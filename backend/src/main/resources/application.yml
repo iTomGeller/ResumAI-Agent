@@ -1,0 +1,67 @@
+server:
+  port: ${BACKEND_PORT:8080}
+
+spring:
+  application:
+    name: resumai-agent-backend
+  jackson:
+    time-zone: Asia/Shanghai
+    serialization:
+      write-dates-as-timestamps: false
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:mysql}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:resumai_agent}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:resumai}
+    password: ${MYSQL_PASSWORD:change-me-mysql-password}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 5000ms
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    jdbc-type-for-null: 'null'
+  global-config:
+    db-config:
+      id-type: assign_id
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+resumai:
+  upload-dir: ${UPLOAD_DIR:./uploads}
+  deepseek:
+    api-key: ${DEEPSEEK_API_KEY:}
+    api-url: ${DEEPSEEK_API_URL:https://api.deepseek.com/chat/completions}
+    model: ${DEEPSEEK_MODEL:deepseek-chat}
+    connect-timeout-ms: ${DEEPSEEK_CONNECT_TIMEOUT_MS:10000}
+    read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:60000}
+  neo4j:
+    uri: ${NEO4J_URI:bolt://neo4j:7687}
+    username: ${NEO4J_USERNAME:neo4j}
+    password: ${NEO4J_PASSWORD:change-me-neo4j}
+  milvus:
+    host: ${MILVUS_HOST:milvus}
+    port: ${MILVUS_PORT:19530}
+    collection: ${MILVUS_COLLECTION:resume_chunk}
+    dimension: ${MILVUS_DIMENSION:1024}
+  trace:
+    langsmith-api-key: ${LANGSMITH_API_KEY:}
+    otel-exporter-otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}

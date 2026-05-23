@@ -1,0 +1,39 @@
+---
+description: 
+alwaysApply: true
+---
+
+# ECS 部署规则
+
+本项目的前端构建（npm run build）和部署必须在阿里云 ECS 服务器上执行，**禁止在本地构建**。
+
+## 部署流程
+
+1. 将源码变更同步到 ECS（通过 git patch、scp 或直接上传文件）
+2. 在 ECS 上执行 `npm run build`（或 docker build）
+3. 在 ECS 上重启相关容器
+
+## ECS 连接信息
+
+部署凭据**不得**写入仓库。在项目根目录创建 `.deploy.local.env`（已被 `.gitignore` 忽略），格式如下：
+
+```env
+ALIYUN_HOST=<your-ecs-host>
+ALIYUN_USER=root
+ALIYUN_PASSWORD=<your-ssh-password>
+DEEPSEEK_API_KEY=<your-api-key>
+MYSQL_ROOT_PASSWORD=<your-mysql-root-password>
+MYSQL_PASSWORD=<your-mysql-app-password>
+REDIS_PASSWORD=<your-redis-password>
+NEO4J_AUTH=neo4j/<your-neo4j-password>
+MINIO_ROOT_PASSWORD=<your-minio-password>
+GRAFANA_PASSWORD=<your-grafana-password>
+```
+
+部署脚本会从该文件读取变量（`deploy_aliyun.py` 使用 paramiko SSH）。
+
+## 禁止操作
+
+- 不要在本地执行 `npm run build`
+- 不要在本地构建 Docker 镜像然后推送
+- 不要将 `.deploy.local.env`、`.env` 或任何密码提交到 Git

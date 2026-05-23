@@ -1,0 +1,44 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Secrets
+.env
+.env.*
+!.env.example
+.deploy.local.env
+*.pem
+*.key
+*.p12
+
+# Java
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Node
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# Runtime data
+logs/
+uploads/
+data/
+__pycache__/
+*.pyc
+
+# Docker local overrides
+docker-compose.override.yml
+
+# Deploy scripts with credentials
+scripts/deploy_fresh.py
+scripts/pull_and_up.py
+scripts/_*.py

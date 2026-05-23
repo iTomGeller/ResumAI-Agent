@@ -1,0 +1,324 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "📈 Business Funnel",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "title": "Resume Uploads",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 1 },
+      "targets": [{ "expr": "sum by (file_type) (resumai_funnel_upload_count_total)", "legendFormat": "{{file_type}}" }]
+    },
+    {
+      "title": "Evaluations Started",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 1 },
+      "targets": [{ "expr": "sum(resumai_funnel_evaluation_started_total)", "legendFormat": "Started" }]
+    },
+    {
+      "title": "Evaluations Completed",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 1 },
+      "targets": [{ "expr": "sum(resumai_funnel_evaluation_completed_total)", "legendFormat": "Completed" }]
+    },
+    {
+      "title": "Funnel Conversion Rate",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 1 },
+      "targets": [{ "expr": "resumai_funnel_conversion_rate", "legendFormat": "Conversion" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.6}, {"color": "green", "value": 0.85}] } } }
+    },
+    {
+      "title": "Time to Screen (p95)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 16, "y": 1 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (job_category, le) (rate(resumai_funnel_time_to_screen_seconds_bucket[5m])))", "legendFormat": "{{job_category}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Recommendation Distribution",
+      "type": "piechart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 1 },
+      "targets": [{ "expr": "sum by (recommendation) (resumai_funnel_recommendation_count_total)", "legendFormat": "{{recommendation}}" }]
+    },
+    {
+      "title": "🤖 Agent Execution",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+      "collapsed": false
+    },
+    {
+      "title": "Agent Span Duration (avg)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 8 },
+      "targets": [{ "expr": "rate(resumai_agent_span_duration_seconds_sum[5m]) / rate(resumai_agent_span_duration_seconds_count[5m])", "legendFormat": "{{agent}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Concurrent Active Agents",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 4, "x": 6, "y": 8 },
+      "targets": [{ "expr": "resumai_agent_concurrent_active", "legendFormat": "Active" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 10, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 4}, {"color": "red", "value": 6}] } } }
+    },
+    {
+      "title": "Agent Delegations",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 5, "x": 10, "y": 8 },
+      "targets": [{ "expr": "sum by (from_agent, to_agent) (resumai_agent_delegation_total)", "legendFormat": "{{from_agent}}→{{to_agent}}" }]
+    },
+    {
+      "title": "Agent Errors",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 4, "x": 15, "y": 8 },
+      "targets": [{ "expr": "sum(resumai_agent_error_total)", "legendFormat": "Errors" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}] } } }
+    },
+    {
+      "title": "Routing Decisions",
+      "type": "piechart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 5, "x": 19, "y": 8 },
+      "targets": [{ "expr": "sum by (decision) (resumai_agent_routing_decision_total)", "legendFormat": "{{decision}}" }]
+    },
+    {
+      "title": "🔧 Tool Calls",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "collapsed": false
+    },
+    {
+      "title": "Tool Call Duration",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 16 },
+      "targets": [{ "expr": "rate(resumai_tool_call_duration_seconds_sum[5m]) / rate(resumai_tool_call_duration_seconds_count[5m])", "legendFormat": "{{tool_name}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Tool Call Count",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 4, "x": 6, "y": 16 },
+      "targets": [{ "expr": "sum by (tool_name, status) (resumai_tool_call_count_total)", "legendFormat": "{{tool_name}} ({{status}})" }]
+    },
+    {
+      "title": "Tool Errors",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 3, "x": 10, "y": 16 },
+      "targets": [{ "expr": "sum(resumai_tool_call_error_total)", "legendFormat": "Errors" }]
+    },
+    {
+      "title": "Milvus Chunks Indexed",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 3, "x": 13, "y": 16 },
+      "targets": [{ "expr": "resumai_tool_milvus_chunks_indexed_sum / resumai_tool_milvus_chunks_indexed_count", "legendFormat": "Avg Chunks" }]
+    },
+    {
+      "title": "Milvus Similarity Scores",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 4, "x": 16, "y": 16 },
+      "targets": [{ "expr": "rate(resumai_tool_milvus_similarity_score_sum[5m]) / rate(resumai_tool_milvus_similarity_score_count[5m])", "legendFormat": "Avg Score" }]
+    },
+    {
+      "title": "Neo4j Nodes Written",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 4, "x": 20, "y": 16 },
+      "targets": [{ "expr": "rate(resumai_tool_neo4j_nodes_written_sum[5m]) / rate(resumai_tool_neo4j_nodes_written_count[5m])", "legendFormat": "{{operation}}" }]
+    },
+    {
+      "title": "🧠 LLM Economics",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "collapsed": false
+    },
+    {
+      "title": "LLM Duration",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 24 },
+      "targets": [{ "expr": "rate(resumai_llm_duration_seconds_sum[5m]) / rate(resumai_llm_duration_seconds_count[5m])", "legendFormat": "{{model}}/{{purpose}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Input Tokens (avg)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 3, "x": 6, "y": 24 },
+      "targets": [{ "expr": "resumai_llm_tokens_input_sum / resumai_llm_tokens_input_count", "legendFormat": "Input" }]
+    },
+    {
+      "title": "Output Tokens (avg)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 3, "x": 9, "y": 24 },
+      "targets": [{ "expr": "resumai_llm_tokens_output_sum / resumai_llm_tokens_output_count", "legendFormat": "Output" }]
+    },
+    {
+      "title": "Total LLM Tokens",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 3, "x": 12, "y": 24 },
+      "targets": [{ "expr": "sum(resumai_llm_tokens_total_total)", "legendFormat": "Total" }]
+    },
+    {
+      "title": "Cost per Call (avg USD)",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 3, "x": 15, "y": 24 },
+      "targets": [{ "expr": "resumai_llm_cost_per_call_sum / resumai_llm_cost_per_call_count", "legendFormat": "USD/call" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 6 } }
+    },
+    {
+      "title": "LLM Errors",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 3, "x": 18, "y": 24 },
+      "targets": [{ "expr": "sum(resumai_llm_error_total)", "legendFormat": "Errors" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}] } } }
+    },
+    {
+      "title": "Token Efficiency",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 3, "x": 21, "y": 24 },
+      "targets": [{ "expr": "resumai_llm_token_efficiency", "legendFormat": "out/in" }]
+    },
+    {
+      "title": "🔍 RAG Quality",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "collapsed": false
+    },
+    {
+      "title": "Faithfulness",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 32 },
+      "targets": [{ "expr": "resumai_rag_faithfulness_sum / resumai_rag_faithfulness_count", "legendFormat": "Faithfulness" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "thresholds": { "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.7}, {"color": "green", "value": 0.85}] } } }
+    },
+    {
+      "title": "Answer Relevancy",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 32 },
+      "targets": [{ "expr": "resumai_rag_answer_relevancy_sum / resumai_rag_answer_relevancy_count", "legendFormat": "Relevancy" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "thresholds": { "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.7}, {"color": "green", "value": 0.85}] } } }
+    },
+    {
+      "title": "Context Precision",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 32 },
+      "targets": [{ "expr": "resumai_rag_context_precision_sum / resumai_rag_context_precision_count", "legendFormat": "Precision" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 1 } }
+    },
+    {
+      "title": "Overall RAG Quality",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 8, "x": 12, "y": 32 },
+      "targets": [{ "expr": "rate(resumai_rag_overall_quality_sum[5m]) / rate(resumai_rag_overall_quality_count[5m])", "legendFormat": "Overall" }]
+    },
+    {
+      "title": "Retrieval Failures",
+      "type": "table",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 32 },
+      "targets": [
+        { "expr": "sum(resumai_rag_retrieval_empty_results_total)", "legendFormat": "Empty", "refId": "A" },
+        { "expr": "sum(resumai_rag_retrieval_below_threshold_total)", "legendFormat": "Below Threshold", "refId": "B" }
+      ]
+    },
+    {
+      "title": "💬 HR Feedback + System Health",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
+      "collapsed": false
+    },
+    {
+      "title": "HR Feedback Submitted",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 39 },
+      "targets": [{ "expr": "sum(resumai_funnel_feedback_submitted_total)", "legendFormat": "Feedback" }]
+    },
+    {
+      "title": "HR-AI Agreement",
+      "type": "piechart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 39 },
+      "targets": [{ "expr": "sum by (agrees_with_ai) (resumai_funnel_feedback_agreement_total)", "legendFormat": "agrees={{agrees_with_ai}}" }]
+    },
+    {
+      "title": "Executor Active Threads",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 39 },
+      "targets": [{ "expr": "resumai_system_executor_active_threads", "legendFormat": "Threads" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 6 } }
+    },
+    {
+      "title": "Executor Queue Size",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 39 },
+      "targets": [{ "expr": "resumai_system_executor_queue_size", "legendFormat": "Queue" }]
+    },
+    {
+      "title": "SSE Active Subscribers",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 16, "y": 39 },
+      "targets": [{ "expr": "resumai_system_sse_active_subscribers", "legendFormat": "SSE" }]
+    },
+    {
+      "title": "Task Cache Size",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 39 },
+      "targets": [{ "expr": "resumai_system_memory_task_cache_size", "legendFormat": "Tasks" }]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["resumai", "multi-agent", "funnel", "rag", "llm"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "ResumAI Multi-Agent Observability",
+  "uid": "resumai-multi-agent",
+  "version": 2
+}

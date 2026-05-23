@@ -1,0 +1,6 @@
+---
+description: 
+alwaysApply: true
+---
+
+永远不要使用composer 作为subagent 当你的模型是claude 或者gpt系列时候，因为composer模型很垃圾

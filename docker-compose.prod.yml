@@ -1,0 +1,287 @@
+name: resumai
+
+services:
+  ai-resume-backend:
+    build:
+      context: ./backend
+    container_name: ai-resume-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_HOST: redis
+      NEO4J_URI: bolt://neo4j:7687
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      SPRING_PROFILES_ACTIVE: prod
+    expose:
+      - "8080"
+    volumes:
+      - uploads-data:/opt/ai-resume-agent-platform/uploads
+      - backend-logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      neo4j:
+        condition: service_started
+      milvus:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - resumai-net
+
+  ai-resume-frontend:
+    build:
+      context: ./frontend
+    container_name: ai-resume-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      ai-resume-backend:
+        condition: service_started
+    networks:
+      - resumai-net
+
+  mysql:
+    image: mysql:8.0
+    container_name: resumai-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    expose:
+      - "3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./backend/src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+08:00
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - resumai-net
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: resumai-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: ["sh", "-c", "redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    expose:
+      - "6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - resumai-net
+
+  neo4j:
+    image: neo4j:5.20-community
+    container_name: resumai-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH}
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_default__listen__address: 0.0.0.0
+    expose:
+      - "7474"
+      - "7687"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - neo4j-plugins:/plugins
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 40s
+    networks:
+      - resumai-net
+
+  minio:
+    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    container_name: resumai-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: ["server", "/minio_data", "--console-address", ":9001"]
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - minio-data:/minio_data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - resumai-net
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.15
+    container_name: resumai-etcd
+    restart: unless-stopped
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command: >
+      etcd
+      --advertise-client-urls=http://127.0.0.1:2379
+      --listen-client-urls=http://0.0.0.0:2379
+      --data-dir=/etcd
+    expose:
+      - "2379"
+    volumes:
+      - etcd-data:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - resumai-net
+
+  milvus:
+    image: milvusdb/milvus:v2.4.4
+    container_name: resumai-milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    expose:
+      - "19530"
+      - "9091"
+    volumes:
+      - milvus-data:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:9091/healthz || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    networks:
+      - resumai-net
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: resumai-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    expose:
+      - "9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - resumai-net
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: resumai-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set}
+      GF_SERVER_ROOT_URL: http://${PUBLIC_HOST:-localhost}:3000
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - resumai-net
+
+networks:
+  resumai-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+    name: resumai-mysql-data
+    external: true
+  redis-data:
+    name: resumai-redis-data
+    external: true
+  neo4j-data:
+    name: resumai-neo4j-data
+    external: true
+  neo4j-logs:
+    name: resumai-neo4j-logs
+    external: true
+  neo4j-plugins:
+    name: resumai-neo4j-plugins
+    external: true
+  minio-data:
+    name: resumai-minio-data
+    external: true
+  etcd-data:
+    name: resumai-etcd-data
+    external: true
+  milvus-data:
+    name: resumai-milvus-data
+    external: true
+  uploads-data:
+    name: resumai-uploads-data
+    external: true
+  backend-logs:
+    name: resumai-backend-logs
+    external: true
+  prometheus-data:
+    name: resumai-prometheus-data
+  grafana-data:
+    name: resumai-grafana-data
