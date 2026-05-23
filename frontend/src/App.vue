@@ -363,9 +363,15 @@ async function createUploadTask(file: File) {
 async function refreshAll() {
   refreshing.value = true;
   try {
-    await Promise.all([loadTasks(), loadMetrics(), loadFeedbacks()]);
+    const results = await Promise.allSettled([loadTasks(), loadMetrics(), loadFeedbacks()]);
+    const failures = results.filter((r) => r.status === 'rejected');
+    if (failures.length === results.length) {
+      errorMessage.value = '后端服务连接失败，请稍后重试';
+    } else if (failures.length > 0) {
+      errorMessage.value = '';
+    }
     if (activeTraceId.value) {
-      await Promise.all([loadTraces(activeTraceId.value), loadGraph(activeTraceId.value)]);
+      await Promise.allSettled([loadTraces(activeTraceId.value), loadGraph(activeTraceId.value)]);
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '刷新数据失败';
