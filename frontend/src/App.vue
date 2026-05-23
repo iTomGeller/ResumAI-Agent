@@ -10,12 +10,13 @@ interface TaskResponse {
   status: string;
   overallScore: number;
   recommendation: string;
-  summary: string;
   durationMs: number;
   tokenCost: number;
   strengths: string[];
   risks: string[];
   interviewQuestions: string[];
+  summary?: string;
+  resumeText?: string;
 }
 
 interface TraceEvent {
@@ -43,19 +44,8 @@ interface Metrics {
   agentDurationMs: Record<string, number>;
 }
 
-interface GraphNode {
-  id: string;
-  label: string;
-  type: string;
-  score: number;
-}
-
-interface GraphEdge {
-  from: string;
-  to: string;
-  label: string;
-  confidence: number;
-}
+interface GraphNode { id: string; label: string; type: string; score: number; }
+interface GraphEdge { from: string; to: string; label: string; confidence: number; }
 
 interface FeedbackResponse {
   id: number;
@@ -78,22 +68,7 @@ interface JobProfile {
   createdAt: string;
 }
 
-interface MarkdownBlock {
-  type: 'heading' | 'paragraph' | 'list' | 'rule';
-  level?: number;
-  text?: string;
-  items?: string[];
-}
-
-interface InlinePart {
-  text: string;
-  strong: boolean;
-}
-
 const JOBS_STORAGE_KEY = 'resumai.jobs.v2';
-const sampleResume = `候选人 6 年 Java 后端经验，长期负责 Spring Boot 微服务、MySQL、Redis、Docker 云部署与线上可观测体系建设。
-最近项目中参与 AI Agent 简历评估平台，负责 TraceId 链路、SSE 实时事件、RAG 证据召回、Docker Compose 上线和故障排查。
-候选人熟悉团队协作、代码评审、生产问题复盘，也具备一定的系统设计和跨团队沟通经验。`;
 
 const defaultJobs: JobProfile[] = [
   {
@@ -116,18 +91,14 @@ const defaultJobs: JobProfile[] = [
   }
 ];
 
-const navItems = [
-  { key: 'dashboard', label: '总览', description: '招聘工作台' },
-  { key: 'jobs', label: '岗位 JD', description: '长期维护' },
-  { key: 'candidates', label: '候选人', description: '批量评估' },
-  { key: 'report', label: '报告', description: '对比阅读' },
-  { key: 'evolution', label: '每日进化', description: '复盘沉淀' }
-] as const;
+type ViewName = 'dashboard' | 'positions' | 'candidates' | 'detail' | 'analytics';
+type DetailTab = 'resume' | 'report' | 'process' | 'graph' | 'feedback';
 
-const appView = ref<(typeof navItems)[number]['key']>('dashboard');
-const detailTab = ref<'summary' | 'trace' | 'graph' | 'feedback'>('summary');
+const appView = ref<ViewName>('dashboard');
+const detailTab = ref<DetailTab>('report');
 const loading = ref(false);
 const refreshing = ref(false);
+const showUploadModal = ref(false);
 const tasks = ref<TaskResponse[]>([]);
 const traces = ref<TraceEvent[]>([]);
 const metrics = ref<Metrics | null>(null);
@@ -138,7 +109,7 @@ const activeTraceId = ref('');
 const feedbackText = ref('');
 const errorMessage = ref('');
 const successMessage = ref('');
-const healthStatus = ref('检查中');
+const healthStatus = ref('...');
 const queuedFiles = ref<File[]>([]);
 const pastedResume = ref('');
 const candidateSearch = ref('');
@@ -146,313 +117,123 @@ const statusFilter = ref('ALL');
 const selectedJobId = ref('');
 const jobs = ref<JobProfile[]>(loadJobs());
 const jobDraft = reactive<JobProfile>({ ...jobs.value[0] });
-const publicUrl = window.location.origin;
 
 let eventSource: EventSource | null = null;
 const pollTimers = new Map<string, number>();
 
-const activeTask = computed(() => tasks.value.find((task) => task.traceId === activeTraceId.value) ?? tasks.value[0]);
-const selectedJob = computed(() => jobs.value.find((job) => job.id === selectedJobId.value) ?? jobs.value[0]);
-const runningTasks = computed(() => tasks.value.filter((task) => task.status === 'RUNNING'));
-const completedTasks = computed(() => tasks.value.filter((task) => task.status === 'SUCCESS'));
-const failedTasks = computed(() => tasks.value.filter((task) => task.status === 'FAILED'));
-const reportBlocks = computed(() => parseMarkdown(activeTask.value?.summary || ''));
-const activeCandidateIndex = computed(() => tasks.value.findIndex((task) => task.traceId === activeTraceId.value));
-const reportCandidateRows = computed(() => filteredCandidates.value.length ? filteredCandidates.value : tasks.value);
-const recommendationLabel = computed(() => {
-  const value = activeTask.value?.recommendation;
-  if (value === 'STRONG_RECOMMEND') {
-    return '强烈推荐进入面试';
-  }
-  if (value === 'RECOMMEND') {
-    return '建议进入面试';
-  }
-  if (value === 'NEED_MANUAL_REVIEW') {
-    return '建议人工复核';
-  }
-  return '等待评估';
-});
-const queuedFileLabel = computed(() => {
-  if (!queuedFiles.value.length) {
-    return '选择一批简历文件，或在右侧粘贴一份文本简历';
-  }
-  return queuedFiles.value.length === 1
-    ? `${queuedFiles.value[0].name} · ${(queuedFiles.value[0].size / 1024).toFixed(1)} KB`
-    : `${queuedFiles.value.length} 份简历待评估`;
-});
-const canStartEvaluation = computed(() => Boolean(selectedJob.value?.description.trim() && (queuedFiles.value.length || pastedResume.value.trim())));
+const activeTask = computed(() => tasks.value.find((t) => t.traceId === activeTraceId.value) ?? null);
+const selectedJob = computed(() => jobs.value.find((j) => j.id === selectedJobId.value) ?? jobs.value[0]);
+const runningTasks = computed(() => tasks.value.filter((t) => t.status === 'RUNNING'));
+const completedTasks = computed(() => tasks.value.filter((t) => t.status === 'SUCCESS'));
+
 const filteredCandidates = computed(() => {
-  const query = candidateSearch.value.trim().toLowerCase();
-  return tasks.value.filter((task) => {
-    const matchStatus = statusFilter.value === 'ALL' || task.status === statusFilter.value;
-    const matchQuery = !query || [task.fileName, task.jobCategory, task.recommendation].join(' ').toLowerCase().includes(query);
-    return matchStatus && matchQuery;
-  });
+  let list = tasks.value;
+  if (statusFilter.value !== 'ALL') {
+    list = list.filter((t) => t.status === statusFilter.value);
+  }
+  if (candidateSearch.value.trim()) {
+    const q = candidateSearch.value.toLowerCase();
+    list = list.filter((t) => t.fileName.toLowerCase().includes(q) || t.jobCategory.toLowerCase().includes(q) || (t.recommendation || '').toLowerCase().includes(q));
+  }
+  return list;
 });
-const traceSteps = computed(() => traces.value.map((event, index) => ({
-  ...event,
-  stageNo: index + 1,
-  stageLabel: traceStageLabel(event),
-  statusLabel: eventStatusText(event.status),
-  evidence: traceEvidence(event)
+
+
+const traceSteps = computed(() => traces.value.map((e, i) => ({
+  ...e,
+  stageNo: i + 1,
+  stageLabel: traceStageLabel(e),
+  statusLabel: eventStatusText(e.status),
+  evidence: traceEvidence(e),
 })));
-const graphSkillNodes = computed(() => graphNodes.value.filter((node) => node.type === 'skill'));
-const graphRiskNodes = computed(() => graphNodes.value.filter((node) => node.type === 'risk'));
-const graphOtherNodes = computed(() => graphNodes.value.filter((node) => node.type !== 'skill' && node.type !== 'risk'));
-const dailyReport = computed(() => {
-  const finished = completedTasks.value;
-  const averageScore = finished.length
-    ? finished.reduce((sum, task) => sum + (task.overallScore || 0), 0) / finished.length
-    : 0;
-  const allRisks = finished.flatMap((task) => task.risks || []).filter(Boolean);
-  const lowScoreTasks = finished.filter((task) => task.overallScore && task.overallScore < 75);
-  const negativeFeedbacks = feedbacks.value.filter((item) => item.ratingScore < 4);
-  const frequentRisks = topTerms(allRisks, 5);
-  return {
-    date: new Date().toLocaleDateString('zh-CN'),
-    total: tasks.value.length,
-    finished: finished.length,
-    running: runningTasks.value.length,
-    failed: failedTasks.value.length,
-    averageScore,
-    feedbackCount: feedbacks.value.length,
-    negativeFeedbackCount: negativeFeedbacks.length,
-    frequentRisks,
-    lowScoreTasks,
-    actions: buildEvolutionActions(frequentRisks, lowScoreTasks.length, negativeFeedbacks.length)
-  };
-});
 
-watch(jobs, (value) => {
-  localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(value));
-}, { deep: true });
+const canStartEvaluation = computed(() => (queuedFiles.value.length > 0 || pastedResume.value.trim().length > 0) && selectedJob.value);
 
-watch(selectedJobId, () => {
-  syncJobDraft();
-});
-
-onMounted(async () => {
-  if (!selectedJobId.value && jobs.value.length) {
-    selectedJobId.value = jobs.value[0].id;
-  }
-  syncJobDraft();
-  await refreshAll();
-  await loadHealth();
-  if (activeTraceId.value) {
-    subscribeTrace(activeTraceId.value);
-  }
-});
-
-onBeforeUnmount(() => {
-  eventSource?.close();
-  pollTimers.forEach((timer) => window.clearTimeout(timer));
+const recommendationLabel = computed(() => {
+  const r = activeTask.value?.recommendation || '';
+  if (r.includes('STRONG')) return '强烈推荐面试';
+  if (r.includes('RECOMMEND')) return '推荐面试';
+  return '需要人工复核';
 });
 
 function loadJobs(): JobProfile[] {
   try {
-    const raw = localStorage.getItem(JOBS_STORAGE_KEY);
-    if (!raw) {
-      return defaultJobs;
-    }
-    const parsed = JSON.parse(raw) as JobProfile[];
-    return parsed.length ? parsed : defaultJobs;
-  } catch {
-    return defaultJobs;
-  }
+    const saved = localStorage.getItem(JOBS_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : [...defaultJobs];
+  } catch { return [...defaultJobs]; }
 }
 
-function syncJobDraft() {
-  const source = selectedJob.value ?? defaultJobs[0];
-  Object.assign(jobDraft, { ...source });
-}
+watch(jobs, (v) => localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(v)), { deep: true });
+watch(selectedJobId, () => { if (selectedJob.value) Object.assign(jobDraft, selectedJob.value); });
 
-function createJob() {
-  const job: JobProfile = {
-    id: `job-${Date.now()}`,
-    title: '新岗位 JD',
-    department: '未分组',
-    level: 'Mid',
-    category: 'TECH',
-    description: '请填写岗位职责、硬性要求、加分项、风险红线和面试关注点。',
-    createdAt: new Date().toISOString()
-  };
-  jobs.value = [job, ...jobs.value];
-  selectedJobId.value = job.id;
-  appView.value = 'jobs';
-}
+onMounted(async () => {
+  if (!selectedJobId.value && jobs.value.length) selectedJobId.value = jobs.value[0].id;
+  if (selectedJob.value) Object.assign(jobDraft, selectedJob.value);
+  await refreshAll();
+  await loadHealth();
+  if (activeTraceId.value) subscribeTrace(activeTraceId.value);
+});
 
-function saveJob() {
-  jobs.value = jobs.value.map((job) => job.id === jobDraft.id ? { ...jobDraft } : job);
-  successMessage.value = '岗位 JD 已保存，后续批量评估会复用这份标准。';
-}
-
-function deleteJob() {
-  if (jobs.value.length <= 1) {
-    errorMessage.value = '至少保留一个岗位 JD。';
-    return;
-  }
-  jobs.value = jobs.value.filter((job) => job.id !== jobDraft.id);
-  selectedJobId.value = jobs.value[0].id;
-}
-
-async function createEvaluations() {
-  errorMessage.value = '';
-  successMessage.value = '';
-  if (!canStartEvaluation.value || !selectedJob.value) {
-    errorMessage.value = '请先选择岗位 JD，并上传简历或粘贴简历文本。';
-    return;
-  }
-  loading.value = true;
-  appView.value = 'candidates';
-  try {
-    const createdTasks: TaskResponse[] = [];
-    if (queuedFiles.value.length) {
-      for (const file of queuedFiles.value) {
-        const response = await createUploadTask(file);
-        if (!response.ok) {
-          throw new Error(await response.text());
-        }
-        createdTasks.push((await response.json()) as TaskResponse);
-      }
-    } else {
-      const response = await createTextTask();
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      createdTasks.push((await response.json()) as TaskResponse);
-    }
-    activeTraceId.value = createdTasks[0].traceId;
-    subscribeTrace(createdTasks[0].traceId);
-    await refreshAll();
-    createdTasks.forEach((task) => startPolling(task.traceId));
-    successMessage.value = createdTasks.length > 1
-      ? `已创建 ${createdTasks.length} 个候选人评估任务。`
-      : '已创建 1 个候选人评估任务。';
-    queuedFiles.value = [];
-    pastedResume.value = '';
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '创建评估失败';
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function createTextTask() {
-  return fetch('/api/tasks', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      fileName: 'pasted-resume.txt',
-      jobCategory: selectedJob.value.category,
-      executionMode: 'DAG_CONCURRENT',
-      jobDescription: selectedJob.value.description,
-      resumeText: pastedResume.value
-    })
-  });
-}
-
-async function createUploadTask(file: File) {
-  const body = new FormData();
-  body.append('file', file);
-  body.append('jobCategory', selectedJob.value.category);
-  body.append('executionMode', 'DAG_CONCURRENT');
-  body.append('jobDescription', selectedJob.value.description);
-  return fetch('/api/tasks/upload', { method: 'POST', body });
-}
+onBeforeUnmount(() => { eventSource?.close(); pollTimers.forEach((t) => clearTimeout(t)); });
 
 async function refreshAll() {
   refreshing.value = true;
   try {
-    const results = await Promise.allSettled([loadTasks(), loadMetrics(), loadFeedbacks()]);
-    const failures = results.filter((r) => r.status === 'rejected');
-    if (failures.length === results.length) {
-      errorMessage.value = '后端服务连接失败，请稍后重试';
-    } else if (failures.length > 0) {
-      errorMessage.value = '';
-    }
+    await Promise.allSettled([loadTasks(), loadMetrics(), loadFeedbacks()]);
     if (activeTraceId.value) {
       await Promise.allSettled([loadTraces(activeTraceId.value), loadGraph(activeTraceId.value)]);
     }
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '刷新数据失败';
-  } finally {
-    refreshing.value = false;
-  }
+  } finally { refreshing.value = false; }
 }
 
 async function loadHealth() {
   try {
-    const response = await fetch('/api/health');
-    const health = (await response.json()) as { status?: string };
-    healthStatus.value = health.status ?? 'UNKNOWN';
-  } catch {
-    healthStatus.value = 'DOWN';
-  }
+    const r = await fetch('/api/health');
+    const h = (await r.json()) as { status?: string };
+    healthStatus.value = h.status ?? 'UNKNOWN';
+  } catch { healthStatus.value = 'DOWN'; }
 }
 
 async function loadTasks() {
-  const response = await fetch('/api/tasks');
-  if (!response.ok) {
-    throw new Error('任务列表加载失败');
-  }
-  tasks.value = (await response.json()) as TaskResponse[];
-  if (!activeTraceId.value && tasks.value.length) {
-    activeTraceId.value = tasks.value[0].traceId;
-  }
+  const r = await fetch('/api/tasks');
+  if (r.ok) tasks.value = (await r.json()) as TaskResponse[];
 }
 
 async function loadMetrics() {
-  const response = await fetch('/api/metrics');
-  if (!response.ok) {
-    throw new Error('性能指标加载失败');
-  }
-  metrics.value = (await response.json()) as Metrics;
-}
-
-async function loadTraces(traceId: string) {
-  const response = await fetch(`/api/traces/${traceId}`);
-  if (!response.ok) {
-    throw new Error('Trace 加载失败');
-  }
-  traces.value = (await response.json()) as TraceEvent[];
-}
-
-async function loadGraph(traceId: string) {
-  const response = await fetch(`/api/graphs/${traceId}`);
-  if (!response.ok) {
-    throw new Error('GraphRAG 图谱加载失败');
-  }
-  const graph = (await response.json()) as { nodes: GraphNode[]; edges: GraphEdge[] };
-  graphNodes.value = graph.nodes;
-  graphEdges.value = graph.edges;
+  const r = await fetch('/api/metrics');
+  if (r.ok) metrics.value = (await r.json()) as Metrics;
 }
 
 async function loadFeedbacks() {
-  const response = await fetch('/api/feedback');
-  if (!response.ok) {
-    throw new Error('反馈列表加载失败');
+  const r = await fetch('/api/feedback');
+  if (r.ok) feedbacks.value = (await r.json()) as FeedbackResponse[];
+}
+
+async function loadTraces(traceId: string) {
+  const r = await fetch(`/api/traces/${traceId}`);
+  if (r.ok) traces.value = (await r.json()) as TraceEvent[];
+}
+
+async function loadGraph(traceId: string) {
+  const r = await fetch(`/api/graphs/${traceId}`);
+  if (r.ok) {
+    const g = (await r.json()) as { nodes: GraphNode[]; edges: GraphEdge[] };
+    graphNodes.value = g.nodes;
+    graphEdges.value = g.edges;
   }
-  feedbacks.value = (await response.json()) as FeedbackResponse[];
 }
 
 function selectTask(task: TaskResponse) {
   activeTraceId.value = task.traceId;
-  detailTab.value = 'summary';
-  subscribeTrace(task.traceId);
-  refreshAll();
-  appView.value = task.status === 'RUNNING' ? 'candidates' : 'report';
-  if (task.status === 'RUNNING') {
-    startPolling(task.traceId);
-  }
+  detailTab.value = 'report';
+  appView.value = 'detail';
+  loadTraces(task.traceId);
+  loadGraph(task.traceId);
+  if (task.status === 'RUNNING') startPolling(task.traceId);
 }
 
-function selectAdjacentCandidate(direction: -1 | 1) {
-  if (!tasks.value.length) {
-    return;
-  }
-  const current = activeCandidateIndex.value >= 0 ? activeCandidateIndex.value : 0;
-  const next = (current + direction + tasks.value.length) % tasks.value.length;
-  selectTask(tasks.value[next]);
+function goBack() {
+  appView.value = 'candidates';
 }
 
 function subscribeTrace(traceId: string) {
@@ -468,584 +249,538 @@ function subscribeTrace(traceId: string) {
 
 function startPolling(traceId: string) {
   const existing = pollTimers.get(traceId);
-  if (existing) {
-    window.clearTimeout(existing);
-  }
+  if (existing) clearTimeout(existing);
   const poll = async () => {
     await refreshAll();
-    const current = tasks.value.find((task) => task.traceId === traceId);
+    const current = tasks.value.find((t) => t.traceId === traceId);
     if (current?.status === 'RUNNING') {
-      pollTimers.set(traceId, window.setTimeout(poll, 1800));
-      return;
-    }
-    pollTimers.delete(traceId);
+      pollTimers.set(traceId, window.setTimeout(poll, 2000));
+    } else { pollTimers.delete(traceId); }
   };
-  pollTimers.set(traceId, window.setTimeout(poll, 1800));
+  pollTimers.set(traceId, window.setTimeout(poll, 2000));
 }
 
 function importResume(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = Array.from(input.files ?? []);
-  if (!files.length) {
-    return;
-  }
-  const invalidFile = files.find((file) => !['pdf', 'txt', 'md', 'csv'].includes(file.name.split('.').pop()?.toLowerCase() ?? ''));
-  if (invalidFile) {
-    queuedFiles.value = [];
-    errorMessage.value = `暂不支持 ${invalidFile.name}，请上传 PDF/TXT/MD/CSV，Word 简历请另存为 PDF。`;
+  if (!files.length) return;
+  const invalid = files.find((f) => !['pdf', 'txt', 'md', 'csv'].includes(f.name.split('.').pop()?.toLowerCase() ?? ''));
+  if (invalid) {
+    errorMessage.value = `不支持 ${invalid.name}，请上传 PDF/TXT/MD/CSV。`;
     input.value = '';
     return;
   }
   queuedFiles.value = files;
-  successMessage.value = `已加入 ${files.length} 份简历，选择岗位 JD 后即可批量评估。`;
+  successMessage.value = `已选择 ${files.length} 份简历。`;
   input.value = '';
 }
 
-function useSample() {
-  queuedFiles.value = [];
-  pastedResume.value = sampleResume;
-  appView.value = 'candidates';
-  successMessage.value = '已填入示例简历，可直接创建文本评估任务。';
-}
-
-function clearUpload() {
-  queuedFiles.value = [];
-  pastedResume.value = '';
-  successMessage.value = '';
+async function createEvaluations() {
+  if (!canStartEvaluation.value) return;
+  loading.value = true;
   errorMessage.value = '';
+  try {
+    if (queuedFiles.value.length) {
+      for (const file of queuedFiles.value) {
+        const body = new FormData();
+        body.append('file', file);
+        body.append('jobCategory', selectedJob.value.category);
+        body.append('executionMode', 'DAG_CONCURRENT');
+        body.append('jobDescription', selectedJob.value.description);
+        await fetch('/api/tasks/upload', { method: 'POST', body });
+      }
+    } else if (pastedResume.value.trim()) {
+      await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobCategory: selectedJob.value.category,
+          executionMode: 'DAG_CONCURRENT',
+          jobDescription: selectedJob.value.description,
+          resumeText: pastedResume.value
+        })
+      });
+    }
+    queuedFiles.value = [];
+    pastedResume.value = '';
+    showUploadModal.value = false;
+    successMessage.value = '评估任务已创建。';
+    await loadTasks();
+    const latest = tasks.value[0];
+    if (latest) { selectTask(latest); subscribeTrace(latest.traceId); }
+  } catch (e) { errorMessage.value = '创建任务失败。'; }
+  finally { loading.value = false; }
 }
 
 async function sendFeedback(score: number) {
-  if (!activeTask.value) {
-    errorMessage.value = '请先选择一个已评估候选人。';
-    return;
-  }
-  const response = await fetch('/api/feedback', {
+  if (!activeTask.value) return;
+  const r = await fetch('/api/feedback', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       traceId: activeTask.value.traceId,
       ratingScore: score,
       feedbackType: score >= 4 ? 'LIKE' : 'DISLIKE',
-      humanComment: feedbackText.value || 'HR 已确认本次评估结果。',
+      humanComment: feedbackText.value || 'HR 已确认。',
       reviewer: 'HR'
     })
   });
-  if (!response.ok) {
-    errorMessage.value = '反馈提交失败';
-    return;
+  if (r.ok) {
+    feedbackText.value = '';
+    successMessage.value = '反馈已提交。';
+    await loadFeedbacks();
   }
-  feedbackText.value = '';
-  successMessage.value = '反馈已写入 Meta-Agent 反思池。';
-  await loadTraces(activeTask.value.traceId);
+}
+
+function createJob() {
+  const newJob: JobProfile = { id: `job-${Date.now()}`, title: '新岗位', department: '', level: '', category: 'TECH', description: '', createdAt: new Date().toISOString() };
+  jobs.value.unshift(newJob);
+  selectedJobId.value = newJob.id;
+}
+
+function saveJob() {
+  const idx = jobs.value.findIndex((j) => j.id === selectedJobId.value);
+  if (idx >= 0) jobs.value[idx] = { ...jobDraft };
+  successMessage.value = '岗位已保存。';
+}
+
+function deleteJob() {
+  jobs.value = jobs.value.filter((j) => j.id !== selectedJobId.value);
+  if (jobs.value.length) selectedJobId.value = jobs.value[0].id;
 }
 
 function statusText(status?: string) {
-  if (status === 'SUCCESS') {
-    return '已完成';
-  }
-  if (status === 'RUNNING') {
-    return '评估中';
-  }
-  if (status === 'FAILED') {
-    return '失败';
-  }
-  return '待启动';
+  if (status === 'SUCCESS') return '已完成';
+  if (status === 'RUNNING') return '评估中';
+  if (status === 'FAILED') return '失败';
+  return '等待中';
 }
 
-function formatDuration(duration?: number) {
-  if (!duration) {
-    return '0s';
-  }
-  return `${(duration / 1000).toFixed(1)}s`;
+function statusClass(status?: string) {
+  if (status === 'SUCCESS') return 'badge-success';
+  if (status === 'RUNNING') return 'badge-warning';
+  if (status === 'FAILED') return 'badge-danger';
+  return 'badge-neutral';
 }
 
-function traceStageLabel(event: TraceEvent) {
-  const role = event.agentRole.toLowerCase();
-  if (role.includes('orchestrator')) {
-    return '任务编排';
-  }
-  if (role.includes('parser')) {
-    return '简历解析';
-  }
-  if (role.includes('dag')) {
-    return '并发评估';
-  }
-  if (role.includes('tech')) {
-    return '技能匹配';
-  }
-  if (role.includes('project')) {
-    return '项目深度';
-  }
-  if (role.includes('risk')) {
-    return '风险识别';
-  }
-  if (role.includes('deepseek') || role.includes('llm')) {
-    return '报告生成';
-  }
-  if (role.includes('human') || role.includes('feedback')) {
-    return '人工反馈';
-  }
+function formatDuration(ms?: number) {
+  if (!ms) return '-';
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function traceStageLabel(e: TraceEvent) {
+  const r = e.agentRole.toLowerCase();
+  if (r.includes('orchestrator')) return '任务编排';
+  if (r.includes('parser')) return '简历解析';
+  if (r.includes('dag')) return '并发评估';
+  if (r.includes('tech')) return '技能匹配';
+  if (r.includes('project')) return '项目深度';
+  if (r.includes('risk')) return '风险识别';
+  if (r.includes('deepseek') || r.includes('llm')) return '报告生成';
+  if (r.includes('human') || r.includes('feedback')) return '人工反馈';
   return '评估步骤';
 }
 
 function eventStatusText(status: string) {
-  if (status === 'SUCCESS') {
-    return '完成';
-  }
-  if (status === 'FAILED') {
-    return '失败';
-  }
+  if (status === 'SUCCESS') return '完成';
+  if (status === 'FAILED') return '失败';
   return '进行中';
 }
 
-function traceEvidence(event: TraceEvent) {
-  if (event.tokenCost > 0) {
-    return `耗时 ${event.durationMs}ms，消耗 ${event.tokenCost} tokens。`;
-  }
-  return `耗时 ${event.durationMs}ms，未调用大模型。`;
+function traceEvidence(e: TraceEvent) {
+  if (e.tokenCost > 0) return `${e.durationMs}ms · ${e.tokenCost} tokens`;
+  return `${e.durationMs}ms`;
 }
 
-function topTerms(items: string[], limit: number) {
-  const counts = new Map<string, number>();
-  for (const item of items) {
-    const key = item.replace(/[：:，。,.\s].*$/, '').trim().slice(0, 24);
-    if (!key) {
-      continue;
-    }
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([label, count]) => ({ label, count }));
-}
-
-function buildEvolutionActions(
-  frequentRisks: Array<{ label: string; count: number }>,
-  lowScoreCount: number,
-  negativeFeedbackCount: number
-) {
-  const actions = [
-    '明天评估时优先要求候选人提供项目量化结果、职责边界和生产事故复盘证据。',
-    '对强推荐候选人追加“经验真实性”和“深度验证”面试追问，避免只看关键词匹配。'
-  ];
-  if (frequentRisks.length) {
-    actions.unshift(`高频风险集中在「${frequentRisks[0].label}」，JD 和报告提示词需要强化该项证据要求。`);
-  }
-  if (lowScoreCount > 0) {
-    actions.push(`今日有 ${lowScoreCount} 位候选人低于 75 分，建议复查岗位要求是否过宽或简历证据是否不足。`);
-  }
-  if (negativeFeedbackCount > 0) {
-    actions.push(`收到 ${negativeFeedbackCount} 条低分反馈，Meta-Agent 应优先回看这些 Trace 并调整评分口径。`);
-  }
-  return actions;
-}
-
-function parseMarkdown(source: string): MarkdownBlock[] {
-  const lines = source.split(/\r?\n/);
-  const blocks: MarkdownBlock[] = [];
-  let listItems: string[] = [];
-  const flushList = () => {
-    if (listItems.length) {
-      blocks.push({ type: 'list', items: listItems });
-      listItems = [];
-    }
-  };
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) {
-      flushList();
-      continue;
-    }
-    if (/^[-*_]{3,}$/.test(line)) {
-      flushList();
-      blocks.push({ type: 'rule' });
-      continue;
-    }
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      flushList();
-      blocks.push({ type: 'heading', level: heading[1].length, text: heading[2] });
-      continue;
-    }
-    const list = line.match(/^[-*]\s+(.+)$|^\d+[.)]\s+(.+)$/);
-    if (list) {
-      listItems.push(list[1] || list[2]);
-      continue;
-    }
-    flushList();
-    blocks.push({ type: 'paragraph', text: line });
-  }
-  flushList();
-  return blocks.length ? blocks : [{ type: 'paragraph', text: '报告生成中。' }];
-}
-
-function inlineParts(text = ''): InlinePart[] {
-  const parts: InlinePart[] = [];
-  const pattern = /\*\*(.+?)\*\*/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ text: text.slice(lastIndex, match.index), strong: false });
-    }
-    parts.push({ text: match[1], strong: true });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) {
-    parts.push({ text: text.slice(lastIndex), strong: false });
-  }
-  return parts.length ? parts : [{ text, strong: false }];
-}
+function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 </script>
 
 <template>
-  <main class="app-shell enterprise-app">
+  <div class="app-shell">
+    <!-- SIDEBAR -->
     <aside class="sidebar">
       <div class="brand">
-        <span>RA</span>
-        <div>
-          <strong>ResumAI</strong>
-          <small>{{ publicUrl }}</small>
-        </div>
+        <div class="brand-icon">R</div>
+        <span class="brand-text">ResumAI</span>
       </div>
-      <nav class="side-nav" aria-label="主导航">
-        <button
-          v-for="item in navItems"
-          :key="item.key"
-          :class="{ active: appView === item.key }"
-          @click="appView = item.key"
-        >
-          <strong>{{ item.label }}</strong>
-          <small>{{ item.description }}</small>
+
+      <nav class="side-nav">
+        <button :class="{ active: appView === 'dashboard' }" @click="appView = 'dashboard'; clearNotices()">
+          <span class="nav-icon">◇</span> 总览
+        </button>
+        <button :class="{ active: appView === 'positions' }" @click="appView = 'positions'; clearNotices()">
+          <span class="nav-icon">◆</span> 岗位管理
+        </button>
+        <button :class="{ active: appView === 'candidates' || appView === 'detail' }" @click="appView = 'candidates'; clearNotices()">
+          <span class="nav-icon">○</span> 候选人
+        </button>
+        <button :class="{ active: appView === 'analytics' }" @click="appView = 'analytics'; clearNotices()">
+          <span class="nav-icon">◈</span> 数据洞察
         </button>
       </nav>
-      <div class="sidebar-status">
+
+      <div class="sidebar-footer">
         <span class="status-dot" :class="{ online: healthStatus === 'UP' }"></span>
-        <div>
-          <strong>{{ healthStatus }}</strong>
-          <small>ECS Docker Stack</small>
-        </div>
+        <span>{{ healthStatus === 'UP' ? '服务正常' : healthStatus }}</span>
       </div>
     </aside>
 
-    <section class="main-panel">
-      <header class="page-header">
-        <div>
-          <p class="eyebrow">AI Resume Evaluation Workspace</p>
-          <h1>{{ appView === 'dashboard' ? '招聘评估总览' : appView === 'jobs' ? '岗位 JD 库' : appView === 'candidates' ? '候选人管理' : appView === 'report' ? '候选人报告' : '每日总结进化' }}</h1>
-          <p>{{ appView === 'dashboard' ? '长期维护岗位、批量评估候选人，并持续沉淀历史报告。' : appView === 'jobs' ? '岗位 JD 是可复用资产，不需要每次重新输入。' : appView === 'candidates' ? '围绕岗位批量上传简历，并从列表进入单个候选人报告。' : appView === 'report' ? '左侧保留候选人队列，右侧阅读报告、证据链和专家过程。' : '每天汇总评估结果、HR 反馈和高频风险，沉淀下一轮评分策略。' }}</p>
-        </div>
-        <div class="header-actions">
-          <button class="ghost" :disabled="refreshing" @click="refreshAll">{{ refreshing ? '刷新中...' : '刷新数据' }}</button>
-          <button class="primary" @click="appView = 'candidates'">批量上传</button>
-        </div>
-      </header>
+    <!-- MAIN -->
+    <main class="main-content">
+      <p v-if="errorMessage" class="notice error" @click="errorMessage = ''">{{ errorMessage }}</p>
+      <p v-if="successMessage" class="notice success" @click="successMessage = ''">{{ successMessage }}</p>
 
-      <p v-if="errorMessage" class="notice error">{{ errorMessage }}</p>
-      <p v-if="successMessage" class="notice success">{{ successMessage }}</p>
+      <!-- ========== DASHBOARD ========== -->
+      <section v-if="appView === 'dashboard'">
+        <div class="page-header">
+          <div>
+            <h1>总览</h1>
+            <p>评估数据概况与快捷操作</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-ghost" :disabled="refreshing" @click="refreshAll">{{ refreshing ? '刷新中...' : '刷新' }}</button>
+            <button class="btn btn-primary" @click="showUploadModal = true">上传简历</button>
+          </div>
+        </div>
 
-      <section v-if="appView === 'dashboard'" class="dashboard-view">
         <div class="kpi-grid">
-          <article><span>候选人</span><strong>{{ metrics?.totalTasks ?? tasks.length }}</strong></article>
-          <article><span>评估中</span><strong>{{ runningTasks.length }}</strong></article>
-          <article><span>已完成</span><strong>{{ completedTasks.length }}</strong></article>
-          <article><span>平均分</span><strong>{{ metrics?.averageScore?.toFixed(1) ?? '0.0' }}</strong></article>
+          <div class="kpi-card"><span class="kpi-label">候选人</span><div class="kpi-value">{{ tasks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">评估中</span><div class="kpi-value">{{ runningTasks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">已完成</span><div class="kpi-value">{{ completedTasks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">平均分</span><div class="kpi-value">{{ metrics?.averageScore?.toFixed(1) ?? '-' }}</div></div>
         </div>
-        <div class="content-grid">
-          <article class="card">
-            <div class="card-head">
-              <h2>最近候选人</h2>
-              <button class="ghost compact" @click="appView = 'candidates'">查看全部</button>
-            </div>
-            <div class="candidate-list compact-list">
-              <button v-for="task in tasks.slice(0, 6)" :key="task.traceId" class="candidate-row" @click="selectTask(task)">
-                <span class="candidate-name">{{ task.fileName }}</span>
-                <span>{{ statusText(task.status) }}</span>
-                <span>{{ task.jobCategory }}</span>
-                <strong>{{ task.overallScore || '-' }}</strong>
-                <small>{{ formatDuration(task.durationMs) }}</small>
-              </button>
-              <p v-if="!tasks.length" class="muted empty-copy">暂无候选人，先去批量上传简历。</p>
-            </div>
-          </article>
-          <article class="card">
-            <div class="card-head">
-              <h2>岗位 JD</h2>
-              <button class="ghost compact" @click="createJob">新增岗位</button>
-            </div>
-            <div class="job-list">
-              <button v-for="job in jobs" :key="job.id" :class="{ active: job.id === selectedJobId }" @click="selectedJobId = job.id; appView = 'jobs'">
-                <strong>{{ job.title }}</strong>
-                <span>{{ job.department }} · {{ job.level }} · {{ job.category }}</span>
-              </button>
-            </div>
-          </article>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>最近评估</h2>
+            <button class="btn btn-ghost btn-sm" @click="appView = 'candidates'">查看全部</button>
+          </div>
+          <table class="data-table" v-if="tasks.length">
+            <thead><tr><th>候选人</th><th>状态</th><th>岗位</th><th>评分</th><th>耗时</th></tr></thead>
+            <tbody>
+              <tr v-for="task in tasks.slice(0, 8)" :key="task.traceId" @click="selectTask(task)">
+                <td class="truncate" style="max-width:200px">{{ task.fileName }}</td>
+                <td><span class="badge" :class="statusClass(task.status)">{{ statusText(task.status) }}</span></td>
+                <td>{{ task.jobCategory }}</td>
+                <td><strong>{{ task.overallScore || '-' }}</strong></td>
+                <td class="text-muted">{{ formatDuration(task.durationMs) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="empty-state"><p>暂无评估记录，上传简历开始使用</p></div>
         </div>
       </section>
 
-      <section v-if="appView === 'jobs'" class="jobs-view">
-        <aside class="card job-library">
-          <div class="card-head">
-            <h2>岗位列表</h2>
-            <button class="primary compact" @click="createJob">新增</button>
+      <!-- ========== POSITIONS ========== -->
+      <section v-if="appView === 'positions'">
+        <div class="page-header">
+          <div><h1>岗位管理</h1><p>维护岗位 JD，评估时自动引用</p></div>
+          <div class="header-actions"><button class="btn btn-primary" @click="createJob">新建岗位</button></div>
+        </div>
+
+        <div class="job-layout">
+          <div class="card">
+            <div class="job-list-panel">
+              <button v-for="job in jobs" :key="job.id" class="job-item" :class="{ active: job.id === selectedJobId }" @click="selectedJobId = job.id">
+                <span class="job-title">{{ job.title }}</span>
+                <span class="job-meta">{{ job.department }} · {{ job.level }}</span>
+              </button>
+            </div>
           </div>
-          <div class="job-list">
-            <button v-for="job in jobs" :key="job.id" :class="{ active: job.id === selectedJobId }" @click="selectedJobId = job.id">
-              <strong>{{ job.title }}</strong>
-              <span>{{ job.department }} · {{ job.level }}</span>
-            </button>
+          <div class="card">
+            <div class="card-header"><h2>编辑岗位</h2></div>
+            <div class="grid-2 mb-lg">
+              <div class="form-field"><label>岗位名称</label><input class="form-input" v-model="jobDraft.title" /></div>
+              <div class="form-field"><label>部门</label><input class="form-input" v-model="jobDraft.department" /></div>
+            </div>
+            <div class="grid-2 mb-lg">
+              <div class="form-field"><label>级别</label><input class="form-input" v-model="jobDraft.level" /></div>
+              <div class="form-field"><label>类别</label>
+                <select class="form-input" v-model="jobDraft.category">
+                  <option value="TECH">技术岗</option>
+                  <option value="PRODUCT">产品岗</option>
+                  <option value="DESIGN">设计岗</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-field mb-lg"><label>JD 描述</label><textarea class="form-input" v-model="jobDraft.description" rows="8" /></div>
+            <div class="flex gap-sm">
+              <button class="btn btn-primary" @click="saveJob">保存</button>
+              <button class="btn btn-ghost" @click="deleteJob">删除</button>
+            </div>
           </div>
-        </aside>
-        <article class="card job-editor">
-          <h2>编辑岗位 JD</h2>
-          <div class="two-col">
-            <label>岗位名称<input v-model="jobDraft.title" /></label>
-            <label>部门<input v-model="jobDraft.department" /></label>
-          </div>
-          <div class="two-col">
-            <label>级别<input v-model="jobDraft.level" /></label>
-            <label>
-              岗位类别
-              <select v-model="jobDraft.category">
-                <option value="TECH">技术岗</option>
-                <option value="PRODUCT">产品岗</option>
-                <option value="DESIGN">设计岗</option>
-              </select>
-            </label>
-          </div>
-          <label>JD 与评估标准<textarea v-model="jobDraft.description" rows="13" /></label>
-          <div class="form-actions">
-            <button class="primary" @click="saveJob">保存岗位 JD</button>
-            <button class="danger" @click="deleteJob">删除</button>
-          </div>
-        </article>
+        </div>
       </section>
 
-      <section v-if="appView === 'candidates'" class="candidates-view">
-        <article class="card upload-card">
-          <div class="upload-header">
-            <div>
-              <h2>批量导入候选人</h2>
-              <p>选择一个岗位 JD，再上传多份简历。任务会进入下方候选人列表。</p>
-            </div>
-            <button class="ghost compact" @click="useSample">填入示例</button>
+      <!-- ========== CANDIDATES LIST ========== -->
+      <section v-if="appView === 'candidates'">
+        <div class="page-header">
+          <div><h1>候选人</h1><p>查看所有评估任务，点击进入详情</p></div>
+          <div class="header-actions">
+            <button class="btn btn-ghost" :disabled="refreshing" @click="refreshAll">刷新</button>
+            <button class="btn btn-primary" @click="showUploadModal = true">上传简历</button>
           </div>
-          <div class="two-col">
-            <label>
-              评估岗位
-              <select v-model="selectedJobId">
-                <option v-for="job in jobs" :key="job.id" :value="job.id">{{ job.title }}</option>
-              </select>
-            </label>
-            <label>
-              当前岗位类别
-              <input :value="selectedJob?.category ?? '-'" disabled />
-            </label>
-          </div>
-          <label class="upload-zone">
-            <input type="file" accept=".pdf,.txt,.md,.csv" multiple @change="importResume" />
-            <strong>{{ queuedFiles.length ? `${queuedFiles.length} 份简历待评估` : '选择或拖入一批简历' }}</strong>
-            <span>{{ queuedFileLabel }}</span>
-          </label>
-          <div v-if="queuedFiles.length" class="file-queue">
-            <div v-for="file in queuedFiles" :key="`${file.name}-${file.size}`">
-              <span>{{ file.name }}</span>
-              <small>{{ (file.size / 1024).toFixed(1) }} KB</small>
-            </div>
-          </div>
-          <label>也可以粘贴单份简历<textarea v-model="pastedResume" rows="6" placeholder="粘贴简历正文，用于快速单人评估。" /></label>
-          <div class="form-actions">
-            <button class="primary" :disabled="loading || !canStartEvaluation" @click="createEvaluations">{{ loading ? '创建中...' : '创建评估任务' }}</button>
-            <button class="ghost" @click="clearUpload">清空导入区</button>
-          </div>
-        </article>
+        </div>
 
-        <article class="card candidate-board">
-          <div class="candidate-board-head">
-            <div>
-              <h2>候选人列表</h2>
-              <p class="muted">这是用户真正会反复使用的主列表。</p>
-            </div>
-            <div class="board-stats">
-              <span>全部 {{ filteredCandidates.length }}</span>
-              <span>完成 {{ completedTasks.length }}</span>
-              <span>运行 {{ runningTasks.length }}</span>
-              <span>失败 {{ failedTasks.length }}</span>
-            </div>
-          </div>
-          <div class="table-tools">
-            <input v-model="candidateSearch" placeholder="搜索文件名、岗位或推荐结论" />
-            <select v-model="statusFilter">
-              <option value="ALL">全部状态</option>
+        <div class="card">
+          <div class="candidate-list-toolbar">
+            <input class="form-input search-input" v-model="candidateSearch" placeholder="搜索候选人..." />
+            <select class="form-input" v-model="statusFilter" style="width:120px">
+              <option value="ALL">全部</option>
               <option value="RUNNING">评估中</option>
               <option value="SUCCESS">已完成</option>
               <option value="FAILED">失败</option>
             </select>
+            <span class="text-muted text-sm" style="margin-left:auto">共 {{ filteredCandidates.length }} 条</span>
           </div>
-          <div class="candidate-list">
-            <button v-for="task in filteredCandidates" :key="task.traceId" class="candidate-row" :class="{ active: task.traceId === activeTraceId }" @click="selectTask(task)">
-              <span class="candidate-name">{{ task.fileName }}</span>
-              <span>{{ statusText(task.status) }}</span>
-              <span>{{ task.jobCategory }}</span>
-              <strong>{{ task.overallScore || '-' }}</strong>
-              <small>{{ formatDuration(task.durationMs) }}</small>
-            </button>
-            <p v-if="!filteredCandidates.length" class="muted empty-copy">没有匹配的候选人。</p>
-          </div>
-        </article>
+
+          <table class="data-table" v-if="filteredCandidates.length">
+            <thead><tr><th>文件名</th><th>状态</th><th>岗位</th><th>评分</th><th>推荐</th><th>耗时</th></tr></thead>
+            <tbody>
+              <tr v-for="task in filteredCandidates" :key="task.traceId" :class="{ active: task.traceId === activeTraceId }" @click="selectTask(task)">
+                <td>{{ task.fileName }}</td>
+                <td><span class="badge" :class="statusClass(task.status)">{{ statusText(task.status) }}</span></td>
+                <td>{{ task.jobCategory }}</td>
+                <td><strong>{{ task.overallScore || '-' }}</strong></td>
+                <td class="text-muted text-sm">{{ task.recommendation || '-' }}</td>
+                <td class="text-muted">{{ formatDuration(task.durationMs) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="empty-state"><p>暂无候选人数据</p></div>
+        </div>
       </section>
 
-      <section v-if="appView === 'report'" class="report-view">
-        <aside class="card report-candidate-rail">
-          <div class="card-head">
-            <div>
-              <h2>候选人队列</h2>
-              <p>看报告时必须能随时切换和对比候选人。</p>
-            </div>
-            <span class="rail-count">{{ reportCandidateRows.length }}</span>
-          </div>
-          <input v-model="candidateSearch" placeholder="搜索候选人" />
-          <div class="rail-list">
-            <button
-              v-for="task in reportCandidateRows"
-              :key="task.traceId"
-              :class="{ active: task.traceId === activeTraceId }"
-              @click="selectTask(task)"
-            >
-              <strong>{{ task.fileName }}</strong>
-              <span>{{ statusText(task.status) }} · {{ task.jobCategory }} · {{ task.overallScore || '-' }} 分</span>
-            </button>
-          </div>
-        </aside>
+      <!-- ========== CANDIDATE DETAIL ========== -->
+      <section v-if="appView === 'detail' && activeTask">
+        <button class="back-link" @click="goBack">← 返回列表</button>
 
-        <article v-if="activeTask" class="card report-reader">
-          <div class="report-hero">
-            <div class="score-ring"><strong>{{ activeTask.overallScore }}</strong><span>综合分</span></div>
-            <div>
-              <p class="eyebrow">{{ statusText(activeTask.status) }} · {{ formatDuration(activeTask.durationMs) }}</p>
-              <h2>{{ recommendationLabel }}</h2>
-              <p>{{ activeTask.fileName }}</p>
-            </div>
-            <div class="report-switcher">
-              <button class="ghost compact" @click="selectAdjacentCandidate(-1)">上一个</button>
-              <button class="ghost compact" @click="selectAdjacentCandidate(1)">下一个</button>
+        <div class="detail-header">
+          <div class="score-circle" :class="{ low: (activeTask.overallScore || 0) < 60, mid: (activeTask.overallScore || 0) >= 60 && (activeTask.overallScore || 0) < 75 }">
+            <span class="score-value">{{ activeTask.overallScore || '-' }}</span>
+            <span class="score-label">综合</span>
+          </div>
+          <div class="detail-meta">
+            <h2>{{ recommendationLabel }}</h2>
+            <p>{{ activeTask.fileName }} · {{ activeTask.jobCategory }} · {{ formatDuration(activeTask.durationMs) }}</p>
+          </div>
+          <div class="detail-actions">
+            <span class="badge" :class="statusClass(activeTask.status)">{{ statusText(activeTask.status) }}</span>
+          </div>
+        </div>
+
+        <div class="tab-bar">
+          <button :class="{ active: detailTab === 'resume' }" @click="detailTab = 'resume'">简历原文</button>
+          <button :class="{ active: detailTab === 'report' }" @click="detailTab = 'report'">评估报告</button>
+          <button :class="{ active: detailTab === 'process' }" @click="detailTab = 'process'">评估过程</button>
+          <button :class="{ active: detailTab === 'graph' }" @click="detailTab = 'graph'">技能图谱</button>
+          <button :class="{ active: detailTab === 'feedback' }" @click="detailTab = 'feedback'">HR 反馈</button>
+        </div>
+
+        <!-- Resume Tab -->
+        <div v-if="detailTab === 'resume'">
+          <div class="resume-preview" v-if="activeTask.resumeText">{{ activeTask.resumeText }}</div>
+          <div class="empty-state" v-else><p>简历原文将在解析后展示。对于 PDF 上传的简历，系统自动提取文本内容。</p></div>
+        </div>
+
+        <!-- Report Tab -->
+        <div v-if="detailTab === 'report'" class="report-content">
+          <template v-if="activeTask.summary">
+            <div v-html="renderMarkdown(activeTask.summary)"></div>
+          </template>
+          <div v-if="activeTask.strengths?.length" class="mt-lg">
+            <h3>优势证据</h3>
+            <ul><li v-for="s in activeTask.strengths" :key="s">{{ s }}</li></ul>
+          </div>
+          <div v-if="activeTask.risks?.length" class="mt-lg">
+            <h3>风险信号</h3>
+            <ul><li v-for="r in activeTask.risks" :key="r">{{ r }}</li></ul>
+          </div>
+          <div v-if="activeTask.interviewQuestions?.length" class="mt-lg">
+            <h3>面试追问建议</h3>
+            <ol><li v-for="q in activeTask.interviewQuestions" :key="q">{{ q }}</li></ol>
+          </div>
+          <div class="empty-state" v-if="!activeTask.summary && !activeTask.strengths?.length"><p>报告生成中...</p></div>
+        </div>
+
+        <!-- Process Tab -->
+        <div v-if="detailTab === 'process'">
+          <div class="trace-timeline" v-if="traceSteps.length">
+            <div v-for="step in traceSteps" :key="step.spanId" class="trace-step" :class="{ failed: step.status === 'FAILED', running: step.status !== 'SUCCESS' && step.status !== 'FAILED' }">
+              <div class="step-agent">{{ step.agentRole }}</div>
+              <div class="step-title">{{ step.stageLabel }} · {{ step.title }}</div>
+              <div class="step-detail">{{ step.detail }}</div>
+              <div class="step-meta">{{ step.evidence }}</div>
             </div>
           </div>
-          <div class="tab-bar">
-            <button :class="{ active: detailTab === 'summary' }" @click="detailTab = 'summary'">报告正文</button>
-            <button :class="{ active: detailTab === 'trace' }" @click="detailTab = 'trace'">评估过程</button>
-            <button :class="{ active: detailTab === 'graph' }" @click="detailTab = 'graph'">证据图谱</button>
-            <button :class="{ active: detailTab === 'feedback' }" @click="detailTab = 'feedback'">反馈</button>
+          <div class="empty-state" v-else><p>评估开始后将展示实时执行过程</p></div>
+        </div>
+
+        <!-- Graph Tab -->
+        <div v-if="detailTab === 'graph'">
+          <div class="graph-container" v-if="graphNodes.length">
+            <svg viewBox="0 0 800 400">
+              <line v-for="edge in graphEdges" :key="`${edge.from}-${edge.to}`" class="graph-edge"
+                :x1="getNodeX(edge.from)" :y1="getNodeY(edge.from)"
+                :x2="getNodeX(edge.to)" :y2="getNodeY(edge.to)" />
+              <g v-for="node in graphNodes" :key="node.id" class="graph-node"
+                :transform="`translate(${getNodeX(node.id)}, ${getNodeY(node.id)})`">
+                <circle :r="nodeRadius(node)" :fill="nodeColor(node)" opacity="0.85" />
+                <text dy="0.35em" :font-size="node.type === 'candidate' ? 12 : 10">{{ node.label }}</text>
+              </g>
+            </svg>
           </div>
-          <section v-if="detailTab === 'summary'" class="tab-panel">
-            <article class="markdown-report">
-              <template v-for="(block, index) in reportBlocks" :key="index">
-                <h2 v-if="block.type === 'heading' && block.level === 1"><template v-for="part in inlineParts(block.text)" :key="`${index}-${part.text}-${part.strong}`"><strong v-if="part.strong">{{ part.text }}</strong><span v-else>{{ part.text }}</span></template></h2>
-                <h3 v-else-if="block.type === 'heading' && (block.level ?? 2) <= 3"><template v-for="part in inlineParts(block.text)" :key="`${index}-${part.text}-${part.strong}`"><strong v-if="part.strong">{{ part.text }}</strong><span v-else>{{ part.text }}</span></template></h3>
-                <h4 v-else-if="block.type === 'heading'"><template v-for="part in inlineParts(block.text)" :key="`${index}-${part.text}-${part.strong}`"><strong v-if="part.strong">{{ part.text }}</strong><span v-else>{{ part.text }}</span></template></h4>
-                <hr v-else-if="block.type === 'rule'" />
-                <ul v-else-if="block.type === 'list'"><li v-for="item in block.items ?? []" :key="item"><template v-for="part in inlineParts(item)" :key="`${item}-${part.text}-${part.strong}`"><strong v-if="part.strong">{{ part.text }}</strong><span v-else>{{ part.text }}</span></template></li></ul>
-                <p v-else><template v-for="part in inlineParts(block.text)" :key="`${index}-${part.text}-${part.strong}`"><strong v-if="part.strong">{{ part.text }}</strong><span v-else>{{ part.text }}</span></template></p>
-              </template>
-            </article>
-            <div class="insight-grid">
-              <section><h3>优势证据</h3><ul><li v-for="item in activeTask.strengths" :key="item">{{ item }}</li><li v-if="!activeTask.strengths?.length">暂无结构化优势。</li></ul></section>
-              <section><h3>风险证据</h3><ul><li v-for="item in activeTask.risks" :key="item">{{ item }}</li><li v-if="!activeTask.risks?.length">暂无结构化风险。</li></ul></section>
+          <div class="empty-state" v-else><p>图谱数据将在评估完成后生成</p></div>
+        </div>
+
+        <!-- Feedback Tab -->
+        <div v-if="detailTab === 'feedback'" class="feedback-section">
+          <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">对本次评估的反馈</h3>
+          <textarea class="form-input" v-model="feedbackText" rows="4" placeholder="评估结论是否准确？有哪些需要调整？" />
+          <div class="feedback-actions">
+            <button class="btn btn-primary" @click="sendFeedback(5)">认可结论</button>
+            <button class="btn btn-danger" @click="sendFeedback(2)">需要复核</button>
+          </div>
+          <div v-if="feedbacks.filter(f => f.traceId === activeTraceId).length" class="mt-lg">
+            <h3 style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--color-text-secondary)">历史反馈</h3>
+            <div v-for="fb in feedbacks.filter(f => f.traceId === activeTraceId)" :key="fb.id" style="padding:8px 0;border-bottom:1px solid var(--color-border-light);font-size:13px">
+              <span class="badge" :class="fb.feedbackType === 'LIKE' ? 'badge-success' : 'badge-danger'">{{ fb.feedbackType === 'LIKE' ? '认可' : '复核' }}</span>
+              <span class="text-muted" style="margin-left:8px">{{ fb.humanComment }}</span>
             </div>
-            <section class="questions"><h3>面试追问</h3><ol><li v-for="item in activeTask.interviewQuestions" :key="item">{{ item }}</li><li v-if="!activeTask.interviewQuestions?.length">暂无追问建议。</li></ol></section>
-          </section>
-          <section v-if="detailTab === 'trace'" class="tab-panel">
-            <div class="human-trace">
-              <div v-for="event in traceSteps" :key="event.spanId" class="trace-step" :class="{ failed: event.status === 'FAILED' }">
-                <span class="step-index">{{ event.stageNo }}</span>
-                <div>
-                  <div class="step-head">
-                    <strong>{{ event.stageLabel }}</strong>
-                    <small>{{ event.statusLabel }} · {{ event.agentRole }}</small>
-                  </div>
-                  <h3>{{ event.title }}</h3>
-                  <p>{{ event.detail }}</p>
-                  <em>{{ event.evidence }}</em>
-                </div>
-              </div>
-              <p v-if="!traceSteps.length" class="muted empty-copy">暂无 Trace，评估开始后会展示每一步的人类可读说明。</p>
-            </div>
-          </section>
-          <section v-if="detailTab === 'graph'" class="tab-panel">
-            <div class="evidence-map">
-              <div class="map-center">
-                <strong>{{ activeTask.fileName }}</strong>
-                <span>候选人 · {{ activeTask.overallScore || '-' }} 分</span>
-              </div>
-              <div class="map-column">
-                <h3>匹配技能</h3>
-                <article v-for="node in graphSkillNodes" :key="node.id">
-                  <strong>{{ node.label }}</strong>
-                  <span>{{ node.score }} 分</span>
-                  <i :style="{ width: `${Math.min(100, Math.max(0, node.score))}%` }"></i>
-                </article>
-              </div>
-              <div class="map-column risk-column">
-                <h3>风险信号</h3>
-                <article v-for="node in graphRiskNodes" :key="node.id">
-                  <strong>{{ node.label }}</strong>
-                  <span>{{ node.score }} 分</span>
-                  <i :style="{ width: `${Math.min(100, Math.max(0, node.score))}%` }"></i>
-                </article>
-              </div>
-              <div class="map-column">
-                <h3>岗位与项目</h3>
-                <article v-for="node in graphOtherNodes" :key="node.id">
-                  <strong>{{ node.label }}</strong>
-                  <span>{{ node.type }} · {{ node.score }}</span>
-                  <i :style="{ width: `${Math.min(100, Math.max(0, node.score))}%` }"></i>
-                </article>
-              </div>
-            </div>
-            <div class="edge-list">
-              <p v-for="edge in graphEdges" :key="`${edge.from}-${edge.to}`">{{ edge.from }} → {{ edge.to }}：{{ edge.label }} · {{ Math.round(edge.confidence * 100) }}%</p>
-              <p v-if="!graphEdges.length" class="muted">暂无图谱关系。</p>
-            </div>
-          </section>
-          <section v-if="detailTab === 'feedback'" class="tab-panel">
-            <h3>这份报告是否可用？</h3>
-            <textarea v-model="feedbackText" rows="5" placeholder="例如：风险点准确，但项目深度判断还可以更严格。" />
-            <div class="feedback-actions"><button @click="sendFeedback(5)">认可结论</button><button class="danger" @click="sendFeedback(2)">要求复核</button></div>
-          </section>
-        </article>
-        <article v-else class="card empty-state"><strong>请选择候选人</strong><p>从候选人列表进入报告详情。</p></article>
+          </div>
+        </div>
       </section>
 
-      <section v-if="appView === 'evolution'" class="evolution-view">
-        <article class="card evolution-hero">
-          <p class="eyebrow">{{ dailyReport.date }}</p>
-          <h2>每日总结进化</h2>
-          <p>系统把今天的评估、HR 反馈、高频风险和低分候选人汇总成下一轮策略，不让 Agent 每天从零开始。</p>
-        </article>
+      <!-- ========== ANALYTICS ========== -->
+      <section v-if="appView === 'analytics'">
+        <div class="page-header">
+          <div><h1>数据洞察</h1><p>评估趋势、风险分布与 HR 反馈分析</p></div>
+        </div>
+
         <div class="kpi-grid">
-          <article><span>今日候选人</span><strong>{{ dailyReport.total }}</strong></article>
-          <article><span>完成评估</span><strong>{{ dailyReport.finished }}</strong></article>
-          <article><span>平均分</span><strong>{{ dailyReport.averageScore.toFixed(1) }}</strong></article>
-          <article><span>HR 反馈</span><strong>{{ dailyReport.feedbackCount }}</strong></article>
+          <div class="kpi-card"><span class="kpi-label">总评估</span><div class="kpi-value">{{ tasks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">平均耗时</span><div class="kpi-value">{{ metrics?.averageDurationMs ? (metrics.averageDurationMs / 1000).toFixed(1) + 's' : '-' }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">Token 消耗</span><div class="kpi-value">{{ metrics?.totalTokenCost?.toLocaleString() ?? '-' }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">HR 反馈</span><div class="kpi-value">{{ feedbacks.length }}</div></div>
         </div>
-        <div class="content-grid">
-          <article class="card">
-            <h2>高频风险</h2>
-            <div class="risk-list">
-              <p v-for="risk in dailyReport.frequentRisks" :key="risk.label"><strong>{{ risk.label }}</strong><span>{{ risk.count }} 次</span></p>
-              <p v-if="!dailyReport.frequentRisks.length" class="muted">暂无足够风险样本。</p>
+
+        <div class="analytics-grid">
+          <div class="analytics-card">
+            <h3>评分分布</h3>
+            <div v-if="completedTasks.length" style="display:flex;flex-direction:column;gap:4px">
+              <div v-for="task in completedTasks.slice(0, 10)" :key="task.traceId" style="display:flex;align-items:center;gap:8px;font-size:12px">
+                <span style="width:120px" class="truncate">{{ task.fileName }}</span>
+                <div style="flex:1;height:6px;background:var(--color-border-light);border-radius:3px;overflow:hidden">
+                  <div :style="{ width: task.overallScore + '%', height: '100%', background: task.overallScore >= 80 ? 'var(--color-success)' : task.overallScore >= 60 ? 'var(--color-warning)' : 'var(--color-danger)', borderRadius: '3px' }"></div>
+                </div>
+                <span style="width:30px;text-align:right;font-weight:600">{{ task.overallScore }}</span>
+              </div>
             </div>
-          </article>
-          <article class="card">
-            <h2>明日进化动作</h2>
-            <ol class="action-list">
-              <li v-for="action in dailyReport.actions" :key="action">{{ action }}</li>
-            </ol>
-          </article>
+            <p v-else class="text-muted text-sm">暂无完成的评估</p>
+          </div>
+          <div class="analytics-card">
+            <h3>Agent 耗时占比</h3>
+            <div v-if="metrics?.agentDurationMs" style="display:flex;flex-direction:column;gap:6px">
+              <div v-for="(ms, agent) in metrics.agentDurationMs" :key="agent" style="display:flex;align-items:center;gap:8px;font-size:12px">
+                <span style="width:140px">{{ agent }}</span>
+                <div style="flex:1;height:6px;background:var(--color-border-light);border-radius:3px;overflow:hidden">
+                  <div :style="{ width: Math.min(100, ms / 20) + '%', height: '100%', background: 'var(--color-primary)', borderRadius: '3px' }"></div>
+                </div>
+                <span class="text-muted" style="width:40px;text-align:right">{{ ms }}ms</span>
+              </div>
+            </div>
+            <p v-else class="text-muted text-sm">暂无数据</p>
+          </div>
+          <div class="analytics-card">
+            <h3>最近反馈</h3>
+            <div v-if="feedbacks.length" style="display:flex;flex-direction:column;gap:6px">
+              <div v-for="fb in feedbacks.slice(0, 6)" :key="fb.id" style="font-size:12px;display:flex;gap:8px;align-items:center">
+                <span class="badge" :class="fb.feedbackType === 'LIKE' ? 'badge-success' : 'badge-danger'" style="font-size:10px">{{ fb.feedbackType === 'LIKE' ? '认可' : '复核' }}</span>
+                <span class="truncate" style="flex:1">{{ fb.humanComment }}</span>
+              </div>
+            </div>
+            <p v-else class="text-muted text-sm">暂无反馈</p>
+          </div>
+          <div class="analytics-card">
+            <h3>岗位分布</h3>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div v-for="job in jobs" :key="job.id" style="font-size:12px;display:flex;justify-content:space-between">
+                <span>{{ job.title }}</span>
+                <span class="text-muted">{{ tasks.filter(t => t.jobCategory === job.category).length }} 人</span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
-    </section>
-  </main>
+
+      <!-- ========== UPLOAD MODAL ========== -->
+      <div v-if="showUploadModal" class="upload-overlay" @click.self="showUploadModal = false">
+        <div class="upload-modal">
+          <h2>上传简历评估</h2>
+          <div class="form-field mb-lg">
+            <label>目标岗位</label>
+            <select class="form-input" v-model="selectedJobId">
+              <option v-for="job in jobs" :key="job.id" :value="job.id">{{ job.title }}</option>
+            </select>
+          </div>
+          <label class="upload-zone">
+            <input type="file" accept=".pdf,.txt,.md,.csv" multiple @change="importResume" />
+            <div class="upload-label">{{ queuedFiles.length ? `${queuedFiles.length} 份简历已选择` : '点击选择或拖入简历文件' }}</div>
+            <div class="upload-hint">支持 PDF、TXT、MD、CSV</div>
+          </label>
+          <div v-if="queuedFiles.length" style="margin-top:12px;font-size:12px;color:var(--color-text-secondary)">
+            <div v-for="f in queuedFiles" :key="f.name">{{ f.name }} ({{ (f.size/1024).toFixed(0) }}KB)</div>
+          </div>
+          <div class="form-field mt-lg">
+            <label>或粘贴简历文本</label>
+            <textarea class="form-input" v-model="pastedResume" rows="4" placeholder="粘贴简历正文..." />
+          </div>
+          <div class="flex gap-sm mt-lg">
+            <button class="btn btn-primary" :disabled="loading || !canStartEvaluation" @click="createEvaluations">{{ loading ? '处理中...' : '开始评估' }}</button>
+            <button class="btn btn-ghost" @click="showUploadModal = false">取消</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
 </template>
+
+<script lang="ts">
+function renderMarkdown(source: string): string {
+  if (!source) return '';
+  return source
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h2>$1</h2>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+    .replace(/^(?!<[hulo])(.*\S.*)$/gm, '<p>$1</p>')
+    .replace(/\n{2,}/g, '');
+}
+
+function getNodeX(id: string): number {
+  const hash = Array.from(id).reduce((a, c) => a + c.charCodeAt(0), 0);
+  return 100 + (hash * 73) % 600;
+}
+
+function getNodeY(id: string): number {
+  const hash = Array.from(id).reduce((a, c) => a + c.charCodeAt(0) * 3, 0);
+  return 60 + (hash * 37) % 280;
+}
+
+function nodeRadius(node: { type: string; score: number }): number {
+  if (node.type === 'candidate') return 28;
+  return 14 + Math.min(12, node.score / 8);
+}
+
+function nodeColor(node: { type: string; score: number }): string {
+  if (node.type === 'candidate') return '#2563eb';
+  if (node.type === 'skill') return '#059669';
+  if (node.type === 'risk') return '#dc2626';
+  if (node.type === 'job') return '#d97706';
+  return '#64748b';
+}
+
+export default {};
+</script>
