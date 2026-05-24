@@ -302,6 +302,114 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 6, "w": 4, "x": 20, "y": 39 },
       "targets": [{ "expr": "resumai_system_memory_task_cache_size", "legendFormat": "Tasks" }]
+    },
+    {
+      "title": "🎯 HR Business Metrics",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 46 },
+      "collapsed": false
+    },
+    {
+      "title": "JD Auto-Match Success Rate",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 47 },
+      "targets": [{ "expr": "sum(resumai_jd_auto_match_total{matched=\"true\"}) / sum(resumai_jd_auto_match_total) * 100", "legendFormat": "Match Rate %" }],
+      "fieldConfig": { "defaults": { "max": 100, "min": 0, "unit": "percent" } }
+    },
+    {
+      "title": "JD Match Score Distribution",
+      "type": "histogram",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 47 },
+      "targets": [{ "expr": "resumai_jd_match_score", "legendFormat": "Score" }]
+    },
+    {
+      "title": "HR Feedback Consistency",
+      "type": "piechart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 47 },
+      "targets": [
+        { "expr": "sum(resumai_hr_feedback_consistency_total{agree=\"true\"})", "legendFormat": "Agree" },
+        { "expr": "sum(resumai_hr_feedback_consistency_total{agree=\"false\"})", "legendFormat": "Disagree" }
+      ]
+    },
+    {
+      "title": "Screening Funnel",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 47 },
+      "targets": [
+        { "expr": "sum(resumai_funnel_upload_count_total)", "legendFormat": "Uploaded" },
+        { "expr": "sum(resumai_funnel_evaluation_completed_total{status=\"SUCCESS\"})", "legendFormat": "Evaluated" },
+        { "expr": "sum(resumai_funnel_recommendation_total{recommendation=\"STRONG_RECOMMEND\"})+sum(resumai_funnel_recommendation_total{recommendation=\"RECOMMEND\"})", "legendFormat": "Recommended" }
+      ]
+    },
+    {
+      "title": "Avg Time to Screen",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 53 },
+      "targets": [{ "expr": "histogram_quantile(0.5, rate(resumai_funnel_time_to_screen_seconds_bucket[5m]))", "legendFormat": "P50" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "🔧 Developer Agent/MCP/RAG Panel",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 60 },
+      "collapsed": false
+    },
+    {
+      "title": "DAG Node Duration by Step",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 61 },
+      "targets": [{ "expr": "histogram_quantile(0.95, rate(resumai_dag_node_duration_seconds_bucket[5m]))", "legendFormat": "{{step_kind}} / {{lane_id}}" }]
+    },
+    {
+      "title": "Parallel Group Bottleneck",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 61 },
+      "targets": [{ "expr": "histogram_quantile(0.95, rate(resumai_dag_parallel_bottleneck_seconds_bucket[5m]))", "legendFormat": "{{dag_group}} / {{bottleneck_lane}}" }]
+    },
+    {
+      "title": "Skill Invocations",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 61 },
+      "targets": [{ "expr": "sum by (skill_name, success) (resumai_skill_invocation_total)", "legendFormat": "{{skill_name}} ({{success}})" }]
+    },
+    {
+      "title": "MCP Call Latency",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 68 },
+      "targets": [{ "expr": "histogram_quantile(0.95, rate(resumai_mcp_call_duration_seconds_bucket[5m]))", "legendFormat": "{{mcp_target}}" }]
+    },
+    {
+      "title": "MCP Call Count",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 4, "x": 8, "y": 68 },
+      "targets": [{ "expr": "sum by (mcp_target) (resumai_mcp_call_count_total)", "legendFormat": "{{mcp_target}}" }]
+    },
+    {
+      "title": "RAG Search Results & Score",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 68 },
+      "targets": [
+        { "expr": "resumai_rag_search_result_count", "legendFormat": "Results ({{collection}})" },
+        { "expr": "resumai_rag_search_top_score", "legendFormat": "Top Score ({{collection}})" }
+      ]
+    },
+    {
+      "title": "Sandbox Runs",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 68 },
+      "targets": [{ "expr": "sum by (project_type, exit_code) (resumai_sandbox_run_count_total)", "legendFormat": "{{project_type}} exit={{exit_code}}" }]
     }
   ],
   "schemaVersion": 39,

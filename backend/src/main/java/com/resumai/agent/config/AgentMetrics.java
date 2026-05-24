@@ -614,4 +614,97 @@ public class AgentMetrics {
     private static String safeTag(String value) {
         return value == null || value.isBlank() ? "unknown" : value;
     }
+
+    // ===== Business DAG Metrics =====
+
+    public void recordDagNodeDuration(String stepKind, String laneId, long durationMs) {
+        Timer.builder("resumai.dag.node.duration")
+                .description("DAG 节点执行耗时")
+                .tag("step_kind", safeTag(stepKind))
+                .tag("lane_id", safeTag(laneId))
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+    }
+
+    public void recordDagParallelBottleneck(String dagGroupId, String bottleneckLane, long durationMs) {
+        Timer.builder("resumai.dag.parallel.bottleneck")
+                .description("并行组瓶颈 lane 耗时")
+                .tag("dag_group", safeTag(dagGroupId))
+                .tag("bottleneck_lane", safeTag(bottleneckLane))
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+    }
+
+    public void recordSkillInvocation(String skillName, String agentName, boolean success) {
+        Counter.builder("resumai.skill.invocation")
+                .description("Skill 调用次数")
+                .tag("skill_name", safeTag(skillName))
+                .tag("agent", safeTag(agentName))
+                .tag("success", String.valueOf(success))
+                .register(registry)
+                .increment();
+    }
+
+    public void recordMcpCall(String mcpTarget, long durationMs, boolean success) {
+        Timer.builder("resumai.mcp.call.duration")
+                .description("MCP 调用耗时")
+                .tag("mcp_target", safeTag(mcpTarget))
+                .tag("success", String.valueOf(success))
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+        Counter.builder("resumai.mcp.call.count")
+                .tag("mcp_target", safeTag(mcpTarget))
+                .tag("success", String.valueOf(success))
+                .register(registry)
+                .increment();
+    }
+
+    public void recordSandboxRun(String projectType, int exitCode, long durationMs) {
+        Timer.builder("resumai.sandbox.run.duration")
+                .description("沙箱运行耗时")
+                .tag("project_type", safeTag(projectType))
+                .tag("exit_code", String.valueOf(exitCode))
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+        Counter.builder("resumai.sandbox.run.count")
+                .tag("project_type", safeTag(projectType))
+                .tag("exit_code", String.valueOf(exitCode))
+                .register(registry)
+                .increment();
+    }
+
+    public void recordRagSearchResult(String collection, int resultCount, double topScore) {
+        DistributionSummary.builder("resumai.rag.search.result_count")
+                .description("RAG 检索结果数")
+                .tag("collection", safeTag(collection))
+                .register(registry)
+                .record(resultCount);
+        DistributionSummary.builder("resumai.rag.search.top_score")
+                .description("RAG 检索 Top 相似度")
+                .tag("collection", safeTag(collection))
+                .register(registry)
+                .record(topScore);
+    }
+
+    public void recordJdAutoMatchSuccess(boolean matched, double topScore) {
+        Counter.builder("resumai.jd.auto_match")
+                .description("JD 自动匹配次数")
+                .tag("matched", String.valueOf(matched))
+                .register(registry)
+                .increment();
+        if (matched) {
+            DistributionSummary.builder("resumai.jd.match_score")
+                    .description("JD 匹配分数分布")
+                    .register(registry)
+                    .record(topScore);
+        }
+    }
+
+    public void recordHrFeedbackConsistency(boolean agree) {
+        Counter.builder("resumai.hr.feedback.consistency")
+                .description("HR 反馈一致性")
+                .tag("agree", String.valueOf(agree))
+                .register(registry)
+                .increment();
+    }
 }

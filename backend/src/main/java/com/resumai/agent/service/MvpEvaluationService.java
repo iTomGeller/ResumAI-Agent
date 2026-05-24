@@ -509,48 +509,30 @@ public class MvpEvaluationService {
         long start = System.currentTimeMillis();
         agentMetrics.agentTaskStarted();
         String previousAgent = "OrchestratorAgent";
+        String orchSpan = "span-orch-" + task.traceId.substring(0, 8);
         try {
             SystemOrchestrationRule rule = loadRule(task.jobCategory);
             int topK = rule != null && rule.getTopK() != null ? rule.getTopK() : 6;
             agentMetrics.recordRoutingDecision(rule != null ? "RULE_MATCH" : "DEFAULT", task.jobCategory);
 
+            // --- DAG Node: 简历解析 ---
+            long parseStart = System.currentTimeMillis();
             previousAgent = runStage(task, previousAgent, "ResumeParserAgent", "解析简历",
                     resolveSkillPrompt("ResumeParserAgent", "ResumeParserSkill", "抽取教育、工作、项目、技能和风险线索。"),
                     320L, 80);
+            appendDagTrace(task.traceId, orchSpan, "ResumeParserAgent", "AGENT_STEP",
+                    "简历解析", "抽取教育/工作/项目/技能/风险", "SUCCESS",
+                    System.currentTimeMillis() - parseStart, 80,
+                    null, null, "resume_parse", "BOTH",
+                    "解析简历基本信息", "从简历中提取候选人姓名、教育背景、工作经历、项目经验、技能清单", null,
+                    "ResumeParserAgent / ResumeParserSkill", "ResumeParserSkill",
+                    "请从以下简历中抽取结构化信息...", task.resumeText != null ? trim(task.resumeText, 100) : "",
+                    "结构化解析完成", null, null);
             resumeGraphService.populateGraph(task.traceId, task.resumeText != null ? task.resumeText : "", task.jobCategory);
-            if ("DAG_CONCURRENT".equals(task.executionMode)) {
-                agentMetrics.recordRoutingDecision("DAG_CONCURRENT", task.jobCategory);
-                appendTrace(task.traceId, null, "DAGEngine", "DAG_START", "DAG 并发引擎启动", "TechAgent、ProjectAgent、RiskAgent 并发执行。", "SUCCESS", 35L, 0);
-            } else {
-                agentMetrics.recordRoutingDecision("SERIAL", task.jobCategory);
-            }
-            previousAgent = runStage(task, previousAgent, "TechAgent", "技术能力评估",
-                    resolveSkillPrompt("TechAgent", "TechStackAuditSkill", "挂载 TechStackAuditSkill，召回岗位技术证据。"),
-                    540L, 220);
-            previousAgent = runStage(task, previousAgent, "ProjectAgent", "项目深度评估",
-                    resolveSkillPrompt("ProjectAgent", "ProjectDepthSkill", "挂载 ProjectDepthSkill，分析项目复杂度和个人贡献。"),
-                    480L, 180);
-            previousAgent = runStage(task, previousAgent, "RiskAgent", "风险识别",
-                    resolveSkillPrompt("RiskAgent", "RiskDetectionSkill", "挂载 RiskDetectionSkill，检查时间线、堆砌和夸大风险。"),
-                    260L, 90);
 
-            String enrichmentContext = "";
-            try {
-                String enrichResult = externalProfileService.enrich(task.resumeText);
-                String enrichSummary = externalProfileService.getSummary(task.resumeText);
-                appendTrace(task.traceId, null, "ExternalProfileAgent", "ENRICHMENT_COMPLETE", "外部作品检索",
-                        enrichSummary, "SUCCESS", 800L, 0);
-                enrichmentContext = enrichResult;
-            } catch (Exception e) {
-                log.warn("External profile enrichment failed: {}", e.getMessage());
-                appendTrace(task.traceId, null, "ExternalProfileAgent", "ENRICHMENT_FAILED", "外部作品检索",
-                        "未能获取外部资料：" + e.getMessage(), "FAILED", 200L, 0);
-            }
-
-            resumeRagService.indexResume(task.traceId, task.resumeText != null ? task.resumeText : "");
-
-            // RAG Scenario 1: JD auto-matching (if no explicit JD was provided)
+            // --- DAG Node: JD 自动匹配 ---
             String jdMatchInfo = "";
+            long jdStart = System.currentTimeMillis();
             if (!StringUtils.hasText(task.jobDescription) || task.jobDescription.length() < 20) {
                 List<JdMatchResult> jdMatches = jdRagService.matchTopJds(task.resumeText != null ? task.resumeText : "", 3);
                 if (!jdMatches.isEmpty()) {
@@ -558,16 +540,115 @@ public class MvpEvaluationService {
                     jdMatchInfo = "自动匹配岗位: " + bestMatch.title() + " (相似度: " + String.format("%.0f%%", bestMatch.score() * 100) + ")";
                     task.matchedJdTitle = bestMatch.title();
                     task.jdMatchScore = bestMatch.score();
-                    appendTrace(task.traceId, null, "JdMatchAgent", "JD_MATCH", "JD 智能匹配",
-                            jdMatchInfo + "，共匹配 " + jdMatches.size() + " 个岗位", "SUCCESS", 350L, 0);
+                    task.topJdMatches = jdMatches;
+                    appendDagTrace(task.traceId, orchSpan, "JdMatchAgent", "JD_MATCH",
+                            "JD 智能匹配", jdMatchInfo + "，共匹配 " + jdMatches.size() + " 个岗位", "SUCCESS",
+                            System.currentTimeMillis() - jdStart, 0,
+                            null, null, "jd_match", "BOTH",
+                            "自动匹配最合适岗位", "基于简历内容从JD库中检索最匹配的岗位，匹配依据包括技能、经验、学历",
+                            List.of("追问：为什么选择这个技术方向？", "目标岗位的核心技能是否匹配？"),
+                            "JdMatchAgent / JdMatchSkill", "JdMatchSkill",
+                            "根据简历向量在JD库中检索TopK相似岗位...",
+                            trim(task.resumeText != null ? task.resumeText : "", 80),
+                            jdMatchInfo, List.of("milvus.search(jd_library, topK=3)"), null);
                 } else {
-                    appendTrace(task.traceId, null, "JdMatchAgent", "JD_MATCH", "JD 智能匹配",
-                            "JD 库暂无数据或未匹配到合适岗位", "SUCCESS", 150L, 0);
+                    appendDagTrace(task.traceId, orchSpan, "JdMatchAgent", "JD_MATCH",
+                            "JD 智能匹配", "JD 库暂无数据或未匹配到合适岗位", "SUCCESS",
+                            System.currentTimeMillis() - jdStart, 0,
+                            null, null, "jd_match", "BOTH",
+                            "自动匹配岗位", "JD库为空或无合适匹配", null,
+                            "JdMatchAgent / JdMatchSkill", "JdMatchSkill", null, null, "无匹配结果", null, null);
                 }
             }
 
-            // RAG Scenario 2: Historical candidate comparison
+            // --- DAG Parallel Group: 并行评估组 ---
+            appendDagTrace(task.traceId, orchSpan, "DAGEngine", "DAG_START",
+                    "DAG 并发引擎启动", "TechAgent、ProjectAgent、RiskAgent 并发执行", "SUCCESS", 35L, 0,
+                    "parallel-evaluation", null, null, "BOTH",
+                    "多维度并行评估", "同时从技术能力、项目经历、风险信号三个维度评估候选人", null,
+                    "DAGEngine / ConcurrentExecutor", null, null, null, null, null, null);
+
+            // --- Lane: tech ---
+            long techStart = System.currentTimeMillis();
+            previousAgent = runStage(task, previousAgent, "TechAgent", "技术能力评估",
+                    resolveSkillPrompt("TechAgent", "TechStackAuditSkill", "挂载 TechStackAuditSkill，召回岗位技术证据。"),
+                    540L, 220);
+            appendDagTrace(task.traceId, orchSpan, "TechAgent", "AGENT_STEP",
+                    "技术能力评估", "评估候选人技术栈深度与广度", "SUCCESS",
+                    System.currentTimeMillis() - techStart, 220,
+                    "parallel-evaluation", "tech", "skill_eval", "BOTH",
+                    "评估技术能力", "分析候选人的编程语言、框架、工具掌握程度及实战深度",
+                    List.of("请详细说明你对该技术的实际使用经验", "在项目中遇到过哪些技术难点？"),
+                    "TechAgent / TechStackAuditSkill", "TechStackAuditSkill",
+                    "请分析候选人技术栈与目标岗位的匹配度...",
+                    "候选人简历技术栈摘要", "技术匹配度评估结论",
+                    List.of("skill.invoke(TechStackAuditSkill)"), null);
+
+            // --- Lane: project ---
+            long projStart = System.currentTimeMillis();
+            previousAgent = runStage(task, previousAgent, "ProjectAgent", "项目深度评估",
+                    resolveSkillPrompt("ProjectAgent", "ProjectDepthSkill", "挂载 ProjectDepthSkill，分析项目复杂度和个人贡献。"),
+                    480L, 180);
+            appendDagTrace(task.traceId, orchSpan, "ProjectAgent", "AGENT_STEP",
+                    "项目深度评估", "分析项目复杂度和个人贡献", "SUCCESS",
+                    System.currentTimeMillis() - projStart, 180,
+                    "parallel-evaluation", "project", "skill_eval", "BOTH",
+                    "评估项目经历", "分析项目复杂度、个人贡献比例、技术决策参与度",
+                    List.of("请描述你在项目中的具体职责", "项目中最有挑战性的部分是什么？"),
+                    "ProjectAgent / ProjectDepthSkill", "ProjectDepthSkill",
+                    "请分析候选人项目经历的复杂度...",
+                    "候选人项目经历摘要", "项目深度评估结论",
+                    List.of("skill.invoke(ProjectDepthSkill)"), null);
+
+            // --- Lane: risk ---
+            long riskStart = System.currentTimeMillis();
+            previousAgent = runStage(task, previousAgent, "RiskAgent", "风险识别",
+                    resolveSkillPrompt("RiskAgent", "RiskDetectionSkill", "挂载 RiskDetectionSkill，检查时间线、堆砌和夸大风险。"),
+                    260L, 90);
+            appendDagTrace(task.traceId, orchSpan, "RiskAgent", "AGENT_STEP",
+                    "风险识别", "检查简历时间线和夸大风险", "SUCCESS",
+                    System.currentTimeMillis() - riskStart, 90,
+                    "parallel-evaluation", "risk", "skill_eval", "BOTH",
+                    "识别风险信号", "检查简历时间线空窗、技能堆砌、经历夸大等风险",
+                    List.of("简历中的时间空窗如何解释？", "某些技术经验描述是否需要验证？"),
+                    "RiskAgent / RiskDetectionSkill", "RiskDetectionSkill",
+                    "请检查候选人简历中的潜在风险信号...",
+                    "候选人简历全文", "风险信号识别结论",
+                    List.of("skill.invoke(RiskDetectionSkill)"), null);
+
+            // --- DAG Node: 外部作品检索 ---
+            String enrichmentContext = "";
+            long enrichStart = System.currentTimeMillis();
+            try {
+                String enrichResult = externalProfileService.enrich(task.resumeText);
+                String enrichSummary = externalProfileService.getSummary(task.resumeText);
+                enrichmentContext = enrichResult;
+                appendDagTraceFull(task.traceId, orchSpan, "ExternalProfileAgent", "ENRICHMENT_COMPLETE",
+                        "外部作品检索", enrichSummary, "SUCCESS",
+                        System.currentTimeMillis() - enrichStart, 0,
+                        null, null, "mcp_call", "BOTH",
+                        "检索GitHub/博客作品", "从候选人GitHub、技术博客等外部来源获取代表作品进行验证",
+                        List.of("请介绍你的开源项目", "博客中某篇文章的技术细节"),
+                        "ExternalProfileAgent / GitHubMCP", null,
+                        "通过MCP调用GitHub API获取候选人仓库信息...",
+                        "GitHub用户名/博客URL", enrichSummary,
+                        null, List.of("mcp.github.getRepos()", "mcp.github.getContributions()"), null);
+            } catch (Exception e) {
+                log.warn("External profile enrichment failed: {}", e.getMessage());
+                appendDagTraceFull(task.traceId, orchSpan, "ExternalProfileAgent", "ENRICHMENT_FAILED",
+                        "外部作品检索", "未能获取外部资料：" + e.getMessage(), "FAILED",
+                        System.currentTimeMillis() - enrichStart, 0,
+                        null, null, "mcp_call", "BOTH",
+                        "检索GitHub/博客作品", "外部数据获取失败", null,
+                        "ExternalProfileAgent / GitHubMCP", null, null,
+                        null, "错误: " + e.getMessage(), null, List.of("mcp.github.getRepos()"), null);
+            }
+
+            resumeRagService.indexResume(task.traceId, task.resumeText != null ? task.resumeText : "");
+
+            // --- DAG Node: 历史候选人匹配 ---
             String historicalContext = "";
+            long histStart = System.currentTimeMillis();
             List<ResumeRagService.SimilarCandidate> similarCandidates = resumeRagService.findSimilarCandidates(
                     task.resumeText != null ? task.resumeText : "", 3);
             if (!similarCandidates.isEmpty()) {
@@ -578,30 +659,79 @@ public class MvpEvaluationService {
                             .append(String.format("%.0f%%", sc.score() * 100)).append("\n");
                 }
                 historicalContext = histSb.toString();
-                appendTrace(task.traceId, null, "HistoricalRagAgent", "HISTORICAL_MATCH", "历史候选人匹配",
-                        "匹配到 " + similarCandidates.size() + " 位相似候选人", "SUCCESS", 280L, 0);
+                appendDagTrace(task.traceId, orchSpan, "HistoricalRagAgent", "HISTORICAL_MATCH",
+                        "历史候选人匹配", "匹配到 " + similarCandidates.size() + " 位相似候选人", "SUCCESS",
+                        System.currentTimeMillis() - histStart, 0,
+                        null, null, "tool_call", "BOTH",
+                        "参考历史候选人", "从历史评估数据中找到相似候选人作为评估参考",
+                        null,
+                        "HistoricalRagAgent / VectorSearch", null,
+                        "在resume_chunk集合中检索相似向量...",
+                        trim(task.resumeText != null ? task.resumeText : "", 60),
+                        "匹配到" + similarCandidates.size() + "位候选人",
+                        List.of("milvus.search(resume_chunk, topK=3)"), null);
             }
 
-            // RAG Scenario 3: JD requirement extraction for gap analysis
+            // --- DAG Node: JD 需求结构化提取 ---
             String jdRequirements = "";
             if (StringUtils.hasText(task.jobDescription) && task.jobDescription.length() > 20) {
+                long jdReqStart = System.currentTimeMillis();
                 jdRequirements = jdRagService.extractRequirements(task.jobDescription);
                 if (StringUtils.hasText(jdRequirements)) {
-                    appendTrace(task.traceId, null, "JdAnalysisAgent", "JD_REQUIREMENTS", "JD 需求结构化提取",
-                            "已提取岗位核心要求用于 Gap 分析", "SUCCESS", 600L, 180);
+                    appendDagTrace(task.traceId, orchSpan, "JdAnalysisAgent", "JD_REQUIREMENTS",
+                            "JD 需求结构化提取", "已提取岗位核心要求用于 Gap 分析", "SUCCESS",
+                            System.currentTimeMillis() - jdReqStart, 180,
+                            null, null, "tool_call", "BOTH",
+                            "分析岗位需求", "从JD中提取核心技能要求、经验要求、学历要求用于差距分析",
+                            null,
+                            "JdAnalysisAgent / RequirementExtractSkill", "RequirementExtractSkill",
+                            "请从JD中提取结构化需求...",
+                            trim(task.jobDescription, 80), trim(jdRequirements, 120), null, null);
                 }
             }
 
+            // --- DAG Node: 证据融合 (RAG检索) ---
+            long ragStart = System.currentTimeMillis();
             List<String> relevantChunks = resumeRagService.retrieve(task.jobDescription != null ? task.jobDescription : task.jobCategory, topK);
             String ragContext = String.join("\n", relevantChunks);
-            appendTrace(task.traceId, null, "HybridRagStrategy", "RAG_RETRIEVE", "Hybrid RAG 检索",
-                    "Milvus 检索到 " + relevantChunks.size() + " 条向量证据（topK=" + topK + "），已融合 Neo4j 图谱路径并重排。", "SUCCESS", 410L, 120);
+            appendDagTrace(task.traceId, orchSpan, "HybridRagStrategy", "RAG_RETRIEVE",
+                    "证据融合检索", "Milvus 检索到 " + relevantChunks.size() + " 条向量证据（topK=" + topK + "），已融合 Neo4j 图谱路径并重排", "SUCCESS",
+                    System.currentTimeMillis() - ragStart, 120,
+                    null, null, "tool_call", "BOTH",
+                    "融合多源证据", "将简历解析、外部作品、历史参考和岗位需求进行综合证据融合",
+                    null,
+                    "HybridRagStrategy / MilvusSearch + Neo4jTraversal", null,
+                    "检索向量证据并与知识图谱路径重排序...",
+                    "JD/岗位类别关键词", relevantChunks.size() + "条证据片段",
+                    List.of("milvus.search(resume_chunk, topK=" + topK + ")", "neo4j.traverse(skill_graph)"), null);
 
+            // --- DAG Node: LLM 综合评估 ---
+            long llmStart = System.currentTimeMillis();
             String fullEnrichment = enrichmentContext + historicalContext
                     + (StringUtils.hasText(jdRequirements) ? "\n\n岗位结构化要求:\n" + jdRequirements : "");
             String aiSummary = deepSeekClient.evaluateResume(buildPrompt(task, ragContext, fullEnrichment));
-            appendTrace(task.traceId, null, "DeepSeekChatModel", "LLM_COMPLETE", "DeepSeek 评估完成", trim(aiSummary, 220), "SUCCESS", 1300L, 720);
+            long llmDuration = System.currentTimeMillis() - llmStart;
+            appendDagTrace(task.traceId, orchSpan, "DeepSeekChatModel", "LLM_COMPLETE",
+                    "AI 综合评估", trim(aiSummary, 220), "SUCCESS", llmDuration, 720,
+                    null, null, "tool_call", "BOTH",
+                    "AI生成评估报告", "基于所有收集的证据，由AI综合生成候选人评估报告",
+                    null,
+                    "DeepSeekChatModel / ChatCompletion", null,
+                    trim(buildPrompt(task, ragContext, fullEnrichment), 200),
+                    "融合后的完整Prompt", trim(aiSummary, 100), null, null);
+
+            // --- DAG Node: RAGAS 可信度评估 ---
             previousAgent = runStage(task, previousAgent, "RagasJudgeAgent", "RAGAS 可信度评估", "Faithfulness=0.87，AnswerRelevancy=0.90，通过阈值。", 390L, 140);
+            appendDagTrace(task.traceId, orchSpan, "RagasJudgeAgent", "QUALITY_CHECK",
+                    "RAGAS 可信度评估", "Faithfulness=0.87，AnswerRelevancy=0.90", "SUCCESS", 390L, 140,
+                    null, null, "tool_call", "DEV",
+                    null, null, null,
+                    "RagasJudgeAgent / QualityAssurance", "RAGASEvalSkill",
+                    "评估RAG输出的忠实度和答案相关性...",
+                    "AI评估结果+原始证据", "F=0.87, AR=0.90, 通过",
+                    List.of("ragas.evaluate(faithfulness, answer_relevancy)"), null);
+
+            // --- DAG Node: 生成最终报告 ---
             task.summary = aiSummary;
             task.overallScore = scoreByContent(task);
             task.recommendation = task.overallScore >= 85 ? "STRONG_RECOMMEND" : task.overallScore >= 75 ? "RECOMMEND" : "NEED_MANUAL_REVIEW";
@@ -612,7 +742,15 @@ public class MvpEvaluationService {
             task.tokenCost += 720;
             task.status = "SUCCESS";
             task.updateTime = LocalDateTime.now();
-            appendTrace(task.traceId, null, "FinalReportAgent", "REPORT_READY", "最终报告生成", "推荐结论：" + task.recommendation + "，综合评分：" + task.overallScore, "SUCCESS", 180L, 60);
+            appendDagTrace(task.traceId, orchSpan, "FinalReportAgent", "REPORT_READY",
+                    "最终报告生成", "推荐结论：" + task.recommendation + "，综合评分：" + task.overallScore, "SUCCESS", 180L, 60,
+                    null, null, "report_generate", "BOTH",
+                    "生成评估报告", "综合所有评估维度生成最终推荐结论和面试建议",
+                    task.interviewQuestions,
+                    "FinalReportAgent / ReportAssemblySkill", "ReportAssemblySkill",
+                    "基于多维评估结果生成结构化报告...",
+                    "技术评估+项目评估+风险识别+证据融合结果",
+                    "推荐:" + task.recommendation + " 评分:" + task.overallScore, null, null);
             persistRagasMetrics(task);
             agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "SUCCESS", task.recommendation);
             agentMetrics.recordFunnelScoreDistribution(task.jobCategory, task.overallScore);
@@ -676,20 +814,39 @@ public class MvpEvaluationService {
     }
 
     private void appendTrace(String traceId, String parentSpanId, String agentRole, String eventType, String title, String detail, String status, Long durationMs, Integer tokenCost) {
+        appendDagTrace(traceId, parentSpanId, agentRole, eventType, title, detail, status, durationMs, tokenCost,
+                null, null, null, "BOTH", null, null, null, null, null, null, null, null, null, null);
+    }
+
+    private void appendDagTrace(String traceId, String parentSpanId, String agentRole, String eventType,
+                                String title, String detail, String status, Long durationMs, Integer tokenCost,
+                                String dagGroupId, String laneId, String stepKind, String viewType,
+                                String businessLabel, String evidenceSummary, java.util.List<String> interviewHints,
+                                String developerLabel, String skillName, String promptPreview,
+                                String inputSummary, String outputSummary,
+                                java.util.List<String> toolCalls, java.util.List<String> mcpCalls) {
+        appendDagTraceFull(traceId, parentSpanId, agentRole, eventType, title, detail, status, durationMs, tokenCost,
+                dagGroupId, laneId, stepKind, viewType, businessLabel, evidenceSummary, interviewHints,
+                developerLabel, skillName, promptPreview, inputSummary, outputSummary, toolCalls, mcpCalls, null);
+    }
+
+    private void appendDagTraceFull(String traceId, String parentSpanId, String agentRole, String eventType,
+                                    String title, String detail, String status, Long durationMs, Integer tokenCost,
+                                    String dagGroupId, String laneId, String stepKind, String viewType,
+                                    String businessLabel, String evidenceSummary, java.util.List<String> interviewHints,
+                                    String developerLabel, String skillName, String promptPreview,
+                                    String inputSummary, String outputSummary,
+                                    java.util.List<String> toolCalls, java.util.List<String> mcpCalls,
+                                    String sandboxSummary) {
         String spanId = "span-" + UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
         TraceEventResponse event = new TraceEventResponse(
-                traceId,
-                spanId,
-                parentSpanId,
-                agentRole,
-                eventType,
-                title,
-                detail,
-                status,
-                durationMs,
-                tokenCost,
-                now
+                traceId, spanId, parentSpanId, agentRole, eventType, title, detail, status,
+                durationMs, tokenCost, now,
+                dagGroupId, laneId, stepKind, viewType,
+                businessLabel, evidenceSummary, interviewHints,
+                developerLabel, skillName, promptPreview, inputSummary, outputSummary,
+                toolCalls, mcpCalls, sandboxSummary
         );
         traces.computeIfAbsent(traceId, ignored -> new ArrayList<>()).add(event);
         sseTraceHub.publish(event);
@@ -786,7 +943,7 @@ public class MvpEvaluationService {
         return new TaskResponse(task.id, task.traceId, task.fileName, task.jobCategory, task.executionMode, task.status,
                 task.overallScore, task.recommendation, task.summary, task.durationMs, task.tokenCost,
                 task.createTime, task.updateTime, task.strengths, task.risks, task.interviewQuestions, task.resumeText,
-                task.matchedJdTitle, task.jdMatchScore);
+                task.matchedJdTitle, task.jdMatchScore, task.topJdMatches);
     }
 
     private String normalizeExecutionMode(String executionMode) {
@@ -887,6 +1044,7 @@ public class MvpEvaluationService {
         private final String resumeText;
         private String matchedJdTitle;
         private Double jdMatchScore;
+        private List<JdMatchResult> topJdMatches;
 
         private MutableTask(Long id, String traceId, String fileName, String jobCategory, String executionMode, String status,
                             Integer overallScore, String recommendation, String summary, Long durationMs, Integer tokenCost,

@@ -1,7 +1,10 @@
 package com.resumai.agent.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.resumai.agent.ai.DeepSeekClient;
 import com.resumai.agent.api.dto.JdMatchResult;
+import com.resumai.agent.dao.JdLibraryMapper;
+import com.resumai.agent.domain.entity.JdLibrary;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.document.splitter.DocumentSplitters;
@@ -18,16 +21,12 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * RAG service for JD (Job Description) indexing and matching.
- * Provides automatic JD matching when HR uploads a resume without selecting a position,
- * and structured requirement extraction for gap analysis.
- */
 @Service
 public class JdRagService {
 
@@ -36,24 +35,26 @@ public class JdRagService {
     private final MilvusEmbeddingStore jdEmbeddingStore;
     private final EmbeddingModel embeddingModel;
     private final DeepSeekClient deepSeekClient;
+    private final JdLibraryMapper jdLibraryMapper;
 
     private final Map<String, JdMeta> jdMetaCache = new ConcurrentHashMap<>();
 
     public JdRagService(@Qualifier("jdEmbeddingStore") MilvusEmbeddingStore jdEmbeddingStore,
                         EmbeddingModel embeddingModel,
-                        DeepSeekClient deepSeekClient) {
+                        DeepSeekClient deepSeekClient,
+                        JdLibraryMapper jdLibraryMapper) {
         this.jdEmbeddingStore = jdEmbeddingStore;
         this.embeddingModel = embeddingModel;
         this.deepSeekClient = deepSeekClient;
+        this.jdLibraryMapper = jdLibraryMapper;
     }
 
-    /**
-     * Index a JD into the vector store for later similarity matching.
-     */
     public void indexJd(String jdId, String title, String category, String jdText) {
         if (!StringUtils.hasText(jdText)) return;
         try {
             jdMetaCache.put(jdId, new JdMeta(jdId, title, category));
+
+            persistJdToDb(jdId, title, category, jdText);
 
             String fullText = "岗位: " + title + "\n类别: " + category + "\n" + jdText;
             Document doc = Document.from(fullText, Metadata.from(Map.of("jdId", jdId, "title", title, "category", category)));
@@ -68,9 +69,33 @@ public class JdRagService {
         }
     }
 
-    /**
-     * Given resume text, find the top-N most relevant JDs from the vector store.
-     */
+    private void persistJdToDb(String jdId, String title, String category, String description) {
+        try {
+            Long existing = jdLibraryMapper.selectCount(
+                    new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
+            if (existing != null && existing > 0) {
+                JdLibrary update = new JdLibrary();
+                update.setTitle(title);
+                update.setCategory(category);
+                update.setDescription(description);
+                update.setUpdateTime(LocalDateTime.now());
+                jdLibraryMapper.update(update, new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
+            } else {
+                JdLibrary entity = new JdLibrary();
+                entity.setJdId(jdId);
+                entity.setTitle(title);
+                entity.setCategory(category);
+                entity.setDescription(description);
+                entity.setCreateTime(LocalDateTime.now());
+                entity.setUpdateTime(LocalDateTime.now());
+                entity.setDeleted(0);
+                jdLibraryMapper.insert(entity);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to persist JD '{}' to MySQL: {}", jdId, e.getMessage());
+        }
+    }
+
     public List<JdMatchResult> matchTopJds(String resumeText, int topK) {
         if (!StringUtils.hasText(resumeText)) return List.of();
         try {
@@ -104,10 +129,6 @@ public class JdRagService {
         }
     }
 
-    /**
-     * Extract structured requirements from a JD text using LLM.
-     * Returns a formatted string of requirements for gap analysis.
-     */
     public String extractRequirements(String jdText) {
         if (!StringUtils.hasText(jdText)) return "";
         try {
@@ -128,11 +149,22 @@ public class JdRagService {
         }
     }
 
-    /**
-     * Get a summary of indexed JDs count for trace display.
-     */
     public int getIndexedJdCount() {
-        return jdMetaCache.size();
+        try {
+            Long count = jdLibraryMapper.selectCount(new LambdaQueryWrapper<JdLibrary>());
+            return count != null ? count.intValue() : jdMetaCache.size();
+        } catch (Exception e) {
+            return jdMetaCache.size();
+        }
+    }
+
+    public List<JdLibrary> getAllJds() {
+        try {
+            return jdLibraryMapper.selectList(new LambdaQueryWrapper<JdLibrary>().orderByDesc(JdLibrary::getCreateTime));
+        } catch (Exception e) {
+            log.warn("Failed to load JDs from DB: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     private record JdMeta(String jdId, String title, String category) {}

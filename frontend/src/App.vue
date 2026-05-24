@@ -19,6 +19,7 @@ interface TaskResponse {
   resumeText?: string;
   matchedJdTitle?: string;
   jdMatchScore?: number;
+  topJdMatches?: Array<{ jdId: string; title: string; category: string; score: number }>;
 }
 
 interface TraceEvent {
@@ -32,6 +33,21 @@ interface TraceEvent {
   durationMs: number;
   tokenCost: number;
   timestamp: string;
+  dagGroupId?: string;
+  laneId?: string;
+  stepKind?: string;
+  viewType?: string;
+  businessLabel?: string;
+  evidenceSummary?: string;
+  interviewHints?: string[];
+  developerLabel?: string;
+  skillName?: string;
+  promptPreview?: string;
+  inputSummary?: string;
+  outputSummary?: string;
+  toolCalls?: string[];
+  mcpCalls?: string[];
+  sandboxSummary?: string;
 }
 
 interface Metrics {
@@ -122,6 +138,8 @@ const jobs = ref<JobProfile[]>(loadJobs());
 const jobDraft = reactive<JobProfile>({ ...jobs.value[0] });
 
 let eventSource: EventSource | null = null;
+const dagViewMode = ref<'hr' | 'dev'>('hr');
+const expandedDagNode = ref<string>('');
 const pollTimers = new Map<string, number>();
 
 const activeTask = computed(() => tasks.value.find((t) => t.traceId === activeTraceId.value) ?? null);
@@ -151,34 +169,129 @@ const traceSteps = computed(() => traces.value.map((e, i) => ({
 })));
 
 const dagGroups = computed(() => {
-  const groups: Array<{ type: 'step' | 'parallel'; label?: string; status?: string; duration?: string; lanes?: Array<{ label: string; status: string; duration: string }> }> = [];
+  const groups: Array<{
+    type: 'step' | 'parallel';
+    label?: string;
+    status?: string;
+    duration?: string;
+    spanId?: string;
+    businessLabel?: string;
+    evidenceSummary?: string;
+    interviewHints?: string[];
+    developerLabel?: string;
+    skillName?: string;
+    promptPreview?: string;
+    inputSummary?: string;
+    outputSummary?: string;
+    toolCalls?: string[];
+    mcpCalls?: string[];
+    sandboxSummary?: string;
+    tokenCost?: number;
+    stepKind?: string;
+    viewType?: string;
+    lanes?: Array<{
+      label: string;
+      status: string;
+      duration: string;
+      spanId: string;
+      businessLabel?: string;
+      evidenceSummary?: string;
+      interviewHints?: string[];
+      developerLabel?: string;
+      skillName?: string;
+      promptPreview?: string;
+      inputSummary?: string;
+      outputSummary?: string;
+      toolCalls?: string[];
+      mcpCalls?: string[];
+      tokenCost?: number;
+      stepKind?: string;
+    }>;
+  }> = [];
   const steps = traceSteps.value;
-  let i = 0;
-  while (i < steps.length) {
-    const step = steps[i];
-    const role = step.agentRole.toLowerCase();
-    if (step.eventType === 'DAG_START' || role.includes('dag')) {
-      const lanes: Array<{ label: string; status: string; duration: string }> = [];
-      i++;
-      while (i < steps.length) {
-        const next = steps[i];
-        const nr = next.agentRole.toLowerCase();
-        if (nr.includes('tech')) { lanes.push({ label: '技术能力评估', status: next.status, duration: formatDuration(next.durationMs) }); i++; }
-        else if (nr.includes('project')) { lanes.push({ label: '项目经验分析', status: next.status, duration: formatDuration(next.durationMs) }); i++; }
-        else if (nr.includes('risk')) { lanes.push({ label: '风险信号识别', status: next.status, duration: formatDuration(next.durationMs) }); i++; }
-        else { break; }
+
+  const parallelSteps = steps.filter(s => s.dagGroupId === 'parallel-evaluation');
+  const nonParallelSteps = steps.filter(s => s.dagGroupId !== 'parallel-evaluation');
+
+  let parallelInserted = false;
+  for (const step of nonParallelSteps) {
+    if (!parallelInserted && step.eventType === 'DAG_START') {
+      const lanes = parallelSteps
+        .filter(s => s.laneId)
+        .map(s => ({
+          label: s.businessLabel || hrStepLabel(s),
+          status: s.status,
+          duration: formatDuration(s.durationMs),
+          spanId: s.spanId,
+          businessLabel: s.businessLabel,
+          evidenceSummary: s.evidenceSummary,
+          interviewHints: s.interviewHints,
+          developerLabel: s.developerLabel,
+          skillName: s.skillName,
+          promptPreview: s.promptPreview,
+          inputSummary: s.inputSummary,
+          outputSummary: s.outputSummary,
+          toolCalls: s.toolCalls,
+          mcpCalls: s.mcpCalls,
+          tokenCost: s.tokenCost,
+          stepKind: s.stepKind,
+        }));
+      if (lanes.length) {
+        groups.push({ type: 'parallel', lanes });
+        parallelInserted = true;
       }
-      if (lanes.length) groups.push({ type: 'parallel', lanes });
-      else i++;
-    } else {
-      groups.push({ type: 'step', label: hrStepLabel(step), status: step.status, duration: formatDuration(step.durationMs) });
-      i++;
+      continue;
     }
+    if (step.eventType === 'QUALITY_CHECK' && dagViewMode.value === 'hr') continue;
+    if (step.viewType === 'DEV' && dagViewMode.value === 'hr') continue;
+    groups.push({
+      type: 'step',
+      label: dagViewMode.value === 'hr' ? (step.businessLabel || hrStepLabel(step)) : (step.developerLabel || step.title),
+      status: step.status,
+      duration: formatDuration(step.durationMs),
+      spanId: step.spanId,
+      businessLabel: step.businessLabel,
+      evidenceSummary: step.evidenceSummary,
+      interviewHints: step.interviewHints,
+      developerLabel: step.developerLabel,
+      skillName: step.skillName,
+      promptPreview: step.promptPreview,
+      inputSummary: step.inputSummary,
+      outputSummary: step.outputSummary,
+      toolCalls: step.toolCalls,
+      mcpCalls: step.mcpCalls,
+      sandboxSummary: step.sandboxSummary,
+      tokenCost: step.tokenCost,
+      stepKind: step.stepKind,
+      viewType: step.viewType,
+    });
+  }
+
+  if (!parallelInserted && parallelSteps.length) {
+    const lanes = parallelSteps.filter(s => s.laneId).map(s => ({
+      label: s.businessLabel || hrStepLabel(s),
+      status: s.status,
+      duration: formatDuration(s.durationMs),
+      spanId: s.spanId,
+      businessLabel: s.businessLabel,
+      evidenceSummary: s.evidenceSummary,
+      interviewHints: s.interviewHints,
+      developerLabel: s.developerLabel,
+      skillName: s.skillName,
+      promptPreview: s.promptPreview,
+      inputSummary: s.inputSummary,
+      outputSummary: s.outputSummary,
+      toolCalls: s.toolCalls,
+      mcpCalls: s.mcpCalls,
+      tokenCost: s.tokenCost,
+      stepKind: s.stepKind,
+    }));
+    if (lanes.length) groups.splice(1, 0, { type: 'parallel', lanes });
   }
   return groups;
 });
 
-const canStartEvaluation = computed(() => (queuedFiles.value.length > 0 || pastedResume.value.trim().length > 0) && selectedJob.value);
+const canStartEvaluation = computed(() => (queuedFiles.value.length > 0 || pastedResume.value.trim().length > 0) && (autoMatchJd.value || selectedJob.value));
 
 const matchedSkills = computed(() => graphNodes.value.filter(n => n.type === 'skill' && n.score >= 60));
 const missingSkills = computed(() => graphNodes.value.filter(n => n.type === 'risk' || (n.type === 'skill' && n.score < 60)));
@@ -226,8 +339,12 @@ const scoreBand90 = computed(() => completedTasks.value.filter(t => (t.overallSc
 const scoreBand80 = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) >= 80 && (t.overallScore || 0) < 90).length);
 const scoreBand70 = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) >= 70 && (t.overallScore || 0) < 80).length);
 const scoreBandLow = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) < 70).length);
-const feedbackAgreeCount = computed(() => feedbacks.value.filter(f => f.feedbackType === 'LIKE').length);
-const feedbackDisagreeCount = computed(() => feedbacks.value.filter(f => f.feedbackType !== 'LIKE').length);
+const validFeedbacks = computed(() => {
+  const taskTraceIds = new Set(tasks.value.map(t => t.traceId));
+  return feedbacks.value.filter(f => taskTraceIds.has(f.traceId) && f.humanComment && !f.humanComment.includes('验证反馈'));
+});
+const feedbackAgreeCount = computed(() => validFeedbacks.value.filter(f => f.feedbackType === 'LIKE').length);
+const feedbackDisagreeCount = computed(() => validFeedbacks.value.filter(f => f.feedbackType !== 'LIKE').length);
 
 function loadJobs(): JobProfile[] {
   try {
@@ -689,10 +806,17 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
         <!-- Report Tab -->
         <div v-if="detailTab === 'report'" class="report-content">
-          <div v-if="activeTask.matchedJdTitle" style="margin-bottom:var(--space-lg);padding:var(--space-md) var(--space-lg);background:var(--color-bg);border-radius:var(--radius-sm);border:1px solid var(--color-border-light)">
-            <span style="font-size:12px;color:var(--color-text-muted)">RAG 匹配岗位</span>
-            <div style="font-size:14px;font-weight:500;margin-top:2px">{{ activeTask.matchedJdTitle }}
-              <span v-if="activeTask.jdMatchScore" style="font-size:12px;color:var(--color-primary);margin-left:8px">匹配度 {{ Math.round((activeTask.jdMatchScore || 0) * 100) }}%</span>
+          <div v-if="activeTask.matchedJdTitle" class="jd-match-card">
+            <div class="jd-match-header">
+              <span class="jd-match-badge">RAG 智能匹配</span>
+              <span class="jd-match-score" v-if="activeTask.jdMatchScore">匹配度 {{ Math.round((activeTask.jdMatchScore || 0) * 100) }}%</span>
+            </div>
+            <div class="jd-match-title">{{ activeTask.matchedJdTitle }}</div>
+            <div v-if="activeTask.topJdMatches && activeTask.topJdMatches.length > 1" class="jd-match-alts">
+              <span class="text-muted" style="font-size:11px">其他候选岗位：</span>
+              <span v-for="(m, mi) in activeTask.topJdMatches.slice(1)" :key="mi" class="jd-alt-chip">
+                {{ m.title }} ({{ Math.round(m.score * 100) }}%)
+              </span>
             </div>
           </div>
           <template v-if="activeTask.summary">
@@ -713,24 +837,84 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <div class="empty-state" v-if="!activeTask.summary && !activeTask.strengths?.length"><p>报告生成中...</p></div>
         </div>
 
-        <!-- Process Tab (HR-readable DAG view) -->
+        <!-- Process Tab (Dual-view DAG) -->
         <div v-if="detailTab === 'process'">
+          <div class="dag-view-toggle">
+            <button :class="{ active: dagViewMode === 'hr' }" @click="dagViewMode = 'hr'">HR 视图</button>
+            <button :class="{ active: dagViewMode === 'dev' }" @click="dagViewMode = 'dev'">开发者视图</button>
+          </div>
+
+          <div v-if="traceSteps.length && !traceSteps[0].dagGroupId && !traceSteps[0].stepKind" class="dag-legacy-warning">
+            <span>旧 Trace 数据，不支持 DAG 详情视图</span>
+          </div>
+
           <div class="dag-flow" v-if="traceSteps.length">
             <template v-for="(group, gi) in dagGroups" :key="gi">
-              <div v-if="group.type === 'step'" class="dag-step" :class="{ failed: group.status === 'FAILED', running: group.status !== 'SUCCESS' && group.status !== 'FAILED' }">
-                <span class="dag-dot"></span>
-                <span class="dag-label">{{ group.label }}</span>
-                <span class="dag-status">{{ group.status === 'SUCCESS' ? '已完成' : group.status === 'FAILED' ? '失败' : '进行中...' }}</span>
+              <!-- Sequential step node -->
+              <div v-if="group.type === 'step'" class="dag-step" :class="{ failed: group.status === 'FAILED', running: group.status !== 'SUCCESS' && group.status !== 'FAILED' }" @click="expandedDagNode = expandedDagNode === group.spanId ? '' : (group.spanId || '')">
+                <span class="dag-dot" :class="'kind-' + (group.stepKind || 'default')"></span>
+                <div class="dag-step-main">
+                  <span class="dag-label">{{ group.label }}</span>
+                  <span class="dag-sublabel" v-if="dagViewMode === 'hr' && group.evidenceSummary">{{ group.evidenceSummary }}</span>
+                  <span class="dag-sublabel" v-if="dagViewMode === 'dev' && group.skillName">Skill: {{ group.skillName }}</span>
+                </div>
+                <span class="dag-status">{{ group.status === 'SUCCESS' ? '✓' : group.status === 'FAILED' ? '✗' : '◌' }}</span>
                 <span class="dag-time">{{ group.duration }}</span>
+                <span class="dag-token" v-if="dagViewMode === 'dev' && group.tokenCost">{{ group.tokenCost }} tok</span>
               </div>
-              <div v-if="group.type === 'parallel'" class="dag-parallel">
-                <div class="dag-parallel-header">并行评估</div>
-                <div class="dag-parallel-lanes">
-                  <div v-for="lane in group.lanes" :key="lane.label" class="dag-lane">
-                    <div class="dag-dot" :style="{ background: lane.status === 'SUCCESS' ? 'var(--color-success)' : lane.status === 'FAILED' ? 'var(--color-danger)' : 'var(--color-primary)' }"></div>
-                    <div class="dag-lane-label">{{ lane.label }}</div>
-                    <div class="dag-lane-desc">{{ lane.duration }}</div>
+              <!-- Expanded detail panel -->
+              <div v-if="group.type === 'step' && expandedDagNode === group.spanId" class="dag-detail-panel">
+                <template v-if="dagViewMode === 'hr'">
+                  <div v-if="group.evidenceSummary" class="dag-detail-row"><strong>证据：</strong>{{ group.evidenceSummary }}</div>
+                  <div v-if="group.interviewHints && group.interviewHints.length" class="dag-detail-row">
+                    <strong>面试追问建议：</strong>
+                    <ul><li v-for="(h, hi) in group.interviewHints" :key="hi">{{ h }}</li></ul>
                   </div>
+                </template>
+                <template v-if="dagViewMode === 'dev'">
+                  <div v-if="group.developerLabel" class="dag-detail-row"><strong>Agent/Skill：</strong>{{ group.developerLabel }}</div>
+                  <div v-if="group.promptPreview" class="dag-detail-row"><strong>Prompt：</strong><code>{{ group.promptPreview }}</code></div>
+                  <div v-if="group.inputSummary" class="dag-detail-row"><strong>Input：</strong>{{ group.inputSummary }}</div>
+                  <div v-if="group.outputSummary" class="dag-detail-row"><strong>Output：</strong>{{ group.outputSummary }}</div>
+                  <div v-if="group.toolCalls && group.toolCalls.length" class="dag-detail-row"><strong>Tool Calls：</strong><ul><li v-for="(tc, ti) in group.toolCalls" :key="ti"><code>{{ tc }}</code></li></ul></div>
+                  <div v-if="group.mcpCalls && group.mcpCalls.length" class="dag-detail-row"><strong>MCP Calls：</strong><ul><li v-for="(mc, mi) in group.mcpCalls" :key="mi"><code>{{ mc }}</code></li></ul></div>
+                  <div v-if="group.sandboxSummary" class="dag-detail-row"><strong>Sandbox：</strong>{{ group.sandboxSummary }}</div>
+                  <div v-if="group.tokenCost" class="dag-detail-row"><strong>Token Cost：</strong>{{ group.tokenCost }}</div>
+                </template>
+              </div>
+
+              <!-- Parallel group -->
+              <div v-if="group.type === 'parallel'" class="dag-parallel">
+                <div class="dag-parallel-header">
+                  <span class="dag-parallel-icon">⫘</span>
+                  {{ dagViewMode === 'hr' ? '多维度并行评估' : 'ConcurrentExecutor / Parallel Group' }}
+                </div>
+                <div class="dag-parallel-lanes">
+                  <div v-for="lane in group.lanes" :key="lane.spanId || lane.label" class="dag-lane" @click="expandedDagNode = expandedDagNode === lane.spanId ? '' : lane.spanId">
+                    <div class="dag-dot" :style="{ background: lane.status === 'SUCCESS' ? 'var(--color-success)' : lane.status === 'FAILED' ? 'var(--color-danger)' : 'var(--color-primary)' }"></div>
+                    <div class="dag-lane-label">{{ dagViewMode === 'hr' ? lane.businessLabel || lane.label : lane.developerLabel || lane.label }}</div>
+                    <div class="dag-lane-desc">{{ lane.duration }}</div>
+                    <span class="dag-token" v-if="dagViewMode === 'dev' && lane.tokenCost">{{ lane.tokenCost }} tok</span>
+                  </div>
+                </div>
+                <!-- Expanded lane detail -->
+                <div v-for="lane in group.lanes" :key="'detail-' + lane.spanId" v-show="expandedDagNode === lane.spanId" class="dag-detail-panel">
+                  <template v-if="dagViewMode === 'hr'">
+                    <div v-if="lane.evidenceSummary" class="dag-detail-row"><strong>证据：</strong>{{ lane.evidenceSummary }}</div>
+                    <div v-if="lane.interviewHints && lane.interviewHints.length" class="dag-detail-row">
+                      <strong>面试追问建议：</strong>
+                      <ul><li v-for="(h, hi) in lane.interviewHints" :key="hi">{{ h }}</li></ul>
+                    </div>
+                  </template>
+                  <template v-if="dagViewMode === 'dev'">
+                    <div v-if="lane.developerLabel" class="dag-detail-row"><strong>Agent/Skill：</strong>{{ lane.developerLabel }}</div>
+                    <div v-if="lane.skillName" class="dag-detail-row"><strong>Skill：</strong>{{ lane.skillName }}</div>
+                    <div v-if="lane.promptPreview" class="dag-detail-row"><strong>Prompt：</strong><code>{{ lane.promptPreview }}</code></div>
+                    <div v-if="lane.inputSummary" class="dag-detail-row"><strong>Input：</strong>{{ lane.inputSummary }}</div>
+                    <div v-if="lane.outputSummary" class="dag-detail-row"><strong>Output：</strong>{{ lane.outputSummary }}</div>
+                    <div v-if="lane.toolCalls && lane.toolCalls.length" class="dag-detail-row"><strong>Tool Calls：</strong><ul><li v-for="(tc, ti) in lane.toolCalls" :key="ti"><code>{{ tc }}</code></li></ul></div>
+                    <div v-if="lane.mcpCalls && lane.mcpCalls.length" class="dag-detail-row"><strong>MCP Calls：</strong><ul><li v-for="(mc, mi) in lane.mcpCalls" :key="mi"><code>{{ mc }}</code></li></ul></div>
+                  </template>
                 </div>
               </div>
             </template>
@@ -885,33 +1069,34 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
           <div class="analytics-card">
             <h3>AI-HR 反馈一致性</h3>
-            <div v-if="feedbacks.length >= 2" style="margin-top:var(--space-md)">
+            <div v-if="validFeedbacks.length >= 3" style="margin-top:var(--space-md)">
               <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:var(--space-lg)">
                 <div><span style="font-size:28px;font-weight:700;color:var(--color-success)">{{ feedbackAgreeCount }}</span><span style="font-size:12px;color:var(--color-text-muted);margin-left:4px">认可</span></div>
                 <div><span style="font-size:28px;font-weight:700;color:var(--color-danger)">{{ feedbackDisagreeCount }}</span><span style="font-size:12px;color:var(--color-text-muted);margin-left:4px">需复核</span></div>
               </div>
               <div style="height:8px;background:var(--color-border-light);border-radius:4px;overflow:hidden;display:flex">
-                <div :style="{ width: (feedbackAgreeCount / feedbacks.length * 100) + '%', height: '100%', background: 'var(--color-success)' }"></div>
-                <div :style="{ width: (feedbackDisagreeCount / feedbacks.length * 100) + '%', height: '100%', background: 'var(--color-danger)' }"></div>
+                <div :style="{ width: (feedbackAgreeCount / validFeedbacks.length * 100) + '%', height: '100%', background: 'var(--color-success)' }"></div>
+                <div :style="{ width: (feedbackDisagreeCount / validFeedbacks.length * 100) + '%', height: '100%', background: 'var(--color-danger)' }"></div>
               </div>
-              <p style="font-size:12px;color:var(--color-text-muted);margin-top:8px">AI 评估与 HR 判断的一致率：{{ Math.round(feedbackAgreeCount / feedbacks.length * 100) }}%</p>
+              <p style="font-size:12px;color:var(--color-text-muted);margin-top:8px">AI 评估与 HR 判断的一致率：{{ Math.round(feedbackAgreeCount / validFeedbacks.length * 100) }}%</p>
             </div>
             <div v-else style="margin-top:var(--space-md)">
-              <p class="text-muted text-sm">需要至少 2 条 HR 反馈才能计算一致性</p>
-              <p style="font-size:12px;color:var(--color-text-muted);margin-top:4px">当前反馈数：{{ feedbacks.length }}</p>
+              <p class="text-muted text-sm">暂无足够数据计算一致性</p>
+              <p style="font-size:12px;color:var(--color-text-muted);margin-top:4px">需要至少 3 条有效 HR 反馈（当前：{{ validFeedbacks.length }} 条有效 / {{ feedbacks.length }} 条总计）</p>
             </div>
           </div>
 
           <div class="analytics-card">
             <h3>最近 HR 反馈</h3>
-            <div v-if="feedbacks.length" style="display:flex;flex-direction:column;gap:6px;margin-top:var(--space-md)">
-              <div v-for="fb in feedbacks.slice(0, 8)" :key="fb.id" style="font-size:12px;display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--color-border-light)">
+            <div v-if="validFeedbacks.length" style="display:flex;flex-direction:column;gap:6px;margin-top:var(--space-md)">
+              <div v-for="fb in validFeedbacks.slice(0, 8)" :key="fb.id" style="font-size:12px;display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--color-border-light)">
                 <span class="badge" :class="fb.feedbackType === 'LIKE' ? 'badge-success' : 'badge-danger'" style="font-size:10px">{{ fb.feedbackType === 'LIKE' ? '认可' : '复核' }}</span>
+                <span class="text-muted text-xs">{{ tasks.find(t => t.traceId === fb.traceId)?.fileName || fb.traceId.substring(0, 8) }}</span>
                 <span class="truncate" style="flex:1">{{ fb.humanComment }}</span>
                 <span class="text-muted text-xs">{{ fb.reviewer }}</span>
               </div>
             </div>
-            <p v-else class="text-muted text-sm">暂无反馈</p>
+            <p v-else class="text-muted text-sm">暂无有效反馈</p>
           </div>
         </div>
       </section>

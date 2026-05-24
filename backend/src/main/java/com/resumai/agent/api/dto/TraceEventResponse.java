@@ -1,13 +1,8 @@
 package com.resumai.agent.api.dto;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
-/**
- * Agent 执行 Trace 事件响应。
- *
- * <p>每条事件对应一次 Agent、Skill、MCP、RAG、LLM 或 RAGAS 的关键动作，
- * 前端通过该结构渲染实时瀑布流和 Span 明细。</p>
- */
 public record TraceEventResponse(
         String traceId,
         String spanId,
@@ -19,6 +14,32 @@ public record TraceEventResponse(
         String status,
         Long durationMs,
         Integer tokenCost,
-        LocalDateTime timestamp
+        LocalDateTime timestamp,
+        // DAG 结构字段
+        String dagGroupId,
+        String laneId,
+        String stepKind,
+        String viewType,
+        // HR 视图字段
+        String businessLabel,
+        String evidenceSummary,
+        List<String> interviewHints,
+        // 开发者视图字段
+        String developerLabel,
+        String skillName,
+        String promptPreview,
+        String inputSummary,
+        String outputSummary,
+        List<String> toolCalls,
+        List<String> mcpCalls,
+        String sandboxSummary
 ) {
+    /** 向下兼容的旧构造方式 */
+    public TraceEventResponse(String traceId, String spanId, String parentSpanId, String agentRole,
+                              String eventType, String title, String detail, String status,
+                              Long durationMs, Integer tokenCost, LocalDateTime timestamp) {
+        this(traceId, spanId, parentSpanId, agentRole, eventType, title, detail, status,
+                durationMs, tokenCost, timestamp,
+                null, null, null, "BOTH", null, null, null, null, null, null, null, null, null, null);
+    }
 }
