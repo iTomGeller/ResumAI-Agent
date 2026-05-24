@@ -147,6 +147,34 @@ const traceSteps = computed(() => traces.value.map((e, i) => ({
   evidence: traceEvidence(e),
 })));
 
+const dagGroups = computed(() => {
+  const groups: Array<{ type: 'step' | 'parallel'; label?: string; status?: string; duration?: string; lanes?: Array<{ label: string; status: string; duration: string }> }> = [];
+  const steps = traceSteps.value;
+  let i = 0;
+  while (i < steps.length) {
+    const step = steps[i];
+    const role = step.agentRole.toLowerCase();
+    if (step.eventType === 'DAG_START' || role.includes('dag')) {
+      const lanes: Array<{ label: string; status: string; duration: string }> = [];
+      i++;
+      while (i < steps.length) {
+        const next = steps[i];
+        const nr = next.agentRole.toLowerCase();
+        if (nr.includes('tech')) { lanes.push({ label: '技术能力评估', status: next.status, duration: formatDuration(next.durationMs) }); i++; }
+        else if (nr.includes('project')) { lanes.push({ label: '项目经验分析', status: next.status, duration: formatDuration(next.durationMs) }); i++; }
+        else if (nr.includes('risk')) { lanes.push({ label: '风险信号识别', status: next.status, duration: formatDuration(next.durationMs) }); i++; }
+        else { break; }
+      }
+      if (lanes.length) groups.push({ type: 'parallel', lanes });
+      else i++;
+    } else {
+      groups.push({ type: 'step', label: hrStepLabel(step), status: step.status, duration: formatDuration(step.durationMs) });
+      i++;
+    }
+  }
+  return groups;
+});
+
 const canStartEvaluation = computed(() => (queuedFiles.value.length > 0 || pastedResume.value.trim().length > 0) && selectedJob.value);
 
 const matchedSkills = computed(() => graphNodes.value.filter(n => n.type === 'skill' && n.score >= 60));
@@ -423,6 +451,20 @@ function traceStageLabel(e: TraceEvent) {
   return '评估步骤';
 }
 
+function hrStepLabel(step: { agentRole: string; eventType: string; title: string }): string {
+  const r = step.agentRole.toLowerCase();
+  if (r.includes('orchestrator') && step.eventType === 'TASK_CREATED') return '创建评估任务';
+  if (r.includes('orchestrator')) return '任务调度';
+  if (r.includes('parser')) return '解析简历内容';
+  if (r.includes('rag') || r.includes('hybrid')) return '知识库检索匹配';
+  if (r.includes('deepseek') || r.includes('llm') || step.eventType === 'LLM_COMPLETE') return 'AI 综合评估';
+  if (r.includes('ragas') || r.includes('judge')) return '评估质量校验';
+  if (r.includes('report') || r.includes('final')) return '生成评估报告';
+  if (r.includes('feedback') || r.includes('human')) return 'HR 反馈记录';
+  if (r.includes('external') || r.includes('github')) return '外部作品检索';
+  return step.title || '评估步骤';
+}
+
 function eventStatusText(status: string) {
   if (status === 'SUCCESS') return '完成';
   if (status === 'FAILED') return '失败';
@@ -645,17 +687,29 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <div class="empty-state" v-if="!activeTask.summary && !activeTask.strengths?.length"><p>报告生成中...</p></div>
         </div>
 
-        <!-- Process Tab -->
+        <!-- Process Tab (HR-readable DAG view) -->
         <div v-if="detailTab === 'process'">
-          <div class="trace-timeline" v-if="traceSteps.length">
-            <div v-for="step in traceSteps" :key="step.spanId" class="trace-step" :class="{ failed: step.status === 'FAILED', running: step.status !== 'SUCCESS' && step.status !== 'FAILED' }">
-              <div class="step-agent">{{ step.agentRole }}</div>
-              <div class="step-title">{{ step.stageLabel }} · {{ step.title }}</div>
-              <div class="step-detail">{{ step.detail }}</div>
-              <div class="step-meta">{{ step.evidence }}</div>
-            </div>
+          <div class="dag-flow" v-if="traceSteps.length">
+            <template v-for="(group, gi) in dagGroups" :key="gi">
+              <div v-if="group.type === 'step'" class="dag-step" :class="{ failed: group.status === 'FAILED', running: group.status !== 'SUCCESS' && group.status !== 'FAILED' }">
+                <span class="dag-dot"></span>
+                <span class="dag-label">{{ group.label }}</span>
+                <span class="dag-status">{{ group.status === 'SUCCESS' ? '已完成' : group.status === 'FAILED' ? '失败' : '进行中...' }}</span>
+                <span class="dag-time">{{ group.duration }}</span>
+              </div>
+              <div v-if="group.type === 'parallel'" class="dag-parallel">
+                <div class="dag-parallel-header">并行评估</div>
+                <div class="dag-parallel-lanes">
+                  <div v-for="lane in group.lanes" :key="lane.label" class="dag-lane">
+                    <div class="dag-dot" :style="{ background: lane.status === 'SUCCESS' ? 'var(--color-success)' : lane.status === 'FAILED' ? 'var(--color-danger)' : 'var(--color-primary)' }"></div>
+                    <div class="dag-lane-label">{{ lane.label }}</div>
+                    <div class="dag-lane-desc">{{ lane.duration }}</div>
+                  </div>
+                </div>
+              </div>
+            </template>
           </div>
-          <div class="empty-state" v-else><p>评估开始后将展示实时执行过程</p></div>
+          <div class="empty-state" v-else><p>评估开始后将展示实时进度</p></div>
         </div>
 
         <!-- Graph Tab → JD Match Analysis -->
@@ -749,7 +803,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         <div class="kpi-grid">
           <div class="kpi-card"><span class="kpi-label">总候选人</span><div class="kpi-value">{{ tasks.length }}</div></div>
           <div class="kpi-card"><span class="kpi-label">推荐面试</span><div class="kpi-value">{{ recommendedCount }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">通过率</span><div class="kpi-value">{{ passRate }}%</div></div>
+          <div class="kpi-card"><span class="kpi-label">通过率</span><div class="kpi-value">{{ tasks.length >= 3 ? passRate + '%' : (recommendedCount + '/' + completedTasks.length) }}</div></div>
           <div class="kpi-card"><span class="kpi-label">平均评估耗时</span><div class="kpi-value">{{ avgEvalTime }}</div></div>
         </div>
 
@@ -805,7 +859,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
           <div class="analytics-card">
             <h3>AI-HR 反馈一致性</h3>
-            <div v-if="feedbacks.length" style="margin-top:var(--space-md)">
+            <div v-if="feedbacks.length >= 2" style="margin-top:var(--space-md)">
               <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:var(--space-lg)">
                 <div><span style="font-size:28px;font-weight:700;color:var(--color-success)">{{ feedbackAgreeCount }}</span><span style="font-size:12px;color:var(--color-text-muted);margin-left:4px">认可</span></div>
                 <div><span style="font-size:28px;font-weight:700;color:var(--color-danger)">{{ feedbackDisagreeCount }}</span><span style="font-size:12px;color:var(--color-text-muted);margin-left:4px">需复核</span></div>
@@ -816,7 +870,10 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               </div>
               <p style="font-size:12px;color:var(--color-text-muted);margin-top:8px">AI 评估与 HR 判断的一致率：{{ Math.round(feedbackAgreeCount / feedbacks.length * 100) }}%</p>
             </div>
-            <p v-else class="text-muted text-sm">暂无 HR 反馈数据</p>
+            <div v-else style="margin-top:var(--space-md)">
+              <p class="text-muted text-sm">需要至少 2 条 HR 反馈才能计算一致性</p>
+              <p style="font-size:12px;color:var(--color-text-muted);margin-top:4px">当前反馈数：{{ feedbacks.length }}</p>
+            </div>
           </div>
 
           <div class="analytics-card">

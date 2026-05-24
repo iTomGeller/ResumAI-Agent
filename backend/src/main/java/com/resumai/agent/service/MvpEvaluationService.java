@@ -79,6 +79,7 @@ public class MvpEvaluationService {
     private final SystemOrchestrationRuleMapper ruleMapper;
     private final DynamicSkillPromptMapper skillPromptMapper;
     private final AgentMetrics agentMetrics;
+    private final ExternalProfileService externalProfileService;
 
     public MvpEvaluationService(DeepSeekClient deepSeekClient,
                                 SseTraceHub sseTraceHub,
@@ -90,7 +91,8 @@ public class MvpEvaluationService {
                                 RagasEvalMetricsMapper ragasEvalMetricsMapper,
                                 SystemOrchestrationRuleMapper ruleMapper,
                                 DynamicSkillPromptMapper skillPromptMapper,
-                                AgentMetrics agentMetrics) {
+                                AgentMetrics agentMetrics,
+                                ExternalProfileService externalProfileService) {
         this.deepSeekClient = deepSeekClient;
         this.sseTraceHub = sseTraceHub;
         this.resumeGraphService = resumeGraphService;
@@ -102,6 +104,7 @@ public class MvpEvaluationService {
         this.ruleMapper = ruleMapper;
         this.skillPromptMapper = skillPromptMapper;
         this.agentMetrics = agentMetrics;
+        this.externalProfileService = externalProfileService;
         agentMetrics.registerExecutorActiveThreadsGauge(executorService::getActiveCount);
         agentMetrics.registerExecutorQueueSizeGauge(() -> executorService.getQueue().size());
         agentMetrics.registerSseActiveSubscribersGauge(sseTraceHub::getActiveSubscriberCount);
@@ -492,12 +495,26 @@ public class MvpEvaluationService {
             previousAgent = runStage(task, previousAgent, "RiskAgent", "风险识别",
                     resolveSkillPrompt("RiskAgent", "RiskDetectionSkill", "挂载 RiskDetectionSkill，检查时间线、堆砌和夸大风险。"),
                     260L, 90);
+
+            String enrichmentContext = "";
+            try {
+                String enrichResult = externalProfileService.enrich(task.resumeText);
+                String enrichSummary = externalProfileService.getSummary(task.resumeText);
+                appendTrace(task.traceId, null, "ExternalProfileAgent", "ENRICHMENT_COMPLETE", "外部作品检索",
+                        enrichSummary, "SUCCESS", 800L, 0);
+                enrichmentContext = enrichResult;
+            } catch (Exception e) {
+                log.warn("External profile enrichment failed: {}", e.getMessage());
+                appendTrace(task.traceId, null, "ExternalProfileAgent", "ENRICHMENT_FAILED", "外部作品检索",
+                        "未能获取外部资料：" + e.getMessage(), "FAILED", 200L, 0);
+            }
+
             resumeRagService.indexResume(task.traceId, task.resumeText != null ? task.resumeText : "");
             List<String> relevantChunks = resumeRagService.retrieve(task.jobDescription != null ? task.jobDescription : task.jobCategory, topK);
             String ragContext = String.join("\n", relevantChunks);
             appendTrace(task.traceId, null, "HybridRagStrategy", "RAG_RETRIEVE", "Hybrid RAG 检索",
                     "Milvus 检索到 " + relevantChunks.size() + " 条向量证据（topK=" + topK + "），已融合 Neo4j 图谱路径并重排。", "SUCCESS", 410L, 120);
-            String aiSummary = deepSeekClient.evaluateResume(buildPrompt(task, ragContext));
+            String aiSummary = deepSeekClient.evaluateResume(buildPrompt(task, ragContext, enrichmentContext));
             appendTrace(task.traceId, null, "DeepSeekChatModel", "LLM_COMPLETE", "DeepSeek 评估完成", trim(aiSummary, 220), "SUCCESS", 1300L, 720);
             previousAgent = runStage(task, previousAgent, "RagasJudgeAgent", "RAGAS 可信度评估", "Faithfulness=0.87，AnswerRelevancy=0.90，通过阈值。", 390L, 140);
             task.summary = aiSummary;
@@ -613,28 +630,33 @@ public class MvpEvaluationService {
     }
 
     private String buildPrompt(MutableTask task) {
-        return buildPrompt(task, "");
+        return buildPrompt(task, "", "");
     }
 
-    private String buildPrompt(MutableTask task, String ragContext) {
+    private String buildPrompt(MutableTask task, String ragContext, String enrichmentContext) {
         String ragSection = StringUtils.hasText(ragContext)
                 ? "\n向量检索证据：\n" + ragContext + "\n"
                 : "";
+        String enrichSection = StringUtils.hasText(enrichmentContext)
+                ? "\n" + enrichmentContext + "\n"
+                : "";
         return """
                 请基于以下信息生成企业招聘场景的简历评估报告，要求包含：综合评分、推荐结论、优势、风险、面试追问。
+                如果候选人有外部作品（GitHub 项目、技术博客等），请在评估中重点参考其代码质量和技术深度。
 
                 候选人文件名：%s
                 岗位类别：%s
                 执行模式：%s
                 岗位描述：%s
                 简历文本：%s
-                %s""".formatted(
+                %s%s""".formatted(
                 task.fileName,
                 task.jobCategory,
                 task.executionMode,
                 StringUtils.hasText(task.jobDescription) ? task.jobDescription : "未填写岗位描述，请按通用技术岗位标准评估。",
                 StringUtils.hasText(task.resumeText) ? task.resumeText : "未填写简历正文，请基于文件名和岗位类别给出低风险 MVP 评估。",
-                ragSection
+                ragSection,
+                enrichSection
         );
     }
 
