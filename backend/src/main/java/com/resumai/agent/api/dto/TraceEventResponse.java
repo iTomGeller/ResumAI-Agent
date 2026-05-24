@@ -40,6 +40,6 @@ public record TraceEventResponse(
                               Long durationMs, Integer tokenCost, LocalDateTime timestamp) {
         this(traceId, spanId, parentSpanId, agentRole, eventType, title, detail, status,
                 durationMs, tokenCost, timestamp,
-                null, null, null, "BOTH", null, null, null, null, null, null, null, null, null, null);
+                null, null, null, "BOTH", null, null, null, null, null, null, null, null, null, null, null);
     }
 }
