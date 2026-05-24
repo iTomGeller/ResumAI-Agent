@@ -521,12 +521,18 @@ select.form-input { appearance: auto; }
 
 /* === UPLOAD === */
 .upload-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   border: 2px dashed var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--space-2xl);
+  padding: var(--space-2xl) var(--space-xl);
   text-align: center;
   cursor: pointer;
   transition: all 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .upload-zone:hover { border-color: var(--color-primary); background: var(--color-primary-light); }
@@ -537,12 +543,14 @@ select.form-input { appearance: auto; }
   font-size: 14px;
   font-weight: 500;
   color: var(--color-text-secondary);
+  pointer-events: none;
 }
 
 .upload-zone .upload-hint {
   font-size: 12px;
   color: var(--color-text-muted);
   margin-top: var(--space-xs);
+  pointer-events: none;
 }
 
 /* === DETAIL HEADER === */

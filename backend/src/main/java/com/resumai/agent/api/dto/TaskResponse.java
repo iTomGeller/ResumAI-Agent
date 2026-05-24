@@ -25,6 +25,7 @@ public record TaskResponse(
         LocalDateTime updateTime,
         List<String> strengths,
         List<String> risks,
-        List<String> interviewQuestions
+        List<String> interviewQuestions,
+        String resumeText
 ) {
 }

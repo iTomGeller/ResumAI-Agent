@@ -678,7 +678,7 @@ public class MvpEvaluationService {
     private TaskResponse toResponse(MutableTask task) {
         return new TaskResponse(task.id, task.traceId, task.fileName, task.jobCategory, task.executionMode, task.status,
                 task.overallScore, task.recommendation, task.summary, task.durationMs, task.tokenCost,
-                task.createTime, task.updateTime, task.strengths, task.risks, task.interviewQuestions);
+                task.createTime, task.updateTime, task.strengths, task.risks, task.interviewQuestions, task.resumeText);
     }
 
     private String normalizeExecutionMode(String executionMode) {

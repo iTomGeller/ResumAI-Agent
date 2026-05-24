@@ -149,12 +149,54 @@ const traceSteps = computed(() => traces.value.map((e, i) => ({
 
 const canStartEvaluation = computed(() => (queuedFiles.value.length > 0 || pastedResume.value.trim().length > 0) && selectedJob.value);
 
+const matchedSkills = computed(() => graphNodes.value.filter(n => n.type === 'skill' && n.score >= 60));
+const missingSkills = computed(() => graphNodes.value.filter(n => n.type === 'risk' || (n.type === 'skill' && n.score < 60)));
+const matchRate = computed(() => {
+  const total = matchedSkills.value.length + missingSkills.value.length;
+  if (!total) return activeTask.value?.overallScore || 0;
+  return Math.round((matchedSkills.value.length / total) * 100);
+});
+const skillMatchPercent = computed(() => {
+  const skills = graphNodes.value.filter(n => n.type === 'skill');
+  if (!skills.length) return activeTask.value?.overallScore || 0;
+  return Math.round(skills.reduce((s, n) => s + Math.min(100, n.score), 0) / skills.length);
+});
+const expMatchPercent = computed(() => {
+  const jobs = graphNodes.value.filter(n => n.type === 'job' || n.type === 'project');
+  if (!jobs.length) return Math.max(0, (activeTask.value?.overallScore || 70) - 5);
+  return Math.round(jobs.reduce((s, n) => s + Math.min(100, n.score), 0) / jobs.length);
+});
+const eduMatchPercent = computed(() => {
+  const edu = graphNodes.value.filter(n => n.type === 'education');
+  if (!edu.length) return Math.max(0, (activeTask.value?.overallScore || 70) + 5);
+  return Math.round(edu.reduce((s, n) => s + Math.min(100, n.score), 0) / edu.length);
+});
+
 const recommendationLabel = computed(() => {
   const r = activeTask.value?.recommendation || '';
   if (r.includes('STRONG')) return '强烈推荐面试';
   if (r.includes('RECOMMEND')) return '推荐面试';
   return '需要人工复核';
 });
+
+const recommendedCount = computed(() => tasks.value.filter(t => t.status === 'SUCCESS' && (t.recommendation || '').includes('RECOMMEND')).length);
+const reviewCount = computed(() => tasks.value.filter(t => t.status === 'SUCCESS' && !(t.recommendation || '').includes('RECOMMEND')).length);
+const passRate = computed(() => {
+  if (!completedTasks.value.length) return 0;
+  return Math.round(recommendedCount.value / completedTasks.value.length * 100);
+});
+const avgEvalTime = computed(() => {
+  const finished = completedTasks.value.filter(t => t.durationMs);
+  if (!finished.length) return '-';
+  const avg = finished.reduce((s, t) => s + (t.durationMs || 0), 0) / finished.length;
+  return (avg / 1000).toFixed(1) + 's';
+});
+const scoreBand90 = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) >= 90).length);
+const scoreBand80 = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) >= 80 && (t.overallScore || 0) < 90).length);
+const scoreBand70 = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) >= 70 && (t.overallScore || 0) < 80).length);
+const scoreBandLow = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) < 70).length);
+const feedbackAgreeCount = computed(() => feedbacks.value.filter(f => f.feedbackType === 'LIKE').length);
+const feedbackDisagreeCount = computed(() => feedbacks.value.filter(f => f.feedbackType !== 'LIKE').length);
 
 function loadJobs(): JobProfile[] {
   try {
@@ -415,7 +457,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <span class="nav-icon">○</span> 候选人
         </button>
         <button :class="{ active: appView === 'analytics' }" @click="appView = 'analytics'; clearNotices()">
-          <span class="nav-icon">◈</span> 数据洞察
+          <span class="nav-icon">◈</span> 招聘洞察
         </button>
       </nav>
 
@@ -573,7 +615,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <button :class="{ active: detailTab === 'resume' }" @click="detailTab = 'resume'">简历原文</button>
           <button :class="{ active: detailTab === 'report' }" @click="detailTab = 'report'">评估报告</button>
           <button :class="{ active: detailTab === 'process' }" @click="detailTab = 'process'">评估过程</button>
-          <button :class="{ active: detailTab === 'graph' }" @click="detailTab = 'graph'">技能图谱</button>
+          <button :class="{ active: detailTab === 'graph' }" @click="detailTab = 'graph'">JD 匹配</button>
           <button :class="{ active: detailTab === 'feedback' }" @click="detailTab = 'feedback'">HR 反馈</button>
         </div>
 
@@ -616,21 +658,68 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <div class="empty-state" v-else><p>评估开始后将展示实时执行过程</p></div>
         </div>
 
-        <!-- Graph Tab -->
+        <!-- Graph Tab → JD Match Analysis -->
         <div v-if="detailTab === 'graph'">
-          <div class="graph-container" v-if="graphNodes.length">
-            <svg viewBox="0 0 800 400">
-              <line v-for="edge in graphEdges" :key="`${edge.from}-${edge.to}`" class="graph-edge"
-                :x1="getNodeX(edge.from)" :y1="getNodeY(edge.from)"
-                :x2="getNodeX(edge.to)" :y2="getNodeY(edge.to)" />
-              <g v-for="node in graphNodes" :key="node.id" class="graph-node"
-                :transform="`translate(${getNodeX(node.id)}, ${getNodeY(node.id)})`">
-                <circle :r="nodeRadius(node)" :fill="nodeColor(node)" opacity="0.85" />
-                <text dy="0.35em" :font-size="node.type === 'candidate' ? 12 : 10">{{ node.label }}</text>
-              </g>
-            </svg>
+          <div v-if="graphNodes.length" class="card" style="padding:var(--space-xl)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-xl)">
+              <h3 style="font-size:15px;font-weight:600">JD 匹配分析</h3>
+              <span class="badge badge-success" v-if="matchRate >= 70">匹配度高</span>
+              <span class="badge badge-warning" v-else-if="matchRate >= 50">部分匹配</span>
+              <span class="badge badge-danger" v-else>匹配度低</span>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:var(--space-xl);margin-bottom:var(--space-2xl)">
+              <div class="score-circle" :class="{ low: matchRate < 50, mid: matchRate >= 50 && matchRate < 70 }">
+                <span class="score-value">{{ matchRate }}%</span>
+                <span class="score-label">匹配</span>
+              </div>
+              <div style="flex:1">
+                <p style="font-size:14px;color:var(--color-text);margin-bottom:4px">满足 <strong>{{ matchedSkills.length }}</strong> / {{ matchedSkills.length + missingSkills.length }} 项岗位要求</p>
+                <p style="font-size:13px;color:var(--color-text-secondary)">基于 AI 评估的岗位匹配度分析，包含技能、经验和教育背景三个维度</p>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:var(--space-lg);margin-bottom:var(--space-2xl)">
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>技能匹配</span><span class="text-muted">{{ skillMatchPercent }}%</span></div>
+                <div style="height:8px;background:var(--color-border-light);border-radius:4px;overflow:hidden"><div :style="{ width: skillMatchPercent + '%', height: '100%', background: skillMatchPercent >= 70 ? 'var(--color-success)' : skillMatchPercent >= 50 ? 'var(--color-warning)' : 'var(--color-danger)', borderRadius: '4px' }"></div></div>
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>经验匹配</span><span class="text-muted">{{ expMatchPercent }}%</span></div>
+                <div style="height:8px;background:var(--color-border-light);border-radius:4px;overflow:hidden"><div :style="{ width: expMatchPercent + '%', height: '100%', background: expMatchPercent >= 70 ? 'var(--color-success)' : expMatchPercent >= 50 ? 'var(--color-warning)' : 'var(--color-danger)', borderRadius: '4px' }"></div></div>
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>教育背景</span><span class="text-muted">{{ eduMatchPercent }}%</span></div>
+                <div style="height:8px;background:var(--color-border-light);border-radius:4px;overflow:hidden"><div :style="{ width: eduMatchPercent + '%', height: '100%', background: eduMatchPercent >= 70 ? 'var(--color-success)' : eduMatchPercent >= 50 ? 'var(--color-warning)' : 'var(--color-danger)', borderRadius: '4px' }"></div></div>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div>
+                <h4 style="font-size:13px;font-weight:600;color:var(--color-success);margin-bottom:var(--space-md)">已满足的要求</h4>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div v-for="skill in matchedSkills" :key="skill.id" style="display:flex;align-items:center;gap:8px;font-size:13px">
+                    <span style="color:var(--color-success)">&#10003;</span>
+                    <span>{{ skill.label }}</span>
+                    <span class="text-muted text-xs" style="margin-left:auto">{{ skill.score }}分</span>
+                  </div>
+                  <p v-if="!matchedSkills.length" class="text-muted text-sm">暂无数据</p>
+                </div>
+              </div>
+              <div>
+                <h4 style="font-size:13px;font-weight:600;color:var(--color-danger);margin-bottom:var(--space-md)">待补充 / 风险项</h4>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div v-for="skill in missingSkills" :key="skill.id" style="display:flex;align-items:center;gap:8px;font-size:13px">
+                    <span style="color:var(--color-danger)">&#10007;</span>
+                    <span>{{ skill.label }}</span>
+                    <span class="text-muted text-xs" style="margin-left:auto">{{ skill.score }}分</span>
+                  </div>
+                  <p v-if="!missingSkills.length" class="text-muted text-sm">无明显短板</p>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="empty-state" v-else><p>图谱数据将在评估完成后生成</p></div>
+          <div class="empty-state" v-else><p>匹配分析将在评估完成后生成</p></div>
         </div>
 
         <!-- Feedback Tab -->
@@ -651,64 +740,95 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         </div>
       </section>
 
-      <!-- ========== ANALYTICS ========== -->
+      <!-- ========== ANALYTICS (HR-focused) ========== -->
       <section v-if="appView === 'analytics'">
         <div class="page-header">
-          <div><h1>数据洞察</h1><p>评估趋势、风险分布与 HR 反馈分析</p></div>
+          <div><h1>招聘洞察</h1><p>候选人漏斗、评分分布与 AI-HR 一致性分析</p></div>
         </div>
 
         <div class="kpi-grid">
-          <div class="kpi-card"><span class="kpi-label">总评估</span><div class="kpi-value">{{ tasks.length }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">平均耗时</span><div class="kpi-value">{{ metrics?.averageDurationMs ? (metrics.averageDurationMs / 1000).toFixed(1) + 's' : '-' }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">Token 消耗</span><div class="kpi-value">{{ metrics?.totalTokenCost?.toLocaleString() ?? '-' }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">HR 反馈</span><div class="kpi-value">{{ feedbacks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">总候选人</span><div class="kpi-value">{{ tasks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">推荐面试</span><div class="kpi-value">{{ recommendedCount }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">通过率</span><div class="kpi-value">{{ passRate }}%</div></div>
+          <div class="kpi-card"><span class="kpi-label">平均评估耗时</span><div class="kpi-value">{{ avgEvalTime }}</div></div>
         </div>
 
         <div class="analytics-grid">
           <div class="analytics-card">
+            <h3>招聘漏斗</h3>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:var(--space-md)">
+              <div style="display:flex;align-items:center;gap:12px">
+                <span style="width:80px;font-size:12px;color:var(--color-text-secondary)">已提交</span>
+                <div style="flex:1;height:24px;background:var(--color-primary-light);border-radius:4px;display:flex;align-items:center;padding:0 10px"><span style="font-size:12px;font-weight:600">{{ tasks.length }}</span></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:12px">
+                <span style="width:80px;font-size:12px;color:var(--color-text-secondary)">已评估</span>
+                <div :style="{ flex: 1, height: '24px', background: 'var(--color-success-light)', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', maxWidth: (completedTasks.length / Math.max(1, tasks.length) * 100) + '%' }"><span style="font-size:12px;font-weight:600">{{ completedTasks.length }}</span></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:12px">
+                <span style="width:80px;font-size:12px;color:var(--color-text-secondary)">推荐面试</span>
+                <div :style="{ flex: 1, height: '24px', background: 'var(--color-success-light)', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', maxWidth: (recommendedCount / Math.max(1, tasks.length) * 100) + '%' }"><span style="font-size:12px;font-weight:600">{{ recommendedCount }}</span></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:12px">
+                <span style="width:80px;font-size:12px;color:var(--color-text-secondary)">需复核</span>
+                <div :style="{ flex: 1, height: '24px', background: 'var(--color-warning-light)', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', maxWidth: (reviewCount / Math.max(1, tasks.length) * 100) + '%' }"><span style="font-size:12px;font-weight:600">{{ reviewCount }}</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="analytics-card">
             <h3>评分分布</h3>
-            <div v-if="completedTasks.length" style="display:flex;flex-direction:column;gap:4px">
-              <div v-for="task in completedTasks.slice(0, 10)" :key="task.traceId" style="display:flex;align-items:center;gap:8px;font-size:12px">
-                <span style="width:120px" class="truncate">{{ task.fileName }}</span>
-                <div style="flex:1;height:6px;background:var(--color-border-light);border-radius:3px;overflow:hidden">
-                  <div :style="{ width: task.overallScore + '%', height: '100%', background: task.overallScore >= 80 ? 'var(--color-success)' : task.overallScore >= 60 ? 'var(--color-warning)' : 'var(--color-danger)', borderRadius: '3px' }"></div>
-                </div>
-                <span style="width:30px;text-align:right;font-weight:600">{{ task.overallScore }}</span>
+            <div v-if="completedTasks.length" style="display:flex;flex-direction:column;gap:8px;margin-top:var(--space-md)">
+              <div style="display:flex;align-items:center;gap:8px;font-size:12px">
+                <span style="width:60px">90+ 分</span>
+                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBand90 / Math.max(1, completedTasks.length) * 100) + '%', height: '100%', background: 'var(--color-success)', borderRadius: '3px' }"></div></div>
+                <span style="width:24px;text-align:right;font-weight:600">{{ scoreBand90 }}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;font-size:12px">
+                <span style="width:60px">80-89 分</span>
+                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBand80 / Math.max(1, completedTasks.length) * 100) + '%', height: '100%', background: '#34d399', borderRadius: '3px' }"></div></div>
+                <span style="width:24px;text-align:right;font-weight:600">{{ scoreBand80 }}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;font-size:12px">
+                <span style="width:60px">70-79 分</span>
+                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBand70 / Math.max(1, completedTasks.length) * 100) + '%', height: '100%', background: 'var(--color-warning)', borderRadius: '3px' }"></div></div>
+                <span style="width:24px;text-align:right;font-weight:600">{{ scoreBand70 }}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;font-size:12px">
+                <span style="width:60px">&lt;70 分</span>
+                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBandLow / Math.max(1, completedTasks.length) * 100) + '%', height: '100%', background: 'var(--color-danger)', borderRadius: '3px' }"></div></div>
+                <span style="width:24px;text-align:right;font-weight:600">{{ scoreBandLow }}</span>
               </div>
             </div>
             <p v-else class="text-muted text-sm">暂无完成的评估</p>
           </div>
+
           <div class="analytics-card">
-            <h3>Agent 耗时占比</h3>
-            <div v-if="metrics?.agentDurationMs" style="display:flex;flex-direction:column;gap:6px">
-              <div v-for="(ms, agent) in metrics.agentDurationMs" :key="agent" style="display:flex;align-items:center;gap:8px;font-size:12px">
-                <span style="width:140px">{{ agent }}</span>
-                <div style="flex:1;height:6px;background:var(--color-border-light);border-radius:3px;overflow:hidden">
-                  <div :style="{ width: Math.min(100, ms / 20) + '%', height: '100%', background: 'var(--color-primary)', borderRadius: '3px' }"></div>
-                </div>
-                <span class="text-muted" style="width:40px;text-align:right">{{ ms }}ms</span>
+            <h3>AI-HR 反馈一致性</h3>
+            <div v-if="feedbacks.length" style="margin-top:var(--space-md)">
+              <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:var(--space-lg)">
+                <div><span style="font-size:28px;font-weight:700;color:var(--color-success)">{{ feedbackAgreeCount }}</span><span style="font-size:12px;color:var(--color-text-muted);margin-left:4px">认可</span></div>
+                <div><span style="font-size:28px;font-weight:700;color:var(--color-danger)">{{ feedbackDisagreeCount }}</span><span style="font-size:12px;color:var(--color-text-muted);margin-left:4px">需复核</span></div>
               </div>
+              <div style="height:8px;background:var(--color-border-light);border-radius:4px;overflow:hidden;display:flex">
+                <div :style="{ width: (feedbackAgreeCount / feedbacks.length * 100) + '%', height: '100%', background: 'var(--color-success)' }"></div>
+                <div :style="{ width: (feedbackDisagreeCount / feedbacks.length * 100) + '%', height: '100%', background: 'var(--color-danger)' }"></div>
+              </div>
+              <p style="font-size:12px;color:var(--color-text-muted);margin-top:8px">AI 评估与 HR 判断的一致率：{{ Math.round(feedbackAgreeCount / feedbacks.length * 100) }}%</p>
             </div>
-            <p v-else class="text-muted text-sm">暂无数据</p>
+            <p v-else class="text-muted text-sm">暂无 HR 反馈数据</p>
           </div>
+
           <div class="analytics-card">
-            <h3>最近反馈</h3>
-            <div v-if="feedbacks.length" style="display:flex;flex-direction:column;gap:6px">
-              <div v-for="fb in feedbacks.slice(0, 6)" :key="fb.id" style="font-size:12px;display:flex;gap:8px;align-items:center">
+            <h3>最近 HR 反馈</h3>
+            <div v-if="feedbacks.length" style="display:flex;flex-direction:column;gap:6px;margin-top:var(--space-md)">
+              <div v-for="fb in feedbacks.slice(0, 8)" :key="fb.id" style="font-size:12px;display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--color-border-light)">
                 <span class="badge" :class="fb.feedbackType === 'LIKE' ? 'badge-success' : 'badge-danger'" style="font-size:10px">{{ fb.feedbackType === 'LIKE' ? '认可' : '复核' }}</span>
                 <span class="truncate" style="flex:1">{{ fb.humanComment }}</span>
+                <span class="text-muted text-xs">{{ fb.reviewer }}</span>
               </div>
             </div>
             <p v-else class="text-muted text-sm">暂无反馈</p>
-          </div>
-          <div class="analytics-card">
-            <h3>岗位分布</h3>
-            <div style="display:flex;flex-direction:column;gap:6px">
-              <div v-for="job in jobs" :key="job.id" style="font-size:12px;display:flex;justify-content:space-between">
-                <span>{{ job.title }}</span>
-                <span class="text-muted">{{ tasks.filter(t => t.jobCategory === job.category).length }} 人</span>
-              </div>
-            </div>
           </div>
         </div>
       </section>
@@ -757,29 +877,6 @@ function renderMarkdown(source: string): string {
     .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
     .replace(/^(?!<[hulo])(.*\S.*)$/gm, '<p>$1</p>')
     .replace(/\n{2,}/g, '');
-}
-
-function getNodeX(id: string): number {
-  const hash = Array.from(id).reduce((a, c) => a + c.charCodeAt(0), 0);
-  return 100 + (hash * 73) % 600;
-}
-
-function getNodeY(id: string): number {
-  const hash = Array.from(id).reduce((a, c) => a + c.charCodeAt(0) * 3, 0);
-  return 60 + (hash * 37) % 280;
-}
-
-function nodeRadius(node: { type: string; score: number }): number {
-  if (node.type === 'candidate') return 28;
-  return 14 + Math.min(12, node.score / 8);
-}
-
-function nodeColor(node: { type: string; score: number }): string {
-  if (node.type === 'candidate') return '#2563eb';
-  if (node.type === 'skill') return '#059669';
-  if (node.type === 'risk') return '#dc2626';
-  if (node.type === 'job') return '#d97706';
-  return '#64748b';
 }
 
 export default {};
