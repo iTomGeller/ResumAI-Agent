@@ -8,6 +8,7 @@ import com.resumai.agent.api.dto.DashboardMetricsResponse;
 import com.resumai.agent.api.dto.FeedbackRequest;
 import com.resumai.agent.api.dto.FeedbackResponse;
 import com.resumai.agent.api.dto.GraphResponse;
+import com.resumai.agent.api.dto.JdMatchResult;
 import com.resumai.agent.api.dto.TaskResponse;
 import com.resumai.agent.api.dto.TraceEventResponse;
 import com.resumai.agent.dao.AgentExecutionTraceMapper;
@@ -80,6 +81,7 @@ public class MvpEvaluationService {
     private final DynamicSkillPromptMapper skillPromptMapper;
     private final AgentMetrics agentMetrics;
     private final ExternalProfileService externalProfileService;
+    private final JdRagService jdRagService;
 
     public MvpEvaluationService(DeepSeekClient deepSeekClient,
                                 SseTraceHub sseTraceHub,
@@ -92,7 +94,8 @@ public class MvpEvaluationService {
                                 SystemOrchestrationRuleMapper ruleMapper,
                                 DynamicSkillPromptMapper skillPromptMapper,
                                 AgentMetrics agentMetrics,
-                                ExternalProfileService externalProfileService) {
+                                ExternalProfileService externalProfileService,
+                                JdRagService jdRagService) {
         this.deepSeekClient = deepSeekClient;
         this.sseTraceHub = sseTraceHub;
         this.resumeGraphService = resumeGraphService;
@@ -105,6 +108,7 @@ public class MvpEvaluationService {
         this.skillPromptMapper = skillPromptMapper;
         this.agentMetrics = agentMetrics;
         this.externalProfileService = externalProfileService;
+        this.jdRagService = jdRagService;
         agentMetrics.registerExecutorActiveThreadsGauge(executorService::getActiveCount);
         agentMetrics.registerExecutorQueueSizeGauge(() -> executorService.getQueue().size());
         agentMetrics.registerSseActiveSubscribersGauge(sseTraceHub::getActiveSubscriberCount);
@@ -184,6 +188,40 @@ public class MvpEvaluationService {
                 resumeText
         );
         return createTask(request);
+    }
+
+    /**
+     * Upload resume with automatic JD matching via RAG vector search.
+     */
+    public TaskResponse createTaskFromUploadAutoMatch(MultipartFile file, String executionMode) {
+        String fileName = file == null ? "" : file.getOriginalFilename();
+        String fileType = detectFileType(fileName);
+        if (file != null && !file.isEmpty()) {
+            agentMetrics.recordFunnelUpload(fileType, "AUTO");
+            agentMetrics.recordFunnelUploadSize(fileType, file.getSize());
+        }
+        String resumeText = extractResumeText(file, fileType, "TECH");
+        List<JdMatchResult> matches = jdRagService.matchTopJds(resumeText, 3);
+        String matchedCategory = "TECH";
+        String matchedDescription = "";
+        String matchedTitle = "";
+        double matchScore = 0.0;
+        if (!matches.isEmpty()) {
+            JdMatchResult best = matches.get(0);
+            matchedCategory = StringUtils.hasText(best.category()) ? best.category() : "TECH";
+            matchedDescription = best.title();
+            matchedTitle = best.title();
+            matchScore = best.score();
+        }
+        CreateTaskRequest request = new CreateTaskRequest(
+                StringUtils.hasText(fileName) ? fileName : "uploaded-resume",
+                matchedCategory,
+                executionMode,
+                matchedDescription,
+                resumeText
+        );
+        TaskResponse response = createTask(request);
+        return response;
     }
 
     private String extractResumeText(MultipartFile file) {
@@ -510,11 +548,58 @@ public class MvpEvaluationService {
             }
 
             resumeRagService.indexResume(task.traceId, task.resumeText != null ? task.resumeText : "");
+
+            // RAG Scenario 1: JD auto-matching (if no explicit JD was provided)
+            String jdMatchInfo = "";
+            if (!StringUtils.hasText(task.jobDescription) || task.jobDescription.length() < 20) {
+                List<JdMatchResult> jdMatches = jdRagService.matchTopJds(task.resumeText != null ? task.resumeText : "", 3);
+                if (!jdMatches.isEmpty()) {
+                    JdMatchResult bestMatch = jdMatches.get(0);
+                    jdMatchInfo = "自动匹配岗位: " + bestMatch.title() + " (相似度: " + String.format("%.0f%%", bestMatch.score() * 100) + ")";
+                    task.matchedJdTitle = bestMatch.title();
+                    task.jdMatchScore = bestMatch.score();
+                    appendTrace(task.traceId, null, "JdMatchAgent", "JD_MATCH", "JD 智能匹配",
+                            jdMatchInfo + "，共匹配 " + jdMatches.size() + " 个岗位", "SUCCESS", 350L, 0);
+                } else {
+                    appendTrace(task.traceId, null, "JdMatchAgent", "JD_MATCH", "JD 智能匹配",
+                            "JD 库暂无数据或未匹配到合适岗位", "SUCCESS", 150L, 0);
+                }
+            }
+
+            // RAG Scenario 2: Historical candidate comparison
+            String historicalContext = "";
+            List<ResumeRagService.SimilarCandidate> similarCandidates = resumeRagService.findSimilarCandidates(
+                    task.resumeText != null ? task.resumeText : "", 3);
+            if (!similarCandidates.isEmpty()) {
+                StringBuilder histSb = new StringBuilder("\n历史相似候选人参考:\n");
+                for (ResumeRagService.SimilarCandidate sc : similarCandidates) {
+                    if (sc.traceId().equals(task.traceId)) continue;
+                    histSb.append("- 候选人(").append(sc.traceId().substring(0, 8)).append(") 相似度: ")
+                            .append(String.format("%.0f%%", sc.score() * 100)).append("\n");
+                }
+                historicalContext = histSb.toString();
+                appendTrace(task.traceId, null, "HistoricalRagAgent", "HISTORICAL_MATCH", "历史候选人匹配",
+                        "匹配到 " + similarCandidates.size() + " 位相似候选人", "SUCCESS", 280L, 0);
+            }
+
+            // RAG Scenario 3: JD requirement extraction for gap analysis
+            String jdRequirements = "";
+            if (StringUtils.hasText(task.jobDescription) && task.jobDescription.length() > 20) {
+                jdRequirements = jdRagService.extractRequirements(task.jobDescription);
+                if (StringUtils.hasText(jdRequirements)) {
+                    appendTrace(task.traceId, null, "JdAnalysisAgent", "JD_REQUIREMENTS", "JD 需求结构化提取",
+                            "已提取岗位核心要求用于 Gap 分析", "SUCCESS", 600L, 180);
+                }
+            }
+
             List<String> relevantChunks = resumeRagService.retrieve(task.jobDescription != null ? task.jobDescription : task.jobCategory, topK);
             String ragContext = String.join("\n", relevantChunks);
             appendTrace(task.traceId, null, "HybridRagStrategy", "RAG_RETRIEVE", "Hybrid RAG 检索",
                     "Milvus 检索到 " + relevantChunks.size() + " 条向量证据（topK=" + topK + "），已融合 Neo4j 图谱路径并重排。", "SUCCESS", 410L, 120);
-            String aiSummary = deepSeekClient.evaluateResume(buildPrompt(task, ragContext, enrichmentContext));
+
+            String fullEnrichment = enrichmentContext + historicalContext
+                    + (StringUtils.hasText(jdRequirements) ? "\n\n岗位结构化要求:\n" + jdRequirements : "");
+            String aiSummary = deepSeekClient.evaluateResume(buildPrompt(task, ragContext, fullEnrichment));
             appendTrace(task.traceId, null, "DeepSeekChatModel", "LLM_COMPLETE", "DeepSeek 评估完成", trim(aiSummary, 220), "SUCCESS", 1300L, 720);
             previousAgent = runStage(task, previousAgent, "RagasJudgeAgent", "RAGAS 可信度评估", "Faithfulness=0.87，AnswerRelevancy=0.90，通过阈值。", 390L, 140);
             task.summary = aiSummary;
@@ -700,7 +785,8 @@ public class MvpEvaluationService {
     private TaskResponse toResponse(MutableTask task) {
         return new TaskResponse(task.id, task.traceId, task.fileName, task.jobCategory, task.executionMode, task.status,
                 task.overallScore, task.recommendation, task.summary, task.durationMs, task.tokenCost,
-                task.createTime, task.updateTime, task.strengths, task.risks, task.interviewQuestions, task.resumeText);
+                task.createTime, task.updateTime, task.strengths, task.risks, task.interviewQuestions, task.resumeText,
+                task.matchedJdTitle, task.jdMatchScore);
     }
 
     private String normalizeExecutionMode(String executionMode) {
@@ -799,6 +885,8 @@ public class MvpEvaluationService {
         private List<String> interviewQuestions;
         private final String jobDescription;
         private final String resumeText;
+        private String matchedJdTitle;
+        private Double jdMatchScore;
 
         private MutableTask(Long id, String traceId, String fileName, String jobCategory, String executionMode, String status,
                             Integer overallScore, String recommendation, String summary, Long durationMs, Integer tokenCost,

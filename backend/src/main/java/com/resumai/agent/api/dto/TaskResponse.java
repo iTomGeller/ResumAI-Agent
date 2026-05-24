@@ -26,6 +26,8 @@ public record TaskResponse(
         List<String> strengths,
         List<String> risks,
         List<String> interviewQuestions,
-        String resumeText
+        String resumeText,
+        String matchedJdTitle,
+        Double jdMatchScore
 ) {
 }

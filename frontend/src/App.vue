@@ -17,6 +17,8 @@ interface TaskResponse {
   interviewQuestions: string[];
   summary?: string;
   resumeText?: string;
+  matchedJdTitle?: string;
+  jdMatchScore?: number;
 }
 
 interface TraceEvent {
@@ -99,6 +101,7 @@ const detailTab = ref<DetailTab>('report');
 const loading = ref(false);
 const refreshing = ref(false);
 const showUploadModal = ref(false);
+const autoMatchJd = ref(true);
 const tasks = ref<TaskResponse[]>([]);
 const traces = ref<TraceEvent[]>([]);
 const metrics = ref<Metrics | null>(null);
@@ -242,6 +245,7 @@ onMounted(async () => {
   await refreshAll();
   await loadHealth();
   if (activeTraceId.value) subscribeTrace(activeTraceId.value);
+  for (const job of jobs.value) { indexJdToBackend(job); }
 });
 
 onBeforeUnmount(() => { eventSource?.close(); pollTimers.forEach((t) => clearTimeout(t)); });
@@ -354,10 +358,15 @@ async function createEvaluations() {
       for (const file of queuedFiles.value) {
         const body = new FormData();
         body.append('file', file);
-        body.append('jobCategory', selectedJob.value.category);
-        body.append('executionMode', 'DAG_CONCURRENT');
-        body.append('jobDescription', selectedJob.value.description);
-        await fetch('/api/tasks/upload', { method: 'POST', body });
+        if (autoMatchJd.value) {
+          body.append('executionMode', 'DAG_CONCURRENT');
+          await fetch('/api/tasks/upload-auto', { method: 'POST', body });
+        } else {
+          body.append('jobCategory', selectedJob.value.category);
+          body.append('executionMode', 'DAG_CONCURRENT');
+          body.append('jobDescription', selectedJob.value.description);
+          await fetch('/api/tasks/upload', { method: 'POST', body });
+        }
       }
     } else if (pastedResume.value.trim()) {
       await fetch('/api/tasks', {
@@ -366,7 +375,7 @@ async function createEvaluations() {
         body: JSON.stringify({
           jobCategory: selectedJob.value.category,
           executionMode: 'DAG_CONCURRENT',
-          jobDescription: selectedJob.value.description,
+          jobDescription: autoMatchJd.value ? '' : selectedJob.value.description,
           resumeText: pastedResume.value
         })
       });
@@ -411,7 +420,18 @@ function createJob() {
 function saveJob() {
   const idx = jobs.value.findIndex((j) => j.id === selectedJobId.value);
   if (idx >= 0) jobs.value[idx] = { ...jobDraft };
+  indexJdToBackend(jobDraft);
   successMessage.value = '岗位已保存。';
+}
+
+async function indexJdToBackend(job: JobProfile) {
+  try {
+    await fetch('/api/jd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jdId: job.id, title: job.title, category: job.category, description: job.description })
+    });
+  } catch { /* best-effort indexing */ }
 }
 
 function deleteJob() {
@@ -669,6 +689,12 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
         <!-- Report Tab -->
         <div v-if="detailTab === 'report'" class="report-content">
+          <div v-if="activeTask.matchedJdTitle" style="margin-bottom:var(--space-lg);padding:var(--space-md) var(--space-lg);background:var(--color-bg);border-radius:var(--radius-sm);border:1px solid var(--color-border-light)">
+            <span style="font-size:12px;color:var(--color-text-muted)">RAG 匹配岗位</span>
+            <div style="font-size:14px;font-weight:500;margin-top:2px">{{ activeTask.matchedJdTitle }}
+              <span v-if="activeTask.jdMatchScore" style="font-size:12px;color:var(--color-primary);margin-left:8px">匹配度 {{ Math.round((activeTask.jdMatchScore || 0) * 100) }}%</span>
+            </div>
+          </div>
           <template v-if="activeTask.summary">
             <div v-html="renderMarkdown(activeTask.summary)"></div>
           </template>
@@ -894,7 +920,14 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
       <div v-if="showUploadModal" class="upload-overlay" @click.self="showUploadModal = false">
         <div class="upload-modal">
           <h2>上传简历评估</h2>
-          <div class="form-field mb-lg">
+          <div class="form-field mb-lg" style="display:flex;align-items:center;gap:12px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="checkbox" v-model="autoMatchJd" style="accent-color:var(--color-primary)" />
+              <span>RAG 智能匹配岗位</span>
+            </label>
+            <span style="font-size:11px;color:var(--color-text-muted)">{{ autoMatchJd ? '系统将自动从 JD 库中匹配最佳岗位' : '手动选择目标岗位' }}</span>
+          </div>
+          <div v-if="!autoMatchJd" class="form-field mb-lg">
             <label>目标岗位</label>
             <select class="form-input" v-model="selectedJobId">
               <option v-for="job in jobs" :key="job.id" :value="job.id">{{ job.title }}</option>

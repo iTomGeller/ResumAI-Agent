@@ -140,6 +140,20 @@ CREATE TABLE IF NOT EXISTS `system_orchestration_rule` (
   UNIQUE KEY `uk_rule_job_category_version` (`job_category`, `version`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '系统宏观调度规则';
 
+-- 8. JD 向量库（RAG 自动匹配岗位）
+CREATE TABLE IF NOT EXISTS `jd_library` (
+  `id`          BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+  `jd_id`       VARCHAR(64)  NOT NULL COMMENT '岗位唯一标识（前端生成）',
+  `title`       VARCHAR(256) NOT NULL COMMENT '岗位标题',
+  `category`    VARCHAR(64)  NULL     COMMENT '岗位类别',
+  `description` TEXT         NULL     COMMENT '岗位描述全文',
+  `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted`     TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
+  UNIQUE KEY `uk_jd_library_jd_id` (`jd_id`),
+  KEY `idx_jd_library_category` (`category`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'JD 向量库';
+
 -- 默认 Skill Prompt（提供给 Agent 即开即用的模板）
 INSERT INTO `dynamic_skill_prompt` (`id`, `skill_name`, `prompt_template`, `version`, `enabled`, `description`, `created_by`)
 VALUES

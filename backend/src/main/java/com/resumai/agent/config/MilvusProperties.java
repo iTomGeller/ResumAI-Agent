@@ -8,6 +8,7 @@ public class MilvusProperties {
     private String host;
     private int port;
     private String collection;
+    private String jdCollection = "jd_library";
     private int dimension;
 
     public String getHost() {
@@ -32,6 +33,14 @@ public class MilvusProperties {
 
     public void setCollection(String collection) {
         this.collection = collection;
+    }
+
+    public String getJdCollection() {
+        return jdCollection;
+    }
+
+    public void setJdCollection(String jdCollection) {
+        this.jdCollection = jdCollection;
     }
 
     public int getDimension() {

@@ -12,6 +12,7 @@ import dev.langchain4j.store.embedding.EmbeddingMatch;
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.milvus.MilvusEmbeddingStore;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -101,4 +102,40 @@ public class ResumeRagService {
             return List.of();
         }
     }
+
+    /**
+     * Find previously indexed candidates that are similar to the given resume text.
+     * Useful for comparative context: "Similar to candidates who scored 85+".
+     */
+    public List<SimilarCandidate> findSimilarCandidates(String resumeText, int topK) {
+        try {
+            String queryText = resumeText.length() > 1500 ? resumeText.substring(0, 1500) : resumeText;
+            Embedding queryEmbedding = embeddingModel.embed(queryText).content();
+            EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
+                    .queryEmbedding(queryEmbedding)
+                    .maxResults(topK * 2)
+                    .minScore(0.6)
+                    .build();
+            EmbeddingSearchResult<TextSegment> result = embeddingStore.search(request);
+            List<EmbeddingMatch<TextSegment>> matches = result.matches();
+
+            List<SimilarCandidate> candidates = new ArrayList<>();
+            java.util.Set<String> seenTraces = new java.util.HashSet<>();
+            for (EmbeddingMatch<TextSegment> match : matches) {
+                TextSegment seg = match.embedded();
+                if (seg == null || seg.metadata() == null) continue;
+                String traceId = seg.metadata().getString("traceId");
+                if (traceId == null || seenTraces.contains(traceId)) continue;
+                seenTraces.add(traceId);
+                candidates.add(new SimilarCandidate(traceId, match.score(), seg.text()));
+                if (candidates.size() >= topK) break;
+            }
+            return candidates;
+        } catch (Exception e) {
+            log.warn("findSimilarCandidates failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    public record SimilarCandidate(String traceId, double score, String matchedChunk) {}
 }

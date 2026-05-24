@@ -61,6 +61,7 @@ resumai:
     host: ${MILVUS_HOST:milvus}
     port: ${MILVUS_PORT:19530}
     collection: ${MILVUS_COLLECTION:resume_chunk}
+    jd-collection: ${MILVUS_JD_COLLECTION:jd_library}
     dimension: ${MILVUS_DIMENSION:1024}
   trace:
     langsmith-api-key: ${LANGSMITH_API_KEY:}
