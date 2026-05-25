@@ -858,12 +858,14 @@ public class MvpEvaluationService {
             long llmDuration = System.currentTimeMillis() - llmStart;
             appendDagTrace(task.traceId, orchSpan, "DeepSeekChatModel", "LLM_COMPLETE",
                     "AI 综合评估", trim(aiSummary, 220), "SUCCESS", llmDuration, 720,
-                    null, null, "tool_call", "BOTH",
+                    null, null, "llm_complete", "BOTH",
                     "AI生成评估报告", "基于所有收集的证据，由AI综合生成候选人评估报告",
                     null,
                     "DeepSeekChatModel / ChatCompletion", null,
                     trim(buildPrompt(task, ragContext, fullEnrichment), 200),
-                    "融合后的完整Prompt", trim(aiSummary, 100), null, null);
+                    "融合后的完整Prompt", trim(aiSummary, 100),
+                    formatToolCall("deepseek-chat", buildPrompt(task, ragContext, fullEnrichment), aiSummary, llmDuration, "SUCCESS"), null);
+            agentMetrics.recordDagNodeDuration("llm_complete", null, llmDuration);
 
             // --- DAG Node: RAGAS 可信度评估 ---
             previousAgent = runStage(task, previousAgent, "RagasJudgeAgent", "RAGAS 可信度评估", "Faithfulness=0.87，AnswerRelevancy=0.90，通过阈值。", 390L, 140);
@@ -909,6 +911,8 @@ public class MvpEvaluationService {
                     "基于多维评估结果生成结构化报告...",
                     "技术评估+项目评估+风险识别+证据融合结果",
                     "推荐:" + task.recommendation + " 评分:" + task.overallScore, null, null);
+            agentMetrics.recordDagNodeDuration("report_generate", null, 180L);
+            agentMetrics.recordDagNodeDuration("quality_check", null, 390L);
             persistRagasMetrics(task);
             agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "SUCCESS", task.recommendation);
             agentMetrics.recordFunnelScoreDistribution(task.jobCategory, task.overallScore);

@@ -495,6 +495,18 @@ function openCandidate(traceId: string) {
   if (task) selectTask(task);
 }
 
+function candidateReviewHint(task: TaskResponse): string {
+  if (task.status !== 'SUCCESS') return statusText(task.status);
+  if ((task.recommendation || '').includes('RECOMMEND')) return '推荐面试';
+  return task.risks?.[0] || '需人工复核';
+}
+
+function recommendationShort(rec: string): string {
+  if (rec.includes('STRONG')) return '强烈推荐';
+  if (rec.includes('RECOMMEND')) return '推荐';
+  return '需复核';
+}
+
 function goBack() {
   appView.value = 'candidates';
 }
@@ -828,14 +840,15 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
 
           <table class="data-table" v-if="filteredCandidates.length">
-            <thead><tr><th>文件名</th><th>状态</th><th>岗位</th><th>评分</th><th>推荐</th><th>耗时</th></tr></thead>
+            <thead><tr><th>文件名</th><th>状态</th><th>岗位</th><th>评分</th><th>推荐</th><th>摘要</th><th>耗时</th></tr></thead>
             <tbody>
-              <tr v-for="task in filteredCandidates" :key="task.traceId" :class="{ active: task.traceId === activeTraceId }" @click="selectTask(task)">
-                <td>{{ task.fileName }}</td>
+              <tr v-for="task in filteredCandidates" :key="task.traceId" :class="{ active: task.traceId === activeTraceId, 'row-review': task.status === 'SUCCESS' && !(task.recommendation || '').includes('RECOMMEND') }" @click="selectTask(task)">
+                <td><strong>{{ task.fileName }}</strong><div class="text-muted text-xs" v-if="task.matchedJdTitle">{{ task.matchedJdTitle }}</div></td>
                 <td><span class="badge" :class="statusClass(task.status)">{{ statusText(task.status) }}</span></td>
                 <td>{{ task.jobCategory }}</td>
                 <td><strong>{{ task.overallScore || '-' }}</strong></td>
-                <td class="text-muted text-sm">{{ task.recommendation || '-' }}</td>
+                <td><span class="badge" :class="(task.recommendation || '').includes('RECOMMEND') ? 'badge-success' : 'badge-warning'">{{ recommendationShort(task.recommendation || '') }}</span></td>
+                <td class="text-muted text-sm truncate" style="max-width:180px">{{ candidateReviewHint(task) }}</td>
                 <td class="text-muted">{{ formatDuration(task.durationMs) }}</td>
               </tr>
             </tbody>

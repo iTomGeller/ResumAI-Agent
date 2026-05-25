@@ -1114,6 +1114,10 @@ select.form-input { appearance: auto; }
 
 .kpi-hint { display: block; font-size: 11px; color: var(--color-text-muted); margin-top: 4px; }
 
+.data-table tbody tr.row-review { background: rgba(245, 158, 11, 0.06); cursor: pointer; }
+.data-table tbody tr { cursor: pointer; }
+.data-table tbody tr:hover { background: rgba(79, 70, 229, 0.04); }
+
 /* === SCROLLBAR === */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
