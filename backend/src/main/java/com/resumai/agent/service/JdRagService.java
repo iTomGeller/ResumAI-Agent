@@ -175,12 +175,26 @@ public class JdRagService {
         }
     }
 
-    private List<JdMatchResult> matchTopJdsViaLexical(String resumeText, int topK) {
-        List<JdLibrary> allJds = getAllJds();
-        if (allJds.isEmpty()) {
-            ensureDefaultJdsSeeded();
-            allJds = getAllJds();
+    private List<JdLibrary> loadJdsForMatching() {
+        List<JdLibrary> fromDb = getAllJds();
+        if (!fromDb.isEmpty()) {
+            return fromDb;
         }
+        log.warn("JD library empty in DB, using built-in default JD catalog for lexical matching");
+        List<JdLibrary> defaults = new ArrayList<>();
+        for (DefaultJd jd : DEFAULT_JDS) {
+            JdLibrary entity = new JdLibrary();
+            entity.setJdId(jd.jdId());
+            entity.setTitle(jd.title());
+            entity.setCategory(jd.category());
+            entity.setDescription(jd.description());
+            defaults.add(entity);
+        }
+        return defaults;
+    }
+
+    private List<JdMatchResult> matchTopJdsViaLexical(String resumeText, int topK) {
+        List<JdLibrary> allJds = loadJdsForMatching();
         if (allJds.isEmpty()) {
             return List.of();
         }
@@ -255,10 +269,17 @@ public class JdRagService {
         try {
             JdLibrary jd = jdLibraryMapper.selectOne(
                     new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId).last("limit 1"));
-            return jd != null && jd.getDescription() != null ? jd.getDescription() : "";
+            if (jd != null && jd.getDescription() != null) {
+                return jd.getDescription();
+            }
         } catch (Exception e) {
-            return "";
+            log.debug("Load JD description from DB failed: {}", e.getMessage());
         }
+        return DEFAULT_JDS.stream()
+                .filter(d -> d.jdId().equals(jdId))
+                .map(DefaultJd::description)
+                .findFirst()
+                .orElse("");
     }
 
     private List<String> buildMatchReasons(String resumeText, String jdText, String title) {
