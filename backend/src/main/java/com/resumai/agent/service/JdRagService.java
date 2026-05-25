@@ -21,7 +21,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.time.LocalDateTime;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -73,11 +74,9 @@ public class JdRagService {
                 Long count = jdLibraryMapper.selectCount(
                         new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jd.jdId()));
                 if (count == null || count == 0) {
-                    indexJd(jd.jdId(), jd.title(), jd.category(), jd.description());
                     seeded++;
-                } else {
-                    jdMetaCache.put(jd.jdId(), new JdMeta(jd.jdId(), jd.title(), jd.category()));
                 }
+                indexJd(jd.jdId(), jd.title(), jd.category(), jd.description());
             } catch (Exception e) {
                 log.warn("Seed JD '{}' failed: {}", jd.title(), e.getMessage());
             }
@@ -134,6 +133,7 @@ public class JdRagService {
 
     public List<JdMatchResult> matchTopJds(String resumeText, int topK) {
         if (!StringUtils.hasText(resumeText)) return List.of();
+        ensureDefaultJdsSeeded();
         List<JdMatchResult> vectorMatches = matchTopJdsViaVector(resumeText, topK);
         if (!vectorMatches.isEmpty()) {
             return vectorMatches;
@@ -187,7 +187,7 @@ public class JdRagService {
         for (JdLibrary jd : allJds) {
             String desc = jd.getDescription() != null ? jd.getDescription() : "";
             double score = lexicalScore(resumeLower, desc, jd.getTitle(), jd.getCategory());
-            if (score > 0.15) {
+            if (score > 0.08) {
                 scored.add(enrichMatchResult(jd.getJdId(), jd.getTitle(), jd.getCategory(), score, resumeText));
             }
         }
@@ -195,19 +195,38 @@ public class JdRagService {
         return scored.stream().limit(topK).collect(Collectors.toList());
     }
 
-    private double lexicalScore(String resumeLower, String jdText, String title, String category) {
-        Set<String> keywords = extractKeywords(jdText + " " + title + " " + category);
-        if (keywords.isEmpty()) return 0.1;
-        long hits = keywords.stream().filter(resumeLower::contains).count();
-        return Math.min(0.95, 0.2 + (double) hits / keywords.size() * 0.75);
+    private Set<String> extractKeywords(String text) {
+        Set<String> keywords = new LinkedHashSet<>();
+        if (!StringUtils.hasText(text)) {
+            return keywords;
+        }
+        Matcher english = Pattern.compile("[a-zA-Z][a-zA-Z0-9+#\\.]*").matcher(text);
+        while (english.find()) {
+            String word = english.group().toLowerCase(Locale.ROOT);
+            if (word.length() >= 2) {
+                keywords.add(word);
+            }
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+        for (String segment : lower.split("[\\s,，、/|；;：:\\.\\(\\)（）\\[\\]{}\"'\\n]+")) {
+            if (segment.length() >= 2 && !segment.matches("\\d+")) {
+                keywords.add(segment);
+            }
+        }
+        for (String tech : List.of("java", "spring", "mysql", "redis", "docker", "rag", "agent", "vue", "python", "sql", "backend", "后端", "工程师", "产品经理")) {
+            if (lower.contains(tech)) {
+                keywords.add(tech);
+            }
+        }
+        return keywords.stream().limit(50).collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
-    private Set<String> extractKeywords(String text) {
-        return java.util.Arrays.stream(text.toLowerCase(Locale.ROOT).split("[\\s,，、/|；;：:\\.\\(\\)（）\\[\\]{}\"'\\n]+"))
-                .filter(w -> w.length() >= 2)
-                .filter(w -> !w.matches("\\d+"))
-                .limit(40)
-                .collect(Collectors.toSet());
+    private double lexicalScore(String resumeLower, String jdText, String title, String category) {
+        Set<String> keywords = extractKeywords(jdText + " " + title + " " + category);
+        if (keywords.isEmpty()) return 0.15;
+        long hits = keywords.stream().filter(kw -> resumeLower.contains(kw.toLowerCase(Locale.ROOT))).count();
+        double ratio = (double) hits / keywords.size();
+        return Math.min(0.95, 0.15 + ratio * 0.8);
     }
 
     private JdMatchResult enrichMatchResult(String jdId, String title, String category, double score, String resumeText) {
