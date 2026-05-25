@@ -39,7 +39,18 @@ public class ResumeRagService {
     }
 
     public boolean isMilvusAvailable() {
-        return embeddingStore != null;
+        if (embeddingStore == null) return false;
+        try {
+            // Test if connection/collection is actually alive
+            embeddingStore.search(EmbeddingSearchRequest.builder()
+                .queryEmbedding(embeddingModel.embed("test").content())
+                .maxResults(1)
+                .build());
+            return true;
+        } catch (Exception e) {
+            log.warn("Milvus health check failed: {}", e.getMessage());
+            return false;
+        }
     }
 
     public void indexResume(String traceId, String resumeText) {
@@ -56,9 +67,13 @@ public class ResumeRagService {
             agentMetrics.recordToolCall("milvus_index", "HybridRagStrategy", "SUCCESS",
                     System.currentTimeMillis() - start);
         } catch (Exception e) {
-            log.warn("Milvus indexResume failed for traceId={}: {}", traceId, e.getMessage());
+            String errorType = e.getClass().getSimpleName();
+            if (e.getMessage() != null && e.getMessage().contains("collection not found")) {
+                errorType = "CollectionNotFoundException";
+            }
+            log.warn("Milvus indexResume failed for traceId={}: {} - {}", traceId, errorType, e.getMessage());
             agentMetrics.recordMilvusChunksIndexed(0);
-            agentMetrics.recordToolCallError("milvus_index", e.getClass().getSimpleName());
+            agentMetrics.recordToolCallError("milvus_index", errorType);
             agentMetrics.recordToolCall("milvus_index", "HybridRagStrategy", "FAILED",
                     System.currentTimeMillis() - start);
         }

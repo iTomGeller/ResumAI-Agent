@@ -147,6 +147,9 @@ const selectedJobId = ref('');
 const jobs = ref<JobProfile[]>(loadJobs());
 const jobDraft = reactive<JobProfile>({ ...jobs.value[0] });
 
+const tasksLoaded = ref(false);
+const tasksError = ref(false);
+
 let eventSource: EventSource | null = null;
 const dagViewMode = ref<'hr' | 'dev'>('hr');
 const expandedDagNode = ref<string>('');
@@ -453,8 +456,19 @@ async function loadHealth() {
 }
 
 async function loadTasks() {
-  const r = await fetch('/api/tasks');
-  if (r.ok) tasks.value = (await r.json()) as TaskResponse[];
+  try {
+    const r = await fetch('/api/tasks');
+    if (r.ok) {
+      tasks.value = (await r.json()) as TaskResponse[];
+      tasksError.value = false;
+    } else {
+      tasksError.value = true;
+    }
+  } catch {
+    tasksError.value = true;
+  } finally {
+    tasksLoaded.value = true;
+  }
 }
 
 async function loadMetrics() {
@@ -772,6 +786,8 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               </tr>
             </tbody>
           </table>
+          <div v-else-if="!tasksLoaded" class="empty-state"><p>加载评估记录中...</p></div>
+          <div v-else-if="tasksError && !tasks.length" class="empty-state"><p>加载记录失败，请刷新重试</p></div>
           <div v-else class="empty-state"><p>暂无评估记录，上传简历开始使用</p></div>
         </div>
       </section>
@@ -853,6 +869,8 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               </tr>
             </tbody>
           </table>
+          <div v-else-if="!tasksLoaded" class="empty-state"><p>加载评估记录中...</p></div>
+          <div v-else-if="tasksError && !tasks.length" class="empty-state"><p>加载记录失败，请刷新重试</p></div>
           <div v-else class="empty-state"><p>暂无候选人数据</p></div>
         </div>
       </section>
@@ -864,7 +882,11 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         <div class="detail-header">
           <div class="score-circle" :class="{ low: (activeTask.overallScore || 0) < 60, mid: (activeTask.overallScore || 0) >= 60 && (activeTask.overallScore || 0) < 75 }">
             <span class="score-value">{{ activeTask.overallScore || '-' }}</span>
-            <span class="score-label">综合</span>
+            <span class="score-label">综合评估</span>
+          </div>
+          <div class="score-circle" v-if="activeTask.jdMatchScore" :class="{ low: activeTask.jdMatchScore < 0.5, mid: activeTask.jdMatchScore >= 0.5 && activeTask.jdMatchScore < 0.7 }">
+            <span class="score-value">{{ Math.round(activeTask.jdMatchScore * 100) }}%</span>
+            <span class="score-label">JD 匹配</span>
           </div>
           <div class="detail-meta">
             <h2>{{ recommendationLabel }}</h2>
@@ -903,8 +925,10 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             <div class="hr-decision-header">
               <span class="hr-decision-badge">{{ recommendationLabel }}</span>
               <span class="hr-decision-score" v-if="activeTask.overallScore">综合评分 {{ activeTask.overallScore }}</span>
+              <span class="hr-decision-score" v-if="activeTask.jdMatchScore" style="margin-left: 8px; color: var(--color-text-light);">JD 匹配 {{ Math.round(activeTask.jdMatchScore * 100) }}%</span>
             </div>
             <p class="hr-decision-summary">{{ activeTask.summary ? activeTask.summary.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 180) : '评估报告生成中...' }}</p>
+            <p class="text-muted text-sm mt-sm">注：综合评分代表候选人整体技术素质，JD 匹配度代表与当前具体岗位的贴合程度。</p>
           </div>
 
           <div v-if="activeTask.matchedJdTitle" class="jd-match-card">

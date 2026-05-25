@@ -36,6 +36,13 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 management:
+  metrics:
+    distribution:
+      percentiles-histogram:
+        resumai.dag.node.duration: true
+        resumai.tool.call.duration: true
+        resumai.mcp.call.duration: true
+        resumai.funnel.time_to_screen: true
   endpoints:
     web:
       exposure:

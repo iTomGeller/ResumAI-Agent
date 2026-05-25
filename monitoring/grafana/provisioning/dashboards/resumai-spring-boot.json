@@ -42,11 +42,11 @@
       "targets": [{ "expr": "sum(resumai_skill_invocation_total{agent=~\"$agent\"})", "legendFormat": "Skills" }]
     },
     {
-      "title": "MCP 调用",
+      "title": "MCP 调用 / Context",
       "type": "stat",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
-      "targets": [{ "expr": "sum(resumai_mcp_call_count_total)", "legendFormat": "MCP" }]
+      "targets": [{ "expr": "sum(resumai_mcp_call_count_total) or sum(resumai_dag_node_duration_seconds_count{step_kind=\"mcp_call\"})", "legendFormat": "MCP" }]
     },
     {
       "title": "Pipeline P95 耗时",

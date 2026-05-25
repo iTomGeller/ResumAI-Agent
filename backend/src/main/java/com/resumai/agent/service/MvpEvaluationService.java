@@ -880,23 +880,23 @@ public class MvpEvaluationService {
 
             // --- DAG Node: 生成最终报告 ---
             task.summary = aiSummary;
-            task.overallScore = scoreByContent(task);
-            task.recommendation = task.overallScore >= 85 ? "STRONG_RECOMMEND" : task.overallScore >= 75 ? "RECOMMEND" : "NEED_MANUAL_REVIEW";
-            task.strengths = extractListSection(aiSummary, "优势", "关键优势", "亮点");
+            task.overallScore = parseLlmScore(aiSummary);
+            if (task.overallScore == 0) {
+                task.overallScore = scoreByContent(task);
+            }
+            double jdMatchScore = task.jdMatchScore != null ? task.jdMatchScore : 0.0;
+            task.recommendation = parseLlmRecommendation(aiSummary, task.overallScore, jdMatchScore);
+            task.strengths = extractSectionItems(aiSummary, List.of("优势", "关键优势", "亮点"));
             if (task.strengths.isEmpty()) {
                 task.strengths = List.of("技术栈与岗位存在较高匹配度", "项目表达具备可追问的工程线索", "RAGAS 已完成可信度初评");
             }
-            task.risks = extractListSection(aiSummary, "风险", "关注点", "不足");
+            task.risks = extractSectionItems(aiSummary, List.of("风险", "关注点", "不足", "关键风险"));
             if (task.risks.isEmpty()) {
                 task.risks = List.of("关键项目贡献仍建议面试官追问验证", "部分技能深度需现场考察");
             }
-            task.interviewQuestions = extractListSection(aiSummary, "追问", "面试", "问题");
+            task.interviewQuestions = extractSectionItems(aiSummary, List.of("追问", "面试", "问题", "面试追问", "面试问题"));
             if (task.interviewQuestions.isEmpty()) {
                 task.interviewQuestions = List.of("请详细说明最近一个项目的架构取舍。", "你在团队中承担的是主导、核心开发还是协作角色？", "请举例说明一次线上问题定位和复盘过程。");
-            }
-            if (task.topJdMatches != null && !task.topJdMatches.isEmpty() && !task.topJdMatches.get(0).gaps().isEmpty()) {
-                task.risks = new ArrayList<>(task.risks);
-                task.risks.addAll(task.topJdMatches.get(0).gaps());
             }
             task.durationMs = System.currentTimeMillis() - start;
             task.tokenCost += 720;
@@ -1130,6 +1130,43 @@ public class MvpEvaluationService {
         return Math.min(base, 95);
     }
 
+    private int parseLlmScore(String text) {
+        if (!StringUtils.hasText(text)) return 0;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("评分.*?(\\d+(\\.\\d+)?)\\s*/\\s*(\\d+)").matcher(text);
+        if (m.find()) {
+            double score = Double.parseDouble(m.group(1));
+            double max = Double.parseDouble(m.group(3));
+            if (max == 10) return (int) Math.round(score * 10);
+            if (max == 100) return (int) Math.round(score);
+        }
+        return 0;
+    }
+
+    private String parseLlmRecommendation(String text, int score, double jdMatchScore) {
+        if (!StringUtils.hasText(text)) {
+            return score >= 85 ? "STRONG_RECOMMEND" : score >= 75 ? "RECOMMEND" : "NEED_MANUAL_REVIEW";
+        }
+        String recommendation = "NEED_MANUAL_REVIEW";
+        if (text.contains("强烈推荐")) {
+            recommendation = "STRONG_RECOMMEND";
+        } else if (text.contains("推荐面试") && !text.contains("待定")) {
+            recommendation = "RECOMMEND";
+        }
+        
+        if (jdMatchScore < 0.5 && !"STRONG_RECOMMEND".equals(recommendation)) {
+            // keep it as is
+        }
+        if (text.contains("严重不符") || text.contains("硬风险") || text.contains("待定") || text.contains("复核")) {
+            if ("STRONG_RECOMMEND".equals(recommendation)) {
+                recommendation = "RECOMMEND";
+            } else if ("RECOMMEND".equals(recommendation)) {
+                recommendation = "NEED_MANUAL_REVIEW";
+            }
+        }
+        
+        return recommendation;
+    }
+
     private Long averageByMode(List<MutableTask> snapshot, String mode) {
         return Math.round(snapshot.stream()
                 .filter(task -> mode.equals(task.executionMode))
@@ -1258,12 +1295,13 @@ public class MvpEvaluationService {
                 target, durationMs, success ? "SUCCESS" : "FAILED", escapeJson(trim(input, 80)), escapeJson(trim(output, 120))));
     }
 
-    private List<String> extractListSection(String text, String... keywords) {
+    private List<String> extractSectionItems(String text, List<String> sectionNames) {
+        String sectionContent = findMarkdownSection(text, sectionNames);
         List<String> items = new ArrayList<>();
-        if (!StringUtils.hasText(text)) {
+        if (!StringUtils.hasText(sectionContent)) {
             return items;
         }
-        for (String line : text.split("\\R")) {
+        for (String line : sectionContent.split("\\R")) {
             String trimmed = line.trim();
             if (trimmed.matches("^[-*•\\d]+[.)]?\\s+.++") || trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
                 String item = trimmed.replaceFirst("^[-*•\\d]+[.)]?\\s+", "");
@@ -1272,20 +1310,58 @@ public class MvpEvaluationService {
                 }
             }
         }
-        if (items.isEmpty()) {
-            for (String keyword : keywords) {
+        return items.stream().limit(6).toList();
+    }
+
+    private String findMarkdownSection(String text, List<String> sectionNames) {
+        if (!StringUtils.hasText(text)) return "";
+        String[] lines = text.split("\\R");
+        StringBuilder sb = new StringBuilder();
+        boolean inSection = false;
+        
+        for (String line : lines) {
+            String trimmed = line.trim();
+            boolean isHeading = trimmed.matches("^(#+|\\**#+|\\d+\\.|\\**\\d+\\.).*");
+            
+            if (isHeading) {
+                boolean matchesTarget = false;
+                for (String name : sectionNames) {
+                    if (trimmed.contains(name)) {
+                        matchesTarget = true;
+                        break;
+                    }
+                }
+                
+                if (matchesTarget) {
+                    inSection = true;
+                    continue;
+                } else if (inSection && (trimmed.startsWith("#") || trimmed.matches("^\\**\\d+\\..*"))) {
+                    break;
+                }
+            }
+            
+            if (inSection) {
+                sb.append(line).append("\n");
+            }
+        }
+        
+        if (sb.length() == 0) {
+            for (String keyword : sectionNames) {
                 int idx = text.indexOf(keyword);
                 if (idx >= 0) {
-                    String section = text.substring(idx, Math.min(text.length(), idx + 400));
-                    for (String line : section.split("\\R")) {
-                        if (line.trim().startsWith("-") && items.size() < 5) {
-                            items.add(line.trim().substring(1).trim());
-                        }
+                    String sub = text.substring(idx);
+                    String[] subLines = sub.split("\\R");
+                    boolean firstLine = true;
+                    for (String l : subLines) {
+                        if (!firstLine && l.trim().startsWith("#")) break;
+                        sb.append(l).append("\n");
+                        firstLine = false;
                     }
+                    break;
                 }
             }
         }
-        return items.stream().limit(5).toList();
+        return sb.toString();
     }
 
     private String escapeJson(String value) {
