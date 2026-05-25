@@ -7,9 +7,59 @@
   "links": [],
   "panels": [
     {
-      "title": "📈 Business Funnel",
+      "title": "运行总览 (LabelHub 结构)",
       "type": "row",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "title": "评估运行总数",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
+      "targets": [{ "expr": "sum(resumai_funnel_evaluation_started_total{job_category=~\"$job_category\"})", "legendFormat": "Runs" }]
+    },
+    {
+      "title": "RAG 召回次数",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 1 },
+      "targets": [{ "expr": "sum(resumai_rag_search_result_count_count)", "legendFormat": "Retrievals" }]
+    },
+    {
+      "title": "RAG 空召回率",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
+      "targets": [{ "expr": "sum(resumai_rag_retrieval_empty_results_total) / clamp_min(sum(resumai_rag_search_result_count_count), 1)", "legendFormat": "Empty Rate" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    },
+    {
+      "title": "Skill 调用",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
+      "targets": [{ "expr": "sum(resumai_skill_invocation_total{agent=~\"$agent\"})", "legendFormat": "Skills" }]
+    },
+    {
+      "title": "MCP 调用",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
+      "targets": [{ "expr": "sum(resumai_mcp_call_count_total)", "legendFormat": "MCP" }]
+    },
+    {
+      "title": "Pipeline P95 耗时",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(resumai_dag_node_duration_seconds_bucket{step_kind=~\"$step_kind\",lane_id=~\"$lane_id\"}[5m])))", "legendFormat": "P95" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "📈 Business Funnel",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
       "collapsed": false
     },
     {
@@ -322,7 +372,7 @@
       "type": "histogram",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 6, "w": 6, "x": 6, "y": 47 },
-      "targets": [{ "expr": "resumai_jd_match_score", "legendFormat": "Score" }]
+      "targets": [{ "expr": "resumai_jd_match_score_sum / clamp_min(resumai_jd_match_score_count, 1)", "legendFormat": "Avg Score" }]
     },
     {
       "title": "HR Feedback Consistency",
@@ -422,11 +472,51 @@
         "name": "DS_PROMETHEUS",
         "type": "datasource",
         "query": "prometheus"
+      },
+      {
+        "name": "job_category",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(resumai_funnel_evaluation_started_total, job_category)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "agent",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(resumai_skill_invocation_total, agent)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "step_kind",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(resumai_dag_node_duration_seconds_bucket, step_kind)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "lane_id",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(resumai_dag_node_duration_seconds_bucket, lane_id)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
       }
     ]
   },
   "time": { "from": "now-1h", "to": "now" },
   "title": "ResumAI Multi-Agent Observability",
-  "uid": "resumai-multi-agent",
-  "version": 2
+  "uid": "resumai-spring-boot",
+  "version": 3
 }

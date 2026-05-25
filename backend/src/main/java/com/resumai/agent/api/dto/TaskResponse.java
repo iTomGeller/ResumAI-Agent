@@ -21,6 +21,8 @@ public record TaskResponse(
         List<String> risks,
         List<String> interviewQuestions,
         String resumeText,
+        String resumeFileUrl,
+        String resumeFileType,
         String matchedJdTitle,
         Double jdMatchScore,
         List<JdMatchResult> topJdMatches

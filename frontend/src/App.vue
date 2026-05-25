@@ -17,9 +17,19 @@ interface TaskResponse {
   interviewQuestions: string[];
   summary?: string;
   resumeText?: string;
+  resumeFileUrl?: string;
+  resumeFileType?: string;
   matchedJdTitle?: string;
   jdMatchScore?: number;
-  topJdMatches?: Array<{ jdId: string; title: string; category: string; score: number }>;
+  topJdMatches?: Array<{
+    jdId: string;
+    title: string;
+    category: string;
+    score: number;
+    matchReasons?: string[];
+    gaps?: string[];
+    interviewChecks?: string[];
+  }>;
 }
 
 interface TraceEvent {
@@ -140,6 +150,7 @@ const jobDraft = reactive<JobProfile>({ ...jobs.value[0] });
 let eventSource: EventSource | null = null;
 const dagViewMode = ref<'hr' | 'dev'>('hr');
 const expandedDagNode = ref<string>('');
+const resumeViewMode = ref<'pdf' | 'text'>('pdf');
 const pollTimers = new Map<string, number>();
 
 const activeTask = computed(() => tasks.value.find((t) => t.traceId === activeTraceId.value) ?? null);
@@ -160,13 +171,66 @@ const filteredCandidates = computed(() => {
 });
 
 
-const traceSteps = computed(() => traces.value.map((e, i) => ({
-  ...e,
-  stageNo: i + 1,
-  stageLabel: traceStageLabel(e),
-  statusLabel: eventStatusText(e.status),
-  evidence: traceEvidence(e),
-})));
+const traceSteps = computed(() => {
+  const dagOnly = traces.value.filter(e =>
+    e.stepKind || e.dagGroupId || e.eventType === 'DAG_START' || e.eventType === 'REPORT_READY'
+  );
+  const source = dagOnly.length ? dagOnly : traces.value;
+  return source.map((e, i) => ({
+    ...e,
+    stageNo: i + 1,
+    stageLabel: traceStageLabel(e),
+    statusLabel: eventStatusText(e.status),
+    evidence: traceEvidence(e),
+  }));
+});
+
+const isLegacyTrace = computed(() =>
+  traces.value.length > 0 && !traces.value.some(e => e.stepKind || e.dagGroupId)
+);
+
+const jdMatchCards = computed(() => activeTask.value?.topJdMatches ?? []);
+
+const jdMatchSuccessRate = computed(() => {
+  const withMatch = tasks.value.filter(t => t.matchedJdTitle && (t.jdMatchScore || 0) > 0).length;
+  if (!tasks.value.length) return 0;
+  return Math.round(withMatch / tasks.value.length * 100);
+});
+
+const pendingReviewTasks = computed(() =>
+  tasks.value.filter(t => t.status === 'SUCCESS' && !(t.recommendation || '').includes('RECOMMEND'))
+);
+
+const jobCategoryStats = computed(() => {
+  const map = new Map<string, { total: number; recommended: number }>();
+  for (const t of completedTasks.value) {
+    const cat = t.jobCategory || 'UNKNOWN';
+    const entry = map.get(cat) || { total: 0, recommended: 0 };
+    entry.total++;
+    if ((t.recommendation || '').includes('RECOMMEND')) entry.recommended++;
+    map.set(cat, entry);
+  }
+  return [...map.entries()].map(([category, stats]) => ({
+    category,
+    total: stats.total,
+    recommended: stats.recommended,
+    rate: stats.total ? Math.round(stats.recommended / stats.total * 100) : 0,
+  }));
+});
+
+function parseCallDetail(raw: string): Record<string, string> {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { name: raw };
+  }
+}
+
+function formatCallDetail(raw: string): string {
+  const obj = parseCallDetail(raw);
+  const parts = [obj.name || obj.server, obj.status, obj.durationMs ? `${obj.durationMs}ms` : '', obj.inputSummary, obj.outputSummary].filter(Boolean);
+  return parts.join(' | ');
+}
 
 const dagGroups = computed(() => {
   const groups: Array<{
@@ -296,6 +360,9 @@ const canStartEvaluation = computed(() => (queuedFiles.value.length > 0 || paste
 const matchedSkills = computed(() => graphNodes.value.filter(n => n.type === 'skill' && n.score >= 60));
 const missingSkills = computed(() => graphNodes.value.filter(n => n.type === 'risk' || (n.type === 'skill' && n.score < 60)));
 const matchRate = computed(() => {
+  if (activeTask.value?.jdMatchScore) {
+    return Math.round((activeTask.value.jdMatchScore || 0) * 100);
+  }
   const total = matchedSkills.value.length + missingSkills.value.length;
   if (!total) return activeTask.value?.overallScore || 0;
   return Math.round((matchedSkills.value.length / total) * 100);
@@ -421,6 +488,11 @@ function selectTask(task: TaskResponse) {
   loadTraces(task.traceId);
   loadGraph(task.traceId);
   if (task.status === 'RUNNING') startPolling(task.traceId);
+}
+
+function openCandidate(traceId: string) {
+  const task = tasks.value.find(t => t.traceId === traceId);
+  if (task) selectTask(task);
 }
 
 function goBack() {
@@ -800,12 +872,28 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
         <!-- Resume Tab -->
         <div v-if="detailTab === 'resume'">
-          <div class="resume-preview" v-if="activeTask.resumeText">{{ activeTask.resumeText }}</div>
-          <div class="empty-state" v-else><p>简历原文将在解析后展示。对于 PDF 上传的简历，系统自动提取文本内容。</p></div>
+          <div class="resume-view-toggle" v-if="activeTask.resumeFileUrl">
+            <button :class="{ active: resumeViewMode === 'pdf' }" @click="resumeViewMode = 'pdf'">PDF 原件</button>
+            <button :class="{ active: resumeViewMode === 'text' }" @click="resumeViewMode = 'text'">文本抽取</button>
+          </div>
+          <div v-if="activeTask.resumeFileUrl && resumeViewMode === 'pdf'" class="resume-pdf-frame">
+            <iframe :src="activeTask.resumeFileUrl" title="简历 PDF 预览" />
+            <a class="btn btn-ghost btn-sm" :href="activeTask.resumeFileUrl" target="_blank" rel="noopener">新窗口打开</a>
+          </div>
+          <div class="resume-preview" v-else-if="activeTask.resumeText">{{ activeTask.resumeText }}</div>
+          <div class="empty-state" v-else><p>简历原文将在解析后展示。PDF 上传后会保留原件预览，文本抽取用于核对解析质量。</p></div>
         </div>
 
         <!-- Report Tab -->
         <div v-if="detailTab === 'report'" class="report-content">
+          <div class="hr-decision-card" :class="recommendationLabel.includes('强烈推荐') ? 'strong' : recommendationLabel.includes('推荐') ? 'recommend' : 'review'">
+            <div class="hr-decision-header">
+              <span class="hr-decision-badge">{{ recommendationLabel }}</span>
+              <span class="hr-decision-score" v-if="activeTask.overallScore">综合评分 {{ activeTask.overallScore }}</span>
+            </div>
+            <p class="hr-decision-summary">{{ activeTask.summary ? activeTask.summary.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 180) : '评估报告生成中...' }}</p>
+          </div>
+
           <div v-if="activeTask.matchedJdTitle" class="jd-match-card">
             <div class="jd-match-header">
               <span class="jd-match-badge">RAG 智能匹配</span>
@@ -819,21 +907,24 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               </span>
             </div>
           </div>
-          <template v-if="activeTask.summary">
+          <div class="hr-evidence-grid">
+            <div class="hr-evidence-card" v-if="activeTask.strengths?.length">
+              <h3>关键优势</h3>
+              <ul><li v-for="s in activeTask.strengths" :key="s">{{ s }}</li></ul>
+            </div>
+            <div class="hr-evidence-card risk" v-if="activeTask.risks?.length">
+              <h3>关键风险</h3>
+              <ul><li v-for="r in activeTask.risks" :key="r">{{ r }}</li></ul>
+            </div>
+            <div class="hr-evidence-card" v-if="activeTask.interviewQuestions?.length">
+              <h3>面试追问</h3>
+              <ol><li v-for="q in activeTask.interviewQuestions" :key="q">{{ q }}</li></ol>
+            </div>
+          </div>
+          <details class="report-raw-md" v-if="activeTask.summary">
+            <summary>查看完整 AI 评估原文</summary>
             <div v-html="renderMarkdown(activeTask.summary)"></div>
-          </template>
-          <div v-if="activeTask.strengths?.length" class="mt-lg">
-            <h3>优势证据</h3>
-            <ul><li v-for="s in activeTask.strengths" :key="s">{{ s }}</li></ul>
-          </div>
-          <div v-if="activeTask.risks?.length" class="mt-lg">
-            <h3>风险信号</h3>
-            <ul><li v-for="r in activeTask.risks" :key="r">{{ r }}</li></ul>
-          </div>
-          <div v-if="activeTask.interviewQuestions?.length" class="mt-lg">
-            <h3>面试追问建议</h3>
-            <ol><li v-for="q in activeTask.interviewQuestions" :key="q">{{ q }}</li></ol>
-          </div>
+          </details>
           <div class="empty-state" v-if="!activeTask.summary && !activeTask.strengths?.length"><p>报告生成中...</p></div>
         </div>
 
@@ -844,7 +935,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             <button :class="{ active: dagViewMode === 'dev' }" @click="dagViewMode = 'dev'">开发者视图</button>
           </div>
 
-          <div v-if="traceSteps.length && !traceSteps[0].dagGroupId && !traceSteps[0].stepKind" class="dag-legacy-warning">
+          <div v-if="isLegacyTrace" class="dag-legacy-warning">
             <span>旧 Trace 数据，不支持 DAG 详情视图</span>
           </div>
 
@@ -876,8 +967,8 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                   <div v-if="group.promptPreview" class="dag-detail-row"><strong>Prompt：</strong><code>{{ group.promptPreview }}</code></div>
                   <div v-if="group.inputSummary" class="dag-detail-row"><strong>Input：</strong>{{ group.inputSummary }}</div>
                   <div v-if="group.outputSummary" class="dag-detail-row"><strong>Output：</strong>{{ group.outputSummary }}</div>
-                  <div v-if="group.toolCalls && group.toolCalls.length" class="dag-detail-row"><strong>Tool Calls：</strong><ul><li v-for="(tc, ti) in group.toolCalls" :key="ti"><code>{{ tc }}</code></li></ul></div>
-                  <div v-if="group.mcpCalls && group.mcpCalls.length" class="dag-detail-row"><strong>MCP Calls：</strong><ul><li v-for="(mc, mi) in group.mcpCalls" :key="mi"><code>{{ mc }}</code></li></ul></div>
+                  <div v-if="group.toolCalls && group.toolCalls.length" class="dag-detail-row"><strong>Tool Calls：</strong><ul><li v-for="(tc, ti) in group.toolCalls" :key="ti"><code>{{ formatCallDetail(tc) }}</code></li></ul></div>
+                  <div v-if="group.mcpCalls && group.mcpCalls.length" class="dag-detail-row"><strong>MCP Calls：</strong><ul><li v-for="(mc, mi) in group.mcpCalls" :key="mi"><code>{{ formatCallDetail(mc) }}</code></li></ul></div>
                   <div v-if="group.sandboxSummary" class="dag-detail-row"><strong>Sandbox：</strong>{{ group.sandboxSummary }}</div>
                   <div v-if="group.tokenCost" class="dag-detail-row"><strong>Token Cost：</strong>{{ group.tokenCost }}</div>
                 </template>
@@ -912,8 +1003,8 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                     <div v-if="lane.promptPreview" class="dag-detail-row"><strong>Prompt：</strong><code>{{ lane.promptPreview }}</code></div>
                     <div v-if="lane.inputSummary" class="dag-detail-row"><strong>Input：</strong>{{ lane.inputSummary }}</div>
                     <div v-if="lane.outputSummary" class="dag-detail-row"><strong>Output：</strong>{{ lane.outputSummary }}</div>
-                    <div v-if="lane.toolCalls && lane.toolCalls.length" class="dag-detail-row"><strong>Tool Calls：</strong><ul><li v-for="(tc, ti) in lane.toolCalls" :key="ti"><code>{{ tc }}</code></li></ul></div>
-                    <div v-if="lane.mcpCalls && lane.mcpCalls.length" class="dag-detail-row"><strong>MCP Calls：</strong><ul><li v-for="(mc, mi) in lane.mcpCalls" :key="mi"><code>{{ mc }}</code></li></ul></div>
+                    <div v-if="lane.toolCalls && lane.toolCalls.length" class="dag-detail-row"><strong>Tool Calls：</strong><ul><li v-for="(tc, ti) in lane.toolCalls" :key="ti"><code>{{ formatCallDetail(tc) }}</code></li></ul></div>
+                    <div v-if="lane.mcpCalls && lane.mcpCalls.length" class="dag-detail-row"><strong>MCP Calls：</strong><ul><li v-for="(mc, mi) in lane.mcpCalls" :key="mi"><code>{{ formatCallDetail(mc) }}</code></li></ul></div>
                   </template>
                 </div>
               </div>
@@ -924,7 +1015,37 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
         <!-- Graph Tab → JD Match Analysis -->
         <div v-if="detailTab === 'graph'">
-          <div v-if="graphNodes.length" class="card" style="padding:var(--space-xl)">
+          <div v-if="jdMatchCards.length" class="card" style="padding:var(--space-xl)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-xl)">
+              <h3 style="font-size:15px;font-weight:600">JD Top3 智能匹配</h3>
+              <span class="badge badge-success" v-if="matchRate >= 70">匹配度高</span>
+              <span class="badge badge-warning" v-else-if="matchRate >= 50">部分匹配</span>
+              <span class="badge badge-danger" v-else-if="jdMatchCards.length">匹配度低</span>
+              <span class="badge badge-warning" v-else>暂无匹配</span>
+            </div>
+
+            <div v-for="(m, idx) in jdMatchCards" :key="m.jdId" class="jd-top-card" :class="{ active: idx === 0 }">
+              <div class="jd-top-header">
+                <span class="jd-top-rank">#{{ idx + 1 }}</span>
+                <strong>{{ m.title }}</strong>
+                <span class="jd-match-score">{{ Math.round(m.score * 100) }}%</span>
+              </div>
+              <p class="text-muted text-sm">{{ m.category }}</p>
+              <div v-if="m.matchReasons?.length" class="jd-reasons">
+                <h4>匹配依据</h4>
+                <ul><li v-for="(r, ri) in m.matchReasons" :key="ri">{{ r }}</li></ul>
+              </div>
+              <div v-if="m.gaps?.length" class="jd-gaps">
+                <h4>能力缺口</h4>
+                <ul><li v-for="(g, gi) in m.gaps" :key="gi">{{ g }}</li></ul>
+              </div>
+              <div v-if="m.interviewChecks?.length" class="jd-checks">
+                <h4>面试验证点</h4>
+                <ul><li v-for="(c, ci) in m.interviewChecks" :key="ci">{{ c }}</li></ul>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="graphNodes.length" class="card" style="padding:var(--space-xl)">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-xl)">
               <h3 style="font-size:15px;font-weight:600">JD 匹配分析</h3>
               <span class="badge badge-success" v-if="matchRate >= 70">匹配度高</span>
@@ -1014,7 +1135,8 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <div class="kpi-card"><span class="kpi-label">总候选人</span><div class="kpi-value">{{ tasks.length }}</div></div>
           <div class="kpi-card"><span class="kpi-label">推荐面试</span><div class="kpi-value">{{ recommendedCount }}</div></div>
           <div class="kpi-card"><span class="kpi-label">通过率</span><div class="kpi-value">{{ tasks.length >= 3 ? passRate + '%' : (recommendedCount + '/' + completedTasks.length) }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">平均评估耗时</span><div class="kpi-value">{{ avgEvalTime }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">JD 匹配成功率</span><div class="kpi-value">{{ tasks.length >= 3 ? jdMatchSuccessRate + '%' : '-' }}</div><span class="kpi-hint" v-if="tasks.length < 3">样本不足 ({{ tasks.length }})</span></div>
+          <div class="kpi-card"><span class="kpi-label">待复核队列</span><div class="kpi-value">{{ pendingReviewTasks.length }}</div></div>
         </div>
 
         <div class="analytics-grid">
@@ -1065,6 +1187,36 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               </div>
             </div>
             <p v-else class="text-muted text-sm">暂无完成的评估</p>
+          </div>
+
+          <div class="analytics-card">
+            <h3>岗位维度通过率</h3>
+            <div v-if="jobCategoryStats.length" style="display:flex;flex-direction:column;gap:8px;margin-top:var(--space-md)">
+              <div v-for="row in jobCategoryStats" :key="row.category" style="font-size:12px;display:flex;gap:8px;align-items:center">
+                <span style="width:80px">{{ row.category }}</span>
+                <div style="flex:1;height:18px;background:var(--color-border-light);border-radius:3px;overflow:hidden">
+                  <div :style="{ width: row.rate + '%', height: '100%', background: 'var(--color-primary)' }"></div>
+                </div>
+                <span>{{ row.recommended }}/{{ row.total }}</span>
+              </div>
+            </div>
+            <p v-else class="text-muted text-sm">暂无岗位维度数据</p>
+          </div>
+
+          <div class="analytics-card">
+            <h3>待复核原因入口</h3>
+            <div v-if="pendingReviewTasks.length" style="display:flex;flex-direction:column;gap:6px;margin-top:var(--space-md)">
+              <div v-for="t in pendingReviewTasks.slice(0, 6)" :key="t.traceId" style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--color-border-light);cursor:pointer" @click="openCandidate(t.traceId)">
+                <strong>{{ t.fileName }}</strong>
+                <span class="text-muted"> — {{ t.risks?.[0] || '需人工复核' }}</span>
+              </div>
+            </div>
+            <p v-else class="text-muted text-sm">当前无待复核候选人</p>
+          </div>
+
+          <div class="analytics-card">
+            <h3>平均评估耗时</h3>
+            <p style="font-size:24px;font-weight:700;margin-top:var(--space-md)">{{ avgEvalTime }}</p>
           </div>
 
           <div class="analytics-card">
@@ -1144,12 +1296,14 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 function renderMarkdown(source: string): string {
   if (!source) return '';
   return source
+    .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
     .replace(/^# (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^---$/gm, '<hr />')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+    .replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>')
     .replace(/^(?!<[hulo])(.*\S.*)$/gm, '<p>$1</p>')
     .replace(/\n{2,}/g, '');
 }

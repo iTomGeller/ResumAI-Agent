@@ -23,9 +23,13 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 @Service
 public class JdRagService {
@@ -39,6 +43,19 @@ public class JdRagService {
 
     private final Map<String, JdMeta> jdMetaCache = new ConcurrentHashMap<>();
 
+    private static final List<DefaultJd> DEFAULT_JDS = List.of(
+            new DefaultJd("job-java-agent", "高级 Java / AI Agent 平台工程师", "TECH",
+                    "招聘 Java 21 / Spring Boot 3 / AI Agent 平台方向高级后端工程师，要求熟悉 RAG、Trace 可观测、Docker 部署、线上问题排查和端到端交付。必要技能：Java, Spring Boot, MySQL, Redis, Docker, RAG, LLM。经验要求：5年以上。"),
+            new DefaultJd("job-product-ai", "AI 产品经理", "PRODUCT",
+                    "负责 AI 招聘产品从需求洞察、PRD、数据指标到上线迭代，要求理解 LLM/RAG 基础能力、B 端工作流和招聘业务。必要技能：产品设计, 数据分析, LLM, RAG, 招聘业务。"),
+            new DefaultJd("job-frontend", "高级前端工程师", "TECH",
+                    "负责 Vue3/React 前端架构、组件库、性能优化与可视化大屏。必要技能：Vue, TypeScript, CSS, 数据可视化, ECharts。"),
+            new DefaultJd("job-data", "数据工程师", "TECH",
+                    "负责数据采集、ETL、数仓建模与指标体系建设。必要技能：Python, SQL, Spark, Flink, 数据建模。")
+    );
+
+    private record DefaultJd(String jdId, String title, String category, String description) {}
+
     public JdRagService(@Qualifier("jdEmbeddingStore") MilvusEmbeddingStore jdEmbeddingStore,
                         EmbeddingModel embeddingModel,
                         DeepSeekClient deepSeekClient,
@@ -47,6 +64,25 @@ public class JdRagService {
         this.embeddingModel = embeddingModel;
         this.deepSeekClient = deepSeekClient;
         this.jdLibraryMapper = jdLibraryMapper;
+    }
+
+    public int ensureDefaultJdsSeeded() {
+        int seeded = 0;
+        for (DefaultJd jd : DEFAULT_JDS) {
+            try {
+                Long count = jdLibraryMapper.selectCount(
+                        new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jd.jdId()));
+                if (count == null || count == 0) {
+                    indexJd(jd.jdId(), jd.title(), jd.category(), jd.description());
+                    seeded++;
+                } else {
+                    jdMetaCache.put(jd.jdId(), new JdMeta(jd.jdId(), jd.title(), jd.category()));
+                }
+            } catch (Exception e) {
+                log.warn("Seed JD '{}' failed: {}", jd.title(), e.getMessage());
+            }
+        }
+        return seeded;
     }
 
     public void indexJd(String jdId, String title, String category, String jdText) {
@@ -98,18 +134,26 @@ public class JdRagService {
 
     public List<JdMatchResult> matchTopJds(String resumeText, int topK) {
         if (!StringUtils.hasText(resumeText)) return List.of();
+        List<JdMatchResult> vectorMatches = matchTopJdsViaVector(resumeText, topK);
+        if (!vectorMatches.isEmpty()) {
+            return vectorMatches;
+        }
+        return matchTopJdsViaLexical(resumeText, topK);
+    }
+
+    private List<JdMatchResult> matchTopJdsViaVector(String resumeText, int topK) {
         try {
             String queryText = resumeText.length() > 2000 ? resumeText.substring(0, 2000) : resumeText;
             Embedding queryEmbedding = embeddingModel.embed(queryText).content();
             EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
                     .queryEmbedding(queryEmbedding)
                     .maxResults(topK * 3)
-                    .minScore(0.4)
+                    .minScore(0.35)
                     .build();
             EmbeddingSearchResult<TextSegment> result = jdEmbeddingStore.search(request);
             List<EmbeddingMatch<TextSegment>> matches = result.matches();
 
-            Map<String, JdMatchResult> deduped = new java.util.LinkedHashMap<>();
+            Map<String, JdMatchResult> deduped = new LinkedHashMap<>();
             for (EmbeddingMatch<TextSegment> match : matches) {
                 TextSegment seg = match.embedded();
                 if (seg == null || seg.metadata() == null) continue;
@@ -118,15 +162,118 @@ public class JdRagService {
                 String category = seg.metadata().getString("category");
                 if (jdId == null) continue;
                 if (!deduped.containsKey(jdId)) {
-                    deduped.put(jdId, new JdMatchResult(jdId, title != null ? title : "", category != null ? category : "", match.score()));
+                    deduped.put(jdId, enrichMatchResult(jdId, title, category, match.score(), resumeText));
                 }
                 if (deduped.size() >= topK) break;
             }
             return new ArrayList<>(deduped.values());
         } catch (Exception e) {
-            log.warn("JD matching failed: {}", e.getMessage());
+            log.warn("JD vector matching failed: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    private List<JdMatchResult> matchTopJdsViaLexical(String resumeText, int topK) {
+        List<JdLibrary> allJds = getAllJds();
+        if (allJds.isEmpty()) {
+            ensureDefaultJdsSeeded();
+            allJds = getAllJds();
+        }
+        if (allJds.isEmpty()) {
+            return List.of();
+        }
+        String resumeLower = resumeText.toLowerCase(Locale.ROOT);
+        List<JdMatchResult> scored = new ArrayList<>();
+        for (JdLibrary jd : allJds) {
+            String desc = jd.getDescription() != null ? jd.getDescription() : "";
+            double score = lexicalScore(resumeLower, desc, jd.getTitle(), jd.getCategory());
+            if (score > 0.15) {
+                scored.add(enrichMatchResult(jd.getJdId(), jd.getTitle(), jd.getCategory(), score, resumeText));
+            }
+        }
+        scored.sort((a, b) -> Double.compare(b.score(), a.score()));
+        return scored.stream().limit(topK).collect(Collectors.toList());
+    }
+
+    private double lexicalScore(String resumeLower, String jdText, String title, String category) {
+        Set<String> keywords = extractKeywords(jdText + " " + title + " " + category);
+        if (keywords.isEmpty()) return 0.1;
+        long hits = keywords.stream().filter(resumeLower::contains).count();
+        return Math.min(0.95, 0.2 + (double) hits / keywords.size() * 0.75);
+    }
+
+    private Set<String> extractKeywords(String text) {
+        return java.util.Arrays.stream(text.toLowerCase(Locale.ROOT).split("[\\s,，、/|；;：:\\.\\(\\)（）\\[\\]{}\"'\\n]+"))
+                .filter(w -> w.length() >= 2)
+                .filter(w -> !w.matches("\\d+"))
+                .limit(40)
+                .collect(Collectors.toSet());
+    }
+
+    private JdMatchResult enrichMatchResult(String jdId, String title, String category, double score, String resumeText) {
+        String jdText = loadJdDescription(jdId);
+        List<String> reasons = buildMatchReasons(resumeText, jdText, title);
+        List<String> gaps = buildGaps(resumeText, jdText);
+        List<String> checks = buildInterviewChecks(gaps, title);
+        return new JdMatchResult(
+                jdId,
+                title != null ? title : "",
+                category != null ? category : "TECH",
+                score,
+                reasons,
+                gaps,
+                checks
+        );
+    }
+
+    public String getJdDescription(String jdId) {
+        return loadJdDescription(jdId);
+    }
+
+    private String loadJdDescription(String jdId) {
+        try {
+            JdLibrary jd = jdLibraryMapper.selectOne(
+                    new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId).last("limit 1"));
+            return jd != null && jd.getDescription() != null ? jd.getDescription() : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private List<String> buildMatchReasons(String resumeText, String jdText, String title) {
+        List<String> reasons = new ArrayList<>();
+        String resumeLower = resumeText.toLowerCase(Locale.ROOT);
+        for (String kw : extractKeywords(jdText)) {
+            if (resumeLower.contains(kw) && reasons.size() < 4) {
+                reasons.add("简历包含岗位关键词：" + kw);
+            }
+        }
+        if (reasons.isEmpty() && StringUtils.hasText(title)) {
+            reasons.add("岗位「" + title + "」与简历整体语义相近");
+        }
+        return reasons;
+    }
+
+    private List<String> buildGaps(String resumeText, String jdText) {
+        List<String> gaps = new ArrayList<>();
+        String resumeLower = resumeText.toLowerCase(Locale.ROOT);
+        for (String kw : extractKeywords(jdText)) {
+            if (!resumeLower.contains(kw) && gaps.size() < 3) {
+                gaps.add("未明确体现：" + kw);
+            }
+        }
+        return gaps;
+    }
+
+    private List<String> buildInterviewChecks(List<String> gaps, String title) {
+        List<String> checks = new ArrayList<>();
+        for (String gap : gaps) {
+            checks.add("请结合「" + title + "」说明 " + gap.replace("未明确体现：", "") + " 的实际经验");
+        }
+        if (checks.isEmpty()) {
+            checks.add("请说明与目标岗位最匹配的一段项目经历");
+        }
+        return checks;
     }
 
     public String extractRequirements(String jdText) {

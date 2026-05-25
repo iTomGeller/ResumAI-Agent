@@ -7,8 +7,16 @@ import com.resumai.agent.api.dto.TaskResponse;
 import com.resumai.agent.service.JdRagService;
 import com.resumai.agent.service.MvpEvaluationService;
 import jakarta.validation.Valid;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -61,6 +69,30 @@ public class TaskController {
     @GetMapping("/tasks/{traceId}")
     public TaskResponse getTask(@PathVariable String traceId) {
         return evaluationService.getTask(traceId);
+    }
+
+    @GetMapping("/tasks/{traceId}/file")
+    public ResponseEntity<Resource> getTaskFile(@PathVariable String traceId) {
+        Path filePath = evaluationService.getResumeFile(traceId);
+        if (filePath == null || !Files.isRegularFile(filePath)) {
+            return ResponseEntity.notFound().build();
+        }
+        String contentType;
+        try {
+            contentType = Files.probeContentType(filePath);
+        } catch (IOException e) {
+            contentType = null;
+        }
+        if (contentType == null) {
+            contentType = filePath.toString().toLowerCase().endsWith(".pdf")
+                    ? MediaType.APPLICATION_PDF_VALUE
+                    : MediaType.TEXT_PLAIN_VALUE;
+        }
+        Resource resource = new FileSystemResource(filePath);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filePath.getFileName() + "\"")
+                .contentType(MediaType.parseMediaType(contentType))
+                .body(resource);
     }
 
     @GetMapping("/metrics")
