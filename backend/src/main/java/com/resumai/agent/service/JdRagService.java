@@ -1,8 +1,14 @@
 package com.resumai.agent.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.resumai.agent.ai.LlmCallResult;
 import com.resumai.agent.ai.DeepSeekClient;
+import com.resumai.agent.api.dto.JdDetailResponse;
 import com.resumai.agent.api.dto.JdMatchResult;
+import com.resumai.agent.api.dto.JdSummaryResponse;
+import com.resumai.agent.api.dto.PageResult;
+import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.dao.JdLibraryMapper;
 import com.resumai.agent.domain.entity.JdLibrary;
 import dev.langchain4j.data.document.Document;
@@ -43,8 +49,27 @@ public class JdRagService {
     private final EmbeddingModel embeddingModel;
     private final DeepSeekClient deepSeekClient;
     private final JdLibraryMapper jdLibraryMapper;
+    private final EmbeddingAvailability embeddingAvailability;
+    private final MilvusVectorMaintenanceService vectorMaintenanceService;
 
     private final Map<String, JdMeta> jdMetaCache = new ConcurrentHashMap<>();
+
+    private static final Map<String, List<String>> SKILL_SYNONYMS = Map.ofEntries(
+            Map.entry("java", List.of("java", "jdk", "jvm")),
+            Map.entry("spring", List.of("spring", "springboot", "spring boot", "spring-boot")),
+            Map.entry("mysql", List.of("mysql", "mariadb")),
+            Map.entry("redis", List.of("redis")),
+            Map.entry("docker", List.of("docker", "k8s", "kubernetes", "容器")),
+            Map.entry("rag", List.of("rag", "检索增强", "向量检索", "embedding", "milvus")),
+            Map.entry("agent", List.of("agent", "智能体", "multi-agent", "agentops")),
+            Map.entry("llm", List.of("llm", "大模型", "deepseek", "gpt", "chatgpt", "模型平台", "方舟")),
+            Map.entry("trace", List.of("trace", "tracing", "可观测", "opentelemetry", "日志对账", "链路追踪")),
+            Map.entry("backend", List.of("backend", "后端", "服务端"))
+    );
+
+    private static final Set<String> NON_SKILL_GAP_WORDS = Set.of(
+            "招聘", "hr", "面试", "工程师", "经理", "负责", "要求", "熟悉", "具备", "以上", "本科", "硕士"
+    );
 
     private static final List<DefaultJd> DEFAULT_JDS = List.of(
             new DefaultJd("job-java-agent", "高级 Java / AI Agent 平台工程师", "TECH",
@@ -62,11 +87,15 @@ public class JdRagService {
     public JdRagService(@Qualifier("jdEmbeddingStore") MilvusEmbeddingStore jdEmbeddingStore,
                         EmbeddingModel embeddingModel,
                         DeepSeekClient deepSeekClient,
-                        JdLibraryMapper jdLibraryMapper) {
+                        JdLibraryMapper jdLibraryMapper,
+                        EmbeddingAvailability embeddingAvailability,
+                        MilvusVectorMaintenanceService vectorMaintenanceService) {
         this.jdEmbeddingStore = jdEmbeddingStore;
         this.embeddingModel = embeddingModel;
         this.deepSeekClient = deepSeekClient;
         this.jdLibraryMapper = jdLibraryMapper;
+        this.embeddingAvailability = embeddingAvailability;
+        this.vectorMaintenanceService = vectorMaintenanceService;
     }
 
     public int ensureDefaultJdsSeeded() {
@@ -92,6 +121,13 @@ public class JdRagService {
             jdMetaCache.put(jdId, new JdMeta(jdId, title, category));
 
             persistJdToDb(jdId, title, category, jdText);
+
+            if (!embeddingAvailability.isOperational()) {
+                log.info("JD '{}' persisted to DB; Milvus index skipped ({})", title, embeddingAvailability.disabledReason());
+                return;
+            }
+
+            vectorMaintenanceService.deleteJdVectors(jdId);
 
             String fullText = "岗位: " + title + "\n类别: " + category + "\n" + jdText;
             Document doc = Document.from(fullText, Metadata.from(Map.of("jdId", jdId, "title", title, "category", category)));
@@ -134,23 +170,39 @@ public class JdRagService {
     }
 
     public List<JdMatchResult> matchTopJds(String resumeText, int topK) {
-        if (!StringUtils.hasText(resumeText)) return List.of();
-        ensureDefaultJdsSeeded();
-        List<JdMatchResult> vectorMatches = matchTopJdsViaVector(resumeText, topK);
-        if (!vectorMatches.isEmpty()) {
-            return vectorMatches;
-        }
-        return matchTopJdsViaLexical(resumeText, topK);
+        return matchTopJds(resumeText, topK, null);
     }
 
-    private List<JdMatchResult> matchTopJdsViaVector(String resumeText, int topK) {
+    public List<JdMatchResult> matchTopJds(String resumeText, int topK, com.resumai.agent.rag.RagOptions options) {
+        if (!StringUtils.hasText(resumeText)) return List.of();
+        ensureDefaultJdsSeeded();
+        com.resumai.agent.rag.RagOptions opts = options != null ? options : com.resumai.agent.rag.RagOptions.defaults();
+        int effectiveTopK = topK > 0 ? topK : opts.topK();
+        if (embeddingAvailability.isOperational() && !"lexical".equals(opts.strategy())) {
+            List<JdMatchResult> vectorMatches = matchTopJdsViaVector(resumeText, effectiveTopK, opts);
+            if (!vectorMatches.isEmpty()) {
+                return vectorMatches;
+            }
+        }
+        return matchTopJdsViaLexical(resumeText, effectiveTopK);
+    }
+
+    List<JdMatchResult> matchTopJdsViaVector(String resumeText, int topK, com.resumai.agent.rag.RagOptions opts) {
+        return matchTopJdsViaVectorInternal(resumeText, topK, opts);
+    }
+
+    private List<JdMatchResult> matchTopJdsViaVectorInternal(String resumeText, int topK, com.resumai.agent.rag.RagOptions opts) {
+        if (!embeddingAvailability.isOperational()) {
+            return List.of();
+        }
         try {
             String queryText = resumeText.length() > 2000 ? resumeText.substring(0, 2000) : resumeText;
             Embedding queryEmbedding = embeddingModel.embed(queryText).content();
+            double minScore = opts != null ? opts.scoreThreshold() : 0.35;
             EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
                     .queryEmbedding(queryEmbedding)
                     .maxResults(topK * 3)
-                    .minScore(0.35)
+                    .minScore(minScore)
                     .build();
             EmbeddingSearchResult<TextSegment> result = jdEmbeddingStore.search(request);
             List<EmbeddingMatch<TextSegment>> matches = result.matches();
@@ -193,7 +245,7 @@ public class JdRagService {
         return defaults;
     }
 
-    private List<JdMatchResult> matchTopJdsViaLexical(String resumeText, int topK) {
+    List<JdMatchResult> matchTopJdsViaLexical(String resumeText, int topK) {
         List<JdLibrary> allJds = loadJdsForMatching();
         if (allJds.isEmpty()) {
             return List.of();
@@ -247,18 +299,116 @@ public class JdRagService {
 
     private JdMatchResult enrichMatchResult(String jdId, String title, String category, double score, String resumeText) {
         String jdText = loadJdDescription(jdId);
-        List<String> reasons = buildMatchReasons(resumeText, jdText, title);
-        List<String> gaps = buildGaps(resumeText, jdText);
+        DimensionalMatch dimensional = computeDimensionalMatch(resumeText, jdText);
+        double blendedScore = dimensional.overallScore() > 0 ? dimensional.overallScore() : score;
+        List<String> reasons = buildMatchReasons(resumeText, jdText, title, dimensional);
+        List<String> gaps = buildGaps(resumeText, jdText, dimensional);
         List<String> checks = buildInterviewChecks(gaps, title);
         return new JdMatchResult(
                 jdId,
                 title != null ? title : "",
                 category != null ? category : "TECH",
-                score,
+                blendedScore,
                 reasons,
                 gaps,
-                checks
+                checks,
+                dimensional.skillMatchScore(),
+                dimensional.experienceMatchScore(),
+                dimensional.projectMatchScore(),
+                dimensional.riskPenalty()
         );
+    }
+
+    private record DimensionalMatch(
+            double skillMatchScore,
+            double experienceMatchScore,
+            double projectMatchScore,
+            double riskPenalty,
+            double overallScore
+    ) {}
+
+    private DimensionalMatch computeDimensionalMatch(String resumeText, String jdText) {
+        String resumeLower = resumeText.toLowerCase(Locale.ROOT);
+        String jdLower = (jdText + " " + jdText).toLowerCase(Locale.ROOT);
+        List<String> requiredSkills = extractRequiredSkills(jdText);
+        if (requiredSkills.isEmpty()) {
+            requiredSkills = extractKeywords(jdText).stream().limit(12).toList();
+        }
+        long skillHits = requiredSkills.stream().filter(skill -> matchesSynonym(resumeLower, skill)).count();
+        double skillMatch = requiredSkills.isEmpty() ? 0.65
+                : Math.min(0.98, (double) skillHits / requiredSkills.size());
+
+        double experienceMatch = computeExperienceMatch(resumeLower, jdLower);
+        double projectMatch = computeProjectMatch(resumeLower, jdLower);
+        double riskPenalty = computeRiskPenalty(resumeLower, jdLower);
+
+        double overall = Math.max(0.05, Math.min(0.98,
+                skillMatch * 0.45 + experienceMatch * 0.25 + projectMatch * 0.20 - riskPenalty * 0.10));
+        return new DimensionalMatch(skillMatch, experienceMatch, projectMatch, riskPenalty, overall);
+    }
+
+    private List<String> extractRequiredSkills(String jdText) {
+        List<String> skills = new ArrayList<>();
+        if (!StringUtils.hasText(jdText)) {
+            return skills;
+        }
+        int idx = jdText.indexOf("必要技能");
+        String segment = idx >= 0 ? jdText.substring(idx) : jdText;
+        Matcher matcher = Pattern.compile("[A-Za-z][A-Za-z0-9+#\\.\\-/]*|[\\u4e00-\\u9fa5]{2,8}").matcher(segment);
+        while (matcher.find() && skills.size() < 16) {
+            String token = matcher.group().trim();
+            if (token.length() >= 2 && !NON_SKILL_GAP_WORDS.contains(token.toLowerCase(Locale.ROOT))) {
+                skills.add(normalizeSkillToken(token));
+            }
+        }
+        return skills.stream().distinct().limit(12).toList();
+    }
+
+    private String normalizeSkillToken(String token) {
+        String lower = token.toLowerCase(Locale.ROOT);
+        for (Map.Entry<String, List<String>> entry : SKILL_SYNONYMS.entrySet()) {
+            if (entry.getValue().stream().anyMatch(v -> lower.contains(v) || v.contains(lower))) {
+                return entry.getKey();
+            }
+        }
+        return lower;
+    }
+
+    private boolean matchesSynonym(String resumeLower, String skillToken) {
+        String normalized = normalizeSkillToken(skillToken);
+        List<String> synonyms = SKILL_SYNONYMS.getOrDefault(normalized, List.of(normalized));
+        return synonyms.stream().anyMatch(resumeLower::contains);
+    }
+
+    private double computeExperienceMatch(String resumeLower, String jdLower) {
+        Matcher jdYears = Pattern.compile("(\\d+)\\s*年以上").matcher(jdLower);
+        int requiredYears = jdYears.find() ? Integer.parseInt(jdYears.group(1)) : 3;
+        Matcher resumeYears = Pattern.compile("(\\d+)\\s*年").matcher(resumeLower);
+        int candidateYears = 0;
+        while (resumeYears.find()) {
+            candidateYears = Math.max(candidateYears, Integer.parseInt(resumeYears.group(1)));
+        }
+        if (candidateYears <= 0) {
+            return 0.55;
+        }
+        return Math.min(1.0, candidateYears / (double) Math.max(requiredYears, 1));
+    }
+
+    private double computeProjectMatch(String resumeLower, String jdLower) {
+        List<String> projectSignals = List.of("项目", "重构", "平台", "系统", "agent", "rag", "trace", "微服务", "架构");
+        long hits = projectSignals.stream().filter(s -> resumeLower.contains(s) && jdLower.contains(s)).count();
+        return Math.min(0.95, 0.35 + hits * 0.12);
+    }
+
+    private double computeRiskPenalty(String resumeLower, String jdLower) {
+        double penalty = 0;
+        if (jdLower.contains("5年") && Pattern.compile("[12]\\s*年").matcher(resumeLower).find()) {
+            penalty += 0.35;
+        }
+        if (resumeLower.contains("严重不符") || resumeLower.contains("空窗")) {
+            penalty += 0.15;
+        }
+        return Math.min(0.5, penalty);
     }
 
     public String getJdDescription(String jdId) {
@@ -282,27 +432,36 @@ public class JdRagService {
                 .orElse("");
     }
 
-    private List<String> buildMatchReasons(String resumeText, String jdText, String title) {
+    private List<String> buildMatchReasons(String resumeText, String jdText, String title, DimensionalMatch dimensional) {
         List<String> reasons = new ArrayList<>();
         String resumeLower = resumeText.toLowerCase(Locale.ROOT);
-        for (String kw : extractKeywords(jdText)) {
-            if (resumeLower.contains(kw) && reasons.size() < 4) {
-                reasons.add("简历包含岗位关键词：" + kw);
+        for (String skill : extractRequiredSkills(jdText)) {
+            if (matchesSynonym(resumeLower, skill) && reasons.size() < 4) {
+                reasons.add("技能匹配：" + skill);
             }
         }
-        if (reasons.isEmpty() && StringUtils.hasText(title)) {
+        reasons.add(String.format("技能维度 %.0f%%，经验维度 %.0f%%，项目维度 %.0f%%",
+                dimensional.skillMatchScore() * 100,
+                dimensional.experienceMatchScore() * 100,
+                dimensional.projectMatchScore() * 100));
+        if (reasons.size() == 1 && StringUtils.hasText(title)) {
             reasons.add("岗位「" + title + "」与简历整体语义相近");
         }
         return reasons;
     }
 
-    private List<String> buildGaps(String resumeText, String jdText) {
+    private List<String> buildGaps(String resumeText, String jdText, DimensionalMatch dimensional) {
         List<String> gaps = new ArrayList<>();
         String resumeLower = resumeText.toLowerCase(Locale.ROOT);
-        for (String kw : extractKeywords(jdText)) {
-            if (!resumeLower.contains(kw) && gaps.size() < 3) {
-                gaps.add("未明确体现：" + kw);
+        for (String skill : extractRequiredSkills(jdText)) {
+            if (!matchesSynonym(resumeLower, skill)
+                    && !NON_SKILL_GAP_WORDS.contains(skill.toLowerCase(Locale.ROOT))
+                    && gaps.size() < 3) {
+                gaps.add("未明确体现：" + skill);
             }
+        }
+        if (dimensional.experienceMatchScore() < 0.6) {
+            gaps.add("经验年限与岗位要求存在差距");
         }
         return gaps;
     }
@@ -318,8 +477,16 @@ public class JdRagService {
         return checks;
     }
 
+    public record JdRequirementsResult(String text, String llmInvocationId) {}
+
     public String extractRequirements(String jdText) {
-        if (!StringUtils.hasText(jdText)) return "";
+        return extractRequirements(jdText, null, null).text();
+    }
+
+    public JdRequirementsResult extractRequirements(String jdText, String traceId, String spanId) {
+        if (!StringUtils.hasText(jdText)) {
+            return new JdRequirementsResult("", null);
+        }
         try {
             String prompt = """
                     请从以下岗位描述中提取结构化要求，输出格式：
@@ -331,13 +498,13 @@ public class JdRagService {
                     
                     岗位描述：
                     %s""".formatted(jdText.length() > 3000 ? jdText.substring(0, 3000) : jdText);
-            return deepSeekClient.evaluateResume(prompt);
+            LlmCallResult result = deepSeekClient.evaluateResume(prompt, "JdAnalysisAgent", "jd_requirements", traceId, spanId);
+            return new JdRequirementsResult(result.text(), result.llmInvocationId());
         } catch (Exception e) {
             log.warn("JD requirement extraction failed: {}", e.getMessage());
-            return "";
+            return new JdRequirementsResult("", null);
         }
     }
-
     public int getIndexedJdCount() {
         try {
             Long count = jdLibraryMapper.selectCount(new LambdaQueryWrapper<JdLibrary>());
@@ -347,12 +514,70 @@ public class JdRagService {
         }
     }
 
+    public PageResult<JdSummaryResponse> queryJds(String keyword, String category, String sortBy, int page, int pageSize) {
+        int safePage = Math.max(page, 1);
+        int safeSize = Math.min(Math.max(pageSize, 1), 100);
+        LambdaQueryWrapper<JdLibrary> wrapper = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            String q = keyword.trim();
+            wrapper.and(w -> w.like(JdLibrary::getTitle, q)
+                    .or().like(JdLibrary::getCategory, q)
+                    .or().like(JdLibrary::getJdId, q));
+        }
+        if (StringUtils.hasText(category) && !"ALL".equalsIgnoreCase(category)) {
+            wrapper.eq(JdLibrary::getCategory, category.trim().toUpperCase());
+        }
+        if ("title".equalsIgnoreCase(sortBy)) {
+            wrapper.orderByAsc(JdLibrary::getTitle);
+        } else if ("category".equalsIgnoreCase(sortBy)) {
+            wrapper.orderByAsc(JdLibrary::getCategory).orderByDesc(JdLibrary::getCreateTime);
+        } else {
+            wrapper.orderByDesc(JdLibrary::getCreateTime);
+        }
+        try {
+            Page<JdLibrary> mpPage = jdLibraryMapper.selectPage(new Page<>(safePage, safeSize), wrapper);
+            List<JdSummaryResponse> items = mpPage.getRecords().stream()
+                    .map(row -> new JdSummaryResponse(row.getJdId(), row.getTitle(), row.getCategory(),
+                            row.getCreateTime(), row.getUpdateTime()))
+                    .toList();
+            return PageResult.of(items, mpPage.getTotal(), safePage, safeSize);
+        } catch (Exception e) {
+            log.warn("Failed to query JDs from DB: {}", e.getMessage());
+            return PageResult.of(List.of(), 0, safePage, safeSize);
+        }
+    }
+
+    public JdDetailResponse getJdDetail(String jdId) {
+        if (!StringUtils.hasText(jdId)) {
+            throw new IllegalArgumentException("jdId 不能为空");
+        }
+        JdLibrary row = jdLibraryMapper.selectOne(new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
+        if (row == null) {
+            throw new IllegalArgumentException("岗位不存在：" + jdId);
+        }
+        return new JdDetailResponse(row.getJdId(), row.getTitle(), row.getCategory(), row.getDescription(),
+                row.getCreateTime(), row.getUpdateTime());
+    }
+
     public List<JdLibrary> getAllJds() {
         try {
             return jdLibraryMapper.selectList(new LambdaQueryWrapper<JdLibrary>().orderByDesc(JdLibrary::getCreateTime));
         } catch (Exception e) {
             log.warn("Failed to load JDs from DB: {}", e.getMessage());
             return List.of();
+        }
+    }
+
+    public void deleteJd(String jdId) {
+        if (!StringUtils.hasText(jdId)) {
+            return;
+        }
+        try {
+            jdLibraryMapper.delete(new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
+            jdMetaCache.remove(jdId);
+            vectorMaintenanceService.deleteJdVectors(jdId);
+        } catch (Exception e) {
+            log.warn("Failed to delete JD '{}': {}", jdId, e.getMessage());
         }
     }
 

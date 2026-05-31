@@ -1,0 +1,501 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "row",
+      "title": "MySQL SQL 执行观测（业务大类）",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "title": "SQL 查询 QPS（按业务大类）",
+      "description": "按 JD / 候选人简历 / 执行链路 / AI 调用等业务大类聚合的 QPS。",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum by (business_category_cn, sql_type_cn, status_cn) (rate(resumai_mysql_query_count_total[$__rate_interval]))",
+          "legendFormat": "{{business_category_cn}} / {{sql_type_cn}} / {{status_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "SQL 耗时 P95（按业务大类）",
+      "description": "按业务大类聚合的 SQL 耗时 P95（秒）。",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (business_category_cn, le) (rate(resumai_mysql_query_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "P95 {{business_category_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "SQL 耗时 P99（按业务大类）",
+      "description": "按业务大类聚合的 SQL 耗时 P99（秒）。",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (business_category_cn, le) (rate(resumai_mysql_query_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "P99 {{business_category_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "慢查询 Top 业务大类",
+      "description": "近 10 分钟按业务大类、访问操作聚合的慢查询次数。",
+      "type": "barchart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (business_category_cn, method_cn) (increase(resumai_mysql_slow_query_count_total[10m])))",
+          "legendFormat": "{{business_category_cn}} / {{method_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无慢查询"
+        }
+      }
+    },
+    {
+      "title": "SQL 错误数（按业务大类）",
+      "description": "按业务大类、错误类型聚合的 SQL 错误计数。",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (business_category_cn, error_type) (increase(resumai_mysql_query_error_total[$__rate_interval]))",
+          "legendFormat": "{{business_category_cn}} / {{error_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无错误"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "岗位 SQL 专项",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      }
+    },
+    {
+      "title": "岗位 SQL 查询 QPS",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "sum by (method_cn, status_cn) (rate(resumai_mysql_query_count_total{business_category_cn=\"JD\"}[$__rate_interval]))",
+          "legendFormat": "{{method_cn}} / {{status_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "岗位 SQL 耗时 P95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (method_cn, le) (rate(resumai_mysql_query_duration_seconds_bucket{business_category_cn=\"JD\"}[$__rate_interval])))",
+          "legendFormat": "P95 {{method_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "岗位 SQL 错误",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(resumai_mysql_query_error_total{business_category_cn=\"JD\"}[1h])) or vector(0)",
+          "legendFormat": "近 1 小时错误"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "核心表容量（业务大类）",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      }
+    },
+    {
+      "title": "业务大类表行数",
+      "description": "按 JD / 候选人简历 / 执行链路等大类汇总行数，约 60 秒刷新。",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "targets": [
+        {
+          "expr": "sum by (business_category_cn) (resumai_mysql_table_rows)",
+          "legendFormat": "{{business_category_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无数据"
+        }
+      }
+    },
+    {
+      "title": "业务大类表容量",
+      "description": "按业务大类汇总数据 + 索引总大小（字节）。",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "targets": [
+        {
+          "expr": "sum by (business_category_cn) (resumai_mysql_table_total_bytes)",
+          "legendFormat": "{{business_category_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "暂无数据"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "表级下钻",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      }
+    },
+    {
+      "title": "核心表行数（表级）",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "expr": "resumai_mysql_table_rows{business_category_cn=~\"JD|候选人简历|执行链路|AI 调用|质量评估|反馈与配置\"}",
+          "legendFormat": "{{table_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无数据"
+        }
+      }
+    },
+    {
+      "title": "核心表数据/索引大小（表级）",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "targets": [
+        {
+          "expr": "resumai_mysql_table_data_bytes{business_category_cn=~\"JD|候选人简历|执行链路|AI 调用\"}",
+          "legendFormat": "数据 {{table_cn}}"
+        },
+        {
+          "expr": "resumai_mysql_table_index_bytes{business_category_cn=~\"JD|候选人简历|执行链路|AI 调用\"}",
+          "legendFormat": "索引 {{table_cn}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "暂无数据"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "连接池状态",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      }
+    },
+    {
+      "title": "Hikari 活跃连接",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 39
+      },
+      "targets": [
+        {
+          "expr": "hikaricp_connections_active or vector(0)",
+          "legendFormat": "活跃"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无数据"
+        }
+      }
+    },
+    {
+      "title": "Hikari 空闲连接",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 39
+      },
+      "targets": [
+        {
+          "expr": "hikaricp_connections_idle or vector(0)",
+          "legendFormat": "空闲"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无数据"
+        }
+      }
+    },
+    {
+      "title": "Hikari 等待连接",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 39
+      },
+      "targets": [
+        {
+          "expr": "hikaricp_connections_pending or vector(0)",
+          "legendFormat": "等待"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "title": "Hikari 连接超时累计",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 39
+      },
+      "targets": [
+        {
+          "expr": "sum(hikaricp_connections_timeout_total) or vector(0)",
+          "legendFormat": "超时次数"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0"
+        }
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "resumai",
+    "mysql",
+    "observability"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "title": "ResumAI MySQL 查询观测",
+  "uid": "resumai-mysql-observability",
+  "version": 3
+}

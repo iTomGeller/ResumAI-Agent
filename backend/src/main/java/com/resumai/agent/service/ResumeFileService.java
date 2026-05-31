@@ -1,6 +1,7 @@
 package com.resumai.agent.service;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -18,9 +19,12 @@ public class ResumeFileService {
     private static final Logger log = LoggerFactory.getLogger(ResumeFileService.class);
 
     private final Path uploadRoot;
+    private final ObjectStorageService objectStorageService;
 
-    public ResumeFileService(@Value("${resumai.upload-dir:./uploads}") String uploadDir) {
+    public ResumeFileService(@Value("${resumai.upload-dir:./uploads}") String uploadDir,
+                             ObjectStorageService objectStorageService) {
         this.uploadRoot = Paths.get(uploadDir).toAbsolutePath().normalize();
+        this.objectStorageService = objectStorageService;
         try {
             Files.createDirectories(uploadRoot);
         } catch (IOException e) {
@@ -30,10 +34,11 @@ public class ResumeFileService {
 
     /**
      * 持久化原始简历文件，按 traceId 命名，防止路径穿越。
+     * 启用对象存储时同步上传 MinIO，并返回 object key。
      */
-    public String save(String traceId, MultipartFile file, String fileType) {
+    public SavedResumeFile save(String traceId, MultipartFile file, String fileType) {
         if (file == null || file.isEmpty() || !StringUtils.hasText(traceId)) {
-            return null;
+            return SavedResumeFile.empty();
         }
         String safeTraceId = traceId.replaceAll("[^a-zA-Z0-9\\-_]", "");
         String extension = extensionFor(fileType, file.getOriginalFilename());
@@ -44,10 +49,12 @@ public class ResumeFileService {
         try {
             Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
             log.info("Saved resume file for trace {} -> {}", traceId, target);
-            return target.toString();
+            String objectKey = ObjectStorageService.resumeObjectKey(traceId, extension);
+            String storedKey = objectStorageService.putFile(objectKey, target, detectContentType(target));
+            return new SavedResumeFile(target.toString(), storedKey, extension);
         } catch (IOException e) {
             log.warn("Failed to save resume file for {}: {}", traceId, e.getMessage());
-            return null;
+            return SavedResumeFile.empty();
         }
     }
 
@@ -65,6 +72,10 @@ public class ResumeFileService {
         return null;
     }
 
+    public InputStream openObjectStream(String objectKey) {
+        return objectStorageService.getObjectStream(objectKey);
+    }
+
     public String detectContentType(Path path) {
         if (path == null) {
             return "application/octet-stream";
@@ -77,6 +88,12 @@ public class ResumeFileService {
             return "text/plain; charset=utf-8";
         }
         return "application/octet-stream";
+    }
+
+    public record SavedResumeFile(String localPath, String objectKey, String extension) {
+        static SavedResumeFile empty() {
+            return new SavedResumeFile(null, null, null);
+        }
     }
 
     private String extensionFor(String fileType, String originalName) {

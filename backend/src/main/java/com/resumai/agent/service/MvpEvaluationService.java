@@ -1,15 +1,25 @@
 package com.resumai.agent.service;
 
+import com.resumai.agent.api.dto.TaskResponse;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.resumai.agent.ai.DeepSeekClient;
+import com.resumai.agent.ai.LlmCallResult;
 import com.resumai.agent.api.dto.CreateTaskRequest;
+import com.resumai.agent.api.dto.RecommendationDecision;
+import com.resumai.agent.util.MarkdownTextUtil;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import com.resumai.agent.config.AgentMetrics;
 import com.resumai.agent.api.dto.DashboardMetricsResponse;
 import com.resumai.agent.api.dto.FeedbackRequest;
 import com.resumai.agent.api.dto.FeedbackResponse;
 import com.resumai.agent.api.dto.GraphResponse;
 import com.resumai.agent.api.dto.JdMatchResult;
-import com.resumai.agent.api.dto.TaskResponse;
+import com.resumai.agent.api.dto.PageResult;
+import com.resumai.agent.api.dto.TaskListItemResponse;
 import com.resumai.agent.api.dto.TraceEventResponse;
 import com.resumai.agent.dao.AgentExecutionTraceMapper;
 import com.resumai.agent.dao.DynamicSkillPromptMapper;
@@ -22,7 +32,10 @@ import com.resumai.agent.domain.entity.DynamicSkillPrompt;
 import com.resumai.agent.domain.entity.HumanFeedbackLog;
 import com.resumai.agent.domain.entity.RagasEvalMetrics;
 import com.resumai.agent.domain.entity.ResumeTask;
+import com.resumai.agent.domain.dag.DagStepRegistry;
+import com.resumai.agent.domain.dag.DagStepRegistry.StepDefinition;
 import com.resumai.agent.domain.entity.SystemOrchestrationRule;
+import com.resumai.agent.rag.RagOptions;
 import java.math.BigDecimal;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -31,14 +44,18 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,9 +70,7 @@ import org.springframework.web.multipart.MultipartFile;
 /**
  * MVP 简历评估服务。
  *
- * <p>该服务用内存状态跑通公网 MVP 的端到端链路：任务创建、Agent 阶段执行、
- * DeepSeek 真实评估、Trace 记录、SSE 推送、GraphRAG 图谱、反馈和进化大盘。
- * 后续阶段会将内存状态替换为 MySQL、Redis Stream、Milvus 和 Neo4j。</p>
+ * <p>MySQL 承担任务/JD/反馈/Trace 的事实查询，内存与 Redis 仅承接 RUNNING 运行态缓存。</p>
  */
 @Service
 public class MvpEvaluationService {
@@ -68,6 +83,7 @@ public class MvpEvaluationService {
     private final AtomicLong feedbackId = new AtomicLong(3000);
     private final Map<String, MutableTask> tasks = new ConcurrentHashMap<>();
     private final Map<String, List<TraceEventResponse>> traces = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> traceSequences = new ConcurrentHashMap<>();
     private final List<FeedbackResponse> feedbacks = new ArrayList<>();
     private final ThreadPoolExecutor executorService = (ThreadPoolExecutor) Executors.newFixedThreadPool(6);
     private final DeepSeekClient deepSeekClient;
@@ -83,7 +99,12 @@ public class MvpEvaluationService {
     private final AgentMetrics agentMetrics;
     private final ExternalProfileService externalProfileService;
     private final JdRagService jdRagService;
+    private final HybridRagService hybridRagService;
+    private final RagConfigService ragConfigService;
     private final ResumeFileService resumeFileService;
+    private final TaskQueryService taskQueryService;
+    private final RuntimeStateService runtimeStateService;
+    private final ObjectMapper objectMapper;
 
     public MvpEvaluationService(DeepSeekClient deepSeekClient,
                                 SseTraceHub sseTraceHub,
@@ -98,7 +119,12 @@ public class MvpEvaluationService {
                                 AgentMetrics agentMetrics,
                                 ExternalProfileService externalProfileService,
                                 JdRagService jdRagService,
-                                ResumeFileService resumeFileService) {
+                                HybridRagService hybridRagService,
+                                RagConfigService ragConfigService,
+                                ResumeFileService resumeFileService,
+                                TaskQueryService taskQueryService,
+                                RuntimeStateService runtimeStateService,
+                                ObjectMapper objectMapper) {
         this.deepSeekClient = deepSeekClient;
         this.sseTraceHub = sseTraceHub;
         this.resumeGraphService = resumeGraphService;
@@ -112,13 +138,97 @@ public class MvpEvaluationService {
         this.agentMetrics = agentMetrics;
         this.externalProfileService = externalProfileService;
         this.jdRagService = jdRagService;
+        this.hybridRagService = hybridRagService;
+        this.ragConfigService = ragConfigService;
         this.resumeFileService = resumeFileService;
+        this.taskQueryService = taskQueryService;
+        this.runtimeStateService = runtimeStateService;
+        this.objectMapper = objectMapper;
         agentMetrics.registerExecutorActiveThreadsGauge(executorService::getActiveCount);
         agentMetrics.registerExecutorQueueSizeGauge(() -> executorService.getQueue().size());
         agentMetrics.registerSseActiveSubscribersGauge(sseTraceHub::getActiveSubscriberCount);
         agentMetrics.registerTaskCacheSizeGauge(() -> tasks.size());
         agentMetrics.registerNeo4jConnectionPoolGauge(() -> resumeGraphService.isNeo4jAvailable() ? 1 : 0);
         agentMetrics.registerMilvusConnectionAliveGauge(() -> resumeRagService.isMilvusAvailable() ? 1 : 0);
+    }
+
+    @PostConstruct
+    void restorePersistedState() {
+        restoreTasksFromDb();
+        restoreFeedbacksFromDb();
+    }
+
+    private void restoreTasksFromDb() {
+        try {
+            QueryWrapper<ResumeTask> wrapper = new QueryWrapper<>();
+            wrapper.orderByDesc("create_time").last("limit 200");
+            List<ResumeTask> rows = resumeTaskMapper.selectList(wrapper);
+            for (ResumeTask row : rows) {
+                if (!StringUtils.hasText(row.getTraceId()) || tasks.containsKey(row.getTraceId())) {
+                    continue;
+                }
+                if (!StringUtils.hasText(row.getResultPayload())) {
+                    continue;
+                }
+                Map<String, Object> payload = objectMapper.readValue(row.getResultPayload(), new TypeReference<>() {});
+                MutableTask task = hydrateTaskFromPayload(row, payload);
+                tasks.put(task.traceId, task);
+                traces.putIfAbsent(task.traceId, new ArrayList<>());
+                if (row.getId() != null && row.getId() > taskId.get()) {
+                    taskId.set(row.getId());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[mvp] restore tasks from db failed: {}", e.getMessage());
+        }
+    }
+
+    private void restoreFeedbacksFromDb() {
+        try {
+            PageResult<FeedbackResponse> page = queryFeedbacks(null, null, 1, 200);
+            feedbacks.addAll(page.items());
+        } catch (Exception e) {
+            log.warn("[mvp] restore feedbacks failed: {}", e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private MutableTask hydrateTaskFromPayload(ResumeTask row, Map<String, Object> payload) {
+        LocalDateTime createTime = row.getCreateTime() != null ? row.getCreateTime() : LocalDateTime.now();
+        LocalDateTime updateTime = row.getUpdateTime() != null ? row.getUpdateTime() : createTime;
+        MutableTask task = new MutableTask(
+                row.getId(),
+                row.getTraceId(),
+                stringValue(payload.get("fileName"), row.getCandidateName()),
+                stringValue(payload.get("jobCategory"), row.getJobCategory()),
+                stringValue(payload.get("executionMode"), row.getExecutionMode()),
+                stringValue(payload.get("status"), row.getStatus()),
+                intValue(payload.get("overallScore"), 0),
+                stringValue(payload.get("recommendation"), "NEED_MANUAL_REVIEW"),
+                stringValue(payload.get("summary"), ""),
+                longValue(payload.get("durationMs"), 0L),
+                intValue(payload.get("tokenCost"), 0),
+                createTime,
+                updateTime,
+                stringList(payload.get("strengths")),
+                stringList(payload.get("risks")),
+                stringList(payload.get("interviewQuestions")),
+                stringValue(payload.get("jobDescription"), ""),
+                stringValue(payload.get("resumeText"), ""),
+                stringValue(payload.get("resumeFilePath"), row.getFileUrl()),
+                stringValue(payload.get("resumeFileType"), null),
+                stringValue(payload.get("matchedJdTitle"), null),
+                doubleValue(payload.get("jdMatchScore")),
+                null,
+                stringValue(payload.get("aiRecommendation"), null),
+                stringValue(payload.get("decisionRationale"), null),
+                stringValue(payload.get("riskSummary"), null)
+        );
+        Object topMatches = payload.get("topJdMatches");
+        if (topMatches instanceof List<?>) {
+            task.topJdMatches = objectMapper.convertValue(topMatches, new TypeReference<>() {});
+        }
+        return task;
     }
 
     /**
@@ -128,12 +238,13 @@ public class MvpEvaluationService {
      * @return 创建后的任务响应
      */
     public TaskResponse createTask(CreateTaskRequest request) {
-        return createTaskInternal(request, "trace-" + UUID.randomUUID(), null, null, null);
+        return createTaskInternal(request, "trace-" + UUID.randomUUID(), null, null, null, null);
     }
 
     private TaskResponse createTaskInternal(CreateTaskRequest request,
                                             String traceId,
                                             String resumeFilePath,
+                                            String resumeObjectKey,
                                             String resumeFileType,
                                             List<JdMatchResult> precomputedJdMatches) {
         LocalDateTime now = LocalDateTime.now();
@@ -180,17 +291,34 @@ public class MvpEvaluationService {
                 resumeFileType,
                 matchedJdTitle,
                 jdMatchScore,
-                topJdMatches
+                topJdMatches,
+                null,
+                null,
+                null
         );
+        RagOptions ragOptions = request.ragOptions() != null ? request.ragOptions() : ragConfigService.getDefaultOptions();
+        task.ragOptions = ragOptions;
         tasks.put(traceId, task);
         traces.put(traceId, new ArrayList<>());
-        persistResumeTask(task);
+        persistResumeTask(task, resumeObjectKey);
+        runtimeStateService.cacheRunningTask(toResponse(task));
         agentMetrics.recordFunnelEvaluationStarted(task.jobCategory, task.executionMode);
         appendDagTrace(task.traceId, null, "OrchestratorAgent", "TASK_CREATED",
                 "任务创建", "TraceId 已生成，准备动态派生子 Agent。", "SUCCESS", 18L, 0,
                 null, null, "task_create", "BOTH",
                 "创建评估任务", "系统已接收简历并启动评估流程", null,
                 "OrchestratorAgent / TaskBootstrap", null, null, null, null, null, null);
+        if (StringUtils.hasText(resumeFilePath)) {
+            int textLen = request.resumeText() != null ? request.resumeText().length() : 0;
+            appendDagTrace(task.traceId, null, "ResumeParserAgent", "UPLOAD_PARSE",
+                    "文件解析", "简历文件已接收并完成文本抽取", "SUCCESS", 0L, 0,
+                    null, null, "upload_parse", "BOTH",
+                    "上传解析", "文件已保存，正文已抽取，等待后台评估", null,
+                    "ResumeParserAgent / UploadHandler", null, null,
+                    trim(request.fileName(), 80),
+                    "文本长度: " + textLen,
+                    null, null, null);
+        }
         CompletableFuture.runAsync(() -> executeTask(task), executorService);
         return toResponse(task);
     }
@@ -221,7 +349,7 @@ public class MvpEvaluationService {
         }
         String resumeText = extractResumeText(file, fileType, normalizedCategory);
         String traceId = "trace-" + UUID.randomUUID();
-        String savedPath = resumeFileService.save(traceId, file, fileType);
+        ResumeFileService.SavedResumeFile saved = resumeFileService.save(traceId, file, fileType);
         CreateTaskRequest request = new CreateTaskRequest(
                 StringUtils.hasText(fileName) ? fileName : "uploaded-resume",
                 jobCategory,
@@ -229,11 +357,12 @@ public class MvpEvaluationService {
                 jobDescription,
                 resumeText
         );
-        return createTaskInternal(request, traceId, savedPath, fileType, null);
+        return createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(), fileType, null);
     }
 
     /**
-     * Upload resume with automatic JD matching via RAG vector search.
+     * Upload resume with automatic JD matching deferred to async DAG execution.
+     * Returns immediately after file save and text extraction; JD matching runs in background.
      */
     public TaskResponse createTaskFromUploadAutoMatch(MultipartFile file, String executionMode) {
         String fileName = file == null ? "" : file.getOriginalFilename();
@@ -242,31 +371,17 @@ public class MvpEvaluationService {
             agentMetrics.recordFunnelUpload(fileType, "AUTO");
             agentMetrics.recordFunnelUploadSize(fileType, file.getSize());
         }
-        String resumeText = extractResumeText(file, fileType, "TECH");
-        List<JdMatchResult> matches = jdRagService.matchTopJds(resumeText, 3);
+        String resumeText = extractResumeText(file, fileType, "AUTO");
         String traceId = "trace-" + UUID.randomUUID();
-        String savedPath = resumeFileService.save(traceId, file, fileType);
-        String matchedCategory = "TECH";
-        String matchedDescription = "";
-        if (!matches.isEmpty()) {
-            JdMatchResult best = matches.get(0);
-            matchedCategory = StringUtils.hasText(best.category()) ? best.category() : "TECH";
-            matchedDescription = jdRagService.getJdDescription(best.jdId());
-            if (!StringUtils.hasText(matchedDescription)) {
-                matchedDescription = best.title();
-            }
-            agentMetrics.recordJdAutoMatchSuccess(true, best.score());
-        } else {
-            agentMetrics.recordJdAutoMatchSuccess(false, 0);
-        }
+        ResumeFileService.SavedResumeFile saved = resumeFileService.save(traceId, file, fileType);
         CreateTaskRequest request = new CreateTaskRequest(
                 StringUtils.hasText(fileName) ? fileName : "uploaded-resume",
-                matchedCategory,
+                "AUTO",
                 executionMode,
-                matchedDescription,
+                "",
                 resumeText
         );
-        return createTaskInternal(request, traceId, savedPath, fileType, matches);
+        return createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(), fileType, null);
     }
 
     public Path getResumeFile(String traceId) {
@@ -328,16 +443,18 @@ public class MvpEvaluationService {
         }
     }
 
-    private void persistResumeTask(MutableTask task) {
+    private void persistResumeTask(MutableTask task, String resumeObjectKey) {
         try {
             ResumeTask entity = new ResumeTask();
             entity.setId(task.id);
             entity.setTraceId(task.traceId);
             entity.setFileUrl(StringUtils.hasText(task.resumeFilePath) ? task.resumeFilePath : task.fileName);
+            entity.setResumeObjectKey(resumeObjectKey);
             entity.setJobCategory(task.jobCategory);
             entity.setExecutionMode(task.executionMode);
             entity.setStatus(task.status);
             entity.setCandidateName(task.fileName);
+            applyListColumns(entity, task);
             entity.setStartTime(task.createTime);
             entity.setCreateTime(task.createTime);
             entity.setUpdateTime(task.updateTime);
@@ -345,6 +462,17 @@ public class MvpEvaluationService {
         } catch (DataAccessException e) {
             log.warn("[mvp] persist resume_task failed (trace={}): {}", task.traceId, e.getMessage());
         }
+    }
+
+    private void applyListColumns(ResumeTask entity, MutableTask task) {
+        entity.setFileName(task.fileName);
+        entity.setOverallScore(task.overallScore);
+        entity.setRecommendation(task.recommendation);
+        entity.setMatchedJdTitle(task.matchedJdTitle);
+        entity.setJdMatchScore(task.jdMatchScore);
+        entity.setDurationMs(task.durationMs);
+        entity.setTokenCost(task.tokenCost);
+        entity.setSummary(trim(task.summary, 2000));
     }
 
     private void updateResumeTask(MutableTask task) {
@@ -355,22 +483,64 @@ public class MvpEvaluationService {
             entity.setEndTime(task.updateTime);
             entity.setUpdateTime(task.updateTime);
             entity.setFailReason("FAILED".equals(task.status) ? task.summary : null);
+            applyListColumns(entity, task);
             resumeTaskMapper.updateById(entity);
+            if ("RUNNING".equals(task.status)) {
+                runtimeStateService.cacheRunningTask(toResponse(task));
+            } else {
+                runtimeStateService.evictRunningTask(task.traceId);
+            }
         } catch (DataAccessException e) {
             log.warn("[mvp] update resume_task failed (trace={}): {}", task.traceId, e.getMessage());
         }
     }
 
     /**
-     * 查询任务列表。
-     *
-     * @return 按创建时间倒序排列的任务
+     * MySQL 分页查询任务列表，运行中任务用内存态覆盖同 traceId 行。
      */
-    public List<TaskResponse> listTasks() {
-        return tasks.values().stream()
-                .sorted(Comparator.comparing((MutableTask task) -> task.createTime).reversed())
-                .map(this::toResponse)
-                .toList();
+    public PageResult<TaskListItemResponse> queryTasks(
+            String keyword,
+            String status,
+            String recommendation,
+            String jobCategory,
+            Integer scoreMin,
+            Integer scoreMax,
+            String sortBy,
+            String sortOrder,
+            int page,
+            int pageSize) {
+        PageResult<TaskListItemResponse> result = taskQueryService.queryTasks(
+                keyword, status, recommendation, jobCategory, scoreMin, scoreMax, sortBy, sortOrder, page, pageSize);
+        List<TaskListItemResponse> merged = new ArrayList<>(result.items().size());
+        for (TaskListItemResponse item : result.items()) {
+            MutableTask live = tasks.get(item.traceId());
+            if (live != null) {
+                merged.add(overlayLiveTask(item, live));
+            } else {
+                merged.add(item);
+            }
+        }
+        return PageResult.of(merged, result.total(), result.page(), result.pageSize());
+    }
+
+    private TaskListItemResponse overlayLiveTask(TaskListItemResponse base, MutableTask live) {
+        return new TaskListItemResponse(
+                base.id(),
+                base.traceId(),
+                live.fileName,
+                live.jobCategory,
+                live.executionMode,
+                live.status,
+                live.overallScore,
+                live.recommendation,
+                live.summary,
+                live.durationMs,
+                live.tokenCost,
+                live.matchedJdTitle,
+                live.jdMatchScore,
+                base.createTime(),
+                live.updateTime != null ? live.updateTime : base.updateTime()
+        );
     }
 
     /**
@@ -381,10 +551,41 @@ public class MvpEvaluationService {
      */
     public TaskResponse getTask(String traceId) {
         MutableTask task = tasks.get(traceId);
-        if (task == null) {
-            throw new IllegalArgumentException("任务不存在：" + traceId);
+        if (task != null) {
+            return toResponse(task);
         }
-        return toResponse(task);
+        return runtimeStateService.getRunningTask(traceId)
+                .orElseGet(() -> loadTaskFromDb(traceId)
+                        .orElseThrow(() -> new IllegalArgumentException("任务不存在：" + traceId)));
+    }
+
+    private Optional<TaskResponse> loadTaskFromDb(String traceId) {
+        try {
+            ResumeTask row = resumeTaskMapper.selectOne(
+                    new QueryWrapper<ResumeTask>().eq("trace_id", traceId).last("limit 1"));
+            if (row == null) {
+                return Optional.empty();
+            }
+            if (StringUtils.hasText(row.getResultPayload())) {
+                Map<String, Object> payload = objectMapper.readValue(row.getResultPayload(), new TypeReference<>() {});
+                return Optional.of(toResponse(hydrateTaskFromPayload(row, payload)));
+            }
+            return Optional.of(new TaskResponse(
+                    row.getId(), row.getTraceId(),
+                    StringUtils.hasText(row.getFileName()) ? row.getFileName() : row.getCandidateName(),
+                    row.getJobCategory(), row.getExecutionMode(), row.getStatus(),
+                    row.getOverallScore(), row.getRecommendation(), row.getSummary(),
+                    row.getDurationMs(), row.getTokenCost(),
+                    row.getCreateTime(), row.getUpdateTime(),
+                    List.of(), List.of(), List.of(), null,
+                    StringUtils.hasText(row.getResumeObjectKey()) || StringUtils.hasText(row.getFileUrl())
+                            ? "/api/tasks/" + row.getTraceId() + "/file" : null,
+                    null, row.getMatchedJdTitle(), row.getJdMatchScore(), List.of(),
+                    null, null, null));
+        } catch (Exception e) {
+            log.warn("[mvp] load task from db failed (trace={}): {}", traceId, e.getMessage());
+            return Optional.empty();
+        }
     }
 
     /**
@@ -394,8 +595,8 @@ public class MvpEvaluationService {
      * @return Trace 事件列表
      */
     public List<TraceEventResponse> listTraces(String traceId) {
-        List<TraceEventResponse> events = loadTraceEvents(traceId);
-        return filterLegacyTraceDuplicates(events);
+        List<TraceEventResponse> events = filterLegacyTraceDuplicates(loadTraceEvents(traceId));
+        return enrichWithExpectedDagNodes(traceId, events);
     }
 
     private List<TraceEventResponse> loadTraceEvents(String traceId) {
@@ -409,25 +610,268 @@ public class MvpEvaluationService {
             List<AgentExecutionTrace> rows = agentExecutionTraceMapper.selectList(wrapper);
             List<TraceEventResponse> result = new ArrayList<>(rows.size());
             for (AgentExecutionTrace row : rows) {
-                result.add(new TraceEventResponse(
-                        row.getTraceId(),
-                        row.getSpanId(),
-                        row.getParentSpanId(),
-                        row.getAgentRole(),
-                        row.getToolCall(),
-                        row.getInputSummary(),
-                        row.getOutputSummary(),
-                        row.getStatus(),
-                        row.getDurationMs(),
-                        row.getCostTokens() == null ? 0 : row.getCostTokens().intValue(),
-                        row.getCreateTime()
-                ));
+                result.add(fromPersistedTrace(row));
+            }
+            if (!result.isEmpty()) {
+                traces.put(traceId, new ArrayList<>(result));
             }
             return result;
         } catch (DataAccessException e) {
             log.warn("[mvp] load trace from db failed (trace={}): {}", traceId, e.getMessage());
             return List.of();
         }
+    }
+
+    private TraceEventResponse fromPersistedTrace(AgentExecutionTrace row) {
+        Map<String, Object> payload = parseTracePayload(row.getPayload());
+        if (payload != null && payload.containsKey("stepKind")) {
+            return buildTraceFromPayload(row, payload);
+        }
+        return new TraceEventResponse(
+                row.getTraceId(),
+                row.getSpanId(),
+                row.getParentSpanId(),
+                row.getAgentRole(),
+                row.getToolCall(),
+                row.getInputSummary(),
+                row.getOutputSummary(),
+                row.getStatus(),
+                row.getDurationMs(),
+                row.getCostTokens() == null ? 0 : row.getCostTokens().intValue(),
+                row.getCreateTime()
+        );
+    }
+
+    private Map<String, Object> parseTracePayload(String payloadJson) {
+        if (!StringUtils.hasText(payloadJson)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(payloadJson, new TypeReference<>() {
+            });
+        } catch (Exception e) {
+            log.warn("[mvp] parse trace payload failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private TraceEventResponse buildTraceFromPayload(AgentExecutionTrace row, Map<String, Object> payload) {
+        return new TraceEventResponse(
+                row.getTraceId(),
+                row.getSpanId(),
+                row.getParentSpanId(),
+                stringValue(payload.get("agentRole"), row.getAgentRole()),
+                stringValue(payload.get("eventType"), row.getToolCall()),
+                stringValue(payload.get("title"), row.getInputSummary()),
+                stringValue(payload.get("detail"), row.getOutputSummary()),
+                stringValue(payload.get("status"), row.getStatus()),
+                row.getDurationMs(),
+                row.getCostTokens() == null ? 0 : row.getCostTokens().intValue(),
+                row.getCreateTime(),
+                stringValue(payload.get("dagGroupId"), null),
+                stringValue(payload.get("laneId"), null),
+                stringValue(payload.get("stepKind"), null),
+                stringValue(payload.get("viewType"), "BOTH"),
+                stringValue(payload.get("businessLabel"), null),
+                stringValue(payload.get("evidenceSummary"), null),
+                (List<String>) payload.get("interviewHints"),
+                stringValue(payload.get("developerLabel"), null),
+                stringValue(payload.get("skillName"), row.getSkillName()),
+                stringValue(payload.get("promptPreview"), null),
+                stringValue(payload.get("inputSummary"), row.getInputSummary()),
+                stringValue(payload.get("outputSummary"), row.getOutputSummary()),
+                (List<String>) payload.get("toolCalls"),
+                (List<String>) payload.get("mcpCalls"),
+                stringValue(payload.get("sandboxSummary"), null),
+                stringValue(payload.get("llmInvocationId"), null),
+                stringValue(payload.get("nodeId"), null),
+                (List<String>) payload.get("dependsOn"),
+                stringValue(payload.get("edgeLabel"), null),
+                stringValue(payload.get("phase"), null),
+                boolValue(payload.get("expected")),
+                payload.get("sortOrder") == null ? null : intValue(payload.get("sortOrder"), 0),
+                stringValue(payload.get("fullPrompt"), null),
+                stringValue(payload.get("fullInput"), null),
+                stringValue(payload.get("fullOutput"), null),
+                payload.get("sequence") == null ? null : intValue(payload.get("sequence"), 0),
+                payload.get("roundIndex") == null ? null : intValue(payload.get("roundIndex"), 0),
+                stringValue(payload.get("roundRole"), null),
+                stringValue(payload.get("callKind"), null),
+                stringValue(payload.get("callName"), null),
+                stringValue(payload.get("parentAgentSpanId"), null),
+                stringValue(payload.get("parentRoundId"), null),
+                stringValue(payload.get("ioJson"), null)
+        );
+    }
+
+    private List<TraceEventResponse> enrichWithExpectedDagNodes(String traceId, List<TraceEventResponse> events) {
+        if (events == null || events.isEmpty()) {
+            return List.of();
+        }
+        boolean hasDag = events.stream().anyMatch(e ->
+                StringUtils.hasText(e.stepKind()) || Boolean.TRUE.equals(e.expected()));
+        if (!hasDag) {
+            return events;
+        }
+        String status = resolveTaskStatus(traceId);
+        if ("SUCCESS".equals(status) || "FAILED".equals(status)) {
+            return sortTraceEvents(events);
+        }
+        boolean includeUpload = events.stream().anyMatch(e -> "upload_parse".equals(e.stepKind()));
+        Set<String> presentNodeIds = new HashSet<>();
+        for (TraceEventResponse event : events) {
+            if (Boolean.TRUE.equals(event.expected())) {
+                continue;
+            }
+            if (StringUtils.hasText(event.nodeId())) {
+                presentNodeIds.add(event.nodeId());
+            } else if (StringUtils.hasText(event.stepKind())) {
+                presentNodeIds.add(DagStepRegistry.resolveNodeId(event.stepKind(), event.laneId()));
+            }
+        }
+        List<TraceEventResponse> merged = new ArrayList<>(events.stream()
+                .filter(e -> !Boolean.TRUE.equals(e.expected()))
+                .toList());
+        for (StepDefinition definition : DagStepRegistry.skeleton(includeUpload)) {
+            if (!presentNodeIds.contains(definition.nodeId())) {
+                merged.add(syntheticPendingNode(traceId, definition));
+            }
+        }
+        return sortTraceEvents(merged);
+    }
+
+    private TraceEventResponse syntheticPendingNode(String traceId, StepDefinition definition) {
+        String dagGroupId = definition.laneId() != null ? "parallel-evaluation" : null;
+        return new TraceEventResponse(
+                traceId,
+                "expected-" + definition.nodeId(),
+                null,
+                "DAGEngine",
+                "EXPECTED_NODE",
+                definition.businessLabel(),
+                "等待上游节点完成后执行",
+                "PENDING",
+                0L,
+                0,
+                LocalDateTime.now(),
+                dagGroupId,
+                definition.laneId(),
+                definition.stepKind(),
+                definition.viewType(),
+                definition.businessLabel(),
+                "等待中",
+                null,
+                definition.developerLabel(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                definition.nodeId(),
+                definition.dependsOn(),
+                definition.edgeLabel(),
+                definition.phase(),
+                true,
+                definition.sortOrder(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+    }
+
+    private List<TraceEventResponse> sortTraceEvents(List<TraceEventResponse> events) {
+        return events.stream()
+                .sorted(Comparator
+                        .comparing((TraceEventResponse e) -> e.sortOrder() == null ? 999 : e.sortOrder())
+                        .thenComparing(e -> e.sequence() == null ? Integer.MAX_VALUE : e.sequence())
+                        .thenComparing(e -> e.timestamp() == null ? LocalDateTime.MIN : e.timestamp()))
+                .toList();
+    }
+
+    private int nextSequence(String traceId) {
+        return traceSequences.computeIfAbsent(traceId, ignored -> new AtomicInteger(0)).incrementAndGet();
+    }
+
+    private String inferCallKind(String stepKind, String skillName, List<String> toolCalls,
+                                 List<String> mcpCalls, String llmInvocationId) {
+        if (StringUtils.hasText(llmInvocationId)) {
+            return "llm";
+        }
+        if (mcpCalls != null && !mcpCalls.isEmpty()) {
+            return "mcp";
+        }
+        if (StringUtils.hasText(skillName) || "skill_eval".equals(stepKind)) {
+            return "skill";
+        }
+        if (stepKind != null && (stepKind.contains("rag") || "jd_match".equals(stepKind)
+                || "historical_match".equals(stepKind))) {
+            return "rag";
+        }
+        if (stepKind != null && stepKind.contains("sandbox")) {
+            return "sandbox";
+        }
+        if (toolCalls != null && !toolCalls.isEmpty()) {
+            return "tool";
+        }
+        return null;
+    }
+
+    private String inferCallName(String stepKind, String skillName, List<String> toolCalls, List<String> mcpCalls) {
+        if (StringUtils.hasText(skillName)) {
+            return skillName;
+        }
+        if (toolCalls != null && !toolCalls.isEmpty()) {
+            return toolCalls.get(0);
+        }
+        if (mcpCalls != null && !mcpCalls.isEmpty()) {
+            return mcpCalls.get(0);
+        }
+        return stepKind;
+    }
+
+    private String buildIoJson(String fullInput, String fullOutput) {
+        if (!StringUtils.hasText(fullInput) && !StringUtils.hasText(fullOutput)) {
+            return null;
+        }
+        Map<String, Object> io = new LinkedHashMap<>();
+        if (StringUtils.hasText(fullInput)) {
+            io.put("input", fullInput);
+        }
+        if (StringUtils.hasText(fullOutput)) {
+            io.put("output", fullOutput);
+        }
+        try {
+            return objectMapper.writeValueAsString(io);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    private String resolveTaskStatus(String traceId) {
+        MutableTask task = tasks.get(traceId);
+        if (task != null && StringUtils.hasText(task.status)) {
+            return task.status;
+        }
+        try {
+            ResumeTask row = resumeTaskMapper.selectOne(new QueryWrapper<ResumeTask>().eq("trace_id", traceId).last("limit 1"));
+            if (row != null && StringUtils.hasText(row.getStatus())) {
+                return row.getStatus();
+            }
+        } catch (DataAccessException e) {
+            log.warn("[mvp] resolve task status failed (trace={}): {}", traceId, e.getMessage());
+        }
+        return "RUNNING";
     }
 
     private List<TraceEventResponse> filterLegacyTraceDuplicates(List<TraceEventResponse> events) {
@@ -500,36 +944,34 @@ public class MvpEvaluationService {
     }
 
     /**
-     * 查询反馈列表，内存为主、MySQL 兜底。
-     *
-     * @return 人工反馈记录
+     * MySQL 分页查询 HR 反馈。
      */
-    public synchronized List<FeedbackResponse> listFeedbacks() {
-        if (!feedbacks.isEmpty()) {
-            return List.copyOf(feedbacks);
+    public PageResult<FeedbackResponse> queryFeedbacks(String traceId, String feedbackType, int page, int pageSize) {
+        int safePage = Math.max(page, 1);
+        int safeSize = Math.min(Math.max(pageSize, 1), 100);
+        QueryWrapper<HumanFeedbackLog> wrapper = new QueryWrapper<>();
+        if (StringUtils.hasText(traceId)) {
+            wrapper.eq("trace_id", traceId.trim());
         }
-        try {
-            QueryWrapper<HumanFeedbackLog> wrapper = new QueryWrapper<>();
-            wrapper.orderByDesc("create_time", "id").last("limit 200");
-            List<HumanFeedbackLog> rows = humanFeedbackLogMapper.selectList(wrapper);
-            List<FeedbackResponse> result = new ArrayList<>(rows.size());
-            for (HumanFeedbackLog row : rows) {
-                result.add(new FeedbackResponse(
-                        row.getId(),
-                        row.getTraceId(),
-                        row.getRatingScore(),
-                        row.getFeedbackType(),
-                        row.getHumanComment(),
-                        row.getFixAction(),
-                        row.getReviewer(),
-                        row.getCreateTime()
-                ));
-            }
-            return result;
-        } catch (DataAccessException e) {
-            log.warn("[mvp] load feedback from db failed: {}", e.getMessage());
-            return List.of();
+        if (StringUtils.hasText(feedbackType) && !"ALL".equalsIgnoreCase(feedbackType)) {
+            wrapper.eq("feedback_type", feedbackType.trim());
         }
+        wrapper.orderByDesc("create_time", "id");
+        Page<HumanFeedbackLog> mpPage = humanFeedbackLogMapper.selectPage(new Page<>(safePage, safeSize), wrapper);
+        List<FeedbackResponse> items = new ArrayList<>(mpPage.getRecords().size());
+        for (HumanFeedbackLog row : mpPage.getRecords()) {
+            items.add(new FeedbackResponse(
+                    row.getId(),
+                    row.getTraceId(),
+                    row.getRatingScore(),
+                    row.getFeedbackType(),
+                    row.getHumanComment(),
+                    row.getFixAction(),
+                    row.getReviewer(),
+                    row.getCreateTime()
+            ));
+        }
+        return PageResult.of(items, mpPage.getTotal(), safePage, safeSize);
     }
 
     /**
@@ -586,7 +1028,7 @@ public class MvpEvaluationService {
                 new GraphResponse.GraphEdge("agent", "job", "岗位匹配", 0.82),
                 new GraphResponse.GraphEdge("candidate", "risk", "需要追问", 0.42)
         );
-        return new GraphResponse(nodes, edges);
+        return new GraphResponse(nodes, edges, "SIMULATED");
     }
 
     private void executeTask(MutableTask task) {
@@ -605,6 +1047,13 @@ public class MvpEvaluationService {
             previousAgent = runStage(task, previousAgent, "ResumeParserAgent", "解析简历", parserPrompt, 320L, 80);
             long parseDuration = System.currentTimeMillis() - parseStart;
             String parseOutput = "抽取完成：姓名/教育/工作/项目/技能/风险线索";
+            String parseFullInput = buildSkillInput("ResumeParserSkill", "ResumeParserAgent", task.jobCategory,
+                    task.resumeText, Map.of("prompt", parserPrompt));
+            String parseFullOutput = buildSkillOutput("ResumeParserSkill", parseOutput,
+                    List.of("姓名", "教育背景", "工作经历", "项目经验", "技能清单"),
+                    List.of("外部作品链接", "量化成果"),
+                    List.of("简历正文已解析", "GraphRAG 节点已写入"),
+                    List.of("请核对教育/工作起止时间是否一致"));
             appendDagTrace(task.traceId, orchSpan, "ResumeParserAgent", "AGENT_STEP",
                     "简历解析", "抽取教育/工作/项目/技能/风险", "SUCCESS",
                     parseDuration, 80,
@@ -612,10 +1061,26 @@ public class MvpEvaluationService {
                     "解析简历基本信息", "从简历中提取候选人姓名、教育背景、工作经历、项目经验、技能清单", null,
                     "ResumeParserAgent / ResumeParserSkill", "ResumeParserSkill",
                     trim(parserPrompt, 200), trim(task.resumeText != null ? task.resumeText : "", 100),
-                    parseOutput, formatToolCall("ResumeParserSkill", task.resumeText, parseOutput, parseDuration, "SUCCESS"), null);
+                    parseOutput, formatToolCall("ResumeParserSkill", task.resumeText, parseOutput, parseDuration, "SUCCESS"), null,
+                    null, null, parserPrompt, parseFullInput, parseFullOutput);
             agentMetrics.recordDagNodeDuration("resume_parse", null, parseDuration);
             agentMetrics.recordSkillInvocation("ResumeParserSkill", "ResumeParserAgent", true);
-            resumeGraphService.populateGraph(task.traceId, task.resumeText != null ? task.resumeText : "", task.jobCategory);
+            ResumeGraphService.GraphPopulateResult graphResult = resumeGraphService.populateGraph(
+                    task.traceId,
+                    task.resumeText != null ? task.resumeText : "",
+                    task.jobCategory,
+                    StringUtils.hasText(task.matchedJdTitle) ? task.matchedJdTitle : task.jobCategory,
+                    task.topJdMatches != null && !task.topJdMatches.isEmpty() ? task.topJdMatches.get(0).jdId() : "job-" + task.jobCategory);
+            appendDagTrace(task.traceId, orchSpan, "ResumeGraphAgent", "GRAPH_EXTRACTION",
+                    "知识图谱抽取", graphResult.success() ? "GraphRAG 实体已写入 Neo4j" : "图谱抽取失败", graphResult.success() ? "SUCCESS" : "WARNING",
+                    graphResult.durationMs(), graphResult.llmInvocationId() != null ? 120 : 0,
+                    null, null, "graph_extraction", "DEV",
+                    "抽取知识图谱", "从简历提取实体并写入图数据库", null,
+                    "ResumeGraphAgent / GraphExtraction", "GraphExtractionSkill",
+                    "从简历提取实体 JSON...", trim(task.resumeText != null ? task.resumeText : "", 80),
+                    graphResult.success() ? "Neo4j 节点已写入" : "抽取失败",
+                    formatToolCall("neo4j.populate", task.traceId, "graph nodes", graphResult.durationMs(), graphResult.success() ? "SUCCESS" : "FAILED"), null,
+                    graphResult.llmInvocationId());
 
             // --- DAG Node: JD 自动匹配 ---
             String jdMatchInfo = "";
@@ -629,6 +1094,13 @@ public class MvpEvaluationService {
                     task.jobDescription = jdRagService.getJdDescription(bestMatch.jdId());
                 }
                 long jdDuration = System.currentTimeMillis() - jdStart;
+                String jdFullInput = buildSkillInput("JdMatchSkill", "JdMatchAgent", task.jobCategory, task.resumeText,
+                        Map.of("topK", 3, "strategy", "jd_library vector search"));
+                String jdFullOutput = buildSkillOutput("JdMatchSkill", jdMatchInfo,
+                        bestMatch.matchReasons(),
+                        bestMatch.gaps(),
+                        List.of("Top1=" + bestMatch.title(), "score=" + String.format("%.2f", bestMatch.score())),
+                        bestMatch.interviewChecks());
                 appendDagTrace(task.traceId, orchSpan, "JdMatchAgent", "JD_MATCH",
                         "JD 智能匹配", jdMatchInfo + "，共匹配 " + task.topJdMatches.size() + " 个岗位", "SUCCESS",
                         jdDuration, 0,
@@ -638,12 +1110,18 @@ public class MvpEvaluationService {
                         "JdMatchAgent / JdMatchSkill", "JdMatchSkill",
                         "根据简历向量在JD库中检索TopK相似岗位...",
                         trim(task.resumeText != null ? task.resumeText : "", 80),
-                        jdMatchInfo, formatToolCall("milvus.search", "jd_library topK=3", jdMatchInfo, jdDuration, "SUCCESS"), null);
+                        jdMatchInfo, formatToolCall("milvus.search", "jd_library topK=3", jdMatchInfo, jdDuration, "SUCCESS"), null,
+                        null, null,
+                        "根据简历向量在JD库中检索TopK相似岗位",
+                        jdFullInput,
+                        jdFullOutput);
                 agentMetrics.recordJdAutoMatchSuccess(true, bestMatch.score());
                 agentMetrics.recordRagSearchResult("jd_library", task.topJdMatches.size(), bestMatch.score());
                 agentMetrics.recordDagNodeDuration("jd_match", null, jdDuration);
             } else if (!StringUtils.hasText(task.jobDescription) || task.jobDescription.length() < 20) {
-                List<JdMatchResult> jdMatches = jdRagService.matchTopJds(task.resumeText != null ? task.resumeText : "", 3);
+                RagOptions ragOpts = task.ragOptions != null ? task.ragOptions : ragConfigService.getDefaultOptions();
+                List<JdMatchResult> jdMatches = hybridRagService.retrieve(
+                        task.resumeText != null ? task.resumeText : "", ragOpts);
                 long jdDuration = System.currentTimeMillis() - jdStart;
                 if (!jdMatches.isEmpty()) {
                     JdMatchResult bestMatch = jdMatches.get(0);
@@ -651,6 +1129,22 @@ public class MvpEvaluationService {
                     task.matchedJdTitle = bestMatch.title();
                     task.jdMatchScore = bestMatch.score();
                     task.topJdMatches = jdMatches;
+                    if (StringUtils.hasText(bestMatch.category())) {
+                        task.jobCategory = normalizeJobCategory(bestMatch.category());
+                    }
+                    String jdDesc = jdRagService.getJdDescription(bestMatch.jdId());
+                    if (StringUtils.hasText(jdDesc)) {
+                        task.jobDescription = jdDesc;
+                    } else if (StringUtils.hasText(bestMatch.title())) {
+                        task.jobDescription = bestMatch.title();
+                    }
+                    String jdFullInput = buildSkillInput("JdMatchSkill", "JdMatchAgent", task.jobCategory, task.resumeText,
+                            Map.of("topK", 3, "strategy", "jd_library vector search"));
+                    String jdFullOutput = buildSkillOutput("JdMatchSkill", jdMatchInfo,
+                            bestMatch.matchReasons(),
+                            bestMatch.gaps(),
+                            List.of("Top1=" + bestMatch.title(), "score=" + String.format("%.2f", bestMatch.score())),
+                            bestMatch.interviewChecks());
                     appendDagTrace(task.traceId, orchSpan, "JdMatchAgent", "JD_MATCH",
                             "JD 智能匹配", jdMatchInfo + "，共匹配 " + jdMatches.size() + " 个岗位", "SUCCESS",
                             jdDuration, 0,
@@ -660,16 +1154,30 @@ public class MvpEvaluationService {
                             "JdMatchAgent / JdMatchSkill", "JdMatchSkill",
                             "根据简历向量在JD库中检索TopK相似岗位...",
                             trim(task.resumeText != null ? task.resumeText : "", 80),
-                            jdMatchInfo, formatToolCall("milvus.search", "jd_library topK=3", jdMatchInfo, jdDuration, "SUCCESS"), null);
+                            jdMatchInfo, formatToolCall("milvus.search", "jd_library topK=3", jdMatchInfo, jdDuration, "SUCCESS"), null,
+                            null, null,
+                            "根据简历向量在JD库中检索TopK相似岗位",
+                            jdFullInput,
+                            jdFullOutput);
                     agentMetrics.recordJdAutoMatchSuccess(true, bestMatch.score());
                     agentMetrics.recordRagSearchResult("jd_library", jdMatches.size(), bestMatch.score());
                 } else {
+                    String jdNoMatchInput = buildSkillInput("JdMatchSkill", "JdMatchAgent", task.jobCategory, task.resumeText,
+                            Map.of("topK", 3, "strategy", "jd_library vector search"));
+                    String jdNoMatchOutput = buildDiagnosticOutput("jd_match", "NO_MATCH",
+                            "JD 库暂无数据或未匹配到合适岗位",
+                            "后续评估将依赖用户输入的岗位描述或岗位类别",
+                            "请在岗位库中维护 JD，或在上传时填写岗位描述");
                     appendDagTrace(task.traceId, orchSpan, "JdMatchAgent", "JD_MATCH",
                             "JD 智能匹配", "JD 库暂无数据或未匹配到合适岗位", "SUCCESS",
                             jdDuration, 0,
                             null, null, "jd_match", "BOTH",
                             "自动匹配岗位", "JD库为空或无合适匹配，请先维护岗位库", null,
-                            "JdMatchAgent / JdMatchSkill", "JdMatchSkill", null, null, "无匹配结果", null, null);
+                            "JdMatchAgent / JdMatchSkill", "JdMatchSkill", null, null, "无匹配结果", null, null,
+                            null, null,
+                            "根据简历向量在JD库中检索TopK相似岗位",
+                            jdNoMatchInput,
+                            jdNoMatchOutput);
                     agentMetrics.recordJdAutoMatchSuccess(false, 0);
                     agentMetrics.recordRagSearchResult("jd_library", 0, 0);
                 }
@@ -689,6 +1197,13 @@ public class MvpEvaluationService {
             previousAgent = runStage(task, previousAgent, "TechAgent", "技术能力评估", techPrompt, 540L, 220);
             long techDuration = System.currentTimeMillis() - techStart;
             String techOutput = "技术栈匹配度评估完成，关键技能与岗位高度相关";
+            String techFullInput = buildSkillInput("TechStackAuditSkill", "TechAgent", task.jobCategory, task.resumeText,
+                    Map.of("prompt", techPrompt, "targetRole", task.matchedJdTitle != null ? task.matchedJdTitle : task.jobCategory));
+            String techFullOutput = buildSkillOutput("TechStackAuditSkill", techOutput,
+                    List.of("Java", "Spring Boot", "MySQL", "Redis"),
+                    List.of("Java 21", "RAG 实战", "Docker 部署细节"),
+                    List.of("岗位必要技能与简历关键词存在交集"),
+                    List.of("请详细说明 Java 21 / Spring Boot 3 使用经验", "请举例说明 RAG 模块职责"));
             appendDagTrace(task.traceId, orchSpan, "TechAgent", "AGENT_STEP",
                     "技术能力评估", "评估候选人技术栈深度与广度", "SUCCESS",
                     techDuration, 220,
@@ -698,7 +1213,8 @@ public class MvpEvaluationService {
                     "TechAgent / TechStackAuditSkill", "TechStackAuditSkill",
                     trim(techPrompt, 200),
                     trim(task.resumeText != null ? task.resumeText : "", 80), techOutput,
-                    formatToolCall("TechStackAuditSkill", task.jobCategory, techOutput, techDuration, "SUCCESS"), null);
+                    formatToolCall("TechStackAuditSkill", task.jobCategory, techOutput, techDuration, "SUCCESS"), null,
+                    null, null, techPrompt, techFullInput, techFullOutput);
             agentMetrics.recordDagNodeDuration("skill_eval", "tech", techDuration);
             agentMetrics.recordSkillInvocation("TechStackAuditSkill", "TechAgent", true);
 
@@ -708,6 +1224,13 @@ public class MvpEvaluationService {
             previousAgent = runStage(task, previousAgent, "ProjectAgent", "项目深度评估", projectPrompt, 480L, 180);
             long projDuration = System.currentTimeMillis() - projStart;
             String projectOutput = "项目复杂度与个人贡献评估完成";
+            String projectFullInput = buildSkillInput("ProjectDepthSkill", "ProjectAgent", task.jobCategory, task.resumeText,
+                    Map.of("prompt", projectPrompt));
+            String projectFullOutput = buildSkillOutput("ProjectDepthSkill", projectOutput,
+                    List.of("AI Agent 平台", "RAG 检索", "Trace 可观测"),
+                    List.of("项目规模", "个人贡献比例", "量化指标"),
+                    List.of("项目描述覆盖核心职责"),
+                    List.of("请说明你在项目中的具体职责", "项目中最有挑战性的部分是什么？"));
             appendDagTrace(task.traceId, orchSpan, "ProjectAgent", "AGENT_STEP",
                     "项目深度评估", "分析项目复杂度和个人贡献", "SUCCESS",
                     projDuration, 180,
@@ -717,7 +1240,8 @@ public class MvpEvaluationService {
                     "ProjectAgent / ProjectDepthSkill", "ProjectDepthSkill",
                     trim(projectPrompt, 200),
                     "候选人项目经历摘要", projectOutput,
-                    formatToolCall("ProjectDepthSkill", "项目列表", projectOutput, projDuration, "SUCCESS"), null);
+                    formatToolCall("ProjectDepthSkill", "项目列表", projectOutput, projDuration, "SUCCESS"), null,
+                    null, null, projectPrompt, projectFullInput, projectFullOutput);
             agentMetrics.recordDagNodeDuration("skill_eval", "project", projDuration);
             agentMetrics.recordSkillInvocation("ProjectDepthSkill", "ProjectAgent", true);
 
@@ -727,6 +1251,13 @@ public class MvpEvaluationService {
             previousAgent = runStage(task, previousAgent, "RiskAgent", "风险识别", riskPrompt, 260L, 90);
             long riskDuration = System.currentTimeMillis() - riskStart;
             String riskOutput = "未发现严重时间线冲突，部分技能描述建议面试验证";
+            String riskFullInput = buildSkillInput("RiskDetectionSkill", "RiskAgent", task.jobCategory, task.resumeText,
+                    Map.of("prompt", riskPrompt));
+            String riskFullOutput = buildSkillOutput("RiskDetectionSkill", riskOutput,
+                    List.of("简历结构完整", "核心技能可识别"),
+                    List.of("经验年限", "教育/实习时间线", "技能堆砌"),
+                    List.of("风险线索来自简历文本与时间线"),
+                    List.of("简历中的时间空窗如何解释？", "某些技术经验描述是否需要验证？"));
             appendDagTrace(task.traceId, orchSpan, "RiskAgent", "AGENT_STEP",
                     "风险识别", "检查简历时间线和夸大风险", "SUCCESS",
                     riskDuration, 90,
@@ -736,7 +1267,8 @@ public class MvpEvaluationService {
                     "RiskAgent / RiskDetectionSkill", "RiskDetectionSkill",
                     trim(riskPrompt, 200),
                     "候选人简历全文", riskOutput,
-                    formatToolCall("RiskDetectionSkill", task.resumeText, riskOutput, riskDuration, "SUCCESS"), null);
+                    formatToolCall("RiskDetectionSkill", task.resumeText, riskOutput, riskDuration, "SUCCESS"), null,
+                    null, null, riskPrompt, riskFullInput, riskFullOutput);
             agentMetrics.recordDagNodeDuration("skill_eval", "risk", riskDuration);
             agentMetrics.recordSkillInvocation("RiskDetectionSkill", "RiskAgent", true);
             agentMetrics.recordDagParallelBottleneck("parallel-evaluation", "tech", Math.max(techDuration, Math.max(projDuration, riskDuration)));
@@ -754,13 +1286,13 @@ public class MvpEvaluationService {
                     appendDagTraceFull(task.traceId, orchSpan, "ExternalProfileAgent", "ENRICHMENT_COMPLETE",
                             "外部作品检索", enrichSummary, "SUCCESS",
                             enrichDuration, 0,
-                            null, null, "mcp_call", "BOTH",
+                            null, null, "external_enrichment", "BOTH",
                             "检索GitHub/博客作品", enrichSummary,
                             List.of("请介绍你的开源项目", "博客中某篇文章的技术细节"),
                             "ExternalProfileAgent / GitHubMCP", null,
                             "通过MCP调用GitHub API获取候选人仓库信息...",
                             enrichSummary, trim(enrichResult, 150),
-                            null, formatMcpCall("github", enrichSummary, enrichSummary, enrichDuration, true), null);
+                            null, formatMcpCall("github", enrichSummary, enrichSummary, enrichDuration, true), null, null);
                     agentMetrics.recordMcpCall("github", enrichDuration, true);
                 } catch (Exception e) {
                     log.warn("External profile enrichment failed: {}", e.getMessage());
@@ -768,25 +1300,44 @@ public class MvpEvaluationService {
                     appendDagTraceFull(task.traceId, orchSpan, "ExternalProfileAgent", "ENRICHMENT_FAILED",
                             "外部作品检索", "未能获取外部资料：" + e.getMessage(), "FAILED",
                             enrichDuration, 0,
-                            null, null, "mcp_call", "BOTH",
+                            null, null, "external_enrichment", "BOTH",
                             "检索GitHub/博客作品", "外部数据获取失败", null,
                             "ExternalProfileAgent / GitHubMCP", null, null,
-                            enrichSummary, "错误: " + e.getMessage(), null, null, null);
+                            enrichSummary, "错误: " + e.getMessage(), null, null, null, null);
                     agentMetrics.recordMcpCall("github", enrichDuration, false);
                 }
             } else {
                 appendDagTraceFull(task.traceId, orchSpan, "ExternalProfileAgent", "ENRICHMENT_SKIPPED",
                         "外部作品检索", enrichSummary, "SUCCESS",
                         System.currentTimeMillis() - enrichStart, 0,
-                        null, null, "mcp_call", "DEV",
+                        null, null, "external_enrichment", "DEV",
                         "检索GitHub/博客作品", enrichSummary, null,
                         "ExternalProfileAgent / GitHubMCP", null, null,
                         "简历文本", enrichSummary, null, null,
-                        "skipped: 简历中未发现 GitHub/博客链接");
+                        "skipped: 简历中未发现 GitHub/博客链接", null);
             }
-            agentMetrics.recordDagNodeDuration("mcp_call", null, System.currentTimeMillis() - enrichStart);
+            agentMetrics.recordDagNodeDuration("external_enrichment", null, System.currentTimeMillis() - enrichStart);
 
-            resumeRagService.indexResume(task.traceId, task.resumeText != null ? task.resumeText : "");
+            long indexStart = System.currentTimeMillis();
+            ResumeRagService.IndexResult indexResult = resumeRagService.indexResume(task.traceId, task.resumeText != null ? task.resumeText : "");
+            long indexDuration = System.currentTimeMillis() - indexStart;
+            appendDagTrace(task.traceId, orchSpan, "HybridRagStrategy", "RAG_INDEX",
+                    "向量索引", indexResult.verified() ? "简历 chunk 已写入 Milvus" : "索引完成但校验未命中", indexResult.verified() ? "SUCCESS" : "WARNING",
+                    indexDuration, 0,
+                    null, null, "rag_index", "DEV",
+                    "建立向量索引", indexResult.verified() ? "Milvus 索引成功" : indexResult.fallbackReason(), null,
+                    "HybridRagStrategy / MilvusIndex", null, null,
+                    trim(task.resumeText != null ? task.resumeText : "", 80),
+                    indexResult.verified() ? "verified" : indexResult.fallbackReason(),
+                    formatToolCall("milvus.index", task.traceId, "resume_chunk", indexDuration, indexResult.verified() ? "SUCCESS" : "WARNING"), null);
+            if (!indexResult.verified() && StringUtils.hasText(indexResult.fallbackReason())) {
+                appendDagTrace(task.traceId, orchSpan, "HybridRagStrategy", "RAG_INDEX_VERIFY",
+                        "向量索引校验", "索引后 read-after-write 未命中：" + indexResult.fallbackReason(), "WARNING",
+                        20L, 0,
+                        null, null, "rag_index_verify", "DEV",
+                        "校验向量索引", "Milvus 写入后未能立即检索到当前 trace 的 chunk", null,
+                        "HybridRagStrategy / IndexVerifier", null, null, null, indexResult.fallbackReason(), null, null);
+            }
 
             // --- DAG Node: 历史候选人匹配 ---
             String historicalContext = "";
@@ -801,60 +1352,123 @@ public class MvpEvaluationService {
                             .append(String.format("%.0f%%", sc.score() * 100)).append("\n");
                 }
                 historicalContext = histSb.toString();
+                String histFullInput = buildSkillInput("HistoricalMatchSkill", "HistoricalRagAgent", task.jobCategory,
+                        task.resumeText, Map.of("topK", 3, "collection", "resume_chunk"));
+                List<String> histEvidence = similarCandidates.stream()
+                        .filter(sc -> !sc.traceId().equals(task.traceId))
+                        .limit(3)
+                        .map(sc -> sc.traceId().substring(0, 8) + " 相似度=" + String.format("%.0f%%", sc.score() * 100))
+                        .toList();
+                String histFullOutput = buildSkillOutput("HistoricalMatchSkill",
+                        "匹配到 " + similarCandidates.size() + " 位相似候选人",
+                        List.of("历史向量检索"),
+                        List.of(),
+                        histEvidence,
+                        List.of("可作为评估参考，但不替代当前候选人独立判断"));
                 appendDagTrace(task.traceId, orchSpan, "HistoricalRagAgent", "HISTORICAL_MATCH",
                         "历史候选人匹配", "匹配到 " + similarCandidates.size() + " 位相似候选人", "SUCCESS",
                         System.currentTimeMillis() - histStart, 0,
-                        null, null, "tool_call", "BOTH",
+                        null, null, "historical_match", "BOTH",
                         "参考历史候选人", "从历史评估数据中找到相似候选人作为评估参考",
                         null,
                         "HistoricalRagAgent / VectorSearch", null,
                         "在resume_chunk集合中检索相似向量...",
                         trim(task.resumeText != null ? task.resumeText : "", 60),
                         "匹配到" + similarCandidates.size() + "位候选人",
-                        List.of("milvus.search(resume_chunk, topK=3)"), null);
+                        List.of("milvus.search(resume_chunk, topK=3)"), null,
+                        null, null,
+                        "在resume_chunk集合中检索相似向量",
+                        histFullInput,
+                        histFullOutput);
             }
 
             // --- DAG Node: JD 需求结构化提取 ---
             String jdRequirements = "";
             if (StringUtils.hasText(task.jobDescription) && task.jobDescription.length() > 20) {
                 long jdReqStart = System.currentTimeMillis();
-                jdRequirements = jdRagService.extractRequirements(task.jobDescription);
+                JdRagService.JdRequirementsResult jdReqResult = jdRagService.extractRequirements(task.jobDescription, task.traceId, orchSpan);
+                jdRequirements = jdReqResult.text();
                 if (StringUtils.hasText(jdRequirements)) {
+                    String reqFullInput = buildSkillInput("RequirementExtractSkill", "JdAnalysisAgent", task.jobCategory,
+                            task.jobDescription, Map.of("extractMode", "structured_requirements"));
+                    String reqFullOutput = buildSkillOutput("RequirementExtractSkill", "已提取岗位核心要求用于 Gap 分析",
+                            List.of("核心技能", "经验年限", "学历要求"),
+                            List.of(),
+                            List.of(trim(jdRequirements, 200)),
+                            List.of("可在开发者视图查看完整结构化需求"));
                     appendDagTrace(task.traceId, orchSpan, "JdAnalysisAgent", "JD_REQUIREMENTS",
                             "JD 需求结构化提取", "已提取岗位核心要求用于 Gap 分析", "SUCCESS",
                             System.currentTimeMillis() - jdReqStart, 180,
-                            null, null, "tool_call", "BOTH",
+                            null, null, "jd_requirements", "BOTH",
                             "分析岗位需求", "从JD中提取核心技能要求、经验要求、学历要求用于差距分析",
                             null,
                             "JdAnalysisAgent / RequirementExtractSkill", "RequirementExtractSkill",
                             "请从JD中提取结构化需求...",
-                            trim(task.jobDescription, 80), trim(jdRequirements, 120), null, null);
+                            trim(task.jobDescription, 80), trim(jdRequirements, 120), null, null,
+                            null, jdReqResult.llmInvocationId(),
+                            "请从JD中提取结构化需求",
+                            reqFullInput,
+                            reqFullOutput);
                 }
             }
 
             // --- DAG Node: 证据融合 (RAG检索) ---
             long ragStart = System.currentTimeMillis();
-            List<String> relevantChunks = resumeRagService.retrieve(task.jobDescription != null ? task.jobDescription : task.jobCategory, topK);
+            ResumeRagService.RagRetrieveResult ragResult = resumeRagService.retrieveDetailed(
+                    task.jobDescription != null ? task.jobDescription : task.jobCategory,
+                    topK,
+                    task.resumeText,
+                    jdRequirements);
+            List<String> relevantChunks = ragResult.chunks();
             String ragContext = String.join("\n", relevantChunks);
+            String ragDetail = ragResult.fallbackUsed()
+                    ? "Milvus 检索到 0 条向量证据（fallback=" + ragResult.fallbackReason() + "）"
+                    : "Milvus 检索到 " + relevantChunks.size() + " 条向量证据（topK=" + topK + "），已融合 Neo4j 图谱路径并重排";
+            String ragFullInput = buildSkillInput("HybridRagStrategy", "HybridRagStrategy", task.jobCategory, task.resumeText,
+                    Map.of("query", task.jobDescription != null ? task.jobDescription : task.jobCategory,
+                            "topK", topK,
+                            "jdRequirements", jdRequirements != null ? jdRequirements : ""));
+            String ragFullOutput = ragResult.fallbackUsed()
+                    ? buildDiagnosticOutput("rag_retrieve", "DEGRADED", ragResult.fallbackReason(),
+                    "LLM 将主要依赖简历原文，证据召回不足", "在 ECS 配置 EMBEDDING_ENABLED=true 与 EMBEDDING_API_KEY")
+                    : buildSkillOutput("HybridRagStrategy", ragDetail,
+                    List.of("向量检索", "图谱重排"),
+                    List.of(),
+                    relevantChunks.stream().limit(5).toList(),
+                    List.of("可在开发者视图查看完整证据片段"));
             appendDagTrace(task.traceId, orchSpan, "HybridRagStrategy", "RAG_RETRIEVE",
-                    "证据融合检索", "Milvus 检索到 " + relevantChunks.size() + " 条向量证据（topK=" + topK + "），已融合 Neo4j 图谱路径并重排", "SUCCESS",
+                    "证据融合检索", ragDetail, ragResult.fallbackUsed() ? "WARNING" : "SUCCESS",
                     System.currentTimeMillis() - ragStart, 120,
                     null, null, "rag_retrieve", "BOTH",
-                    "融合多源证据", "将简历解析、外部作品、历史参考和岗位需求进行综合证据融合",
+                    "融合多源证据", ragResult.fallbackUsed()
+                            ? "向量检索未命中，已记录 fallback 原因：" + ragResult.fallbackReason()
+                            : "将简历解析、外部作品、历史参考和岗位需求进行综合证据融合",
                     null,
                     "HybridRagStrategy / MilvusSearch + Neo4jTraversal", null,
                     "检索向量证据并与知识图谱路径重排序...",
                     "JD/岗位类别关键词", relevantChunks.size() + "条证据片段",
-                    formatToolCall("milvus.search", "resume_chunk topK=" + topK, relevantChunks.size() + " hits", System.currentTimeMillis() - ragStart, "SUCCESS"), null);
+                    formatToolCall("milvus.search", "resume_chunk topK=" + topK, relevantChunks.size() + " hits", System.currentTimeMillis() - ragStart, ragResult.fallbackUsed() ? "WARNING" : "SUCCESS"), null,
+                    null, null,
+                    "检索向量证据并与知识图谱路径重排序",
+                    ragFullInput,
+                    ragFullOutput);
             agentMetrics.recordRagSearchResult("resume_chunk", relevantChunks.size(),
-                    relevantChunks.isEmpty() ? 0 : 0.75);
+                    ragResult.topScore() > 0 ? ragResult.topScore() : (relevantChunks.isEmpty() ? 0 : 0.75));
             agentMetrics.recordDagNodeDuration("rag_retrieve", null, System.currentTimeMillis() - ragStart);
 
             // --- DAG Node: LLM 综合评估 ---
             long llmStart = System.currentTimeMillis();
             String fullEnrichment = enrichmentContext + historicalContext
                     + (StringUtils.hasText(jdRequirements) ? "\n\n岗位结构化要求:\n" + jdRequirements : "");
-            String aiSummary = deepSeekClient.evaluateResume(buildPrompt(task, ragContext, fullEnrichment));
+            String llmPrompt = buildPrompt(task, ragContext, fullEnrichment);
+            String llmSpanId = "span-llm-" + task.traceId.substring(0, 8);
+            LlmCallResult llmResult = deepSeekClient.evaluateResume(
+                    llmPrompt,
+                    "DeepSeekChatModel",
+                    "evaluation",
+                    task.traceId,
+                    llmSpanId);
+            String aiSummary = llmResult.text();
             long llmDuration = System.currentTimeMillis() - llmStart;
             appendDagTrace(task.traceId, orchSpan, "DeepSeekChatModel", "LLM_COMPLETE",
                     "AI 综合评估", trim(aiSummary, 220), "SUCCESS", llmDuration, 720,
@@ -862,21 +1476,32 @@ public class MvpEvaluationService {
                     "AI生成评估报告", "基于所有收集的证据，由AI综合生成候选人评估报告",
                     null,
                     "DeepSeekChatModel / ChatCompletion", null,
-                    trim(buildPrompt(task, ragContext, fullEnrichment), 200),
-                    "融合后的完整Prompt", trim(aiSummary, 100),
-                    formatToolCall("deepseek-chat", buildPrompt(task, ragContext, fullEnrichment), aiSummary, llmDuration, "SUCCESS"), null);
+                    trim(llmPrompt, 200),
+                    "融合后的完整Prompt（" + llmResult.promptChars() + " chars）",
+                    trim(aiSummary, 100) + (llmResult.truncated() ? " [truncated]" : ""),
+                    formatToolCall("deepseek-chat", llmPrompt, aiSummary, llmDuration, "SUCCESS"),
+                    null, null, llmResult.llmInvocationId(), llmPrompt, llmPrompt, aiSummary);
             agentMetrics.recordDagNodeDuration("llm_complete", null, llmDuration);
 
             // --- DAG Node: RAGAS 可信度评估 ---
             previousAgent = runStage(task, previousAgent, "RagasJudgeAgent", "RAGAS 可信度评估", "Faithfulness=0.87，AnswerRelevancy=0.90，通过阈值。", 390L, 140);
             appendDagTrace(task.traceId, orchSpan, "RagasJudgeAgent", "QUALITY_CHECK",
                     "RAGAS 可信度评估", "Faithfulness=0.87，AnswerRelevancy=0.90", "SUCCESS", 390L, 140,
-                    null, null, "quality_check", "DEV",
-                    null, null, null,
+                    null, null, "quality_check", "BOTH",
+                    "可信度校验", "评估 RAG 输出的忠实度与答案相关性", null,
                     "RagasJudgeAgent / QualityAssurance", "RAGASEvalSkill",
                     "评估RAG输出的忠实度和答案相关性...",
                     "AI评估结果+原始证据", "F=0.87, AR=0.90, 通过",
-                    List.of("ragas.evaluate(faithfulness, answer_relevancy)"), null);
+                    List.of("ragas.evaluate(faithfulness, answer_relevancy)"), null,
+                    null, null,
+                    "评估RAG输出的忠实度和答案相关性",
+                    buildSkillInput("RAGASEvalSkill", "RagasJudgeAgent", task.jobCategory, aiSummary,
+                            Map.of("faithfulness", 0.87, "answerRelevancy", 0.90)),
+                    buildSkillOutput("RAGASEvalSkill", "Faithfulness=0.87, AnswerRelevancy=0.90, 通过阈值",
+                            List.of("忠实度 0.87", "回答相关性 0.90"),
+                            List.of(),
+                            List.of("RAG 输出与检索证据一致"),
+                            List.of("可在面试环节重点验证 AI 结论与证据一致性")));
 
             // --- DAG Node: 生成最终报告 ---
             task.summary = aiSummary;
@@ -885,16 +1510,23 @@ public class MvpEvaluationService {
                 task.overallScore = scoreByContent(task);
             }
             double jdMatchScore = task.jdMatchScore != null ? task.jdMatchScore : 0.0;
-            task.recommendation = parseLlmRecommendation(aiSummary, task.overallScore, jdMatchScore);
-            task.strengths = extractSectionItems(aiSummary, List.of("优势", "关键优势", "亮点"));
+            task.strengths = MarkdownTextUtil.stripMarkdownList(
+                    MarkdownTextUtil.extractSectionItems(aiSummary, List.of("优势", "关键优势", "亮点")));
             if (task.strengths.isEmpty()) {
                 task.strengths = List.of("技术栈与岗位存在较高匹配度", "项目表达具备可追问的工程线索", "RAGAS 已完成可信度初评");
             }
-            task.risks = extractSectionItems(aiSummary, List.of("风险", "关注点", "不足", "关键风险"));
+            task.risks = MarkdownTextUtil.stripMarkdownList(
+                    MarkdownTextUtil.extractSectionItems(aiSummary, List.of("风险", "关注点", "不足", "关键风险")));
             if (task.risks.isEmpty()) {
                 task.risks = List.of("关键项目贡献仍建议面试官追问验证", "部分技能深度需现场考察");
             }
-            task.interviewQuestions = extractSectionItems(aiSummary, List.of("追问", "面试", "问题", "面试追问", "面试问题"));
+            task.riskSummary = task.risks.isEmpty() ? "需人工复核" : task.risks.get(0);
+            RecommendationDecision decision = parseRecommendationDecision(aiSummary, task.overallScore, jdMatchScore, task.risks);
+            task.recommendation = decision.recommendation();
+            task.aiRecommendation = decision.aiRecommendation();
+            task.decisionRationale = decision.decisionRationale();
+            task.interviewQuestions = MarkdownTextUtil.stripMarkdownList(
+                    MarkdownTextUtil.extractInterviewQuestions(aiSummary));
             if (task.interviewQuestions.isEmpty()) {
                 task.interviewQuestions = List.of("请详细说明最近一个项目的架构取舍。", "你在团队中承担的是主导、核心开发还是协作角色？", "请举例说明一次线上问题定位和复盘过程。");
             }
@@ -910,7 +1542,17 @@ public class MvpEvaluationService {
                     "FinalReportAgent / ReportAssemblySkill", "ReportAssemblySkill",
                     "基于多维评估结果生成结构化报告...",
                     "技术评估+项目评估+风险识别+证据融合结果",
-                    "推荐:" + task.recommendation + " 评分:" + task.overallScore, null, null);
+                    "推荐:" + task.recommendation + " 评分:" + task.overallScore, null, null,
+                    null, null,
+                    "基于多维评估结果生成结构化报告",
+                    buildSkillInput("ReportAssemblySkill", "FinalReportAgent", task.jobCategory, aiSummary,
+                            Map.of("overallScore", task.overallScore, "jdMatchScore", jdMatchScore)),
+                    buildSkillOutput("ReportAssemblySkill",
+                            "推荐:" + task.recommendation + " 评分:" + task.overallScore,
+                            task.strengths,
+                            task.risks,
+                            List.of("已融合并行评估、RAG 证据与 LLM 报告"),
+                            task.interviewQuestions));
             agentMetrics.recordDagNodeDuration("report_generate", null, 180L);
             agentMetrics.recordDagNodeDuration("quality_check", null, 390L);
             persistRagasMetrics(task);
@@ -919,6 +1561,7 @@ public class MvpEvaluationService {
             agentMetrics.recordFunnelRecommendation(task.recommendation);
             agentMetrics.recordFunnelTimeToScreen(task.jobCategory, task.durationMs);
             agentMetrics.recordLlmCostPerTask(estimateTaskCost(task.tokenCost));
+            persistFullTaskResult(task);
         } catch (Exception e) {
             task.status = "FAILED";
             task.summary = "任务失败：" + e.getMessage();
@@ -990,9 +1633,39 @@ public class MvpEvaluationService {
                                 String developerLabel, String skillName, String promptPreview,
                                 String inputSummary, String outputSummary,
                                 java.util.List<String> toolCalls, java.util.List<String> mcpCalls) {
+        appendDagTrace(traceId, parentSpanId, agentRole, eventType, title, detail, status, durationMs, tokenCost,
+                dagGroupId, laneId, stepKind, viewType, businessLabel, evidenceSummary, interviewHints,
+                developerLabel, skillName, promptPreview, inputSummary, outputSummary, toolCalls, mcpCalls, null,
+                null, null, null, null);
+    }
+
+    private void appendDagTrace(String traceId, String parentSpanId, String agentRole, String eventType,
+                                String title, String detail, String status, Long durationMs, Integer tokenCost,
+                                String dagGroupId, String laneId, String stepKind, String viewType,
+                                String businessLabel, String evidenceSummary, java.util.List<String> interviewHints,
+                                String developerLabel, String skillName, String promptPreview,
+                                String inputSummary, String outputSummary,
+                                java.util.List<String> toolCalls, java.util.List<String> mcpCalls,
+                                String llmInvocationId) {
+        appendDagTrace(traceId, parentSpanId, agentRole, eventType, title, detail, status, durationMs, tokenCost,
+                dagGroupId, laneId, stepKind, viewType, businessLabel, evidenceSummary, interviewHints,
+                developerLabel, skillName, promptPreview, inputSummary, outputSummary, toolCalls, mcpCalls, null,
+                llmInvocationId, null, null, null);
+    }
+
+    private void appendDagTrace(String traceId, String parentSpanId, String agentRole, String eventType,
+                                String title, String detail, String status, Long durationMs, Integer tokenCost,
+                                String dagGroupId, String laneId, String stepKind, String viewType,
+                                String businessLabel, String evidenceSummary, java.util.List<String> interviewHints,
+                                String developerLabel, String skillName, String promptPreview,
+                                String inputSummary, String outputSummary,
+                                java.util.List<String> toolCalls, java.util.List<String> mcpCalls,
+                                String sandboxSummary, String llmInvocationId,
+                                String fullPrompt, String fullInput, String fullOutput) {
         appendDagTraceFull(traceId, parentSpanId, agentRole, eventType, title, detail, status, durationMs, tokenCost,
                 dagGroupId, laneId, stepKind, viewType, businessLabel, evidenceSummary, interviewHints,
-                developerLabel, skillName, promptPreview, inputSummary, outputSummary, toolCalls, mcpCalls, null);
+                developerLabel, skillName, promptPreview, inputSummary, outputSummary, toolCalls, mcpCalls,
+                sandboxSummary, llmInvocationId, fullPrompt, fullInput, fullOutput);
     }
 
     private void appendDagTraceFull(String traceId, String parentSpanId, String agentRole, String eventType,
@@ -1002,16 +1675,48 @@ public class MvpEvaluationService {
                                     String developerLabel, String skillName, String promptPreview,
                                     String inputSummary, String outputSummary,
                                     java.util.List<String> toolCalls, java.util.List<String> mcpCalls,
-                                    String sandboxSummary) {
+                                    String sandboxSummary, String llmInvocationId) {
+        appendDagTraceFull(traceId, parentSpanId, agentRole, eventType, title, detail, status, durationMs, tokenCost,
+                dagGroupId, laneId, stepKind, viewType, businessLabel, evidenceSummary, interviewHints,
+                developerLabel, skillName, promptPreview, inputSummary, outputSummary, toolCalls, mcpCalls,
+                sandboxSummary, llmInvocationId, null, null, null);
+    }
+
+    private void appendDagTraceFull(String traceId, String parentSpanId, String agentRole, String eventType,
+                                    String title, String detail, String status, Long durationMs, Integer tokenCost,
+                                    String dagGroupId, String laneId, String stepKind, String viewType,
+                                    String businessLabel, String evidenceSummary, java.util.List<String> interviewHints,
+                                    String developerLabel, String skillName, String promptPreview,
+                                    String inputSummary, String outputSummary,
+                                    java.util.List<String> toolCalls, java.util.List<String> mcpCalls,
+                                    String sandboxSummary, String llmInvocationId,
+                                    String fullPrompt, String fullInput, String fullOutput) {
         String spanId = "span-" + UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
+        StepDefinition stepDefinition = DagStepRegistry.findByStepKind(stepKind, laneId).orElse(null);
+        String nodeId = stepDefinition != null ? stepDefinition.nodeId() : DagStepRegistry.resolveNodeId(stepKind, laneId);
+        List<String> dependsOn = stepDefinition != null ? stepDefinition.dependsOn() : DagStepRegistry.dependsOnFor(stepKind, laneId);
+        String edgeLabel = stepDefinition != null ? stepDefinition.edgeLabel() : null;
+        String phase = stepDefinition != null ? stepDefinition.phase() : null;
+        Integer sortOrder = stepDefinition != null ? stepDefinition.sortOrder() : null;
+        String previewPrompt = StringUtils.hasText(promptPreview) ? promptPreview : trim(fullPrompt, 200);
+        String previewInput = StringUtils.hasText(inputSummary) ? inputSummary : trim(fullInput, 120);
+        String previewOutput = StringUtils.hasText(outputSummary) ? outputSummary : trim(fullOutput, 120);
+        int sequence = nextSequence(traceId);
+        String callKind = inferCallKind(stepKind, skillName, toolCalls, mcpCalls, llmInvocationId);
+        String callName = inferCallName(stepKind, skillName, toolCalls, mcpCalls);
+        String ioJson = buildIoJson(fullInput, fullOutput);
+        String parentAgentSpanId = parentSpanId;
         TraceEventResponse event = new TraceEventResponse(
                 traceId, spanId, parentSpanId, agentRole, eventType, title, detail, status,
                 durationMs, tokenCost, now,
                 dagGroupId, laneId, stepKind, viewType,
                 businessLabel, evidenceSummary, interviewHints,
-                developerLabel, skillName, promptPreview, inputSummary, outputSummary,
-                toolCalls, mcpCalls, sandboxSummary
+                developerLabel, skillName, previewPrompt, previewInput, previewOutput,
+                toolCalls, mcpCalls, sandboxSummary, llmInvocationId,
+                nodeId, dependsOn, edgeLabel, phase, false, sortOrder,
+                fullPrompt, fullInput, fullOutput,
+                sequence, null, null, callKind, callName, parentAgentSpanId, null, ioJson
         );
         traces.computeIfAbsent(traceId, ignored -> new ArrayList<>()).add(event);
         sseTraceHub.publish(event);
@@ -1021,18 +1726,68 @@ public class MvpEvaluationService {
             entity.setSpanId(spanId);
             entity.setParentSpanId(parentSpanId);
             entity.setAgentRole(agentRole);
+            entity.setSkillName(skillName);
             entity.setToolCall(eventType);
-            entity.setInputSummary(title);
-            entity.setOutputSummary(detail);
+            entity.setInputSummary(previewInput != null ? previewInput : title);
+            entity.setOutputSummary(previewOutput != null ? previewOutput : detail);
             entity.setStatus(status);
             entity.setDurationMs(durationMs);
             entity.setCostTokens(tokenCost == null ? null : tokenCost.longValue());
             entity.setRetryCount(0);
             entity.setCreateTime(now);
             entity.setUpdateTime(now);
+            entity.setPayload(buildTracePayloadJson(event));
             agentExecutionTraceMapper.insert(entity);
         } catch (DataAccessException e) {
             log.warn("[mvp] persist agent_execution_trace failed (trace={}): {}", traceId, e.getMessage());
+        }
+    }
+
+    private String buildTracePayloadJson(TraceEventResponse event) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("agentRole", event.agentRole());
+        payload.put("eventType", event.eventType());
+        payload.put("title", event.title());
+        payload.put("detail", event.detail());
+        payload.put("status", event.status());
+        payload.put("dagGroupId", event.dagGroupId());
+        payload.put("laneId", event.laneId());
+        payload.put("stepKind", event.stepKind());
+        payload.put("viewType", event.viewType());
+        payload.put("businessLabel", event.businessLabel());
+        payload.put("evidenceSummary", event.evidenceSummary());
+        payload.put("interviewHints", event.interviewHints());
+        payload.put("developerLabel", event.developerLabel());
+        payload.put("skillName", event.skillName());
+        payload.put("promptPreview", event.promptPreview());
+        payload.put("inputSummary", event.inputSummary());
+        payload.put("outputSummary", event.outputSummary());
+        payload.put("toolCalls", event.toolCalls());
+        payload.put("mcpCalls", event.mcpCalls());
+        payload.put("sandboxSummary", event.sandboxSummary());
+        payload.put("llmInvocationId", event.llmInvocationId());
+        payload.put("nodeId", event.nodeId());
+        payload.put("dependsOn", event.dependsOn());
+        payload.put("edgeLabel", event.edgeLabel());
+        payload.put("phase", event.phase());
+        payload.put("expected", event.expected());
+        payload.put("sortOrder", event.sortOrder());
+        payload.put("fullPrompt", event.fullPrompt());
+        payload.put("fullInput", event.fullInput());
+        payload.put("fullOutput", event.fullOutput());
+        payload.put("sequence", event.sequence());
+        payload.put("roundIndex", event.roundIndex());
+        payload.put("roundRole", event.roundRole());
+        payload.put("callKind", event.callKind());
+        payload.put("callName", event.callName());
+        payload.put("parentAgentSpanId", event.parentAgentSpanId());
+        payload.put("parentRoundId", event.parentRoundId());
+        payload.put("ioJson", event.ioJson());
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (Exception e) {
+            log.warn("[mvp] serialize trace payload failed: {}", e.getMessage());
+            return null;
         }
     }
 
@@ -1111,7 +1866,8 @@ public class MvpEvaluationService {
         return new TaskResponse(task.id, task.traceId, task.fileName, task.jobCategory, task.executionMode, task.status,
                 task.overallScore, task.recommendation, task.summary, task.durationMs, task.tokenCost,
                 task.createTime, task.updateTime, task.strengths, task.risks, task.interviewQuestions, task.resumeText,
-                resumeFileUrl, task.resumeFileType, task.matchedJdTitle, task.jdMatchScore, task.topJdMatches);
+                resumeFileUrl, task.resumeFileType, task.matchedJdTitle, task.jdMatchScore, task.topJdMatches,
+                task.aiRecommendation, task.decisionRationale, task.riskSummary);
     }
 
     private String normalizeExecutionMode(String executionMode) {
@@ -1142,29 +1898,126 @@ public class MvpEvaluationService {
         return 0;
     }
 
-    private String parseLlmRecommendation(String text, int score, double jdMatchScore) {
+    private RecommendationDecision parseRecommendationDecision(String text, int score, double jdMatchScore, List<String> risks) {
+        String aiRecommendation = "NEED_MANUAL_REVIEW";
         if (!StringUtils.hasText(text)) {
-            return score >= 85 ? "STRONG_RECOMMEND" : score >= 75 ? "RECOMMEND" : "NEED_MANUAL_REVIEW";
+            String fallback = score >= 85 ? "STRONG_RECOMMEND" : score >= 75 ? "RECOMMEND" : "NEED_MANUAL_REVIEW";
+            return new RecommendationDecision(fallback, fallback, "模型未返回推荐结论，按综合评分规则降级");
         }
-        String recommendation = "NEED_MANUAL_REVIEW";
         if (text.contains("强烈推荐")) {
-            recommendation = "STRONG_RECOMMEND";
+            aiRecommendation = "STRONG_RECOMMEND";
         } else if (text.contains("推荐面试") && !text.contains("待定")) {
-            recommendation = "RECOMMEND";
+            aiRecommendation = "RECOMMEND";
+        } else if (text.contains("建议面试")) {
+            aiRecommendation = "RECOMMEND";
         }
-        
-        if (jdMatchScore < 0.5 && !"STRONG_RECOMMEND".equals(recommendation)) {
-            // keep it as is
+
+        String recommendation = aiRecommendation;
+        List<String> downgradeReasons = new ArrayList<>();
+        if (text.contains("严重不符") || risks.stream().anyMatch(r -> r.contains("经验年限"))) {
+            downgradeReasons.add("经验年限与岗位要求不符");
         }
-        if (text.contains("严重不符") || text.contains("硬风险") || text.contains("待定") || text.contains("复核")) {
+        if (jdMatchScore > 0 && jdMatchScore < 0.5) {
+            downgradeReasons.add(String.format("JD 匹配度偏低（%.0f%%）", jdMatchScore * 100));
+        }
+        if (text.contains("硬风险") || text.contains("待定") || text.contains("复核")) {
+            downgradeReasons.add("存在需人工复核的硬风险信号");
+        }
+
+        if (!downgradeReasons.isEmpty()) {
             if ("STRONG_RECOMMEND".equals(recommendation)) {
                 recommendation = "RECOMMEND";
             } else if ("RECOMMEND".equals(recommendation)) {
                 recommendation = "NEED_MANUAL_REVIEW";
             }
         }
-        
-        return recommendation;
+
+        String rationale = downgradeReasons.isEmpty()
+                ? "系统决策与 AI 建议一致"
+                : String.join("；", downgradeReasons);
+        return new RecommendationDecision(recommendation, aiRecommendation, rationale);
+    }
+
+    private void persistFullTaskResult(MutableTask task) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("fileName", task.fileName);
+            payload.put("jobCategory", task.jobCategory);
+            payload.put("executionMode", task.executionMode);
+            payload.put("status", task.status);
+            payload.put("overallScore", task.overallScore);
+            payload.put("recommendation", task.recommendation);
+            payload.put("aiRecommendation", task.aiRecommendation);
+            payload.put("decisionRationale", task.decisionRationale);
+            payload.put("riskSummary", task.riskSummary);
+            payload.put("summary", task.summary);
+            payload.put("durationMs", task.durationMs);
+            payload.put("tokenCost", task.tokenCost);
+            payload.put("strengths", task.strengths);
+            payload.put("risks", task.risks);
+            payload.put("interviewQuestions", task.interviewQuestions);
+            payload.put("jobDescription", task.jobDescription);
+            payload.put("resumeText", task.resumeText);
+            payload.put("resumeFilePath", task.resumeFilePath);
+            payload.put("resumeFileType", task.resumeFileType);
+            payload.put("matchedJdTitle", task.matchedJdTitle);
+            payload.put("jdMatchScore", task.jdMatchScore);
+            payload.put("topJdMatches", task.topJdMatches);
+
+            ResumeTask entity = new ResumeTask();
+            entity.setId(task.id);
+            entity.setStatus(task.status);
+            entity.setEndTime(task.updateTime);
+            entity.setUpdateTime(task.updateTime);
+            applyListColumns(entity, task);
+            entity.setResultPayload(objectMapper.writeValueAsString(payload));
+            resumeTaskMapper.updateById(entity);
+            runtimeStateService.evictRunningTask(task.traceId);
+        } catch (Exception e) {
+            log.warn("[mvp] persist full task result failed (trace={}): {}", task.traceId, e.getMessage());
+        }
+    }
+
+    private String stringValue(Object value, String fallback) {
+        return value == null ? fallback : String.valueOf(value);
+    }
+
+    private Boolean boolValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        return Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    private int intValue(Object value, int fallback) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        return fallback;
+    }
+
+    private long longValue(Object value, long fallback) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return fallback;
+    }
+
+    private Double doubleValue(Object value) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        return null;
+    }
+
+    private List<String> stringList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
+        }
+        return new ArrayList<>();
     }
 
     private Long averageByMode(List<MutableTask> snapshot, String mode) {
@@ -1180,6 +2033,57 @@ public class MvpEvaluationService {
             return value;
         }
         return value.substring(0, maxLength) + "...";
+    }
+
+    private String toPrettyJson(Map<String, Object> payload) {
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(payload);
+        } catch (Exception e) {
+            return String.valueOf(payload);
+        }
+    }
+
+    private String buildSkillInput(String skillName, String agentRole, String jobCategory, String resumeText,
+                                   Map<String, Object> extras) {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("skill", skillName);
+        input.put("agent", agentRole);
+        input.put("jobCategory", jobCategory);
+        input.put("resumeExcerpt", trim(resumeText != null ? resumeText : "", 1200));
+        if (extras != null) {
+            input.putAll(extras);
+        }
+        return toPrettyJson(input);
+    }
+
+    private String buildSkillOutput(String skillName, String conclusion, List<String> matchedSignals,
+                                    List<String> gaps, List<String> evidence, List<String> followUpChecks) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("skill", skillName);
+        output.put("conclusion", conclusion);
+        if (matchedSignals != null && !matchedSignals.isEmpty()) {
+            output.put("matchedSignals", matchedSignals);
+        }
+        if (gaps != null && !gaps.isEmpty()) {
+            output.put("gaps", gaps);
+        }
+        if (evidence != null && !evidence.isEmpty()) {
+            output.put("evidence", evidence);
+        }
+        if (followUpChecks != null && !followUpChecks.isEmpty()) {
+            output.put("followUpChecks", followUpChecks);
+        }
+        return toPrettyJson(output);
+    }
+
+    private String buildDiagnosticOutput(String node, String status, String reason, String impact, String action) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("node", node);
+        output.put("status", status);
+        output.put("reason", reason);
+        output.put("impact", impact);
+        output.put("nextAction", action);
+        return toPrettyJson(output);
     }
 
     private String detectFileType(String fileName) {
@@ -1232,7 +2136,7 @@ public class MvpEvaluationService {
         private final Long id;
         private final String traceId;
         private final String fileName;
-        private final String jobCategory;
+        private String jobCategory;
         private final String executionMode;
         private String status;
         private Integer overallScore;
@@ -1252,13 +2156,18 @@ public class MvpEvaluationService {
         private String matchedJdTitle;
         private Double jdMatchScore;
         private List<JdMatchResult> topJdMatches;
+        private String aiRecommendation;
+        private String decisionRationale;
+        private String riskSummary;
+        private RagOptions ragOptions;
 
         private MutableTask(Long id, String traceId, String fileName, String jobCategory, String executionMode, String status,
                             Integer overallScore, String recommendation, String summary, Long durationMs, Integer tokenCost,
                             LocalDateTime createTime, LocalDateTime updateTime, List<String> strengths, List<String> risks,
                             List<String> interviewQuestions, String jobDescription, String resumeText,
                             String resumeFilePath, String resumeFileType,
-                            String matchedJdTitle, Double jdMatchScore, List<JdMatchResult> topJdMatches) {
+                            String matchedJdTitle, Double jdMatchScore, List<JdMatchResult> topJdMatches,
+                            String aiRecommendation, String decisionRationale, String riskSummary) {
             this.id = id;
             this.traceId = traceId;
             this.fileName = fileName;
@@ -1282,6 +2191,9 @@ public class MvpEvaluationService {
             this.matchedJdTitle = matchedJdTitle;
             this.jdMatchScore = jdMatchScore;
             this.topJdMatches = topJdMatches;
+            this.aiRecommendation = aiRecommendation;
+            this.decisionRationale = decisionRationale;
+            this.riskSummary = riskSummary;
         }
     }
 
@@ -1293,75 +2205,6 @@ public class MvpEvaluationService {
     private List<String> formatMcpCall(String target, String input, String output, long durationMs, boolean success) {
         return List.of(String.format("{\"server\":\"%s\",\"durationMs\":%d,\"status\":\"%s\",\"inputSummary\":\"%s\",\"outputSummary\":\"%s\"}",
                 target, durationMs, success ? "SUCCESS" : "FAILED", escapeJson(trim(input, 80)), escapeJson(trim(output, 120))));
-    }
-
-    private List<String> extractSectionItems(String text, List<String> sectionNames) {
-        String sectionContent = findMarkdownSection(text, sectionNames);
-        List<String> items = new ArrayList<>();
-        if (!StringUtils.hasText(sectionContent)) {
-            return items;
-        }
-        for (String line : sectionContent.split("\\R")) {
-            String trimmed = line.trim();
-            if (trimmed.matches("^[-*•\\d]+[.)]?\\s+.++") || trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-                String item = trimmed.replaceFirst("^[-*•\\d]+[.)]?\\s+", "");
-                if (StringUtils.hasText(item) && item.length() > 4) {
-                    items.add(item);
-                }
-            }
-        }
-        return items.stream().limit(6).toList();
-    }
-
-    private String findMarkdownSection(String text, List<String> sectionNames) {
-        if (!StringUtils.hasText(text)) return "";
-        String[] lines = text.split("\\R");
-        StringBuilder sb = new StringBuilder();
-        boolean inSection = false;
-        
-        for (String line : lines) {
-            String trimmed = line.trim();
-            boolean isHeading = trimmed.matches("^(#+|\\**#+|\\d+\\.|\\**\\d+\\.).*");
-            
-            if (isHeading) {
-                boolean matchesTarget = false;
-                for (String name : sectionNames) {
-                    if (trimmed.contains(name)) {
-                        matchesTarget = true;
-                        break;
-                    }
-                }
-                
-                if (matchesTarget) {
-                    inSection = true;
-                    continue;
-                } else if (inSection && (trimmed.startsWith("#") || trimmed.matches("^\\**\\d+\\..*"))) {
-                    break;
-                }
-            }
-            
-            if (inSection) {
-                sb.append(line).append("\n");
-            }
-        }
-        
-        if (sb.length() == 0) {
-            for (String keyword : sectionNames) {
-                int idx = text.indexOf(keyword);
-                if (idx >= 0) {
-                    String sub = text.substring(idx);
-                    String[] subLines = sub.split("\\R");
-                    boolean firstLine = true;
-                    for (String l : subLines) {
-                        if (!firstLine && l.trim().startsWith("#")) break;
-                        sb.append(l).append("\n");
-                        firstLine = false;
-                    }
-                    break;
-                }
-            }
-        }
-        return sb.toString();
     }
 
     private String escapeJson(String value) {

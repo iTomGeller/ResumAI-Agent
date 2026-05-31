@@ -1,5 +1,7 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -7,463 +9,1197 @@
   "links": [],
   "panels": [
     {
-      "title": "运行总览 (LabelHub 结构)",
       "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "title": "📊 运营总览",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "collapsed": false
     },
     {
-      "title": "评估运行总数",
+      "title": "评估启动次数",
+      "description": "累计启动的简历评估任务数。无样本时显示 0，不代表故障。",
       "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
-      "targets": [{ "expr": "sum(resumai_funnel_evaluation_started_total{job_category=~\"$job_category\"})", "legendFormat": "Runs" }]
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_funnel_evaluation_started_total{job_category=~\"$job_category\"}) or vector(0)",
+          "legendFormat": "启动"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "评估完成次数",
+      "description": "已成功结束（含成功/失败）的评估任务。",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_funnel_evaluation_completed_total) or vector(0)",
+          "legendFormat": "完成"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "漏斗转化率",
+      "description": "上传 → 完成评估的转化比例。样本不足时可能为 0。",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "resumai_funnel_conversion_rate or vector(0)",
+          "legendFormat": "转化率"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "筛选 P95 耗时",
+      "description": "从任务创建到报告就绪的 P95 耗时，反映 HR 等待体验。",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(resumai_funnel_time_to_screen_seconds_bucket[$__rate_interval]))) or vector(0)",
+          "legendFormat": "P95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "并发 Agent 数",
+      "description": "当前正在执行的 Agent 数量。",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(resumai_agent_concurrent_active, \"agent\", \"任务编排器\", \"agent\", \"OrchestratorAgent\"), \"agent\", \"简历解析器\", \"agent\", \"ResumeParserAgent\"), \"agent\", \"技术评估\", \"agent\", \"TechAgent\"), \"agent\", \"项目评估\", \"agent\", \"ProjectAgent\"), \"agent\", \"风险识别\", \"agent\", \"RiskAgent\"), \"agent\", \"岗位匹配\", \"agent\", \"JdMatchAgent\"), \"agent\", \"质量校验\", \"agent\", \"RagasJudgeAgent\"), \"agent\", \"报告生成\", \"agent\", \"FinalReportAgent\"), \"agent\", \"大模型评估\", \"agent\", \"DeepSeekChatModel\"), \"agent\", \"混合检索\", \"agent\", \"HybridRagStrategy\"), \"agent\", \"需求分析\", \"agent\", \"JdAnalysisAgent\"), \"agent\", \"历史匹配\", \"agent\", \"HistoricalRagAgent\"), \"agent\", \"外部检索\", \"agent\", \"ExternalProfileAgent\"), \"agent\", \"并发引擎\", \"agent\", \"DAGEngine\")",
+          "legendFormat": "活跃"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 10,
+          "noValue": "暂无样本",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "OrchestratorAgent": {
+                  "index": 0,
+                  "text": "任务编排器"
+                },
+                "ResumeParserAgent": {
+                  "index": 1,
+                  "text": "简历解析器"
+                },
+                "TechAgent": {
+                  "index": 2,
+                  "text": "技术评估"
+                },
+                "ProjectAgent": {
+                  "index": 3,
+                  "text": "项目评估"
+                },
+                "RiskAgent": {
+                  "index": 4,
+                  "text": "风险识别"
+                },
+                "JdMatchAgent": {
+                  "index": 5,
+                  "text": "岗位匹配"
+                },
+                "RagasJudgeAgent": {
+                  "index": 6,
+                  "text": "质量校验"
+                },
+                "FinalReportAgent": {
+                  "index": 7,
+                  "text": "报告生成"
+                },
+                "DeepSeekChatModel": {
+                  "index": 8,
+                  "text": "大模型评估"
+                },
+                "HybridRagStrategy": {
+                  "index": 9,
+                  "text": "混合检索"
+                },
+                "JdAnalysisAgent": {
+                  "index": 10,
+                  "text": "需求分析"
+                },
+                "HistoricalRagAgent": {
+                  "index": 11,
+                  "text": "历史匹配"
+                },
+                "ExternalProfileAgent": {
+                  "index": 12,
+                  "text": "外部检索"
+                },
+                "DAGEngine": {
+                  "index": 13,
+                  "text": "并发引擎"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "SSE 实时订阅",
+      "description": "前端 Trace 推送的活跃连接数。",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "resumai_system_sse_active_subscribers or vector(0)",
+          "legendFormat": "订阅"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "📈 招聘漏斗",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "collapsed": false
+    },
+    {
+      "title": "简历上传（按格式）",
+      "description": "各格式简历上传量。PDF/TXT 等。",
+      "type": "barchart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 7
+      },
+      "targets": [
+        {
+          "expr": "sum by (file_type) (resumai_funnel_upload_count_total)",
+          "legendFormat": "{{file_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "评估启动趋势",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 7
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(resumai_funnel_evaluation_started_total{job_category=~\"$job_category\"}[$__rate_interval])) or vector(0)",
+          "legendFormat": "启动/秒"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "推荐结论分布",
+      "description": "按推荐结论统计：强烈推荐、推荐、需人工复核、拒绝。",
+      "type": "piechart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 7
+      },
+      "targets": [
+        {
+          "expr": "label_replace(label_replace(label_replace(label_replace(sum by (recommendation) (resumai_funnel_recommendation_count_total), \"recommendation\", \"需人工复核\", \"recommendation\", \"NEED_MANUAL_REVIEW\"), \"recommendation\", \"推荐\", \"recommendation\", \"RECOMMEND\"), \"recommendation\", \"强烈推荐\", \"recommendation\", \"STRONG_RECOMMEND\"), \"recommendation\", \"拒绝\", \"recommendation\", \"REJECT\")",
+          "legendFormat": "{{recommendation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "NEED_MANUAL_REVIEW": {
+                  "index": 0,
+                  "text": "需人工复核"
+                },
+                "RECOMMEND": {
+                  "index": 1,
+                  "text": "推荐"
+                },
+                "STRONG_RECOMMEND": {
+                  "index": 2,
+                  "text": "强烈推荐"
+                },
+                "REJECT": {
+                  "index": 3,
+                  "text": "拒绝"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "JD 自动匹配成功率",
+      "description": "RAG 智能岗位匹配的命中率。",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 7
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_jd_auto_match_total{matched=\"true\"}) / clamp_min(sum(resumai_jd_auto_match_total), 1) or vector(0)",
+          "legendFormat": "匹配率"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "🎯 候选人质量",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "collapsed": false
+    },
+    {
+      "title": "JD Top1 匹配分",
+      "description": "自动匹配的最佳岗位相似度均值。",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_jd_match_score_sum) / clamp_min(sum(resumai_jd_match_score_count), 1) or vector(0)",
+          "legendFormat": "平均分"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "HR 反馈提交",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_funnel_feedback_submitted_total) or vector(0)",
+          "legendFormat": "反馈"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "HR 与 AI 一致性",
+      "type": "piechart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "sum by (agrees_with_ai) (resumai_funnel_feedback_agreement_total)",
+          "legendFormat": "一致={{agrees_with_ai}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "RAG 忠实度",
+      "description": "回答是否 grounded 于检索证据。",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_rag_faithfulness_sum) / clamp_min(sum(resumai_rag_faithfulness_count), 1) or vector(0)",
+          "legendFormat": "忠实度"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "RAG 回答相关性",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_rag_answer_relevancy_sum) / clamp_min(sum(resumai_rag_answer_relevancy_count), 1) or vector(0)",
+          "legendFormat": "相关性"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "筛选漏斗对比",
+      "type": "barchart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_funnel_upload_count_total) or vector(0)",
+          "legendFormat": "已上传"
+        },
+        {
+          "expr": "sum(resumai_funnel_evaluation_completed_total{status=\"SUCCESS\"}) or vector(0)",
+          "legendFormat": "已评估"
+        },
+        {
+          "expr": "label_replace(label_replace(label_replace(label_replace(sum(resumai_funnel_recommendation_total{recommendation=~\"STRONG_RECOMMEND|RECOMMEND\"}), \"recommendation\", \"需人工复核\", \"recommendation\", \"NEED_MANUAL_REVIEW\"), \"recommendation\", \"推荐\", \"recommendation\", \"RECOMMEND\"), \"recommendation\", \"强烈推荐\", \"recommendation\", \"STRONG_RECOMMEND\"), \"recommendation\", \"拒绝\", \"recommendation\", \"REJECT\") or vector(0)",
+          "legendFormat": "已推荐"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "🤖 Agent 执行健康",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "collapsed": false
+    },
+    {
+      "title": "DAG 节点 P95 耗时",
+      "description": "各 DAG 步骤的 P95 延迟，可定位 JD 匹配/LLM 等瓶颈。",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "targets": [
+        {
+          "expr": "label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(histogram_quantile(0.95, sum by (step_kind, le) (rate(resumai_dag_node_duration_seconds_bucket{step_kind=~\"$step_kind\",lane_id=~\"$lane_id\"}[$__rate_interval]))), \"step_kind\", \"创建任务\", \"step_kind\", \"task_create\"), \"step_kind\", \"上传解析\", \"step_kind\", \"upload_parse\"), \"step_kind\", \"简历解析\", \"step_kind\", \"resume_parse\"), \"step_kind\", \"岗位匹配\", \"step_kind\", \"jd_match\"), \"step_kind\", \"能力评估\", \"step_kind\", \"skill_eval\"), \"step_kind\", \"证据融合\", \"step_kind\", \"rag_retrieve\"), \"step_kind\", \"AI 评估\", \"step_kind\", \"llm_complete\"), \"step_kind\", \"质量校验\", \"step_kind\", \"quality_check\"), \"step_kind\", \"报告生成\", \"step_kind\", \"report_generate\"), \"step_kind\", \"外部检索\", \"step_kind\", \"mcp_call\"), \"step_kind\", \"工具调用\", \"step_kind\", \"tool_call\"), \"step_kind\", \"索引校验\", \"step_kind\", \"rag_index_verify\")",
+          "legendFormat": "{{step_kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "暂无样本",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "task_create": {
+                  "index": 0,
+                  "text": "创建任务"
+                },
+                "upload_parse": {
+                  "index": 1,
+                  "text": "上传解析"
+                },
+                "resume_parse": {
+                  "index": 2,
+                  "text": "简历解析"
+                },
+                "jd_match": {
+                  "index": 3,
+                  "text": "岗位匹配"
+                },
+                "skill_eval": {
+                  "index": 4,
+                  "text": "能力评估"
+                },
+                "rag_retrieve": {
+                  "index": 5,
+                  "text": "证据融合"
+                },
+                "llm_complete": {
+                  "index": 6,
+                  "text": "AI 评估"
+                },
+                "quality_check": {
+                  "index": 7,
+                  "text": "质量校验"
+                },
+                "report_generate": {
+                  "index": 8,
+                  "text": "报告生成"
+                },
+                "mcp_call": {
+                  "index": 9,
+                  "text": "外部检索"
+                },
+                "tool_call": {
+                  "index": 10,
+                  "text": "工具调用"
+                },
+                "rag_index_verify": {
+                  "index": 11,
+                  "text": "索引校验"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Agent 平均耗时",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 12,
+        "y": 20
+      },
+      "targets": [
+        {
+          "expr": "label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(rate(resumai_agent_span_duration_seconds_sum{agent=~\"$agent\"}[$__rate_interval]) / clamp_min(rate(resumai_agent_span_duration_seconds_count{agent=~\"$agent\"}[$__rate_interval]), 1), \"agent\", \"任务编排器\", \"agent\", \"OrchestratorAgent\"), \"agent\", \"简历解析器\", \"agent\", \"ResumeParserAgent\"), \"agent\", \"技术评估\", \"agent\", \"TechAgent\"), \"agent\", \"项目评估\", \"agent\", \"ProjectAgent\"), \"agent\", \"风险识别\", \"agent\", \"RiskAgent\"), \"agent\", \"岗位匹配\", \"agent\", \"JdMatchAgent\"), \"agent\", \"质量校验\", \"agent\", \"RagasJudgeAgent\"), \"agent\", \"报告生成\", \"agent\", \"FinalReportAgent\"), \"agent\", \"大模型评估\", \"agent\", \"DeepSeekChatModel\"), \"agent\", \"混合检索\", \"agent\", \"HybridRagStrategy\"), \"agent\", \"需求分析\", \"agent\", \"JdAnalysisAgent\"), \"agent\", \"历史匹配\", \"agent\", \"HistoricalRagAgent\"), \"agent\", \"外部检索\", \"agent\", \"ExternalProfileAgent\"), \"agent\", \"并发引擎\", \"agent\", \"DAGEngine\")",
+          "legendFormat": "{{agent}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "暂无样本",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "OrchestratorAgent": {
+                  "index": 0,
+                  "text": "任务编排器"
+                },
+                "ResumeParserAgent": {
+                  "index": 1,
+                  "text": "简历解析器"
+                },
+                "TechAgent": {
+                  "index": 2,
+                  "text": "技术评估"
+                },
+                "ProjectAgent": {
+                  "index": 3,
+                  "text": "项目评估"
+                },
+                "RiskAgent": {
+                  "index": 4,
+                  "text": "风险识别"
+                },
+                "JdMatchAgent": {
+                  "index": 5,
+                  "text": "岗位匹配"
+                },
+                "RagasJudgeAgent": {
+                  "index": 6,
+                  "text": "质量校验"
+                },
+                "FinalReportAgent": {
+                  "index": 7,
+                  "text": "报告生成"
+                },
+                "DeepSeekChatModel": {
+                  "index": 8,
+                  "text": "大模型评估"
+                },
+                "HybridRagStrategy": {
+                  "index": 9,
+                  "text": "混合检索"
+                },
+                "JdAnalysisAgent": {
+                  "index": 10,
+                  "text": "需求分析"
+                },
+                "HistoricalRagAgent": {
+                  "index": 11,
+                  "text": "历史匹配"
+                },
+                "ExternalProfileAgent": {
+                  "index": 12,
+                  "text": "外部检索"
+                },
+                "DAGEngine": {
+                  "index": 13,
+                  "text": "并发引擎"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Agent 错误 / Skill 调用",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 18,
+        "y": 20
+      },
+      "targets": [
+        {
+          "expr": "label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum(resumai_agent_error_total), \"agent\", \"任务编排器\", \"agent\", \"OrchestratorAgent\"), \"agent\", \"简历解析器\", \"agent\", \"ResumeParserAgent\"), \"agent\", \"技术评估\", \"agent\", \"TechAgent\"), \"agent\", \"项目评估\", \"agent\", \"ProjectAgent\"), \"agent\", \"风险识别\", \"agent\", \"RiskAgent\"), \"agent\", \"岗位匹配\", \"agent\", \"JdMatchAgent\"), \"agent\", \"质量校验\", \"agent\", \"RagasJudgeAgent\"), \"agent\", \"报告生成\", \"agent\", \"FinalReportAgent\"), \"agent\", \"大模型评估\", \"agent\", \"DeepSeekChatModel\"), \"agent\", \"混合检索\", \"agent\", \"HybridRagStrategy\"), \"agent\", \"需求分析\", \"agent\", \"JdAnalysisAgent\"), \"agent\", \"历史匹配\", \"agent\", \"HistoricalRagAgent\"), \"agent\", \"外部检索\", \"agent\", \"ExternalProfileAgent\"), \"agent\", \"并发引擎\", \"agent\", \"DAGEngine\")",
+          "legendFormat": "Agent 错误"
+        },
+        {
+          "expr": "label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum(resumai_skill_invocation_total{agent=~\"$agent\"}), \"agent\", \"任务编排器\", \"agent\", \"OrchestratorAgent\"), \"agent\", \"简历解析器\", \"agent\", \"ResumeParserAgent\"), \"agent\", \"技术评估\", \"agent\", \"TechAgent\"), \"agent\", \"项目评估\", \"agent\", \"ProjectAgent\"), \"agent\", \"风险识别\", \"agent\", \"RiskAgent\"), \"agent\", \"岗位匹配\", \"agent\", \"JdMatchAgent\"), \"agent\", \"质量校验\", \"agent\", \"RagasJudgeAgent\"), \"agent\", \"报告生成\", \"agent\", \"FinalReportAgent\"), \"agent\", \"大模型评估\", \"agent\", \"DeepSeekChatModel\"), \"agent\", \"混合检索\", \"agent\", \"HybridRagStrategy\"), \"agent\", \"需求分析\", \"agent\", \"JdAnalysisAgent\"), \"agent\", \"历史匹配\", \"agent\", \"HistoricalRagAgent\"), \"agent\", \"外部检索\", \"agent\", \"ExternalProfileAgent\"), \"agent\", \"并发引擎\", \"agent\", \"DAGEngine\")",
+          "legendFormat": "Skill 调用"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "OrchestratorAgent": {
+                  "index": 0,
+                  "text": "任务编排器"
+                },
+                "ResumeParserAgent": {
+                  "index": 1,
+                  "text": "简历解析器"
+                },
+                "TechAgent": {
+                  "index": 2,
+                  "text": "技术评估"
+                },
+                "ProjectAgent": {
+                  "index": 3,
+                  "text": "项目评估"
+                },
+                "RiskAgent": {
+                  "index": 4,
+                  "text": "风险识别"
+                },
+                "JdMatchAgent": {
+                  "index": 5,
+                  "text": "岗位匹配"
+                },
+                "RagasJudgeAgent": {
+                  "index": 6,
+                  "text": "质量校验"
+                },
+                "FinalReportAgent": {
+                  "index": 7,
+                  "text": "报告生成"
+                },
+                "DeepSeekChatModel": {
+                  "index": 8,
+                  "text": "大模型评估"
+                },
+                "HybridRagStrategy": {
+                  "index": 9,
+                  "text": "混合检索"
+                },
+                "JdAnalysisAgent": {
+                  "index": 10,
+                  "text": "需求分析"
+                },
+                "HistoricalRagAgent": {
+                  "index": 11,
+                  "text": "历史匹配"
+                },
+                "ExternalProfileAgent": {
+                  "index": 12,
+                  "text": "外部检索"
+                },
+                "DAGEngine": {
+                  "index": 13,
+                  "text": "并发引擎"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "🔍 RAG 检索质量",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "collapsed": false
     },
     {
       "title": "RAG 召回次数",
       "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 1 },
-      "targets": [{ "expr": "sum(resumai_rag_search_result_count_count)", "legendFormat": "Retrievals" }]
-    },
-    {
-      "title": "RAG 空召回率",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
-      "targets": [{ "expr": "sum(resumai_rag_retrieval_empty_results_total) / clamp_min(sum(resumai_rag_search_result_count_count), 1)", "legendFormat": "Empty Rate" }],
-      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
-    },
-    {
-      "title": "Skill 调用",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
-      "targets": [{ "expr": "sum(resumai_skill_invocation_total{agent=~\"$agent\"})", "legendFormat": "Skills" }]
-    },
-    {
-      "title": "MCP 调用 / Context",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
-      "targets": [{ "expr": "sum(resumai_mcp_call_count_total) or sum(resumai_dag_node_duration_seconds_count{step_kind=\"mcp_call\"})", "legendFormat": "MCP" }]
-    },
-    {
-      "title": "Pipeline P95 耗时",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
-      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(resumai_dag_node_duration_seconds_bucket{step_kind=~\"$step_kind\",lane_id=~\"$lane_id\"}[5m])))", "legendFormat": "P95" }],
-      "fieldConfig": { "defaults": { "unit": "s" } }
-    },
-    {
-      "title": "📈 Business Funnel",
-      "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
-      "collapsed": false
-    },
-    {
-      "title": "Resume Uploads",
-      "type": "barchart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 1 },
-      "targets": [{ "expr": "sum by (file_type) (resumai_funnel_upload_count_total)", "legendFormat": "{{file_type}}" }]
-    },
-    {
-      "title": "Evaluations Started",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 1 },
-      "targets": [{ "expr": "sum(resumai_funnel_evaluation_started_total)", "legendFormat": "Started" }]
-    },
-    {
-      "title": "Evaluations Completed",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 1 },
-      "targets": [{ "expr": "sum(resumai_funnel_evaluation_completed_total)", "legendFormat": "Completed" }]
-    },
-    {
-      "title": "Funnel Conversion Rate",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 1 },
-      "targets": [{ "expr": "resumai_funnel_conversion_rate", "legendFormat": "Conversion" }],
-      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.6}, {"color": "green", "value": 0.85}] } } }
-    },
-    {
-      "title": "Time to Screen (p95)",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 16, "y": 1 },
-      "targets": [{ "expr": "histogram_quantile(0.95, sum by (job_category, le) (rate(resumai_funnel_time_to_screen_seconds_bucket[5m])))", "legendFormat": "{{job_category}}" }],
-      "fieldConfig": { "defaults": { "unit": "s" } }
-    },
-    {
-      "title": "Recommendation Distribution",
-      "type": "piechart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 1 },
-      "targets": [{ "expr": "sum by (recommendation) (resumai_funnel_recommendation_count_total)", "legendFormat": "{{recommendation}}" }]
-    },
-    {
-      "title": "🤖 Agent Execution",
-      "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
-      "collapsed": false
-    },
-    {
-      "title": "Agent Span Duration (avg)",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 8 },
-      "targets": [{ "expr": "rate(resumai_agent_span_duration_seconds_sum[5m]) / rate(resumai_agent_span_duration_seconds_count[5m])", "legendFormat": "{{agent}}" }],
-      "fieldConfig": { "defaults": { "unit": "s" } }
-    },
-    {
-      "title": "Concurrent Active Agents",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 4, "x": 6, "y": 8 },
-      "targets": [{ "expr": "resumai_agent_concurrent_active", "legendFormat": "Active" }],
-      "fieldConfig": { "defaults": { "min": 0, "max": 10, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 4}, {"color": "red", "value": 6}] } } }
-    },
-    {
-      "title": "Agent Delegations",
-      "type": "barchart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 5, "x": 10, "y": 8 },
-      "targets": [{ "expr": "sum by (from_agent, to_agent) (resumai_agent_delegation_total)", "legendFormat": "{{from_agent}}→{{to_agent}}" }]
-    },
-    {
-      "title": "Agent Errors",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 4, "x": 15, "y": 8 },
-      "targets": [{ "expr": "sum(resumai_agent_error_total)", "legendFormat": "Errors" }],
-      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}] } } }
-    },
-    {
-      "title": "Routing Decisions",
-      "type": "piechart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 5, "x": 19, "y": 8 },
-      "targets": [{ "expr": "sum by (decision) (resumai_agent_routing_decision_total)", "legendFormat": "{{decision}}" }]
-    },
-    {
-      "title": "🔧 Tool Calls",
-      "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
-      "collapsed": false
-    },
-    {
-      "title": "Tool Call Duration",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 16 },
-      "targets": [{ "expr": "rate(resumai_tool_call_duration_seconds_sum[5m]) / rate(resumai_tool_call_duration_seconds_count[5m])", "legendFormat": "{{tool_name}}" }],
-      "fieldConfig": { "defaults": { "unit": "s" } }
-    },
-    {
-      "title": "Tool Call Count",
-      "type": "barchart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 4, "x": 6, "y": 16 },
-      "targets": [{ "expr": "sum by (tool_name, status) (resumai_tool_call_count_total)", "legendFormat": "{{tool_name}} ({{status}})" }]
-    },
-    {
-      "title": "Tool Errors",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 3, "x": 10, "y": 16 },
-      "targets": [{ "expr": "sum(resumai_tool_call_error_total)", "legendFormat": "Errors" }]
-    },
-    {
-      "title": "Milvus Chunks Indexed",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 3, "x": 13, "y": 16 },
-      "targets": [{ "expr": "resumai_tool_milvus_chunks_indexed_sum / resumai_tool_milvus_chunks_indexed_count", "legendFormat": "Avg Chunks" }]
-    },
-    {
-      "title": "Milvus Similarity Scores",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 4, "x": 16, "y": 16 },
-      "targets": [{ "expr": "rate(resumai_tool_milvus_similarity_score_sum[5m]) / rate(resumai_tool_milvus_similarity_score_count[5m])", "legendFormat": "Avg Score" }]
-    },
-    {
-      "title": "Neo4j Nodes Written",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 4, "x": 20, "y": 16 },
-      "targets": [{ "expr": "rate(resumai_tool_neo4j_nodes_written_sum[5m]) / rate(resumai_tool_neo4j_nodes_written_count[5m])", "legendFormat": "{{operation}}" }]
-    },
-    {
-      "title": "🧠 LLM Economics",
-      "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
-      "collapsed": false
-    },
-    {
-      "title": "LLM Duration",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 24 },
-      "targets": [{ "expr": "rate(resumai_llm_duration_seconds_sum[5m]) / rate(resumai_llm_duration_seconds_count[5m])", "legendFormat": "{{model}}/{{purpose}}" }],
-      "fieldConfig": { "defaults": { "unit": "s" } }
-    },
-    {
-      "title": "Input Tokens (avg)",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 3, "x": 6, "y": 24 },
-      "targets": [{ "expr": "resumai_llm_tokens_input_sum / resumai_llm_tokens_input_count", "legendFormat": "Input" }]
-    },
-    {
-      "title": "Output Tokens (avg)",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 3, "x": 9, "y": 24 },
-      "targets": [{ "expr": "resumai_llm_tokens_output_sum / resumai_llm_tokens_output_count", "legendFormat": "Output" }]
-    },
-    {
-      "title": "Total LLM Tokens",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 3, "x": 12, "y": 24 },
-      "targets": [{ "expr": "sum(resumai_llm_tokens_total_total)", "legendFormat": "Total" }]
-    },
-    {
-      "title": "Cost per Call (avg USD)",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 3, "x": 15, "y": 24 },
-      "targets": [{ "expr": "resumai_llm_cost_per_call_sum / resumai_llm_cost_per_call_count", "legendFormat": "USD/call" }],
-      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 6 } }
-    },
-    {
-      "title": "LLM Errors",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 3, "x": 18, "y": 24 },
-      "targets": [{ "expr": "sum(resumai_llm_error_total)", "legendFormat": "Errors" }],
-      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}] } } }
-    },
-    {
-      "title": "Token Efficiency",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 3, "x": 21, "y": 24 },
-      "targets": [{ "expr": "resumai_llm_token_efficiency", "legendFormat": "out/in" }]
-    },
-    {
-      "title": "🔍 RAG Quality",
-      "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
-      "collapsed": false
-    },
-    {
-      "title": "Faithfulness",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 32 },
-      "targets": [{ "expr": "resumai_rag_faithfulness_sum / resumai_rag_faithfulness_count", "legendFormat": "Faithfulness" }],
-      "fieldConfig": { "defaults": { "min": 0, "max": 1, "thresholds": { "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.7}, {"color": "green", "value": 0.85}] } } }
-    },
-    {
-      "title": "Answer Relevancy",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 32 },
-      "targets": [{ "expr": "resumai_rag_answer_relevancy_sum / resumai_rag_answer_relevancy_count", "legendFormat": "Relevancy" }],
-      "fieldConfig": { "defaults": { "min": 0, "max": 1, "thresholds": { "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.7}, {"color": "green", "value": 0.85}] } } }
-    },
-    {
-      "title": "Context Precision",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 32 },
-      "targets": [{ "expr": "resumai_rag_context_precision_sum / resumai_rag_context_precision_count", "legendFormat": "Precision" }],
-      "fieldConfig": { "defaults": { "min": 0, "max": 1 } }
-    },
-    {
-      "title": "Overall RAG Quality",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 8, "x": 12, "y": 32 },
-      "targets": [{ "expr": "rate(resumai_rag_overall_quality_sum[5m]) / rate(resumai_rag_overall_quality_count[5m])", "legendFormat": "Overall" }]
-    },
-    {
-      "title": "Retrieval Failures",
-      "type": "table",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 32 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 28
+      },
       "targets": [
-        { "expr": "sum(resumai_rag_retrieval_empty_results_total)", "legendFormat": "Empty", "refId": "A" },
-        { "expr": "sum(resumai_rag_retrieval_below_threshold_total)", "legendFormat": "Below Threshold", "refId": "B" }
+        {
+          "expr": "sum(resumai_rag_search_result_count_count) or vector(0)",
+          "legendFormat": "召回"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "空召回率",
+      "description": "空召回率升高说明 RAG 没找到候选人相关证据，不等于系统宕机。",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 28
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_rag_retrieval_empty_results_total) / clamp_min(sum(resumai_rag_search_result_count_count), 1) or vector(0)",
+          "legendFormat": "空召回"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "Milvus 连接",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 28
+      },
+      "targets": [
+        {
+          "expr": "resumai_system_milvus_connection_alive or vector(0)",
+          "legendFormat": "Milvus"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "Neo4j 连接",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 28
+      },
+      "targets": [
+        {
+          "expr": "resumai_system_neo4j_connection_pool or vector(0)",
+          "legendFormat": "Neo4j"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "RAG 质量趋势",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 28
+      },
+      "targets": [
+        {
+          "expr": "rate(resumai_rag_overall_quality_sum[$__rate_interval]) / clamp_min(rate(resumai_rag_overall_quality_count[$__rate_interval]), 1) or vector(0)",
+          "legendFormat": "综合质量"
+        },
+        {
+          "expr": "rate(resumai_rag_retrieval_empty_results_total[$__rate_interval]) or vector(0)",
+          "legendFormat": "空召回/秒"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "⚙️ 系统基础设施",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "collapsed": false
+    },
+    {
+      "title": "LLM 平均耗时",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 34
+      },
+      "targets": [
+        {
+          "expr": "rate(resumai_llm_duration_seconds_sum[$__rate_interval]) / clamp_min(rate(resumai_llm_duration_seconds_count[$__rate_interval]), 1) or vector(0)",
+          "legendFormat": "DeepSeek"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "Token 消耗",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 6,
+        "y": 34
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_llm_tokens_total_total) or vector(0)",
+          "legendFormat": "总 Token"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "LLM 错误",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 10,
+        "y": 34
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_llm_error_total) or vector(0)",
+          "legendFormat": "错误"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "线程池 / 队列",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 14,
+        "y": 34
+      },
+      "targets": [
+        {
+          "expr": "resumai_system_executor_active_threads or vector(0)",
+          "legendFormat": "活跃线程"
+        },
+        {
+          "expr": "resumai_system_executor_queue_size or vector(0)",
+          "legendFormat": "队列"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "任务缓存",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 34
+      },
+      "targets": [
+        {
+          "expr": "resumai_system_memory_task_cache_size or vector(0)",
+          "legendFormat": "内存任务"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "🔧 原始指标排障（开发/运维）",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "collapsed": true
+    },
+    {
+      "title": "resumai_agent_span_duration_seconds",
+      "description": "Micrometer 原始指标：Agent Span 耗时分布",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 41
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (agent, le) (rate(resumai_agent_span_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{agent}}"
+        }
       ]
     },
     {
-      "title": "💬 HR Feedback + System Health",
-      "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
-      "collapsed": false
-    },
-    {
-      "title": "HR Feedback Submitted",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 39 },
-      "targets": [{ "expr": "sum(resumai_funnel_feedback_submitted_total)", "legendFormat": "Feedback" }]
-    },
-    {
-      "title": "HR-AI Agreement",
-      "type": "piechart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 39 },
-      "targets": [{ "expr": "sum by (agrees_with_ai) (resumai_funnel_feedback_agreement_total)", "legendFormat": "agrees={{agrees_with_ai}}" }]
-    },
-    {
-      "title": "Executor Active Threads",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 39 },
-      "targets": [{ "expr": "resumai_system_executor_active_threads", "legendFormat": "Threads" }],
-      "fieldConfig": { "defaults": { "min": 0, "max": 6 } }
-    },
-    {
-      "title": "Executor Queue Size",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 39 },
-      "targets": [{ "expr": "resumai_system_executor_queue_size", "legendFormat": "Queue" }]
-    },
-    {
-      "title": "SSE Active Subscribers",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 16, "y": 39 },
-      "targets": [{ "expr": "resumai_system_sse_active_subscribers", "legendFormat": "SSE" }]
-    },
-    {
-      "title": "Task Cache Size",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 39 },
-      "targets": [{ "expr": "resumai_system_memory_task_cache_size", "legendFormat": "Tasks" }]
-    },
-    {
-      "title": "🎯 HR Business Metrics",
-      "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 46 },
-      "collapsed": false
-    },
-    {
-      "title": "JD Auto-Match Success Rate",
-      "type": "gauge",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 47 },
-      "targets": [{ "expr": "sum(resumai_jd_auto_match_total{matched=\"true\"}) / sum(resumai_jd_auto_match_total) * 100", "legendFormat": "Match Rate %" }],
-      "fieldConfig": { "defaults": { "max": 100, "min": 0, "unit": "percent" } }
-    },
-    {
-      "title": "JD Match Score Distribution",
-      "type": "histogram",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 47 },
-      "targets": [{ "expr": "resumai_jd_match_score_sum / clamp_min(resumai_jd_match_score_count, 1)", "legendFormat": "Avg Score" }]
-    },
-    {
-      "title": "HR Feedback Consistency",
-      "type": "piechart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 47 },
+      "title": "resumai_tool_call_count_total",
+      "type": "barchart",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 41
+      },
       "targets": [
-        { "expr": "sum(resumai_hr_feedback_consistency_total{agree=\"true\"})", "legendFormat": "Agree" },
-        { "expr": "sum(resumai_hr_feedback_consistency_total{agree=\"false\"})", "legendFormat": "Disagree" }
+        {
+          "expr": "sum by (tool_name, status) (resumai_tool_call_count_total{tool_name=~\"$tool_name\"})",
+          "legendFormat": "{{tool_name}} {{status}}"
+        }
       ]
     },
     {
-      "title": "Screening Funnel",
-      "type": "barchart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 47 },
+      "title": "resumai_dag_node_duration_seconds",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 41
+      },
       "targets": [
-        { "expr": "sum(resumai_funnel_upload_count_total)", "legendFormat": "Uploaded" },
-        { "expr": "sum(resumai_funnel_evaluation_completed_total{status=\"SUCCESS\"})", "legendFormat": "Evaluated" },
-        { "expr": "sum(resumai_funnel_recommendation_total{recommendation=\"STRONG_RECOMMEND\"})+sum(resumai_funnel_recommendation_total{recommendation=\"RECOMMEND\"})", "legendFormat": "Recommended" }
+        {
+          "expr": "histogram_quantile(0.95, sum by (step_kind, lane_id, le) (rate(resumai_dag_node_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{step_kind}}/{{lane_id}}"
+        }
       ]
-    },
-    {
-      "title": "Avg Time to Screen",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 53 },
-      "targets": [{ "expr": "histogram_quantile(0.5, rate(resumai_funnel_time_to_screen_seconds_bucket[5m]))", "legendFormat": "P50" }],
-      "fieldConfig": { "defaults": { "unit": "s" } }
-    },
-    {
-      "title": "🔧 Developer Agent/MCP/RAG Panel",
-      "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 60 },
-      "collapsed": false
-    },
-    {
-      "title": "DAG Node Duration by Step",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 61 },
-      "targets": [{ "expr": "histogram_quantile(0.95, rate(resumai_dag_node_duration_seconds_bucket[5m]))", "legendFormat": "{{step_kind}} / {{lane_id}}" }]
-    },
-    {
-      "title": "Parallel Group Bottleneck",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 61 },
-      "targets": [{ "expr": "histogram_quantile(0.95, rate(resumai_dag_parallel_bottleneck_seconds_bucket[5m]))", "legendFormat": "{{dag_group}} / {{bottleneck_lane}}" }]
-    },
-    {
-      "title": "Skill Invocations",
-      "type": "barchart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 61 },
-      "targets": [{ "expr": "sum by (skill_name, success) (resumai_skill_invocation_total)", "legendFormat": "{{skill_name}} ({{success}})" }]
-    },
-    {
-      "title": "MCP Call Latency",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 68 },
-      "targets": [{ "expr": "histogram_quantile(0.95, rate(resumai_mcp_call_duration_seconds_bucket[5m]))", "legendFormat": "{{mcp_target}}" }]
-    },
-    {
-      "title": "MCP Call Count",
-      "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 4, "x": 8, "y": 68 },
-      "targets": [{ "expr": "sum by (mcp_target) (resumai_mcp_call_count_total)", "legendFormat": "{{mcp_target}}" }]
-    },
-    {
-      "title": "RAG Search Results & Score",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 68 },
-      "targets": [
-        { "expr": "resumai_rag_search_result_count", "legendFormat": "Results ({{collection}})" },
-        { "expr": "resumai_rag_search_top_score", "legendFormat": "Top Score ({{collection}})" }
-      ]
-    },
-    {
-      "title": "Sandbox Runs",
-      "type": "barchart",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 68 },
-      "targets": [{ "expr": "sum by (project_type, exit_code) (resumai_sandbox_run_count_total)", "legendFormat": "{{project_type}} exit={{exit_code}}" }]
     }
   ],
   "schemaVersion": 39,
-  "tags": ["resumai", "multi-agent", "funnel", "rag", "llm"],
+  "tags": [
+    "resumai",
+    "运营",
+    "中文"
+  ],
   "templating": {
     "list": [
       {
@@ -475,48 +1211,309 @@
       },
       {
         "name": "job_category",
+        "label": "岗位类型",
         "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
         "query": "label_values(resumai_funnel_evaluation_started_total, job_category)",
         "includeAll": true,
         "allValue": ".*",
         "multi": true,
-        "current": { "text": "All", "value": "$__all" }
+        "current": {
+          "selected": true,
+          "text": "全部",
+          "value": "$__all"
+        }
       },
       {
         "name": "agent",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "query": "label_values(resumai_skill_invocation_total, agent)",
+        "label": "Agent 角色",
+        "type": "custom",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "任务编排器 : OrchestratorAgent,简历解析器 : ResumeParserAgent,技术评估 : TechAgent,项目评估 : ProjectAgent,风险识别 : RiskAgent,岗位匹配 : JdMatchAgent,质量校验 : RagasJudgeAgent,报告生成 : FinalReportAgent,大模型评估 : DeepSeekChatModel,混合检索 : HybridRagStrategy,需求分析 : JdAnalysisAgent,历史匹配 : HistoricalRagAgent,外部检索 : ExternalProfileAgent,并发引擎 : DAGEngine",
         "includeAll": true,
         "allValue": ".*",
         "multi": true,
-        "current": { "text": "All", "value": "$__all" }
+        "current": {
+          "selected": true,
+          "text": "全部",
+          "value": "$__all"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "全部",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "任务编排器",
+            "value": "OrchestratorAgent"
+          },
+          {
+            "selected": false,
+            "text": "简历解析器",
+            "value": "ResumeParserAgent"
+          },
+          {
+            "selected": false,
+            "text": "技术评估",
+            "value": "TechAgent"
+          },
+          {
+            "selected": false,
+            "text": "项目评估",
+            "value": "ProjectAgent"
+          },
+          {
+            "selected": false,
+            "text": "风险识别",
+            "value": "RiskAgent"
+          },
+          {
+            "selected": false,
+            "text": "岗位匹配",
+            "value": "JdMatchAgent"
+          },
+          {
+            "selected": false,
+            "text": "质量校验",
+            "value": "RagasJudgeAgent"
+          },
+          {
+            "selected": false,
+            "text": "报告生成",
+            "value": "FinalReportAgent"
+          },
+          {
+            "selected": false,
+            "text": "大模型评估",
+            "value": "DeepSeekChatModel"
+          },
+          {
+            "selected": false,
+            "text": "混合检索",
+            "value": "HybridRagStrategy"
+          },
+          {
+            "selected": false,
+            "text": "需求分析",
+            "value": "JdAnalysisAgent"
+          },
+          {
+            "selected": false,
+            "text": "历史匹配",
+            "value": "HistoricalRagAgent"
+          },
+          {
+            "selected": false,
+            "text": "外部检索",
+            "value": "ExternalProfileAgent"
+          },
+          {
+            "selected": false,
+            "text": "并发引擎",
+            "value": "DAGEngine"
+          }
+        ]
       },
       {
         "name": "step_kind",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "query": "label_values(resumai_dag_node_duration_seconds_bucket, step_kind)",
+        "label": "DAG 步骤",
+        "type": "custom",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "创建任务 : task_create,上传解析 : upload_parse,简历解析 : resume_parse,岗位匹配 : jd_match,能力评估 : skill_eval,证据融合 : rag_retrieve,AI 评估 : llm_complete,质量校验 : quality_check,报告生成 : report_generate,外部检索 : mcp_call,工具调用 : tool_call,索引校验 : rag_index_verify",
         "includeAll": true,
         "allValue": ".*",
         "multi": true,
-        "current": { "text": "All", "value": "$__all" }
+        "current": {
+          "selected": true,
+          "text": "全部",
+          "value": "$__all"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "全部",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "创建任务",
+            "value": "task_create"
+          },
+          {
+            "selected": false,
+            "text": "上传解析",
+            "value": "upload_parse"
+          },
+          {
+            "selected": false,
+            "text": "简历解析",
+            "value": "resume_parse"
+          },
+          {
+            "selected": false,
+            "text": "岗位匹配",
+            "value": "jd_match"
+          },
+          {
+            "selected": false,
+            "text": "能力评估",
+            "value": "skill_eval"
+          },
+          {
+            "selected": false,
+            "text": "证据融合",
+            "value": "rag_retrieve"
+          },
+          {
+            "selected": false,
+            "text": "AI 评估",
+            "value": "llm_complete"
+          },
+          {
+            "selected": false,
+            "text": "质量校验",
+            "value": "quality_check"
+          },
+          {
+            "selected": false,
+            "text": "报告生成",
+            "value": "report_generate"
+          },
+          {
+            "selected": false,
+            "text": "外部检索",
+            "value": "mcp_call"
+          },
+          {
+            "selected": false,
+            "text": "工具调用",
+            "value": "tool_call"
+          },
+          {
+            "selected": false,
+            "text": "索引校验",
+            "value": "rag_index_verify"
+          }
+        ]
       },
       {
         "name": "lane_id",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "query": "label_values(resumai_dag_node_duration_seconds_bucket, lane_id)",
+        "label": "并行泳道",
+        "type": "custom",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "技术泳道 : tech,项目泳道 : project,风险泳道 : risk",
         "includeAll": true,
         "allValue": ".*",
         "multi": true,
-        "current": { "text": "All", "value": "$__all" }
+        "current": {
+          "selected": true,
+          "text": "全部",
+          "value": "$__all"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "全部",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "技术泳道",
+            "value": "tech"
+          },
+          {
+            "selected": false,
+            "text": "项目泳道",
+            "value": "project"
+          },
+          {
+            "selected": false,
+            "text": "风险泳道",
+            "value": "risk"
+          }
+        ]
+      },
+      {
+        "name": "tool_name",
+        "label": "工具名",
+        "type": "custom",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "Milvus 检索 : milvus.search,DeepSeek 对话 : deepseek-chat,GitHub MCP : github,简历解析 Skill : ResumeParserSkill,技术栈 Skill : TechStackAuditSkill,项目深度 Skill : ProjectDepthSkill,风险识别 Skill : RiskDetectionSkill",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": "全部",
+          "value": "$__all"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "全部",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "Milvus 检索",
+            "value": "milvus.search"
+          },
+          {
+            "selected": false,
+            "text": "DeepSeek 对话",
+            "value": "deepseek-chat"
+          },
+          {
+            "selected": false,
+            "text": "GitHub MCP",
+            "value": "github"
+          },
+          {
+            "selected": false,
+            "text": "简历解析 Skill",
+            "value": "ResumeParserSkill"
+          },
+          {
+            "selected": false,
+            "text": "技术栈 Skill",
+            "value": "TechStackAuditSkill"
+          },
+          {
+            "selected": false,
+            "text": "项目深度 Skill",
+            "value": "ProjectDepthSkill"
+          },
+          {
+            "selected": false,
+            "text": "风险识别 Skill",
+            "value": "RiskDetectionSkill"
+          }
+        ]
       }
     ]
   },
-  "time": { "from": "now-1h", "to": "now" },
-  "title": "ResumAI Multi-Agent Observability",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "title": "ResumAI 运营驾驶舱",
   "uid": "resumai-spring-boot",
-  "version": 3
+  "version": 4
 }

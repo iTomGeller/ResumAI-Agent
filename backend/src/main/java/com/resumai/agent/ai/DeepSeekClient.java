@@ -2,6 +2,8 @@ package com.resumai.agent.ai;
 
 import com.resumai.agent.config.AgentMetrics;
 import com.resumai.agent.config.DeepSeekProperties;
+import com.resumai.agent.domain.entity.LlmInvocation;
+import com.resumai.agent.service.LlmInvocationService;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -26,29 +28,36 @@ public class DeepSeekClient {
     private final ChatModel chatModel;
     private final DeepSeekProperties properties;
     private final AgentMetrics agentMetrics;
+    private final LlmInvocationService llmInvocationService;
 
-    public DeepSeekClient(ChatModel chatModel, DeepSeekProperties properties, AgentMetrics agentMetrics) {
+    public DeepSeekClient(ChatModel chatModel,
+                          DeepSeekProperties properties,
+                          AgentMetrics agentMetrics,
+                          LlmInvocationService llmInvocationService) {
         this.chatModel = chatModel;
         this.properties = properties;
         this.agentMetrics = agentMetrics;
+        this.llmInvocationService = llmInvocationService;
     }
 
-    /**
-     * 调用 DeepSeek 生成简历评估。
-     *
-     * @param prompt 完整评估提示词
-     * @return 模型生成的中文评估文本
-     */
     public String evaluateResume(String prompt) {
-        return evaluateResume(prompt, "DeepSeekChatModel", "evaluation");
+        return evaluateResume(prompt, "DeepSeekChatModel", "evaluation", null, null).text();
     }
 
-    /**
-     * 调用 DeepSeek 生成文本，并记录 LLM 经济与耗时指标。
-     */
     public String evaluateResume(String prompt, String agent, String purpose) {
+        return evaluateResume(prompt, agent, purpose, null, null).text();
+    }
+
+    public LlmCallResult evaluateResume(String prompt, String agent, String purpose, String traceId, String spanId) {
         if (!StringUtils.hasText(properties.getApiKey())) {
-            return "DeepSeek API Key 未配置，当前返回 MVP 本地评估：候选人具备基础岗位匹配度，建议补充真实简历文本后进行 AI 深度评估。";
+            String fallback = "DeepSeek API Key 未配置，当前返回 MVP 本地评估：候选人具备基础岗位匹配度，建议补充真实简历文本后进行 AI 深度评估。";
+            LlmInvocation saved = llmInvocationService.saveInvocation(
+                    traceId, spanId, MODEL_NAME, agent, purpose, 0L,
+                    prompt, fallback, estimateTokens(prompt), estimateTokens(fallback),
+                    "fallback", null, null);
+            return new LlmCallResult(fallback, saved.getId(), false,
+                    prompt == null ? 0 : prompt.length(), fallback.length(),
+                    estimateTokens(prompt), estimateTokens(fallback), "fallback");
         }
 
         long start = System.currentTimeMillis();
@@ -72,15 +81,29 @@ public class DeepSeekClient {
 
             int outputTokens = tokenUsage != null && tokenUsage.outputTokenCount() != null
                     ? tokenUsage.outputTokenCount() : estimateTokens(text);
+            String finishReason = "stop";
 
             agentMetrics.recordLlmTokens(MODEL_NAME, agent, purpose, inputTokens, outputTokens);
             double costUsd = (inputTokens * INPUT_COST_PER_1K / 1000D) + (outputTokens * OUTPUT_COST_PER_1K / 1000D);
             agentMetrics.recordLlmCostPerCall(MODEL_NAME, agent, costUsd);
             agentMetrics.recordLlmContextUtilization(MODEL_NAME, Math.min(1D, inputTokens / 64000D));
-            return text;
+
+            LlmInvocation saved = llmInvocationService.saveInvocation(
+                    traceId, spanId, MODEL_NAME, agent, purpose, durationMs,
+                    prompt, text, inputTokens, outputTokens, finishReason, null, null);
+            boolean truncated = finishReason.toLowerCase().contains("length");
+            if (truncated) {
+                agentMetrics.recordLlmError(MODEL_NAME, "TruncatedResponse");
+            }
+            return new LlmCallResult(text, saved.getId(), truncated,
+                    prompt.length(), text.length(), inputTokens, outputTokens, finishReason);
         } catch (Exception e) {
             agentMetrics.recordLlmDuration(MODEL_NAME, agent, purpose, System.currentTimeMillis() - start);
             agentMetrics.recordLlmError(MODEL_NAME, e.getClass().getSimpleName());
+            LlmInvocation saved = llmInvocationService.saveInvocation(
+                    traceId, spanId, MODEL_NAME, agent, purpose, System.currentTimeMillis() - start,
+                    prompt, null, estimateTokens(prompt), 0, "error",
+                    e.getClass().getSimpleName(), e.getMessage());
             throw e instanceof RuntimeException runtime ? runtime : new IllegalStateException(e.getMessage(), e);
         }
     }

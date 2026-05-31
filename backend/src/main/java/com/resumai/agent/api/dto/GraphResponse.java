@@ -4,14 +4,16 @@ import java.util.List;
 
 /**
  * GraphRAG 图谱响应。
- *
- * <p>MVP 阶段返回候选人与技能、项目、岗位、风险之间的模拟子图，
- * 后续阶段会替换为 Neo4j 子图查询结果。</p>
  */
 public record GraphResponse(
         List<GraphNode> nodes,
-        List<GraphEdge> edges
+        List<GraphEdge> edges,
+        String source
 ) {
+
+    public GraphResponse(List<GraphNode> nodes, List<GraphEdge> edges) {
+        this(nodes, edges, "SIMULATED");
+    }
 
     /**
      * 图谱节点。

@@ -1,0 +1,187 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "row",
+      "title": "ResumAI 能力 - MCP / 向量库 / 图数据库",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "title": "MCP 调用量",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum by (mcp_target) (rate(resumai_mcp_call_count_total[$__rate_interval]))",
+          "legendFormat": "{{mcp_target}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "外部调用成功/失败",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_mcp_call_count_total{success=\"true\"}) or vector(0)",
+          "legendFormat": "成功"
+        },
+        {
+          "expr": "sum(resumai_mcp_call_count_total{success=\"false\"}) or vector(0)",
+          "legendFormat": "失败"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "Milvus 索引/检索 Chunk",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(resumai_tool_milvus_chunks_indexed_sum[$__rate_interval])) or vector(0)",
+          "legendFormat": "索引 片段/秒"
+        },
+        {
+          "expr": "sum(rate(resumai_tool_milvus_chunks_retrieved_sum[$__rate_interval])) or vector(0)",
+          "legendFormat": "检索 片段/秒"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "Neo4j 节点 / 关系写入",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
+      "targets": [
+        {
+          "expr": "sum by (operation) (rate(resumai_tool_neo4j_nodes_written_sum[$__rate_interval]))",
+          "legendFormat": "节点 {{operation}}"
+        },
+        {
+          "expr": "sum by (operation) (rate(resumai_tool_neo4j_relationships_written_sum[$__rate_interval]))",
+          "legendFormat": "关系 {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "人工复核率",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "targets": [
+        {
+          "expr": "label_replace(label_replace(label_replace(label_replace(sum(resumai_funnel_recommendation_count_total{recommendation=\"NEED_MANUAL_REVIEW\"}) / clamp_min(sum(resumai_funnel_recommendation_count_total), 1), \"recommendation\", \"需人工复核\", \"recommendation\", \"NEED_MANUAL_REVIEW\"), \"recommendation\", \"推荐\", \"recommendation\", \"RECOMMEND\"), \"recommendation\", \"强烈推荐\", \"recommendation\", \"STRONG_RECOMMEND\"), \"recommendation\", \"拒绝\", \"recommendation\", \"REJECT\") or vector(0)",
+          "legendFormat": "人工复核率"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "暂无样本"
+        }
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "resumai",
+    "capability",
+    "mcp",
+    "vectordb",
+    "graphdb"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "title": "ResumAI 基础设施",
+  "uid": "resumai-capability-infra",
+  "version": 2
+}

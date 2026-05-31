@@ -1,0 +1,321 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "row",
+      "title": "ResumAI 能力 - RAG",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "title": "Milvus 连接状态",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "resumai_system_milvus_connection_alive or vector(0)",
+          "legendFormat": "在线"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "索引成功率",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum(resumai_tool_call_count_total{tool_name=\"milvus_index\",status=\"SUCCESS\"}) / clamp_min(sum(resumai_tool_call_count_total{tool_name=\"milvus_index\"}), 1), \"tool_name\", \"Milvus 检索\", \"tool_name\", \"milvus.search\"), \"tool_name\", \"DeepSeek 对话\", \"tool_name\", \"deepseek-chat\"), \"tool_name\", \"GitHub MCP\", \"tool_name\", \"github\"), \"tool_name\", \"简历解析 Skill\", \"tool_name\", \"ResumeParserSkill\"), \"tool_name\", \"技术栈 Skill\", \"tool_name\", \"TechStackAuditSkill\"), \"tool_name\", \"项目深度 Skill\", \"tool_name\", \"ProjectDepthSkill\"), \"tool_name\", \"风险识别 Skill\", \"tool_name\", \"RiskDetectionSkill\") or vector(0)",
+          "legendFormat": "索引成功"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "检索命中率",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "1 - (sum(resumai_rag_retrieval_empty_results_total) / clamp_min(sum(increase(resumai_rag_search_result_count_count{collection=~\"$collection\"}[1h])), 1)) or vector(0)",
+          "legendFormat": "检索命中率"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "空召回趋势",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(resumai_rag_retrieval_empty_results_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "空召回/秒"
+        },
+        {
+          "expr": "sum(rate(resumai_rag_retrieval_below_threshold_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "低于阈值/秒"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "集合命中数",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "expr": "sum by (collection) (rate(resumai_rag_search_result_count_sum{collection=~\"$collection\"}[$__rate_interval]))",
+          "legendFormat": "{{collection}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    },
+    {
+      "title": "RAGAS 质量",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "targets": [
+        {
+          "expr": "sum(resumai_rag_faithfulness_sum) / clamp_min(sum(resumai_rag_faithfulness_count), 1) or vector(0)",
+          "legendFormat": "忠实度"
+        },
+        {
+          "expr": "sum(resumai_rag_answer_relevancy_sum) / clamp_min(sum(resumai_rag_answer_relevancy_count), 1) or vector(0)",
+          "legendFormat": "回答相关性"
+        },
+        {
+          "expr": "sum(resumai_rag_context_precision_sum) / clamp_min(sum(resumai_rag_context_precision_count), 1) or vector(0)",
+          "legendFormat": "上下文精确率"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "暂无样本"
+        }
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "resumai",
+    "capability",
+    "rag"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        }
+      },
+      {
+        "name": "collection",
+        "label": "向量集合",
+        "type": "custom",
+        "query": "resume_chunk,jd_library",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "text": "全部",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "agent",
+        "label": "Agent 角色",
+        "type": "custom",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "任务编排器 : OrchestratorAgent,简历解析器 : ResumeParserAgent,技术评估 : TechAgent,项目评估 : ProjectAgent,风险识别 : RiskAgent,岗位匹配 : JdMatchAgent,质量校验 : RagasJudgeAgent,报告生成 : FinalReportAgent,大模型评估 : DeepSeekChatModel,混合检索 : HybridRagStrategy,需求分析 : JdAnalysisAgent,历史匹配 : HistoricalRagAgent,外部检索 : ExternalProfileAgent,并发引擎 : DAGEngine",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": "全部",
+          "value": "$__all"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "全部",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "任务编排器",
+            "value": "OrchestratorAgent"
+          },
+          {
+            "selected": false,
+            "text": "简历解析器",
+            "value": "ResumeParserAgent"
+          },
+          {
+            "selected": false,
+            "text": "技术评估",
+            "value": "TechAgent"
+          },
+          {
+            "selected": false,
+            "text": "项目评估",
+            "value": "ProjectAgent"
+          },
+          {
+            "selected": false,
+            "text": "风险识别",
+            "value": "RiskAgent"
+          },
+          {
+            "selected": false,
+            "text": "岗位匹配",
+            "value": "JdMatchAgent"
+          },
+          {
+            "selected": false,
+            "text": "质量校验",
+            "value": "RagasJudgeAgent"
+          },
+          {
+            "selected": false,
+            "text": "报告生成",
+            "value": "FinalReportAgent"
+          },
+          {
+            "selected": false,
+            "text": "大模型评估",
+            "value": "DeepSeekChatModel"
+          },
+          {
+            "selected": false,
+            "text": "混合检索",
+            "value": "HybridRagStrategy"
+          },
+          {
+            "selected": false,
+            "text": "需求分析",
+            "value": "JdAnalysisAgent"
+          },
+          {
+            "selected": false,
+            "text": "历史匹配",
+            "value": "HistoricalRagAgent"
+          },
+          {
+            "selected": false,
+            "text": "外部检索",
+            "value": "ExternalProfileAgent"
+          },
+          {
+            "selected": false,
+            "text": "并发引擎",
+            "value": "DAGEngine"
+          }
+        ]
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "title": "ResumAI RAG 检索",
+  "uid": "resumai-capability-rag",
+  "version": 2
+}

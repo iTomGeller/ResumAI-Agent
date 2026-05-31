@@ -49,11 +49,11 @@ flowchart TB
     end
 
     subgraph Storage ["数据层"]
-        MySQL["MySQL 8.0<br/>任务/反馈持久化"]
-        Redis["Redis 7.2<br/>分布式锁/缓存"]
-        Milvus["Milvus 2.4<br/>向量检索 (RAG)"]
-        Neo4j["Neo4j 5.20<br/>知识图谱"]
-        MinIO["MinIO<br/>简历文件存储"]
+        MySQL["MySQL 8.0<br/>业务事实与列表查询"]
+        Redis["Redis 7.2<br/>RUNNING 运行态/SSE 游标"]
+        Milvus["Milvus 2.4<br/>语义向量检索"]
+        Neo4j["Neo4j 5.20<br/>候选人关系图谱"]
+        MinIO["MinIO<br/>简历/大文本对象存储（可选）"]
     end
 
     subgraph Observability ["可观测性"]
@@ -145,11 +145,11 @@ Grafana 预配置 **6 行 34 面板** Dashboard，开箱即用。
 
 | 服务 | 版本 | 用途 |
 |------|------|------|
-| MySQL | 8.0 | 任务/反馈/JD 持久化 |
-| Redis | 7.2 | 分布式锁、热数据缓存 |
-| Neo4j | 5.20 | 候选人-技能-项目知识图谱 |
-| Milvus | 2.4.4 | 简历 Chunk 向量索引 & ANN 检索 |
-| MinIO | RELEASE.2024-05-10 | S3 兼容的简历文件存储 |
+| MySQL | 8.0 | 任务/JD/反馈/Trace/LLM 元数据与列表分页查询 |
+| Redis | 7.2 | RUNNING 任务运行态缓存、SSE 游标（非长期事实库） |
+| Neo4j | 5.20 | 按 traceId 隔离的候选人-技能-项目-风险子图 |
+| Milvus | 2.4.4 | 简历/JD 语义向量检索（不负责业务列表分页） |
+| MinIO | RELEASE.2024-05-10 | 简历原件与 LLM 大文本冷存储（`OBJECT_STORAGE_ENABLED=true` 时启用；默认本地 volume） |
 | Prometheus | 2.53.0 | 指标采集 |
 | Grafana | 11.1.0 | 指标可视化 |
 
@@ -195,20 +195,40 @@ python scripts/deploy_aliyun.py
 
 ---
 
+## 数据架构与查询边界
+
+| 查询类型 | 存储归属 | 说明 |
+|----------|----------|------|
+| 列表分页（候选人/JD/反馈/LLM） | **MySQL** | `/api/tasks`、`/api/jds`、`/api/feedback`、`/api/llm-invocations` 均返回 `{ items, total, page, pageSize }` |
+| 任务/评估详情 | **MySQL** + 内存/Redis 运行态 | 已完成任务从 `result_payload` 回源；RUNNING 任务优先内存，Redis 作跨实例缓存 |
+| 语义相似检索 | **Milvus** | JD 自动匹配、简历 RAG 证据召回；JD 更新/删除时同步清理向量 |
+| 关系解释图谱 | **Neo4j** | 按 `traceId` 隔离子图；无 Neo4j 数据时 API 返回 `source: SIMULATED` 模拟图 |
+| 实时 Trace 推送 | **SSE** + MySQL 回源 | SSE 推增量；历史 Trace 从 `agent_execution_trace` 表查询 |
+| 大对象（简历/Prompt 全文） | **本地 volume / MinIO** | 默认本地 `./uploads`；启用 `OBJECT_STORAGE_ENABLED` 后写入 MinIO |
+| 性能与容量趋势 | **Prometheus/Grafana** | 仅指标观测，不承担业务明细查询 |
+
+列表页常用字段（评分、推荐结论、匹配岗位等）已从 JSON 快照列化到 `resume_task` 表，便于 SQL 索引与分页。
+
+---
+
 ## API 接口
 
 | Method | Path | 说明 |
 |--------|------|------|
 | `POST` | `/api/tasks/upload` | 上传 PDF 简历并创建评估任务 |
 | `POST` | `/api/tasks` | 通过 JSON 创建评估任务 |
-| `GET` | `/api/tasks` | 任务列表 |
+| `GET` | `/api/tasks?page=&pageSize=&keyword=&status=` | 候选人列表（服务端分页） |
 | `GET` | `/api/tasks/{traceId}` | 任务详情 |
+| `GET` | `/api/jds?page=&pageSize=&keyword=&category=` | JD 列表摘要（不含 description） |
+| `GET` | `/api/jds/{jdId}` | JD 详情（含 description 全文） |
 | `GET` | `/api/metrics` | Dashboard 性能指标 |
 | `GET` | `/api/traces/{traceId}` | Agent 执行 Trace |
 | `GET` | `/sse/traces/{traceId}` | SSE 实时 Trace 推送 |
 | `POST` | `/api/feedback` | 提交 HR 反馈 |
-| `GET` | `/api/feedback` | 反馈列表 |
-| `GET` | `/api/graphs/{traceId}` | GraphRAG 知识子图 |
+| `GET` | `/api/feedback?page=&traceId=&feedbackType=` | 反馈列表（服务端分页） |
+| `GET` | `/api/llm-invocations?page=&traceId=` | LLM 调用列表（服务端分页） |
+| `GET` | `/api/llm-invocations/{id}` | LLM 调用详情（含全文） |
+| `GET` | `/api/graphs/{traceId}` | 知识子图（`source`: `NEO4J` 或 `SIMULATED`） |
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/actuator/prometheus` | Prometheus 指标导出 |
 

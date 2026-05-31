@@ -8,13 +8,23 @@ SET FOREIGN_KEY_CHECKS = 0;
 CREATE TABLE IF NOT EXISTS `resume_task` (
   `id`             BIGINT       NOT NULL PRIMARY KEY COMMENT '任务主键',
   `file_url`       VARCHAR(512) NULL     COMMENT '简历文件地址',
+  `resume_object_key` VARCHAR(512) NULL  COMMENT '简历对象存储 key',
   `job_id`         VARCHAR(64)  NULL     COMMENT '岗位唯一标识',
   `job_category`   VARCHAR(64)  NULL     COMMENT '岗位类别',
   `execution_mode` VARCHAR(32)  NULL     COMMENT '执行模式：SERIAL/DAG_CONCURRENT',
   `status`         VARCHAR(32)  NULL     COMMENT '任务状态',
   `trace_id`       VARCHAR(64)  NOT NULL COMMENT '全局链路追踪 ID',
   `candidate_name` VARCHAR(128) NULL     COMMENT '候选人姓名',
+  `file_name`      VARCHAR(256) NULL     COMMENT '简历文件名',
+  `overall_score`  INT          NULL     COMMENT '综合评分',
+  `recommendation` VARCHAR(32)  NULL     COMMENT '推荐结论',
+  `matched_jd_title` VARCHAR(256) NULL   COMMENT '匹配岗位标题',
+  `jd_match_score` DECIMAL(5,3) NULL     COMMENT 'JD 匹配分',
+  `duration_ms`    BIGINT       NULL     COMMENT '评估耗时毫秒',
+  `token_cost`     INT          NULL     COMMENT 'Token 成本',
+  `summary`        VARCHAR(2000) NULL    COMMENT '评估摘要',
   `fail_reason`    VARCHAR(1024) NULL    COMMENT '失败原因',
+  `result_payload` JSON         NULL     COMMENT '评估结果快照',
   `start_time`     DATETIME     NULL     COMMENT '任务开始时间',
   `end_time`       DATETIME     NULL     COMMENT '任务结束时间',
   `create_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -22,7 +32,8 @@ CREATE TABLE IF NOT EXISTS `resume_task` (
   `deleted`        TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
   UNIQUE KEY `uk_resume_task_trace_id` (`trace_id`),
   KEY `idx_resume_task_status` (`status`),
-  KEY `idx_resume_task_job_category` (`job_category`)
+  KEY `idx_resume_task_job_category` (`job_category`),
+  KEY `idx_resume_task_list` (`create_time`, `status`, `recommendation`, `overall_score`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '简历评估任务';
 
 -- 2. Agent 执行链路
@@ -153,6 +164,37 @@ CREATE TABLE IF NOT EXISTS `jd_library` (
   UNIQUE KEY `uk_jd_library_jd_id` (`jd_id`),
   KEY `idx_jd_library_category` (`category`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'JD 向量库';
+
+-- 9. LLM 完整调用记录
+CREATE TABLE IF NOT EXISTS `llm_invocation` (
+  `id`                 VARCHAR(64)  NOT NULL PRIMARY KEY COMMENT '调用 ID',
+  `trace_id`           VARCHAR(64)  NULL     COMMENT 'Trace ID',
+  `span_id`            VARCHAR(64)  NULL     COMMENT 'Span ID',
+  `model_name`         VARCHAR(64)  NULL     COMMENT '模型名称',
+  `agent_role`         VARCHAR(64)  NULL     COMMENT 'Agent 角色',
+  `purpose`            VARCHAR(64)  NULL     COMMENT '调用目的',
+  `request_started_at` DATETIME     NULL     COMMENT '请求开始时间',
+  `duration_ms`        BIGINT       NULL     COMMENT '耗时毫秒',
+  `input_tokens`       INT          NULL     COMMENT '输入 Token',
+  `output_tokens`      INT          NULL     COMMENT '输出 Token',
+  `finish_reason`      VARCHAR(32)  NULL     COMMENT '结束原因',
+  `truncated`          TINYINT      NULL     DEFAULT 0 COMMENT '是否截断',
+  `prompt_chars`       INT          NULL     COMMENT 'Prompt 字符数',
+  `response_chars`     INT          NULL     COMMENT 'Response 字符数',
+  `prompt_preview`     VARCHAR(2000) NULL    COMMENT 'Prompt 预览',
+  `response_preview`   VARCHAR(2000) NULL    COMMENT 'Response 预览',
+  `prompt_full`        MEDIUMTEXT   NULL     COMMENT '完整 Prompt',
+  `response_full`      MEDIUMTEXT   NULL     COMMENT '完整 Response',
+  `prompt_object_key`  VARCHAR(512) NULL     COMMENT 'Prompt 对象存储 key',
+  `response_object_key` VARCHAR(512) NULL    COMMENT 'Response 对象存储 key',
+  `error_code`         VARCHAR(64)  NULL     COMMENT '错误码',
+  `error_body`         VARCHAR(2000) NULL    COMMENT '错误体',
+  `create_time`        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time`        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted`            TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
+  KEY `idx_llm_trace` (`trace_id`),
+  KEY `idx_llm_agent` (`agent_role`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'LLM 完整调用记录';
 
 -- 默认 Skill Prompt（提供给 Agent 即开即用的模板）
 INSERT INTO `dynamic_skill_prompt` (`id`, `skill_name`, `prompt_template`, `version`, `enabled`, `description`, `created_by`)

@@ -15,6 +15,11 @@ services:
       NEO4J_URI: bolt://neo4j:7687
       MILVUS_HOST: milvus
       MILVUS_PORT: 19530
+      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-false}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-resumai}
       SPRING_PROFILES_ACTIVE: prod
     expose:
       - "8080"
@@ -229,7 +234,9 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set}
-      GF_SERVER_ROOT_URL: http://${PUBLIC_HOST:-localhost}:3000
+      GF_SERVER_ROOT_URL: http://${PUBLIC_HOST:-localhost}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_USERS_DEFAULT_LANGUAGE: zh-Hans
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro

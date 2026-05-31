@@ -2,13 +2,14 @@ package com.resumai.agent.api;
 
 import com.resumai.agent.api.dto.FeedbackRequest;
 import com.resumai.agent.api.dto.FeedbackResponse;
+import com.resumai.agent.api.dto.PageResult;
 import com.resumai.agent.service.MvpEvaluationService;
 import jakarta.validation.Valid;
-import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -41,7 +42,11 @@ public class FeedbackController {
      * @return 反馈列表
      */
     @GetMapping
-    public List<FeedbackResponse> listFeedbacks() {
-        return evaluationService.listFeedbacks();
+    public PageResult<FeedbackResponse> listFeedbacks(
+            @RequestParam(required = false) String traceId,
+            @RequestParam(required = false) String feedbackType,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize) {
+        return evaluationService.queryFeedbacks(traceId, feedbackType, page, pageSize);
     }
 }

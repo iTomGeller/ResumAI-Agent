@@ -49,9 +49,49 @@ public class ResumeTask {
     @TableField("candidate_name")
     private String candidateName;
 
+    /** 简历文件名（列表展示）。 */
+    @TableField("file_name")
+    private String fileName;
+
+    /** 综合评分（列表展示）。 */
+    @TableField("overall_score")
+    private Integer overallScore;
+
+    /** 推荐结论（列表展示）。 */
+    @TableField("recommendation")
+    private String recommendation;
+
+    /** 匹配岗位标题（列表展示）。 */
+    @TableField("matched_jd_title")
+    private String matchedJdTitle;
+
+    /** JD 匹配分（列表展示）。 */
+    @TableField("jd_match_score")
+    private Double jdMatchScore;
+
+    /** 评估耗时毫秒（列表展示）。 */
+    @TableField("duration_ms")
+    private Long durationMs;
+
+    /** Token 成本（列表展示）。 */
+    @TableField("token_cost")
+    private Integer tokenCost;
+
+    /** 评估摘要（列表展示）。 */
+    @TableField("summary")
+    private String summary;
+
+    /** 简历对象存储 key。 */
+    @TableField("resume_object_key")
+    private String resumeObjectKey;
+
     /** 失败原因。 */
     @TableField("fail_reason")
     private String failReason;
+
+    /** 评估结果快照 JSON。 */
+    @TableField("result_payload")
+    private String resultPayload;
 
     /** 任务开始时间。 */
     @TableField("start_time")

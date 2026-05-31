@@ -2,7 +2,11 @@ package com.resumai.agent.api;
 
 import com.resumai.agent.api.dto.CreateTaskRequest;
 import com.resumai.agent.api.dto.DashboardMetricsResponse;
+import com.resumai.agent.api.dto.JdDetailResponse;
 import com.resumai.agent.api.dto.JdMatchResult;
+import com.resumai.agent.api.dto.JdSummaryResponse;
+import com.resumai.agent.api.dto.PageResult;
+import com.resumai.agent.api.dto.TaskListItemResponse;
 import com.resumai.agent.api.dto.TaskResponse;
 import com.resumai.agent.service.JdRagService;
 import com.resumai.agent.service.MvpEvaluationService;
@@ -17,6 +21,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -62,8 +67,19 @@ public class TaskController {
     }
 
     @GetMapping("/tasks")
-    public List<TaskResponse> listTasks() {
-        return evaluationService.listTasks();
+    public PageResult<TaskListItemResponse> listTasks(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false, defaultValue = "ALL") String status,
+            @RequestParam(required = false, defaultValue = "ALL") String recommendation,
+            @RequestParam(required = false, defaultValue = "ALL") String jobCategory,
+            @RequestParam(required = false) Integer scoreMin,
+            @RequestParam(required = false) Integer scoreMax,
+            @RequestParam(required = false, defaultValue = "create_time") String sortBy,
+            @RequestParam(required = false, defaultValue = "desc") String sortOrder,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize) {
+        return evaluationService.queryTasks(keyword, status, recommendation, jobCategory,
+                scoreMin, scoreMax, sortBy, sortOrder, page, pageSize);
     }
 
     @GetMapping("/tasks/{traceId}")
@@ -111,6 +127,27 @@ public class TaskController {
         String description = body.getOrDefault("description", "");
         jdRagService.indexJd(jdId, title, category, description);
         return Map.of("status", "indexed", "jdId", jdId);
+    }
+
+    @GetMapping("/jds")
+    public PageResult<JdSummaryResponse> listJds(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false, defaultValue = "ALL") String category,
+            @RequestParam(required = false, defaultValue = "create_time") String sortBy,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize) {
+        return jdRagService.queryJds(keyword, category, sortBy, page, pageSize);
+    }
+
+    @GetMapping("/jds/{jdId}")
+    public JdDetailResponse getJd(@PathVariable String jdId) {
+        return jdRagService.getJdDetail(jdId);
+    }
+
+    @DeleteMapping("/jds/{jdId}")
+    public Map<String, String> deleteJd(@PathVariable String jdId) {
+        jdRagService.deleteJd(jdId);
+        return Map.of("status", "deleted", "jdId", jdId);
     }
 
     /**

@@ -25,6 +25,9 @@ public record TaskResponse(
         String resumeFileType,
         String matchedJdTitle,
         Double jdMatchScore,
-        List<JdMatchResult> topJdMatches
+        List<JdMatchResult> topJdMatches,
+        String aiRecommendation,
+        String decisionRationale,
+        String riskSummary
 ) {
 }

@@ -1,0 +1,93 @@
+{
+  "presets": [
+    {
+      "id": "fast",
+      "name": "快速筛选",
+      "icon": "⚡",
+      "description": "找出最相关 3 个，速度最快",
+      "tagline": "< 5 秒返回",
+      "options": {
+        "strategy": "lexical",
+        "topK": 3,
+        "scoreThreshold": 0.30,
+        "semanticWeight": 0.7,
+        "keywordWeight": 0.3,
+        "rrfK": 60,
+        "rerankerEnabled": false,
+        "rerankerModel": "none",
+        "chunkSize": 400,
+        "chunkOverlap": 80,
+        "embeddingProvider": "local",
+        "generation": { "temperature": 0.2, "topP": 0.9, "maxTokens": 1200 },
+        "presetName": "fast"
+      }
+    },
+    {
+      "id": "balanced",
+      "name": "平衡推荐",
+      "icon": "⭐",
+      "description": "适合大多数岗位，关键词+语义并用",
+      "tagline": "~10 秒",
+      "default": true,
+      "options": {
+        "strategy": "hybrid",
+        "topK": 5,
+        "scoreThreshold": 0.35,
+        "semanticWeight": 0.7,
+        "keywordWeight": 0.3,
+        "rrfK": 60,
+        "rerankerEnabled": false,
+        "rerankerModel": "none",
+        "chunkSize": 400,
+        "chunkOverlap": 80,
+        "embeddingProvider": "local",
+        "generation": { "temperature": 0.4, "topP": 0.9, "maxTokens": 1200 },
+        "presetName": "balanced"
+      }
+    },
+    {
+      "id": "strict",
+      "name": "严格匹配",
+      "icon": "🎯",
+      "description": "只要高度匹配的，命中率高",
+      "tagline": "启用智能重排序",
+      "options": {
+        "strategy": "hybrid",
+        "topK": 3,
+        "scoreThreshold": 0.55,
+        "semanticWeight": 0.8,
+        "keywordWeight": 0.2,
+        "rrfK": 60,
+        "rerankerEnabled": true,
+        "rerankerModel": "bge-reranker-v2-m3",
+        "chunkSize": 400,
+        "chunkOverlap": 80,
+        "embeddingProvider": "local",
+        "generation": { "temperature": 0.2, "topP": 0.9, "maxTokens": 1200 },
+        "presetName": "strict"
+      }
+    },
+    {
+      "id": "wide",
+      "name": "广撒网",
+      "icon": "🌐",
+      "description": "不漏掉任何可能，召回多待筛选",
+      "tagline": "召回多 待筛选",
+      "options": {
+        "strategy": "hybrid",
+        "topK": 10,
+        "scoreThreshold": 0.20,
+        "semanticWeight": 0.6,
+        "keywordWeight": 0.4,
+        "rrfK": 60,
+        "rerankerEnabled": false,
+        "rerankerModel": "none",
+        "chunkSize": 400,
+        "chunkOverlap": 80,
+        "embeddingProvider": "local",
+        "generation": { "temperature": 0.5, "topP": 0.9, "maxTokens": 1200 },
+        "presetName": "wide"
+      }
+    }
+  ]
+}

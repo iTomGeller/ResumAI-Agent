@@ -22,6 +22,7 @@
         <mybatis-plus.version>3.5.7</mybatis-plus.version>
         <langchain4j.version>1.13.0</langchain4j.version>
         <langchain4j.milvus.version>1.13.0-beta23</langchain4j.milvus.version>
+        <langchain4j.embeddings.version>1.13.0-beta23</langchain4j.embeddings.version>
         <redisson.version>3.32.0</redisson.version>
         <guava.version>33.2.1-jre</guava.version>
         <pdfbox.version>3.0.2</pdfbox.version>
@@ -89,6 +90,11 @@
         </dependency>
         <dependency>
             <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-embeddings-all-minilm-l6-v2</artifactId>
+            <version>${langchain4j.embeddings.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-milvus</artifactId>
             <version>${langchain4j.milvus.version}</version>
         </dependency>
@@ -116,6 +122,12 @@
         </dependency>
 
         <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>2.25.62</version>
+        </dependency>
+
+        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
@@ -139,6 +151,15 @@
                             <artifactId>lombok</artifactId>
                         </exclude>
                     </excludes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>24</source>
+                    <target>24</target>
+                    <compilerArgs>--enable-preview</compilerArgs>
                 </configuration>
             </plugin>
         </plugins>

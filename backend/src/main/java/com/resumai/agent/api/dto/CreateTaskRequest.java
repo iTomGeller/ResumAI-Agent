@@ -1,5 +1,6 @@
 package com.resumai.agent.api.dto;
 
+import com.resumai.agent.rag.RagOptions;
 import jakarta.validation.constraints.NotBlank;
 
 /**
@@ -16,6 +17,11 @@ public record CreateTaskRequest(
         @NotBlank(message = "executionMode 不能为空")
         String executionMode,
         String jobDescription,
-        String resumeText
+        String resumeText,
+        RagOptions ragOptions
 ) {
+    public CreateTaskRequest(String fileName, String jobCategory, String executionMode,
+                             String jobDescription, String resumeText) {
+        this(fileName, jobCategory, executionMode, jobDescription, resumeText, null);
+    }
 }

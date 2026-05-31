@@ -13,12 +13,17 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  * Trace SSE 推送中心。
  *
  * <p>按 TraceId 管理前端连接，并在 Agent 执行阶段将事件实时推送给
- * AgentTerminal。连接断开时会自动清理，避免内存泄漏。</p>
+ * AgentTerminal。SSE 游标写入 Redis，连接断开时会自动清理。</p>
  */
 @Component
 public class SseTraceHub {
 
     private final Map<String, List<SseEmitter>> emitters = new ConcurrentHashMap<>();
+    private final RuntimeStateService runtimeStateService;
+
+    public SseTraceHub(RuntimeStateService runtimeStateService) {
+        this.runtimeStateService = runtimeStateService;
+    }
 
     /**
      * 订阅指定 TraceId 的实时事件。
@@ -41,6 +46,7 @@ public class SseTraceHub {
      * @param event Trace 事件
      */
     public void publish(TraceEventResponse event) {
+        runtimeStateService.saveSseCursor(event.traceId(), event.spanId());
         List<SseEmitter> traceEmitters = emitters.get(event.traceId());
         if (traceEmitters == null || traceEmitters.isEmpty()) {
             return;
