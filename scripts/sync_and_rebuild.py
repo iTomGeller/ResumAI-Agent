@@ -124,6 +124,7 @@ def main() -> None:
             "backend/src/main/java/com/resumai/agent/ai/LocalToolExecutor.java",
             "backend/src/main/java/com/resumai/agent/ai/AgentLoopResult.java",
             "backend/src/main/java/com/resumai/agent/ai/AgentTools.java",
+            "backend/src/main/java/com/resumai/agent/ai/LangfuseAgentListener.java",
         ]
         rm_cmd = " ".join(f'rm -f "{deploy_dir}/{f}"' for f in stale_files)
         run(ssh, rm_cmd, timeout=30, allow_fail=True)
