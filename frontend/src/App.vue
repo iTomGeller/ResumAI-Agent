@@ -183,7 +183,6 @@ const feedbacks = ref<FeedbackResponse[]>([]);
 const activeTraceId = ref('');
 const agentExecutionTree = ref<any>(null);
 const expandedAgentNodes = reactive(new Set<number>([0]));
-const expandedSubAgents = reactive(new Set<string>());
 const feedbackText = ref('');
 const errorMessage = ref('');
 const successMessage = ref('');
@@ -929,11 +928,6 @@ function goBack() {
 function toggleAgentNode(idx: number) {
   if (expandedAgentNodes.has(idx)) expandedAgentNodes.delete(idx);
   else expandedAgentNodes.add(idx);
-}
-
-function toggleSubAgent(key: string) {
-  if (expandedSubAgents.has(key)) expandedSubAgents.delete(key);
-  else expandedSubAgents.add(key);
 }
 
 function getAgentIcon(name: string): string {
@@ -1862,7 +1856,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                       <div v-for="(round, ridx) in (agent.rounds || [])" :key="ridx" class="round-node">
                         <div class="round-header" @click="toggleRound(`${pidx}-${aidx}-${ridx}`)">
                           <span class="round-arrow">{{ expandedRounds.has(`${pidx}-${aidx}-${ridx}`) ? '▼' : '▶' }}</span>
-                          <span class="round-label">Round {{ ridx + 1 }}</span>
+                          <span class="round-label">Round {{ (ridx as number) + 1 }}</span>
                           <span class="round-type" v-if="round.type">{{ round.type }}</span>
                           <span v-if="round.tokens" class="round-tokens">{{ round.tokens }} tokens</span>
                         </div>
