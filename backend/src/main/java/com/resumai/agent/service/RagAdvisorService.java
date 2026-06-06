@@ -20,7 +20,7 @@ public class RagAdvisorService {
 
     public Map<String, Object> suggest() {
         List<TaskListItemResponse> recent = evaluationService.queryTasks(
-                null, "SUCCESS", null, null, null, null, "create_time", "desc", 1, SAMPLE_SIZE
+                null, "SUCCESS", null, null, null, null, null, null, "create_time", "desc", 1, SAMPLE_SIZE
         ).items();
         if (recent.size() < 5) {
             return Map.of("show", false);

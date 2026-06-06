@@ -28,6 +28,7 @@ public record TaskResponse(
         List<JdMatchResult> topJdMatches,
         String aiRecommendation,
         String decisionRationale,
-        String riskSummary
+        String riskSummary,
+        TaskQueueFields queue
 ) {
 }

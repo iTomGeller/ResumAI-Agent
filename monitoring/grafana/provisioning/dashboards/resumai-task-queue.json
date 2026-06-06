@@ -1,0 +1,141 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "row",
+      "title": "任务队列与 Worker",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "title": "队列深度",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "targets": [{ "expr": "resumai_task_queue_depth or vector(0)", "legendFormat": "depth" }],
+      "fieldConfig": { "defaults": { "noValue": "0" } }
+    },
+    {
+      "title": "Pending 消息",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "targets": [{ "expr": "resumai_task_queue_pending or vector(0)", "legendFormat": "pending" }],
+      "fieldConfig": { "defaults": { "noValue": "0" } }
+    },
+    {
+      "title": "最老等待 (秒)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "targets": [{ "expr": "resumai_task_queue_oldest_wait_seconds or vector(0)", "legendFormat": "wait" }],
+      "fieldConfig": { "defaults": { "unit": "s", "noValue": "0" } }
+    },
+    {
+      "title": "活跃 Worker",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "targets": [{ "expr": "resumai_task_worker_active or vector(0)", "legendFormat": "active" }],
+      "fieldConfig": { "defaults": { "noValue": "0" } }
+    },
+    {
+      "title": "Worker 利用率",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "targets": [{ "expr": "resumai_task_worker_utilization or vector(0)", "legendFormat": "util" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "red", "value": 0.9 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "卡住任务数",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "targets": [{ "expr": "resumai_task_stuck_count or vector(0)", "legendFormat": "stuck" }],
+      "fieldConfig": { "defaults": { "noValue": "0" } }
+    },
+    {
+      "title": "队列深度趋势",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "targets": [
+        { "expr": "resumai_task_queue_depth", "legendFormat": "depth" },
+        { "expr": "resumai_task_queue_pending", "legendFormat": "pending" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Worker 活跃与容量",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "targets": [
+        { "expr": "resumai_task_worker_active", "legendFormat": "active" },
+        { "expr": "resumai_task_worker_capacity", "legendFormat": "capacity" },
+        { "expr": "resumai_task_worker_utilization", "legendFormat": "utilization" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
+    },
+    {
+      "title": "入队等待 P95",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(resumai_task_queue_wait_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "wait P95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "执行耗时 P95",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(resumai_task_execution_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "exec P95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "重试与失败速率",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 21 },
+      "targets": [
+        { "expr": "rate(resumai_task_retry_count_total[$__rate_interval])", "legendFormat": "retry {{error_type}}" },
+        { "expr": "rate(resumai_task_fail_count_total[$__rate_interval])", "legendFormat": "fail {{error_type}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["resumai", "task-queue"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "ResumAI 任务队列与 Worker",
+  "uid": "resumai-task-queue",
+  "version": 1
+}

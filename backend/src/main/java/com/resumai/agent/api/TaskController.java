@@ -8,6 +8,7 @@ import com.resumai.agent.api.dto.JdSummaryResponse;
 import com.resumai.agent.api.dto.PageResult;
 import com.resumai.agent.api.dto.TaskListItemResponse;
 import com.resumai.agent.api.dto.TaskResponse;
+import com.resumai.agent.api.dto.UpsertJdRequest;
 import com.resumai.agent.service.JdRagService;
 import com.resumai.agent.service.MvpEvaluationService;
 import jakarta.validation.Valid;
@@ -25,6 +26,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -56,10 +58,6 @@ public class TaskController {
         return evaluationService.createTaskFromUpload(file, jobCategory, executionMode, jobDescription);
     }
 
-    /**
-     * Upload resume with automatic JD matching via RAG.
-     * No pre-selected JD needed -- the system finds the best match.
-     */
     @PostMapping("/tasks/upload-auto")
     public TaskResponse uploadTaskAutoMatch(@RequestParam("file") MultipartFile file,
                                             @RequestParam(value = "executionMode", defaultValue = "DAG_CONCURRENT") String executionMode) {
@@ -72,13 +70,15 @@ public class TaskController {
             @RequestParam(required = false, defaultValue = "ALL") String status,
             @RequestParam(required = false, defaultValue = "ALL") String recommendation,
             @RequestParam(required = false, defaultValue = "ALL") String jobCategory,
+            @RequestParam(required = false, defaultValue = "ALL") String queueStatus,
+            @RequestParam(required = false, defaultValue = "ALL") String uploadedBy,
             @RequestParam(required = false) Integer scoreMin,
             @RequestParam(required = false) Integer scoreMax,
             @RequestParam(required = false, defaultValue = "create_time") String sortBy,
             @RequestParam(required = false, defaultValue = "desc") String sortOrder,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int pageSize) {
-        return evaluationService.queryTasks(keyword, status, recommendation, jobCategory,
+        return evaluationService.queryTasks(keyword, status, recommendation, jobCategory, queueStatus, uploadedBy,
                 scoreMin, scoreMax, sortBy, sortOrder, page, pageSize);
     }
 
@@ -116,9 +116,7 @@ public class TaskController {
         return evaluationService.metrics();
     }
 
-    /**
-     * Index a JD into the vector store for RAG matching.
-     */
+    /** @deprecated 使用 POST /api/jds 或 PUT /api/jds/{jdId} */
     @PostMapping("/jd")
     public Map<String, String> indexJd(@RequestBody Map<String, String> body) {
         String jdId = body.getOrDefault("jdId", "jd-" + System.currentTimeMillis());
@@ -127,6 +125,16 @@ public class TaskController {
         String description = body.getOrDefault("description", "");
         jdRagService.indexJd(jdId, title, category, description);
         return Map.of("status", "indexed", "jdId", jdId);
+    }
+
+    @PostMapping("/jds")
+    public JdDetailResponse createJd(@Valid @RequestBody UpsertJdRequest request) {
+        return jdRagService.createJd(request);
+    }
+
+    @PutMapping("/jds/{jdId}")
+    public JdDetailResponse updateJd(@PathVariable String jdId, @Valid @RequestBody UpsertJdRequest request) {
+        return jdRagService.updateJd(jdId, request);
     }
 
     @GetMapping("/jds")
@@ -150,12 +158,14 @@ public class TaskController {
         return Map.of("status", "deleted", "jdId", jdId);
     }
 
-    /**
-     * Match resume text against indexed JDs, returns top-3.
-     */
     @PostMapping("/jd/match")
     public List<JdMatchResult> matchJds(@RequestBody Map<String, String> body) {
         String resumeText = body.getOrDefault("resumeText", "");
         return jdRagService.matchTopJds(resumeText, 3);
+    }
+
+    @GetMapping("/tasks/{traceId}/agent-execution")
+    public Map<String, Object> getAgentExecution(@PathVariable String traceId) {
+        return evaluationService.getAgentExecutionTree(traceId);
     }
 }

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.resumai.agent.api.dto.PageResult;
 import com.resumai.agent.api.dto.TaskListItemResponse;
+import com.resumai.agent.api.dto.TaskQueueFields;
 import com.resumai.agent.dao.ResumeTaskMapper;
 import com.resumai.agent.domain.entity.ResumeTask;
 import java.util.ArrayList;
@@ -28,6 +29,8 @@ public class TaskQueryService {
             String status,
             String recommendation,
             String jobCategory,
+            String queueStatus,
+            String uploadedBy,
             Integer scoreMin,
             Integer scoreMax,
             String sortBy,
@@ -48,6 +51,12 @@ public class TaskQueryService {
         }
         if (StringUtils.hasText(status) && !"ALL".equalsIgnoreCase(status)) {
             wrapper.eq("status", status.trim().toUpperCase());
+        }
+        if (StringUtils.hasText(queueStatus) && !"ALL".equalsIgnoreCase(queueStatus)) {
+            wrapper.eq("queue_status", queueStatus.trim().toUpperCase());
+        }
+        if (StringUtils.hasText(uploadedBy) && !"ALL".equalsIgnoreCase(uploadedBy)) {
+            wrapper.eq("uploaded_by", uploadedBy.trim());
         }
         if (StringUtils.hasText(recommendation) && !"ALL".equalsIgnoreCase(recommendation)) {
             if ("RECOMMEND".equalsIgnoreCase(recommendation)) {
@@ -87,11 +96,17 @@ public class TaskQueryService {
             case "score_asc" -> "overall_score";
             case "duration_desc", "duration" -> "duration_ms";
             case "duration_asc" -> "duration_ms";
+            case "priority" -> "priority";
+            case "queued_at" -> "queued_at";
             case "create_time" -> "create_time";
             default -> "create_time";
         };
         if ("score_asc".equals(sortBy) || "duration_asc".equals(sortBy) || asc) {
             wrapper.orderByAsc(column).orderByDesc("id");
+        } else if ("priority".equals(sortBy)) {
+            wrapper.orderByDesc("priority").orderByAsc("queued_at").orderByDesc("id");
+        } else if ("queued_at".equals(sortBy)) {
+            wrapper.orderByAsc("queued_at").orderByDesc("id");
         } else {
             wrapper.orderByDesc(column).orderByDesc("id");
         }
@@ -113,7 +128,19 @@ public class TaskQueryService {
                 row.getMatchedJdTitle(),
                 row.getJdMatchScore(),
                 row.getCreateTime(),
-                row.getUpdateTime()
+                row.getUpdateTime(),
+                new TaskQueueFields(
+                        row.getQueueStatus(),
+                        row.getUploadedBy(),
+                        row.getTenantId(),
+                        row.getPriority(),
+                        row.getQueuedAt(),
+                        row.getStartedAt(),
+                        row.getFinishedAt(),
+                        row.getAttemptCount(),
+                        row.getNextRetryAt(),
+                        row.getWorkerId()
+                )
         );
     }
 }

@@ -20,6 +20,7 @@ public record TaskListItemResponse(
         String matchedJdTitle,
         Double jdMatchScore,
         LocalDateTime createTime,
-        LocalDateTime updateTime
+        LocalDateTime updateTime,
+        TaskQueueFields queue
 ) {
 }

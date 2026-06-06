@@ -41,6 +41,46 @@ public class ResumeTask {
     @TableField("status")
     private String status;
 
+    /** 队列调度状态。 */
+    @TableField("queue_status")
+    private String queueStatus;
+
+    /** 上传 HR 标识。 */
+    @TableField("uploaded_by")
+    private String uploadedBy;
+
+    /** 租户标识。 */
+    @TableField("tenant_id")
+    private String tenantId;
+
+    /** 任务优先级，越大越优先。 */
+    @TableField("priority")
+    private Integer priority;
+
+    /** 入队时间。 */
+    @TableField("queued_at")
+    private LocalDateTime queuedAt;
+
+    /** 开始消费时间。 */
+    @TableField("started_at")
+    private LocalDateTime startedAt;
+
+    /** 结束时间。 */
+    @TableField("finished_at")
+    private LocalDateTime finishedAt;
+
+    /** 已重试次数。 */
+    @TableField("attempt_count")
+    private Integer attemptCount;
+
+    /** 下次重试时间。 */
+    @TableField("next_retry_at")
+    private LocalDateTime nextRetryAt;
+
+    /** 消费 worker 标识。 */
+    @TableField("worker_id")
+    private String workerId;
+
     /** 全局链路追踪 ID。 */
     @TableField("trace_id")
     private String traceId;

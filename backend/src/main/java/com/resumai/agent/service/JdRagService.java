@@ -4,13 +4,16 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.resumai.agent.ai.LlmCallResult;
 import com.resumai.agent.ai.DeepSeekClient;
+import com.resumai.agent.api.JdVersionConflictException;
 import com.resumai.agent.api.dto.JdDetailResponse;
 import com.resumai.agent.api.dto.JdMatchResult;
 import com.resumai.agent.api.dto.JdSummaryResponse;
 import com.resumai.agent.api.dto.PageResult;
+import com.resumai.agent.api.dto.UpsertJdRequest;
 import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.dao.JdLibraryMapper;
 import com.resumai.agent.domain.entity.JdLibrary;
+import com.resumai.agent.util.HrContext;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.document.splitter.DocumentSplitters;
@@ -116,57 +119,108 @@ public class JdRagService {
     }
 
     public void indexJd(String jdId, String title, String category, String jdText) {
-        if (!StringUtils.hasText(jdText)) return;
+        upsertJdInternal(jdId, title, category, jdText, null, HrContext.getHrId(), true);
+    }
+
+    public JdDetailResponse createJd(UpsertJdRequest request) {
+        String jdId = StringUtils.hasText(request.jdId()) ? request.jdId() : "jd-" + System.currentTimeMillis();
+        upsertJdInternal(jdId, request.title(), request.category(), request.description(), null, HrContext.getHrId(), true);
+        return getJdDetail(jdId);
+    }
+
+    public JdDetailResponse updateJd(String jdId, UpsertJdRequest request) {
+        if (request.version() == null) {
+            throw new IllegalArgumentException("更新 JD 必须提供 version");
+        }
+        upsertJdInternal(jdId, request.title(), request.category(), request.description(), request.version(), HrContext.getHrId(), false);
+        return getJdDetail(jdId);
+    }
+
+    private void upsertJdInternal(String jdId, String title, String category, String jdText,
+                                  Integer expectedVersion, String updatedBy, boolean allowInsert) {
+        if (!StringUtils.hasText(jdText)) {
+            return;
+        }
+        JdLibrary existing = jdLibraryMapper.selectOne(new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
+        int newVersion;
+        if (existing == null) {
+            if (!allowInsert) {
+                throw new IllegalArgumentException("岗位不存在：" + jdId);
+            }
+            JdLibrary entity = new JdLibrary();
+            entity.setJdId(jdId);
+            entity.setTitle(title);
+            entity.setCategory(category);
+            entity.setDescription(jdText);
+            entity.setVersion(1);
+            entity.setUpdatedBy(updatedBy);
+            entity.setTenantId("default");
+            entity.setCreateTime(LocalDateTime.now());
+            entity.setUpdateTime(LocalDateTime.now());
+            entity.setDeleted(0);
+            jdLibraryMapper.insert(entity);
+            newVersion = 1;
+        } else {
+            if (expectedVersion != null && (existing.getVersion() == null || !expectedVersion.equals(existing.getVersion()))) {
+                throw new JdVersionConflictException(toDetail(existing));
+            }
+            int currentVersion = existing.getVersion() != null ? existing.getVersion() : 1;
+            newVersion = expectedVersion != null ? currentVersion + 1 : currentVersion;
+            com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<JdLibrary> updateWrapper =
+                    new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<JdLibrary>()
+                            .eq(JdLibrary::getJdId, jdId)
+                            .set(JdLibrary::getTitle, title)
+                            .set(JdLibrary::getCategory, category)
+                            .set(JdLibrary::getDescription, jdText)
+                            .set(JdLibrary::getUpdatedBy, updatedBy)
+                            .set(JdLibrary::getUpdateTime, LocalDateTime.now());
+            if (expectedVersion != null) {
+                updateWrapper.eq(JdLibrary::getVersion, expectedVersion)
+                        .set(JdLibrary::getVersion, newVersion);
+            }
+            int updated = jdLibraryMapper.update(null, updateWrapper);
+            if (expectedVersion != null && updated == 0) {
+                JdLibrary latest = jdLibraryMapper.selectOne(new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
+                throw new JdVersionConflictException(toDetail(latest));
+            }
+            if (expectedVersion == null) {
+                newVersion = currentVersion;
+            }
+        }
+        jdMetaCache.put(jdId, new JdMeta(jdId, title, category));
+        reindexVectors(jdId, title, category, jdText, newVersion);
+    }
+
+    private void reindexVectors(String jdId, String title, String category, String jdText, int jdVersion) {
         try {
-            jdMetaCache.put(jdId, new JdMeta(jdId, title, category));
-
-            persistJdToDb(jdId, title, category, jdText);
-
             if (!embeddingAvailability.isOperational()) {
                 log.info("JD '{}' persisted to DB; Milvus index skipped ({})", title, embeddingAvailability.disabledReason());
                 return;
             }
-
             vectorMaintenanceService.deleteJdVectors(jdId);
-
             String fullText = "岗位: " + title + "\n类别: " + category + "\n" + jdText;
-            Document doc = Document.from(fullText, Metadata.from(Map.of("jdId", jdId, "title", title, "category", category)));
+            Document doc = Document.from(fullText, Metadata.from(Map.of(
+                    "jdId", jdId,
+                    "title", title,
+                    "category", category,
+                    "jdVersion", String.valueOf(jdVersion)
+            )));
             var splitter = DocumentSplitters.recursive(400, 80);
             List<TextSegment> segments = splitter.split(doc);
-
             List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
             jdEmbeddingStore.addAll(embeddings, segments);
-            log.info("Indexed JD '{}' ({} chunks) into jd_library", title, segments.size());
+            log.info("Indexed JD '{}' v{} ({} chunks)", title, jdVersion, segments.size());
         } catch (Exception e) {
             log.warn("Failed to index JD '{}': {}", title, e.getMessage());
         }
     }
 
-    private void persistJdToDb(String jdId, String title, String category, String description) {
-        try {
-            Long existing = jdLibraryMapper.selectCount(
-                    new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
-            if (existing != null && existing > 0) {
-                JdLibrary update = new JdLibrary();
-                update.setTitle(title);
-                update.setCategory(category);
-                update.setDescription(description);
-                update.setUpdateTime(LocalDateTime.now());
-                jdLibraryMapper.update(update, new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
-            } else {
-                JdLibrary entity = new JdLibrary();
-                entity.setJdId(jdId);
-                entity.setTitle(title);
-                entity.setCategory(category);
-                entity.setDescription(description);
-                entity.setCreateTime(LocalDateTime.now());
-                entity.setUpdateTime(LocalDateTime.now());
-                entity.setDeleted(0);
-                jdLibraryMapper.insert(entity);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to persist JD '{}' to MySQL: {}", jdId, e.getMessage());
-        }
+    private JdDetailResponse toDetail(JdLibrary row) {
+        return new JdDetailResponse(
+                row.getJdId(), row.getTitle(), row.getCategory(), row.getDescription(),
+                row.getVersion(), row.getUpdatedBy(), row.getTenantId(),
+                row.getCreateTime(), row.getUpdateTime()
+        );
     }
 
     public List<JdMatchResult> matchTopJds(String resumeText, int topK) {
@@ -215,6 +269,20 @@ public class JdRagService {
                 String title = seg.metadata().getString("title");
                 String category = seg.metadata().getString("category");
                 if (jdId == null) continue;
+                JdLibrary row = jdLibraryMapper.selectOne(new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
+                if (row != null && row.getVersion() != null) {
+                    String versionText = seg.metadata().getString("jdVersion");
+                    if (StringUtils.hasText(versionText)) {
+                        try {
+                            int segVersion = Integer.parseInt(versionText);
+                            if (segVersion < row.getVersion()) {
+                                continue;
+                            }
+                        } catch (NumberFormatException ignored) {
+                            // keep legacy vectors without version metadata
+                        }
+                    }
+                }
                 if (!deduped.containsKey(jdId)) {
                     deduped.put(jdId, enrichMatchResult(jdId, title, category, match.score(), resumeText));
                 }
@@ -556,6 +624,7 @@ public class JdRagService {
             throw new IllegalArgumentException("岗位不存在：" + jdId);
         }
         return new JdDetailResponse(row.getJdId(), row.getTitle(), row.getCategory(), row.getDescription(),
+                row.getVersion(), row.getUpdatedBy(), row.getTenantId(),
                 row.getCreateTime(), row.getUpdateTime());
     }
 

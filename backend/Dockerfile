@@ -14,5 +14,7 @@ RUN sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g; s|ht
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /workspace/target/*.jar /app/resumai-agent-backend.jar
+COPY skills/ /app/skills/
+COPY src/main/resources/mcp-servers.json /app/mcp-servers.json
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "/app/resumai-agent-backend.jar"]

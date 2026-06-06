@@ -595,6 +595,81 @@ public class AgentMetrics {
                 .register(registry);
     }
 
+    public void registerTaskWorkerActiveGauge(IntSupplier activeSupplier) {
+        Gauge.builder("resumai.task.worker.active", activeSupplier, IntSupplier::getAsInt)
+                .description("当前活跃 worker 数")
+                .register(registry);
+    }
+
+    public void registerTaskWorkerCapacityGauge(IntSupplier capacitySupplier) {
+        Gauge.builder("resumai.task.worker.capacity", capacitySupplier, IntSupplier::getAsInt)
+                .description("worker 最大并发")
+                .register(registry);
+    }
+
+    public void registerTaskWorkerUtilizationGauge(IntSupplier activeSupplier, IntSupplier capacitySupplier) {
+        Gauge.builder("resumai.task.worker.utilization", () -> {
+                    int capacity = Math.max(1, capacitySupplier.getAsInt());
+                    return (double) activeSupplier.getAsInt() / capacity;
+                })
+                .description("worker 利用率")
+                .register(registry);
+    }
+
+    public void registerTaskQueueDepthGauge(IntSupplier depthSupplier) {
+        Gauge.builder("resumai.task.queue.depth", depthSupplier, IntSupplier::getAsInt)
+                .description("Redis Stream 队列深度")
+                .register(registry);
+    }
+
+    public void registerTaskQueuePendingGauge(IntSupplier pendingSupplier) {
+        Gauge.builder("resumai.task.queue.pending", pendingSupplier, IntSupplier::getAsInt)
+                .description("Redis Stream pending 消息数")
+                .register(registry);
+    }
+
+    public void registerTaskQueueOldestWaitGauge(java.util.function.DoubleSupplier secondsSupplier) {
+        Gauge.builder("resumai.task.queue.oldest_wait_seconds", secondsSupplier, java.util.function.DoubleSupplier::getAsDouble)
+                .description("最老排队任务等待秒数")
+                .register(registry);
+    }
+
+    public void recordTaskQueueWaitDuration(long durationMs) {
+        Timer.builder("resumai.task.queue.wait.duration")
+                .description("任务入队到开始执行等待耗时")
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+    }
+
+    public void recordTaskExecutionDuration(long durationMs) {
+        Timer.builder("resumai.task.execution.duration")
+                .description("任务评估执行耗时")
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+    }
+
+    public void recordTaskRetry() {
+        Counter.builder("resumai.task.retry.count")
+                .description("任务重试次数")
+                .register(registry)
+                .increment();
+    }
+
+    public void recordTaskFail(String errorType) {
+        Counter.builder("resumai.task.fail.count")
+                .description("任务失败次数")
+                .tag("error_type", safeTag(errorType))
+                .register(registry)
+                .increment();
+    }
+
+    public void recordTaskStuck(int count) {
+        Counter.builder("resumai.task.stuck.count")
+                .description("超时卡住任务回收次数")
+                .register(registry)
+                .increment(count);
+    }
+
     private double tokenEfficiencyRatio() {
         long input = totalLlmInputTokens.get();
         if (input == 0) {

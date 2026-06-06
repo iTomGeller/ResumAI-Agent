@@ -78,6 +78,12 @@ flowchart TB
 
 ---
 
+## 前端实现与异步链路（详细说明）
+
+- **[前端技术亮点、大盘 KPI 更新、分页、Markdown/XSS、简历上传异步链路](docs/FRONTEND_TECH_AND_ASYNC_PIPELINE.md)** — 面向答辩 / 复盘的分点说明与代码索引
+
+---
+
 ## 多 Agent 编排设计
 
 | Agent | 职责 | 核心能力 |

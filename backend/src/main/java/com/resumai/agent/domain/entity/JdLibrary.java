@@ -13,6 +13,9 @@ public class JdLibrary {
     private String title;
     private String category;
     private String description;
+    private Integer version;
+    private String updatedBy;
+    private String tenantId;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 
@@ -29,6 +32,12 @@ public class JdLibrary {
     public void setCategory(String category) { this.category = category; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
+    public Integer getVersion() { return version; }
+    public void setVersion(Integer version) { this.version = version; }
+    public String getUpdatedBy() { return updatedBy; }
+    public void setUpdatedBy(String updatedBy) { this.updatedBy = updatedBy; }
+    public String getTenantId() { return tenantId; }
+    public void setTenantId(String tenantId) { this.tenantId = tenantId; }
     public LocalDateTime getCreateTime() { return createTime; }
     public void setCreateTime(LocalDateTime createTime) { this.createTime = createTime; }
     public LocalDateTime getUpdateTime() { return updateTime; }

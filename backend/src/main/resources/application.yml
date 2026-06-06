@@ -60,7 +60,7 @@ resumai:
     api-url: ${DEEPSEEK_API_URL:https://api.deepseek.com/chat/completions}
     model: ${DEEPSEEK_MODEL:deepseek-chat}
     connect-timeout-ms: ${DEEPSEEK_CONNECT_TIMEOUT_MS:10000}
-    read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:60000}
+    read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:120000}
   neo4j:
     uri: ${NEO4J_URI:bolt://neo4j:7687}
     username: ${NEO4J_USERNAME:neo4j}
@@ -70,7 +70,7 @@ resumai:
     port: ${MILVUS_PORT:19530}
     collection: ${MILVUS_COLLECTION:resume_chunk}
     jd-collection: ${MILVUS_JD_COLLECTION:jd_library}
-    dimension: ${MILVUS_DIMENSION:1024}
+    dimension: ${MILVUS_DIMENSION:0}
   embedding:
     provider: ${EMBEDDING_PROVIDER:local}
     enabled: ${EMBEDDING_ENABLED:true}
@@ -81,6 +81,11 @@ resumai:
   trace:
     langsmith-api-key: ${LANGSMITH_API_KEY:}
     otel-exporter-otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
+
+langfuse:
+  otel-endpoint: ${LANGFUSE_OTEL_ENDPOINT:}
+  public-key: ${LANGFUSE_PUBLIC_KEY:}
+  secret-key: ${LANGFUSE_SECRET_KEY:}
   mysql:
     observability:
       enabled: true
@@ -101,3 +106,20 @@ resumai:
     secret-key: ${MINIO_ROOT_PASSWORD:}
     bucket: ${MINIO_BUCKET:resumai}
     region: us-east-1
+  task-queue:
+    enabled: ${TASK_QUEUE_ENABLED:true}
+    stream-key: resumai:task_queue
+    consumer-group: resume-workers
+    worker-id: ${TASK_WORKER_ID:worker-1}
+    max-workers: ${TASK_QUEUE_MAX_WORKERS:6}
+    poll-interval-ms: ${TASK_QUEUE_POLL_MS:500}
+    running-timeout-minutes: ${TASK_QUEUE_RUNNING_TIMEOUT_MIN:30}
+    max-attempts: ${TASK_QUEUE_MAX_ATTEMPTS:3}
+    retry-backoff-seconds: ${TASK_QUEUE_RETRY_BACKOFF_SEC:60}
+
+app:
+  mcp:
+    config-path: ${MCP_CONFIG_PATH:mcp-servers.json}
+    builtin-url: ${MCP_BUILTIN_URL:http://127.0.0.1:8080/mcp}
+  skills:
+    path: ${SKILLS_PATH:src/main/resources/skills}

@@ -1,11 +1,14 @@
 package com.resumai.agent.config;
 
+import com.resumai.agent.ai.TracingChatModelListener;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.listener.ChatModelListener;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.embedding.onnx.allminilml6v2.AllMiniLmL6V2EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import java.time.Duration;
+import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -16,15 +19,16 @@ import org.springframework.util.StringUtils;
 public class LangChain4jConfig {
 
     @Bean
-    public ChatModel chatModel(DeepSeekProperties props) {
+    public ChatModel chatModel(DeepSeekProperties props, TracingChatModelListener tracingListener) {
         return OpenAiChatModel.builder()
                 .baseUrl("https://api.deepseek.com/v1")
                 .apiKey(props.getApiKey() != null ? props.getApiKey() : "sk-placeholder")
                 .modelName(props.getModel())
                 .timeout(Duration.ofMillis(props.getReadTimeoutMs()))
                 .temperature(0.2)
-                .maxTokens(1200)
+                .maxTokens(8192)
                 .maxRetries(3)
+                .listeners(List.of(tracingListener))
                 .build();
     }
 

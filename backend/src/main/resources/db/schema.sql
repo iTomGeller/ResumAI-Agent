@@ -13,8 +13,18 @@ CREATE TABLE IF NOT EXISTS `resume_task` (
   `job_category`   VARCHAR(64)  NULL     COMMENT '岗位类别',
   `execution_mode` VARCHAR(32)  NULL     COMMENT '执行模式：SERIAL/DAG_CONCURRENT',
   `status`         VARCHAR(32)  NULL     COMMENT '任务状态',
+  `queue_status`   VARCHAR(32)  NULL     DEFAULT 'QUEUED' COMMENT '队列状态',
   `trace_id`       VARCHAR(64)  NOT NULL COMMENT '全局链路追踪 ID',
   `candidate_name` VARCHAR(128) NULL     COMMENT '候选人姓名',
+  `uploaded_by`    VARCHAR(128) NULL     COMMENT '上传 HR 标识',
+  `tenant_id`      VARCHAR(64)  NULL     DEFAULT 'default' COMMENT '租户标识',
+  `priority`       INT          NOT NULL DEFAULT 0 COMMENT '任务优先级',
+  `queued_at`      DATETIME     NULL     COMMENT '入队时间',
+  `started_at`     DATETIME     NULL     COMMENT '开始消费时间',
+  `finished_at`    DATETIME     NULL     COMMENT '结束时间',
+  `attempt_count`  INT          NOT NULL DEFAULT 0 COMMENT '已重试次数',
+  `next_retry_at`  DATETIME     NULL     COMMENT '下次重试时间',
+  `worker_id`      VARCHAR(128) NULL     COMMENT '消费 worker 标识',
   `file_name`      VARCHAR(256) NULL     COMMENT '简历文件名',
   `overall_score`  INT          NULL     COMMENT '综合评分',
   `recommendation` VARCHAR(32)  NULL     COMMENT '推荐结论',
@@ -33,7 +43,9 @@ CREATE TABLE IF NOT EXISTS `resume_task` (
   UNIQUE KEY `uk_resume_task_trace_id` (`trace_id`),
   KEY `idx_resume_task_status` (`status`),
   KEY `idx_resume_task_job_category` (`job_category`),
-  KEY `idx_resume_task_list` (`create_time`, `status`, `recommendation`, `overall_score`)
+  KEY `idx_resume_task_list` (`create_time`, `status`, `recommendation`, `overall_score`),
+  KEY `idx_resume_task_queue` (`queue_status`, `priority`, `queued_at`),
+  KEY `idx_resume_task_uploaded_by` (`uploaded_by`, `create_time`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '简历评估任务';
 
 -- 2. Agent 执行链路
@@ -158,6 +170,9 @@ CREATE TABLE IF NOT EXISTS `jd_library` (
   `title`       VARCHAR(256) NOT NULL COMMENT '岗位标题',
   `category`    VARCHAR(64)  NULL     COMMENT '岗位类别',
   `description` TEXT         NULL     COMMENT '岗位描述全文',
+  `version`     INT          NOT NULL DEFAULT 1 COMMENT '乐观锁版本',
+  `updated_by`  VARCHAR(128) NULL     COMMENT '最后修改 HR',
+  `tenant_id`   VARCHAR(64)  NULL     DEFAULT 'default' COMMENT '租户标识',
   `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `deleted`     TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',

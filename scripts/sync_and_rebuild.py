@@ -81,7 +81,7 @@ def main() -> None:
             if not path.is_file():
                 continue
             rel = path.relative_to(root).as_posix()
-            if rel.startswith(("backend/src/", "backend/pom.xml", "frontend/src/", "frontend/nginx.conf", "monitoring/grafana/", "docker-compose.prod.yml")):
+            if rel.startswith(("backend/src/", "backend/pom.xml", "backend/skills/", "frontend/src/", "frontend/nginx.conf", "monitoring/grafana/", "docker-compose.prod.yml")) or rel == "docker-compose.langfuse.yml":
                 uploads.append(path)
         for local in uploads:
             remote = f"{deploy_dir}/{local.relative_to(root).as_posix()}"
@@ -119,12 +119,24 @@ def main() -> None:
         sftp.close()
         print(f"\n[sync] uploaded {uploaded} files")
 
+        stale_files = [
+            "backend/src/main/java/com/resumai/agent/ai/CompositeToolProvider.java",
+            "backend/src/main/java/com/resumai/agent/ai/LocalToolExecutor.java",
+            "backend/src/main/java/com/resumai/agent/ai/AgentLoopResult.java",
+            "backend/src/main/java/com/resumai/agent/ai/AgentTools.java",
+        ]
+        rm_cmd = " ".join(f'rm -f "{deploy_dir}/{f}"' for f in stale_files)
+        run(ssh, rm_cmd, timeout=30, allow_fail=True)
+        print(f"[cleanup] removed {len(stale_files)} stale files")
+
         merge_env_keys = [
             "DEEPSEEK_API_KEY", "DEEPSEEK_API_URL", "DEEPSEEK_MODEL",
             "EMBEDDING_PROVIDER", "EMBEDDING_ENABLED", "EMBEDDING_API_KEY",
             "EMBEDDING_BASE_URL", "EMBEDDING_MODEL",
             "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "REDIS_PASSWORD",
             "NEO4J_AUTH", "MINIO_ROOT_PASSWORD", "GRAFANA_PASSWORD",
+            "MILVUS_DIMENSION",
+            "LANGFUSE_OTEL_ENDPOINT", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
         ]
         merge_lines = []
         for key in merge_env_keys:
@@ -160,6 +172,36 @@ def main() -> None:
             f"ai-resume-backend ai-resume-frontend grafana prometheus 2>&1",
             timeout=600,
         )
+
+        langfuse_compose = root / "docker-compose.langfuse.yml"
+        if langfuse_compose.exists():
+            run(
+                ssh,
+                f"cd {deploy_dir} && docker compose -f docker-compose.langfuse.yml up -d 2>&1",
+                timeout=600,
+                allow_fail=True,
+            )
+            print("[langfuse] started langfuse stack")
+
+        local_migration_v4 = root / "backend/src/main/resources/db/migration-v4.sql"
+        if local_migration_v4.exists():
+            remote_v4 = f"{deploy_dir}/backend/src/main/resources/db/migration-v4.sql"
+            env_text = run(ssh, f"grep -E '^MYSQL_(ROOT_PASSWORD|DATABASE)=' {deploy_dir}/.env || true", timeout=30)
+            mysql_root = env.get("MYSQL_ROOT_PASSWORD", "ResumaiRoot!2026")
+            mysql_db = env.get("MYSQL_DATABASE", "resumai_agent")
+            for line in env_text.splitlines():
+                if line.startswith("MYSQL_ROOT_PASSWORD="):
+                    mysql_root = line.split("=", 1)[1].strip()
+                elif line.startswith("MYSQL_DATABASE="):
+                    mysql_db = line.split("=", 1)[1].strip()
+            run(
+                ssh,
+                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} < {remote_v4}",
+                timeout=120,
+            )
+            print("[migration] applied migration-v4.sql")
+            run(ssh, "docker restart ai-resume-backend", timeout=120)
+            print("[migration] restarted ai-resume-backend after migration-v4")
 
         backend_health = ""
         for attempt in range(1, 31):

@@ -1,5 +1,6 @@
 package com.resumai.agent.service;
 
+import com.resumai.agent.config.EmbeddingProperties;
 import com.resumai.agent.config.MilvusProperties;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.grpc.MutationResult;
@@ -20,11 +21,15 @@ public class MilvusVectorMaintenanceService {
     private static final Logger log = LoggerFactory.getLogger(MilvusVectorMaintenanceService.class);
 
     private final MilvusProperties milvusProperties;
-    private volatile MilvusServiceClient client;
+    private final EmbeddingProperties embeddingProperties;
 
-    public MilvusVectorMaintenanceService(MilvusProperties milvusProperties) {
+    public MilvusVectorMaintenanceService(MilvusProperties milvusProperties,
+                                          EmbeddingProperties embeddingProperties) {
         this.milvusProperties = milvusProperties;
+        this.embeddingProperties = embeddingProperties;
     }
+
+    private volatile MilvusServiceClient client;
 
     public void deleteJdVectors(String jdId) {
         if (!StringUtils.hasText(jdId)) {
@@ -57,11 +62,19 @@ public class MilvusVectorMaintenanceService {
     }
 
     private String resumeCollection() {
-        return milvusProperties.getCollection() != null ? milvusProperties.getCollection() : "resume_chunk";
+        String collection = milvusProperties.getCollection();
+        if (collection == null || collection.isBlank() || "resume_chunk".equals(collection)) {
+            return "resume_chunk_" + embeddingProperties.resolveJdCollectionSuffix();
+        }
+        return collection;
     }
 
     private String jdCollection() {
-        return milvusProperties.getJdCollection() != null ? milvusProperties.getJdCollection() : "jd_library";
+        String jdCollection = milvusProperties.getJdCollection();
+        if (jdCollection == null || jdCollection.isBlank() || "jd_library".equals(jdCollection)) {
+            return "jd_library_" + embeddingProperties.resolveJdCollectionSuffix();
+        }
+        return jdCollection;
     }
 
     private MilvusServiceClient client() {

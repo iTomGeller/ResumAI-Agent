@@ -1,4 +1,4 @@
-"""Wait for ECS health, apply migration-v2.sql, and run read-only acceptance checks."""
+"""Wait for ECS health, apply migration-v2/v3/v4.sql, and run read-only acceptance checks."""
 from __future__ import annotations
 
 import json
@@ -29,6 +29,8 @@ PROMQL_SMOKE = (
     ("resumai_llm_duration_seconds_count", "LLM 调用次数"),
     ("resumai_mysql_query_duration_seconds_count", "MySQL SQL 查询次数"),
     ("resumai_mysql_table_total_bytes", "MySQL 表总容量"),
+    ("resumai_task_queue_depth", "任务队列深度"),
+    ("resumai_task_worker_active", "活跃 Worker 数"),
 )
 
 MYSQL_PROMQL_SMOKE = (
@@ -46,6 +48,7 @@ DASHBOARD_UIDS = (
     "resumai-capability-infra",
     "resumai-capability-toolcalls",
     "resumai-mysql-observability",
+    "resumai-task-queue",
 )
 
 VAR_SUBSTITUTIONS = {
@@ -675,12 +678,16 @@ def main() -> None:
     try:
         local_migration_v2 = Path(__file__).resolve().parents[1] / "backend/src/main/resources/db/migration-v2.sql"
         local_migration_v3 = Path(__file__).resolve().parents[1] / "backend/src/main/resources/db/migration-v3.sql"
+        local_migration_v4 = Path(__file__).resolve().parents[1] / "backend/src/main/resources/db/migration-v4.sql"
         remote_migration_v2 = f"{deploy_dir}/backend/src/main/resources/db/migration-v2.sql"
         remote_migration_v3 = f"{deploy_dir}/backend/src/main/resources/db/migration-v3.sql"
+        remote_migration_v4 = f"{deploy_dir}/backend/src/main/resources/db/migration-v4.sql"
         sftp = ssh.open_sftp()
         sftp.put(str(local_migration_v2), remote_migration_v2)
         if local_migration_v3.exists():
             sftp.put(str(local_migration_v3), remote_migration_v3)
+        if local_migration_v4.exists():
+            sftp.put(str(local_migration_v4), remote_migration_v4)
         sftp.close()
 
         env_text = run(ssh, f"grep -E '^MYSQL_(ROOT_PASSWORD|DATABASE)=' {deploy_dir}/.env || true", timeout=30)
@@ -703,6 +710,13 @@ def main() -> None:
                 ssh,
                 f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} "
                 f"< {remote_migration_v3}",
+                timeout=60,
+            )
+        if local_migration_v4.exists():
+            run(
+                ssh,
+                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} "
+                f"< {remote_migration_v4}",
                 timeout=60,
             )
 
@@ -786,6 +800,26 @@ def main() -> None:
         payload_lines = [line.strip() for line in payload_col_raw.splitlines() if line.strip().isdigit()]
         check("resume_task.result_payload column", payload_lines and payload_lines[-1] == "1")
 
+        queue_col_raw = run(
+            ssh,
+            f"docker exec resumai-mysql mysql -uroot -p'{mysql_root}' -N -s -e "
+            f"\"SELECT COUNT(*) FROM information_schema.columns "
+            f"WHERE table_schema='{mysql_db}' AND table_name='resume_task' AND column_name='queue_status'\" 2>/dev/null",
+            timeout=30,
+        )
+        queue_lines = [line.strip() for line in queue_col_raw.splitlines() if line.strip().isdigit()]
+        check("resume_task.queue_status column", queue_lines and queue_lines[-1] == "1")
+
+        jd_version_raw = run(
+            ssh,
+            f"docker exec resumai-mysql mysql -uroot -p'{mysql_root}' -N -s -e "
+            f"\"SELECT COUNT(*) FROM information_schema.columns "
+            f"WHERE table_schema='{mysql_db}' AND table_name='jd_library' AND column_name='version'\" 2>/dev/null",
+            timeout=30,
+        )
+        jd_version_lines = [line.strip() for line in jd_version_raw.splitlines() if line.strip().isdigit()]
+        check("jd_library.version column", jd_version_lines and jd_version_lines[-1] == "1")
+
         log_scan = run(
             ssh,
             f"docker logs ai-resume-backend --since {started_at} 2>&1 | "
@@ -803,6 +837,13 @@ def main() -> None:
             sample = tasks[0]
             for field in ("traceId", "status", "recommendation"):
                 check(f"/api/tasks field {field}", field in sample)
+            check("/api/tasks queue field", "queue" in sample, f"keys={list(sample.keys())[:10]}")
+
+        queue_status_raw = run(ssh, "curl -fsS http://127.0.0.1/api/task-queue/status", timeout=30)
+        queue_status = json.loads(queue_status_raw) if queue_status_raw.strip().startswith("{") else {}
+        check("/api/task-queue/status reachable", isinstance(queue_status, dict))
+        for field in ("queued", "running", "retrying", "stuck", "activeWorkers", "workerCapacity"):
+            check(f"/api/task-queue/status field {field}", field in queue_status)
 
         jds_raw = run(ssh, "curl -fsS 'http://127.0.0.1/api/jds?page=1&pageSize=5'", timeout=30)
         jds_payload = json.loads(jds_raw) if jds_raw.strip().startswith("{") else {}

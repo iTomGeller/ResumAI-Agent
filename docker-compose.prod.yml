@@ -21,6 +21,9 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-resumai}
       SPRING_PROFILES_ACTIVE: prod
+      LANGFUSE_OTEL_ENDPOINT: http://langfuse-web:3000/api/public/otel/v1/traces
+      LANGFUSE_PUBLIC_KEY: lf_pk_resumai
+      LANGFUSE_SECRET_KEY: lf_sk_resumai
     expose:
       - "8080"
     volumes:
