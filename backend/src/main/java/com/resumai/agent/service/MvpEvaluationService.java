@@ -761,7 +761,7 @@ public class MvpEvaluationService {
         round1.put("type", "generation");
         round1.put("input", t.getInputSummary());
         round1.put("output", t.getOutputSummary());
-        round1.put("tokens", t.getTokenCost() != null ? t.getTokenCost() : 0);
+        round1.put("tokens", t.getCostTokens() != null ? t.getCostTokens() : 0);
 
         List<Map<String, Object>> toolCalls = new ArrayList<>();
         if (t.getToolCall() != null && !t.getToolCall().isEmpty()) {

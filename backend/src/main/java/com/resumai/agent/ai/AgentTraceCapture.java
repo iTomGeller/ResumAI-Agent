@@ -50,7 +50,7 @@ public class AgentTraceCapture {
                 .setAttribute("langfuse.observation.name", agentName)
                 .setAttribute(AttributeKey.stringKey("agent.name"), agentName)
                 .setAttribute(AttributeKey.stringKey("agent.description"), description)
-                .setAttribute(AttributeKey.longKey("agent.phase"), phase)
+                .setAttribute(AttributeKey.longKey("agent.phase"), (long) phase)
                 .startSpan();
 
         session.pushSpan(agentName, agentSpan);

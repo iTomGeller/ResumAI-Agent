@@ -2,7 +2,6 @@ package com.resumai.agent.ai;
 
 import dev.langchain4j.model.chat.listener.*;
 import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
@@ -16,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Listens to every ChatModel request/response and creates OTel spans → Langfuse generations.
+ * Listens to every ChatModel request/response and creates OTel spans -> Langfuse generations.
  * Captures multi-turn tool calling rounds so each LLM invocation is individually traced.
  */
 @Component
@@ -34,19 +33,18 @@ public class TracingChatModelListener implements ChatModelListener {
     @Override
     public void onRequest(ChatModelRequestContext context) {
         int round = roundCounter.incrementAndGet();
-        String modelName = "deepseek-chat";
 
-        int messageCount = context.chatRequest().messages() != null
-                ? context.chatRequest().messages().size() : 0;
+        long messageCount = context.chatRequest().messages() != null
+                ? (long) context.chatRequest().messages().size() : 0L;
 
         Span span = tracer.spanBuilder("llm.chat.round-" + round)
                 .setParent(Context.current())
                 .setAttribute("langfuse.observation.type", "generation")
                 .setAttribute("langfuse.observation.name", "DeepSeek Chat Round " + round)
-                .setAttribute(AttributeKey.stringKey("gen_ai.system"), "deepseek")
-                .setAttribute(AttributeKey.stringKey("gen_ai.request.model"), modelName)
-                .setAttribute(AttributeKey.longKey("gen_ai.request.message_count"), messageCount)
-                .setAttribute(AttributeKey.longKey("llm.round"), round)
+                .setAttribute("gen_ai.system", "deepseek")
+                .setAttribute("gen_ai.request.model", "deepseek-chat")
+                .setAttribute("gen_ai.request.message_count", messageCount)
+                .setAttribute("llm.round", (long) round)
                 .startSpan();
 
         activeSpans.put(context, span);
@@ -55,7 +53,14 @@ public class TracingChatModelListener implements ChatModelListener {
 
     @Override
     public void onResponse(ChatModelResponseContext context) {
-        Span span = activeSpans.remove(context.requestContext());
+        Span span = activeSpans.remove(context);
+        if (span == null) {
+            for (var entry : activeSpans.entrySet()) {
+                span = entry.getValue();
+                activeSpans.remove(entry.getKey());
+                break;
+            }
+        }
         if (span == null) return;
 
         var response = context.chatResponse();
@@ -70,33 +75,33 @@ public class TracingChatModelListener implements ChatModelListener {
             hasToolCalls = response.aiMessage().hasToolExecutionRequests();
         }
 
-        int totalTokens = 0;
-        int inputTokens = 0;
-        int outputTokens = 0;
+        long totalTokens = 0L;
+        long inputTokens = 0L;
+        long outputTokens = 0L;
         if (response.tokenUsage() != null) {
             totalTokens = response.tokenUsage().totalTokenCount() != null
-                    ? response.tokenUsage().totalTokenCount() : 0;
+                    ? (long) response.tokenUsage().totalTokenCount() : 0L;
             inputTokens = response.tokenUsage().inputTokenCount() != null
-                    ? response.tokenUsage().inputTokenCount() : 0;
+                    ? (long) response.tokenUsage().inputTokenCount() : 0L;
             outputTokens = response.tokenUsage().outputTokenCount() != null
-                    ? response.tokenUsage().outputTokenCount() : 0;
+                    ? (long) response.tokenUsage().outputTokenCount() : 0L;
         }
 
         span.setAttribute("langfuse.observation.output", content);
-        span.setAttribute(AttributeKey.booleanKey("llm.has_tool_calls"), hasToolCalls);
-        span.setAttribute(AttributeKey.longKey("gen_ai.usage.input_tokens"), inputTokens);
-        span.setAttribute(AttributeKey.longKey("gen_ai.usage.output_tokens"), outputTokens);
-        span.setAttribute(AttributeKey.longKey("gen_ai.usage.total_tokens"), totalTokens);
+        span.setAttribute("llm.has_tool_calls", hasToolCalls);
+        span.setAttribute("gen_ai.usage.input_tokens", inputTokens);
+        span.setAttribute("gen_ai.usage.output_tokens", outputTokens);
+        span.setAttribute("gen_ai.usage.total_tokens", totalTokens);
 
         if (hasToolCalls) {
-            int toolCallCount = response.aiMessage().toolExecutionRequests().size();
-            span.setAttribute(AttributeKey.longKey("llm.tool_call_count"), toolCallCount);
+            long toolCallCount = (long) response.aiMessage().toolExecutionRequests().size();
+            span.setAttribute("llm.tool_call_count", toolCallCount);
             StringBuilder toolNames = new StringBuilder();
             for (var req : response.aiMessage().toolExecutionRequests()) {
-                if (toolNames.length() > 0) toolNames.append(",");
+                if (!toolNames.isEmpty()) toolNames.append(",");
                 toolNames.append(req.name());
             }
-            span.setAttribute(AttributeKey.stringKey("llm.tool_call_names"), toolNames.toString());
+            span.setAttribute("llm.tool_call_names", toolNames.toString());
         }
 
         span.setStatus(StatusCode.OK);
@@ -107,7 +112,14 @@ public class TracingChatModelListener implements ChatModelListener {
 
     @Override
     public void onError(ChatModelErrorContext context) {
-        Span span = activeSpans.remove(context.requestContext());
+        Span span = activeSpans.remove(context);
+        if (span == null) {
+            for (var entry : activeSpans.entrySet()) {
+                span = entry.getValue();
+                activeSpans.remove(entry.getKey());
+                break;
+            }
+        }
         if (span == null) return;
 
         span.setStatus(StatusCode.ERROR, context.error().getMessage());
