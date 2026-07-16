@@ -60,7 +60,7 @@ public class TaskQueryService {
         }
         if (StringUtils.hasText(recommendation) && !"ALL".equalsIgnoreCase(recommendation)) {
             if ("RECOMMEND".equalsIgnoreCase(recommendation)) {
-                wrapper.like("recommendation", "RECOMMEND");
+                wrapper.in("recommendation", List.of("RECOMMEND", "STRONG_RECOMMEND"));
             } else if ("REVIEW".equalsIgnoreCase(recommendation)) {
                 wrapper.eq("status", "SUCCESS")
                         .and(w -> w.isNull("recommendation")

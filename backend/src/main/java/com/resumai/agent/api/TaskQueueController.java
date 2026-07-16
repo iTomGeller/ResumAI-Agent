@@ -28,14 +28,14 @@ public class TaskQueueController {
     private final TaskWorkerService taskWorkerService;
     private final TaskQueueProperties properties;
     private final TaskQueueMetricsCollector metricsCollector;
-    private final com.resumai.agent.service.MvpEvaluationService evaluationService;
+    private final com.resumai.agent.service.ResumeEvaluationService evaluationService;
 
     public TaskQueueController(TaskQueueRepository taskQueueRepository,
                                TaskQueueService taskQueueService,
                                TaskWorkerService taskWorkerService,
                                TaskQueueProperties properties,
                                TaskQueueMetricsCollector metricsCollector,
-                               com.resumai.agent.service.MvpEvaluationService evaluationService) {
+                               com.resumai.agent.service.ResumeEvaluationService evaluationService) {
         this.taskQueueRepository = taskQueueRepository;
         this.taskQueueService = taskQueueService;
         this.taskWorkerService = taskWorkerService;

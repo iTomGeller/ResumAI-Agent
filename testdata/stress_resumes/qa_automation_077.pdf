@@ -1,0 +1,160 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2432 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Han Siyuan) Tj
+T*
+(Gender: Male    Objective: QA Automation Engineer    Location: Xiamen) Tj
+T*
+(Phone: 15468060656    Email: hansiyuan2372@gmail.com) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2017.09 - 2021.06    Hunan University    Computer Science and Technology \(M.S.\)) Tj
+T*
+(Courses: Compilers, Computer Networks, Design Patterns, Distributed Systems, Machine Learning, Operating ) Tj
+T*
+(Systems) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(QA automation engineer focused on test frameworks, API/performance testing and quality metrics, shifting ) Tj
+T*
+(quality left into the pipeline.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2023.07 - Present    Zhihu    QA Automation Engineer) Tj
+T*
+(- Integrated CI/CD for test-on-commit to surface defects early.) Tj
+T*
+(- Built load-testing, located bottlenecks and raised API throughput by 34%, and related standards were ad) Tj
+T*
+(opted by the team.) Tj
+T*
+(- Delivered quality dashboards quantifying coverage and defect distribution, significantly lowering maint) Tj
+T*
+(enance cost.) Tj
+T*
+(- Designed test data and a mock platform to cut integration cost.) Tj
+T*
+(2021.07 - 2023.06    Bilibili    Junior QA Automation Engineer) Tj
+T*
+(- Wrote automation with Pytest/Selenium, improving regression efficiency by 51%.) Tj
+T*
+(- Drove quality gates and release checkpoints, reducing production defects, and related standards were ad) Tj
+T*
+(opted by the team.) Tj
+T*
+(- Built API and UI test-automation frameworks covering core regression, and related standards were adopte) Tj
+T*
+(d by the team.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Test Automation Platform \(Pytest + Selenium + Allure\)) Tj
+T*
+(- Wired CI for test-on-commit, and related standards were adopted by the team.) Tj
+T*
+(- Built a framework with Pytest and Selenium, ensuring online service stability.) Tj
+T*
+(- Integrated Allure reporting, improving end-to-end delivery quality.) Tj
+T*
+(- Improved regression efficiency by 51%, and key metrics improved steadily.) Tj
+T*
+(Full-Link Load Testing \(JMeter + Grafana\)) Tj
+T*
+(- Monitored key metrics with Grafana.) Tj
+T*
+(- Located performance bottlenecks, and key metrics improved steadily.) Tj
+T*
+(- Designed load scenarios with JMeter, supporting rapid business growth.) Tj
+T*
+(- Raised API throughput by 34%.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Led a major technical effort involving computer networking basics, staying stable at 12000 QPS peak) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1015 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Built a reusable methodology and docs around API and performance testing, adopted by several teams) Tj
+T*
+(- Work around Test data and mocking delivered about 51% efficiency gains and was reused across the team) Tj
+T*
+(- Owned core modules that steadily served 5460K daily visits with 99.9%+ availability) Tj
+T*
+(- Continuously optimized data analysis and metrics, cutting key-path latency from 1800ms to 220ms) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Python, Pytest/Selenium, Test data and mocking, Quality metric systems) Tj
+T*
+(Proficient in: Performance Testing, CI/CD, Test Development, API Testing) Tj
+T*
+(Familiar with: Pytest, Quality Assurance, CI/CD integration, API and performance testing, Test automation) Tj
+T*
+( frameworks, Selenium) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+(- Stays calm under pressure and recovers services quickly during high-concurrency incidents) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002786 00000 n 
+0000002961 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4028
+%%EOF

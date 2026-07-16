@@ -3,13 +3,17 @@ package com.resumai.agent.api;
 import com.resumai.agent.ai.SkillDescriptor;
 import com.resumai.agent.ai.SkillProvider;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.*;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
  * REST API for Skill management (Agent Skills open specification).
@@ -93,6 +97,45 @@ public class SkillController {
             skillProvider.scanSkills();
             return ResponseEntity.ok(Map.of("removed", name));
         } catch (IOException e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/import/zip")
+    public ResponseEntity<?> importFromZip(@RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+                                           @RequestParam(value = "skillName", required = false) String skillName) {
+        try {
+            Path skillsRoot = Path.of(skillProvider.getSkillsRootPath());
+            Files.createDirectories(skillsRoot);
+            String name = StringUtils.hasText(skillName) ? skillName : file.getOriginalFilename();
+            if (name == null || name.isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "skillName required"));
+            }
+            name = name.replaceAll("\\.zip$", "").replaceAll("[^a-zA-Z0-9_-]", "-");
+            Path targetDir = skillsRoot.resolve(name);
+            if (Files.exists(targetDir)) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Skill already exists: " + name));
+            }
+            Files.createDirectories(targetDir);
+            try (InputStream is = file.getInputStream(); ZipInputStream zis = new ZipInputStream(is)) {
+                ZipEntry entry;
+                while ((entry = zis.getNextEntry()) != null) {
+                    if (entry.isDirectory()) continue;
+                    Path out = targetDir.resolve(entry.getName()).normalize();
+                    if (!out.startsWith(targetDir)) {
+                        return ResponseEntity.badRequest().body(Map.of("error", "Zip path escape blocked"));
+                    }
+                    Files.createDirectories(out.getParent());
+                    Files.copy(zis, out, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            if (!Files.exists(targetDir.resolve("SKILL.md"))) {
+                deleteDirectory(targetDir);
+                return ResponseEntity.badRequest().body(Map.of("error", "No SKILL.md found in zip"));
+            }
+            skillProvider.scanSkills();
+            return ResponseEntity.ok(Map.of("imported", name, "status", "success"));
+        } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }

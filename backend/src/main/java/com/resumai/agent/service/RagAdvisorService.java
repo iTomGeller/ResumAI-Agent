@@ -12,9 +12,9 @@ public class RagAdvisorService {
     private static final int SAMPLE_SIZE = 20;
     private static final double REVIEW_THRESHOLD = 0.55;
 
-    private final MvpEvaluationService evaluationService;
+    private final ResumeEvaluationService evaluationService;
 
-    public RagAdvisorService(MvpEvaluationService evaluationService) {
+    public RagAdvisorService(ResumeEvaluationService evaluationService) {
         this.evaluationService = evaluationService;
     }
 

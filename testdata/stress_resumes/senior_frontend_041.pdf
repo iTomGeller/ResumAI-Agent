@@ -1,0 +1,190 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2716 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Luo Chao) Tj
+T*
+(Gender: Male    Objective: Senior Frontend Engineer    Location: Shanghai) Tj
+T*
+(Phone: 13026939553    Email: luochao808@163.com) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2013.09 - 2017.06    University of Electronic Science and Technology of China    Electronic Information E) Tj
+T*
+(ngineering \(B.S.\)) Tj
+T*
+(Courses: Software Engineering, Data Structures and Algorithms, Compilers, Machine Learning, Operating Sys) Tj
+T*
+(tems, Database Systems) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Senior frontend engineer skilled in complex dashboards, visualization, performance optimization and tooli) Tj
+T*
+(ng, having led micro-frontend splits.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2020.07 - Present    Kuaishou    Senior Frontend Engineer) Tj
+T*
+(- Built a shared component library and scaffolding, unifying interaction and style specs and raising reus) Tj
+T*
+(e to 23%, reused across multiple business lines.) Tj
+T*
+(- Split a micro-frontend and onboarded sub-apps to reduce cross-team coupling, recognized by stakeholders) Tj
+T*
+( and peers.) Tj
+T*
+(- Added tracking and frontend monitoring for blank screen, JS errors and API latency with a quality dashb) Tj
+T*
+(oard.) Tj
+T*
+(- Drove engineering migration to Vite, significantly speeding up local startup and builds, and key metric) Tj
+T*
+(s improved steadily.) Tj
+T*
+(- Defined API contracts with backend and wrapped a unified request layer and error handling, ensuring onl) Tj
+T*
+(ine service stability.) Tj
+T*
+(2017.07 - 2020.06    ByteDance    Frontend Engineer) Tj
+T*
+(- Optimized first-screen load and long-list rendering with virtual scrolling and lazy loading, cutting fi) Tj
+T*
+(rst-screen time by 59%, with experience documented and shared internally.) Tj
+T*
+(- Wrote unit and end-to-end tests to keep core interactions stable, ensuring online service stability.) Tj
+T*
+(- Implemented complex ECharts visualizations with smooth interaction over large datasets, and related sta) Tj
+T*
+(ndards were adopted by the team.) Tj
+T*
+(- Built admin and dashboard frontends including candidate list, report detail, trace timeline and feedbac) Tj
+T*
+(k pages, reused across multiple business lines.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Resume Evaluation Platform Frontend \(Vue3 + TypeScript + Vite + Pinia\)) Tj
+T*
+(- Optimized first-screen and long-list rendering for smoother interaction.) Tj
+T*
+(- Built a reusable component library and scaffolding, significantly lowering maintenance cost.) Tj
+T*
+(- Added tracking and frontend monitoring, significantly lowering maintenance cost.) Tj
+T*
+(- Built candidate list, report detail and trace timeline pages.) Tj
+T*
+(Component Library & Design System \(Vue3 + Storybook\)) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1875 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Improved reuse across teams, recognized by stakeholders and peers.) Tj
+T*
+(- Unified interaction and style specs.) Tj
+T*
+(- Added unit and e2e tests.) Tj
+T*
+(- Documented components with Storybook, recognized by stakeholders and peers.) Tj
+T*
+(Realtime Data Visualization Dashboard \(Vue3 + ECharts + WebSocket\)) Tj
+T*
+(- Optimized repaint and memory usage, and it became a reusable team best practice.) Tj
+T*
+(- Implemented live updates over WebSocket.) Tj
+T*
+(- Supported theme switching and dark mode, ensuring online service stability.) Tj
+T*
+(- Rendered complex charts over large datasets while staying smooth.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Established metrics and reviews around Git collaboration and code review to keep improving delivery qua) Tj
+T*
+(lity) Tj
+T*
+(- Drove a focused effort on requirement analysis and documentation, reducing related issues by about 23%) Tj
+T*
+(- Owned core modules that steadily served 2430K daily visits with 99.9%+ availability) Tj
+T*
+(- Built a reusable methodology and docs around ECharts data visualization, adopted by several teams) Tj
+T*
+(- Work around project management and planning delivered about 59% efficiency gains and was reused across ) Tj
+T*
+(the team) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Performance, TypeScript, Vite, ECharts data visualization, Vue3) Tj
+T*
+(Proficient in: Visualization, Node.js, Vue3 and Composition API, React and micro-frontends, TypeScript an) Tj
+T*
+(d tooling) Tj
+T*
+(Familiar with: Frontend performance optimization, Webpack, Engineering, Micro-frontend, React, Vite/Webpa) Tj
+T*
+(ck builds) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+(- Strong communication and collaboration with product, QA and ops to deliver projects on time) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000003070 00000 n 
+0000003245 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+5172
+%%EOF

@@ -1,0 +1,83 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1156 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Leo Zhang) Tj
+T*
+(Junior Frontend Engineer | 1.5 years experience) Tj
+T*
+(Email: leo.zhang@example.com) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Frontend engineer focused on Vue dashboards, component reuse, and user interaction details.) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Vue 3, TypeScript, Vite, Pinia, CSS, ECharts, REST API integration, basic Node.js.) Tj
+T*
+() Tj
+T*
+(Experience) Tj
+T*
+(2024.02 - Present  Data Analytics Startup  Frontend Engineer) Tj
+T*
+(- Built dashboard pages for candidate list, report view, trace timeline, and feedback management.) Tj
+T*
+(- Improved loading state and pagination interactions, reducing perceived page stutter.) Tj
+T*
+() Tj
+T*
+(2023.06 - 2023.12  E-commerce Company  Frontend Intern) Tj
+T*
+(- Implemented product search filters and order detail pages.) Tj
+T*
+(- Wrote unit tests for reusable components.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Trace Timeline UI) Tj
+T*
+(- Designed grouped phase view with expandable agent rounds and raw protocol debug section.) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2019.09 - 2023.06  Nanjing University of Posts and Telecommunications  B.S. Software Engineering) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000296 00000 n 
+trailer
+<< /Size 5 /Root 1 0 R >>
+startxref
+1504
+%%EOF

@@ -1,0 +1,158 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2555 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Hu Li) Tj
+T*
+(Gender: Female    Objective: Data Platform Engineer    Location: Xiamen) Tj
+T*
+(Phone: 15625932865    Email: huli1962@outlook.com    GitHub: https://github.com/huli114) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2016.09 - 2020.06    Hunan University    Information Security \(B.S.\)) Tj
+T*
+(Courses: Database Systems, Machine Learning, Operating Systems, Computer Organization, Compilers, Distrib) Tj
+T*
+(uted Systems) Tj
+T*
+(GPA 3.7/4.0, top 5% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Data platform engineer focused on realtime warehouse, streaming ETL and batch processing with strong data) Tj
+T*
+( modeling and governance.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2022.07 - Present    JD.com    Data Engineer) Tj
+T*
+(- Processed 8110K records per day keeping T+1 and realtime paths stable.) Tj
+T*
+(- Designed a layered warehouse \(ODS/DWD/DWS/ADS\) and data modeling for BI and ML features.) Tj
+T*
+(- Governed metric definitions on a unified platform to reduce inconsistencies.) Tj
+T*
+(- Supported realtime dashboards and risk features with second-level end-to-end latency, and related stand) Tj
+T*
+(ards were adopted by the team.) Tj
+T*
+(2020.07 - 2022.06    Kuaishou    Junior Data Engineer) Tj
+T*
+(- Built data-quality monitoring and lineage with automatic anomaly alerts.) Tj
+T*
+(- Optimized Spark offline jobs, cutting runtime by 58% and resource cost by 25%, significantly lowering m) Tj
+T*
+(aintenance cost.) Tj
+T*
+(- Owned realtime warehouse and streaming ETL with Flink over massive Kafka event data, ensuring online se) Tj
+T*
+(rvice stability.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Offline Warehouse & Metrics Platform \(Spark + Hive\)) Tj
+T*
+(- Unified metric definitions and dimensional modeling.) Tj
+T*
+(- Built a layered warehouse with Spark and Hive.) Tj
+T*
+(- Optimized scheduling, cutting runtime by 58%, reused across multiple business lines.) Tj
+T*
+(- Built data-quality and lineage monitoring, significantly lowering maintenance cost.) Tj
+T*
+(Realtime Data Platform \(Flink + Kafka + ClickHouse\)) Tj
+T*
+(- Designed exactly-once semantics for data accuracy.) Tj
+T*
+(- Processed 8110K events per day, and key metrics improved steadily.) Tj
+T*
+(- Processed Kafka realtime data with Flink at second-level end-to-end latency.) Tj
+T*
+(- Wrote to ClickHouse for realtime dashboards and ad-hoc queries, recognized by stakeholders and peers.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Established metrics and reviews around cross-team communication to keep improving delivery quality) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1015 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Built a reusable methodology and docs around Linux and shell basics, adopted by several teams) Tj
+T*
+(- Drove a focused effort on unit testing and quality, reducing related issues by about 25%) Tj
+T*
+(- Work around Flink stream processing delivered about 58% efficiency gains and was reused across the team) Tj
+T*
+(- Led a major technical effort involving data analysis and metrics, staying stable at 20000 QPS peak) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Hive/ClickHouse, Flink, Data Warehouse, Hive) Tj
+T*
+(Proficient in: ETL, Data warehouse modeling, Data governance and lineage, Flink stream processing) Tj
+T*
+(Familiar with: Data Governance, Spark, Python, Kafka data ingestion, Kafka, Spark batch processing) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Curious about new tech, continuously learning LLM and cloud-native topics and applying them in practice) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002909 00000 n 
+0000003084 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4151
+%%EOF

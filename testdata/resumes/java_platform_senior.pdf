@@ -1,0 +1,101 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1854 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Alex Chen) Tj
+T*
+(Senior Java Platform Engineer | 7 years experience | Shanghai) Tj
+T*
+(Email: alex.chen@example.com | GitHub: https://github.com/example-dev) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Senior backend engineer focused on payment platform, distributed systems, observability, and production i) Tj
+T*
+(ncident response.) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Java 17, Spring Boot 3, Kafka, Kubernetes, Redis, MySQL, Docker, Prometheus, Grafana, OpenTelemetry, SQL ) Tj
+T*
+(optimization.) Tj
+T*
+() Tj
+T*
+(Experience) Tj
+T*
+(2021.05 - Present  FinTech Payment Platform  Senior Backend Engineer) Tj
+T*
+(- Led payment platform refactor from monolith to domain services, including order, settlement, reconcilia) Tj
+T*
+(tion, and risk-control modules.) Tj
+T*
+(- Designed Kafka-based asynchronous transaction pipeline with idempotency keys, retry topics, and dead-le) Tj
+T*
+(tter handling.) Tj
+T*
+(- Reduced P99 payment callback latency from 1.8s to 420ms by SQL index redesign, cache warmup, and connec) Tj
+T*
+(tion pool tuning.) Tj
+T*
+(- Built observability dashboards for payment success rate, settlement lag, consumer backlog, JVM GC, and ) Tj
+T*
+(API latency.) Tj
+T*
+() Tj
+T*
+(2018.07 - 2021.04  SaaS Logistics Platform  Backend Engineer) Tj
+T*
+(- Built shipment tracking APIs with Spring Boot and MySQL, handled 30M tracking events per day.) Tj
+T*
+(- Introduced Redis cache and rate limiting to protect partner integrations.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Payment Reconciliation Engine) Tj
+T*
+(- Implemented daily reconciliation between payment gateway, internal ledger, and settlement files.) Tj
+T*
+(- Added audit trace id to every payment state transition for compliance investigation.) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2014.09 - 2018.06  East China University of Science and Technology  B.S. Software Engineering) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000296 00000 n 
+trailer
+<< /Size 5 /Root 1 0 R >>
+startxref
+2202
+%%EOF

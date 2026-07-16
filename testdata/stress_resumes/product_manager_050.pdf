@@ -1,0 +1,178 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2519 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(He Mengyao) Tj
+T*
+(Gender: Female    Objective: AI Product Manager    Location: Suzhou) Tj
+T*
+(Phone: 13530945875    Email: hemengyao5662@foxmail.com    GitHub: https://github.com/hemengyao61) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2017.09 - 2021.06    Shandong University    Computer Science and Technology \(M.S.\)) Tj
+T*
+(Courses: Operating Systems, Machine Learning, Distributed Systems, Computer Organization, Computer Networ) Tj
+T*
+(ks, Compilers) Tj
+T*
+(GPA 3.8/4.0, top 15% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Six years of product experience in B2B workflow products and LLM features, skilled in data-driven iterati) Tj
+T*
+(on and cross-team delivery.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2023.07 - Present    Xiaomi    Product Manager) Tj
+T*
+(- Designed an LLM report-quality feedback system and evaluation dashboard to lift generation quality, rec) Tj
+T*
+(ognized by stakeholders and peers.) Tj
+T*
+(- Owned competitive analysis and market research with a differentiation strategy.) Tj
+T*
+(- Ran A/B experiments validating key features, lifting core conversion by 52%, with experience documented) Tj
+T*
+( and shared internally.) Tj
+T*
+(- Owned end-to-end design of an AI resume-screening product from upload to HR feedback, recognized by sta) Tj
+T*
+(keholders and peers.) Tj
+T*
+(2021.07 - 2023.06    Trip.com    Junior Product Manager) Tj
+T*
+(- Mined pain points via user interviews and data analysis and shaped the roadmap, recognized by stakehold) Tj
+T*
+(ers and peers.) Tj
+T*
+(- Led requirement reviews and PRDs, coordinating engineering, data and CS teams for enterprise rollout, e) Tj
+T*
+(nsuring online service stability.) Tj
+T*
+(- Defined core metrics: time-to-screen, recommendation acceptance, manual override and evidence coverage.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(AI Resume Screening Workflow \(B2B SaaS\)) Tj
+T*
+(- Coordinated engineering, data and CS teams.) Tj
+T*
+(- Drove enterprise customer rollout.) Tj
+T*
+(- Designed the end-to-end flow from upload to feedback, recognized by stakeholders and peers.) Tj
+T*
+(- Defined core metrics and dashboards, and it became a reusable team best practice.) Tj
+T*
+(Recruiting Data Analytics Platform \(Analytics\)) Tj
+T*
+(- Delivered insights to support decisions.) Tj
+T*
+(- Defined funnel and conversion metrics, significantly lowering maintenance cost.) Tj
+T*
+(- Shaped the product roadmap.) Tj
+T*
+(- Designed A/B experiments.) Tj
+T*
+(LLM Report Quality Evaluation System \(LLM Evaluation\)) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1474 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Closed the quality-improvement loop, significantly lowering maintenance cost.) Tj
+T*
+(- Designed a feedback taxonomy.) Tj
+T*
+(- Improved generated report quality.) Tj
+T*
+(- Built an evaluation dashboard.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Continuously optimized root-cause analysis and postmortems, cutting key-path latency from 1500ms to 320) Tj
+T*
+(ms) Tj
+T*
+(- Drove a focused effort on Basic SQL for data pulls, reducing related issues by about 26%) Tj
+T*
+(- Established metrics and reviews around RESTful API design to keep improving delivery quality) Tj
+T*
+(- Owned core modules that steadily served 2800K daily visits with 99.9%+ availability) Tj
+T*
+(- Built a reusable methodology and docs around design patterns and refactoring, adopted by several teams) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Monetization, Basic SQL for data pulls, LLM Application, PRD) Tj
+T*
+(Proficient in: Data analysis and metric systems, Data Analysis, LLM application boundaries, Project manag) Tj
+T*
+(ement and cross-team collaboration) Tj
+T*
+(Familiar with: A/B experiment design, Requirement Analysis, A/B Testing, Project Management, Requirement ) Tj
+T*
+(analysis and PRD writing, User Research) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Enjoys retrospectives, cares about code quality and observability, and makes data-driven decisions) Tj
+T*
+(- Stays calm under pressure and recovers services quickly during high-concurrency incidents) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002873 00000 n 
+0000003048 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4574
+%%EOF

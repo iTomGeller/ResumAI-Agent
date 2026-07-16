@@ -11,10 +11,10 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai
 RUN sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g; s|http://security.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true \
     && apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl git \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /workspace/target/*.jar /app/resumai-agent-backend.jar
-COPY skills/ /app/skills/
+COPY src/main/resources/skills/ /app/skills/
 COPY src/main/resources/mcp-servers.json /app/mcp-servers.json
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "/app/resumai-agent-backend.jar"]

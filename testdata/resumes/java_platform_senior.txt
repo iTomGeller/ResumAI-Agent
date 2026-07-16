@@ -1,0 +1,28 @@
+Alex Chen
+Senior Java Platform Engineer | 7 years experience | Shanghai
+Email: alex.chen@example.com | GitHub: https://github.com/example-dev
+
+Summary
+Senior backend engineer focused on payment platform, distributed systems, observability, and production incident response.
+
+Skills
+Java 17, Spring Boot 3, Kafka, Kubernetes, Redis, MySQL, Docker, Prometheus, Grafana, OpenTelemetry, SQL optimization.
+
+Experience
+2021.05 - Present  FinTech Payment Platform  Senior Backend Engineer
+- Led payment platform refactor from monolith to domain services, including order, settlement, reconciliation, and risk-control modules.
+- Designed Kafka-based asynchronous transaction pipeline with idempotency keys, retry topics, and dead-letter handling.
+- Reduced P99 payment callback latency from 1.8s to 420ms by SQL index redesign, cache warmup, and connection pool tuning.
+- Built observability dashboards for payment success rate, settlement lag, consumer backlog, JVM GC, and API latency.
+
+2018.07 - 2021.04  SaaS Logistics Platform  Backend Engineer
+- Built shipment tracking APIs with Spring Boot and MySQL, handled 30M tracking events per day.
+- Introduced Redis cache and rate limiting to protect partner integrations.
+
+Projects
+Payment Reconciliation Engine
+- Implemented daily reconciliation between payment gateway, internal ledger, and settlement files.
+- Added audit trace id to every payment state transition for compliance investigation.
+
+Education
+2014.09 - 2018.06  East China University of Science and Technology  B.S. Software Engineering

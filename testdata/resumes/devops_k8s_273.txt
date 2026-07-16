@@ -1,0 +1,32 @@
+DevOps Kubernetes Engineer Candidate 273
+DevOps Kubernetes Engineer | 3 years experience
+Email: candidate273@example.com
+
+Summary
+Managed Kubernetes clusters, Helm charts, blue-green deployment, and SLO monitoring. Batch 19, domain scenario 3.
+
+Skills
+Kubernetes, Docker, Helm, CI/CD, SRE, REST API, documentation, monitoring, cross-team collaboration.
+
+Experience
+2021.01 - Present  Bluefin AI  DevOps Kubernetes Engineer
+- Delivered production features related to Managed Kubernetes clusters, Helm charts, blue-green deployment, and SLO monitoring.
+- Collaborated with backend, product, QA, and operations teams.
+- Improved reliability, observability, and delivery quality with measurable engineering practices.
+- Measured outcome: improved query cost 31% through design review, rollout control, dashboards, and incident retrospectives.
+
+2019.07 - 2020.12  Prior Systems  Engineer
+- Maintained legacy modules, wrote migration plans, reviewed pull requests, and handled production defects.
+- Worked with customer success and security teams to resolve escalations.
+
+Project
+Domain Platform Improvement 273
+- Designed implementation plan, handled rollout, monitored metrics, and produced post-launch review.
+- Evidence includes dashboards, logs, pull requests, design docs, and incident notes.
+
+Side Project
+Knowledge Base Evaluation 273
+- Built retrieval test cases, labeled relevant snippets, compared lexical, embedding, and hybrid search quality.
+
+Education
+2016.09 - 2020.06  Example University  B.S. Computer Science

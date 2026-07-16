@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.request
@@ -58,6 +59,14 @@ def wait_health(host: str, attempts: int = 30, sleep_s: int = 6) -> None:
     raise SystemExit("public health check timed out after rebuild")
 
 
+def start_stack_with_mirror_retries(root: Path) -> None:
+    """Reuse the mirror-aware starter after images are built and files synced."""
+    script = root / "scripts" / "start_ecs_stack.py"
+    result = subprocess.run([sys.executable, str(script)], cwd=root, check=False)
+    if result.returncode != 0:
+        raise SystemExit(f"start_ecs_stack.py failed ({result.returncode})")
+
+
 def main() -> None:
     env = load_env()
     root = Path(__file__).resolve().parents[1]
@@ -81,7 +90,11 @@ def main() -> None:
             if not path.is_file():
                 continue
             rel = path.relative_to(root).as_posix()
-            if rel.startswith(("backend/src/", "backend/pom.xml", "backend/skills/", "frontend/src/", "frontend/nginx.conf", "monitoring/grafana/", "docker-compose.prod.yml")) or rel == "docker-compose.langfuse.yml":
+            if rel.startswith((
+                "backend/src/", "backend/pom.xml", "backend/Dockerfile", "backend/settings.xml", "backend/skills/",
+                "frontend/src/", "frontend/nginx.conf", "frontend/Dockerfile", "frontend/package.json", "frontend/package-lock.json", "frontend/tsconfig.json", "frontend/tsconfig.node.json", "frontend/vite.config.ts", "frontend/index.html",
+                "monitoring/", "workflow/", "docker-compose.prod.yml", "docker-compose.langfuse.yml",
+            )):
                 uploads.append(path)
         for local in uploads:
             remote = f"{deploy_dir}/{local.relative_to(root).as_posix()}"
@@ -125,6 +138,7 @@ def main() -> None:
             "backend/src/main/java/com/resumai/agent/ai/AgentLoopResult.java",
             "backend/src/main/java/com/resumai/agent/ai/AgentTools.java",
             "backend/src/main/java/com/resumai/agent/ai/LangfuseAgentListener.java",
+            "backend/src/main/java/com/resumai/agent/service/MvpEvaluationService.java",
         ]
         rm_cmd = " ".join(f'rm -f "{deploy_dir}/{f}"' for f in stale_files)
         run(ssh, rm_cmd, timeout=30, allow_fail=True)
@@ -137,13 +151,23 @@ def main() -> None:
             "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "REDIS_PASSWORD",
             "NEO4J_AUTH", "MINIO_ROOT_PASSWORD", "GRAFANA_PASSWORD",
             "MILVUS_DIMENSION",
-            "LANGFUSE_OTEL_ENDPOINT", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
+            "LANGFUSE_OTEL_ENDPOINT", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_URL", "LANGFUSE_HOST",
+            "WORKFLOW_INTERNAL_TOKEN", "WORKFLOW_POSTGRES_PASSWORD",
         ]
         merge_lines = []
         for key in merge_env_keys:
             if key in env and env[key]:
                 val = env[key].replace("'", "'\\''")
                 merge_lines.append(f"{key}={val}")
+        embedding_overrides = {
+            "EMBEDDING_PROVIDER": "local",
+            "EMBEDDING_ENABLED": "true",
+            "EMBEDDING_MODEL": "all-minilm-l6-v2",
+            "MILVUS_DIMENSION": "384",
+        }
+        for key, value in embedding_overrides.items():
+            merge_lines = [line for line in merge_lines if not line.startswith(f"{key}=")]
+            merge_lines.append(f"{key}={value}")
         if merge_lines:
             merge_script = (
                 f"ENV_FILE={deploy_dir}/.env; "
@@ -159,7 +183,7 @@ def main() -> None:
         build_log = run(
             ssh,
             f"cd {deploy_dir} && docker compose -f docker-compose.prod.yml build "
-            f"ai-resume-backend ai-resume-frontend 2>&1",
+            f"ai-resume-backend ai-resume-frontend ai-resume-workflow 2>&1",
             timeout=3600,
         )
         if "Successfully tagged" not in build_log and "naming to" not in build_log.lower():
@@ -167,11 +191,17 @@ def main() -> None:
         if "ERROR" in build_log or "failed to solve" in build_log.lower():
             raise SystemExit("docker build reported errors")
 
-        run(
-            ssh,
-            f"cd {deploy_dir} && docker compose -f docker-compose.prod.yml up -d "
-            f"ai-resume-backend ai-resume-frontend grafana prometheus 2>&1",
-            timeout=600,
+        ssh.close()
+        start_stack_with_mirror_retries(root)
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(
+            host,
+            username=env.get("ALIYUN_USER", "root"),
+            password=env["ALIYUN_PASSWORD"],
+            look_for_keys=False,
+            allow_agent=False,
+            timeout=30,
         )
 
         langfuse_compose = root / "docker-compose.langfuse.yml"
@@ -184,17 +214,18 @@ def main() -> None:
             )
             print("[langfuse] started langfuse stack")
 
+        mysql_root = env.get("MYSQL_ROOT_PASSWORD", "ResumaiRoot!2026")
+        mysql_db = env.get("MYSQL_DATABASE", "resumai_agent")
+        env_text = run(ssh, f"grep -E '^MYSQL_(ROOT_PASSWORD|DATABASE)=' {deploy_dir}/.env || true", timeout=30)
+        for line in env_text.splitlines():
+            if line.startswith("MYSQL_ROOT_PASSWORD="):
+                mysql_root = line.split("=", 1)[1].strip()
+            elif line.startswith("MYSQL_DATABASE="):
+                mysql_db = line.split("=", 1)[1].strip()
+
         local_migration_v4 = root / "backend/src/main/resources/db/migration-v4.sql"
         if local_migration_v4.exists():
             remote_v4 = f"{deploy_dir}/backend/src/main/resources/db/migration-v4.sql"
-            env_text = run(ssh, f"grep -E '^MYSQL_(ROOT_PASSWORD|DATABASE)=' {deploy_dir}/.env || true", timeout=30)
-            mysql_root = env.get("MYSQL_ROOT_PASSWORD", "ResumaiRoot!2026")
-            mysql_db = env.get("MYSQL_DATABASE", "resumai_agent")
-            for line in env_text.splitlines():
-                if line.startswith("MYSQL_ROOT_PASSWORD="):
-                    mysql_root = line.split("=", 1)[1].strip()
-                elif line.startswith("MYSQL_DATABASE="):
-                    mysql_db = line.split("=", 1)[1].strip()
             run(
                 ssh,
                 f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} < {remote_v4}",
@@ -203,6 +234,34 @@ def main() -> None:
             print("[migration] applied migration-v4.sql")
             run(ssh, "docker restart ai-resume-backend", timeout=120)
             print("[migration] restarted ai-resume-backend after migration-v4")
+
+        local_migration_v5 = root / "backend/src/main/resources/db/migration-v5-langgraph-workflow.sql"
+        if local_migration_v5.exists():
+            remote_v5 = f"{deploy_dir}/backend/src/main/resources/db/migration-v5-langgraph-workflow.sql"
+            run(
+                ssh,
+                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} < {remote_v5}",
+                timeout=120,
+            )
+            print("[migration] applied migration-v5-langgraph-workflow.sql")
+
+        local_migration_v6 = root / "backend/src/main/resources/db/migration-v6-trace-contract.sql"
+        if local_migration_v6.exists():
+            remote_v6 = f"{deploy_dir}/backend/src/main/resources/db/migration-v6-trace-contract.sql"
+            run(
+                ssh,
+                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} < {remote_v6}",
+                timeout=120,
+            )
+            print("[migration] applied migration-v6-trace-contract.sql")
+
+        workflow_health = run(
+            ssh,
+            "docker exec ai-resume-workflow curl -fsS http://127.0.0.1:8090/health",
+            timeout=30,
+            allow_fail=True,
+        )
+        print(f"[workflow-health] {workflow_health[:120]}")
 
         backend_health = ""
         for attempt in range(1, 31):

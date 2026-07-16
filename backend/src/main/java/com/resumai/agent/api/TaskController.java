@@ -10,7 +10,7 @@ import com.resumai.agent.api.dto.TaskListItemResponse;
 import com.resumai.agent.api.dto.TaskResponse;
 import com.resumai.agent.api.dto.UpsertJdRequest;
 import com.resumai.agent.service.JdRagService;
-import com.resumai.agent.service.MvpEvaluationService;
+import com.resumai.agent.service.ResumeEvaluationService;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -37,10 +37,10 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api")
 public class TaskController {
 
-    private final MvpEvaluationService evaluationService;
+    private final ResumeEvaluationService evaluationService;
     private final JdRagService jdRagService;
 
-    public TaskController(MvpEvaluationService evaluationService, JdRagService jdRagService) {
+    public TaskController(ResumeEvaluationService evaluationService, JdRagService jdRagService) {
         this.evaluationService = evaluationService;
         this.jdRagService = jdRagService;
     }
@@ -85,6 +85,21 @@ public class TaskController {
     @GetMapping("/tasks/{traceId}")
     public TaskResponse getTask(@PathVariable String traceId) {
         return evaluationService.getTask(traceId);
+    }
+
+    @DeleteMapping("/tasks/{traceId}")
+    public Map<String, String> deleteTask(@PathVariable String traceId) {
+        evaluationService.deleteTask(traceId);
+        return Map.of("status", "deleted", "traceId", traceId);
+    }
+
+    @PostMapping("/tasks/batch-delete")
+    public Map<String, Object> batchDeleteTasks(@RequestBody Map<String, List<String>> body) {
+        List<String> traceIds = body.getOrDefault("traceIds", List.of());
+        if (!traceIds.isEmpty()) {
+            evaluationService.deleteTasks(traceIds);
+        }
+        return Map.of("status", "deleted", "count", traceIds.size());
     }
 
     @GetMapping("/tasks/{traceId}/file")

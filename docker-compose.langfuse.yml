@@ -15,7 +15,7 @@ services:
     ports:
       - "3001:3000"
     environment: &langfuse-env
-      NEXTAUTH_URL: http://8.166.136.122:3001
+      NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://8.138.10.189:3001}
       NEXTAUTH_SECRET: resumai-langfuse-secret-change-me
       DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
       SALT: resumai-langfuse-salt-change-me

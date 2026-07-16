@@ -1,0 +1,164 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2514 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Wang Yong) Tj
+T*
+(Gender: Male    Objective: Security Engineer    Location: Guangzhou) Tj
+T*
+(Phone: 19284455074    Email: wangyong8439@163.com    GitHub: https://github.com/wangyong146) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2016.09 - 2020.06    Dalian University of Technology    Data Science and Big Data Technology \(M.S.\)) Tj
+T*
+(Courses: Distributed Systems, Machine Learning, Compilers, Database Systems, Computer Organization, Data ) Tj
+T*
+(Structures and Algorithms) Tj
+T*
+(GPA 3.4/4.0, top 10% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Security engineer focused on backend security, unified auth, risk control and compliance auditing.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2022.07 - Present    Didi    Security Engineer) Tj
+T*
+(- Worked with security testing/pentest to fix high-risk vulns, cutting recurrence by 16%, and it became a) Tj
+T*
+( reusable team best practice.) Tj
+T*
+(- Built audit logging and operation trails for compliance.) Tj
+T*
+(- Built security baselines and code scanning integrated into CI, recognized by stakeholders and peers.) Tj
+T*
+(- Implemented payment risk rules and lists, blocking suspicious transactions and raising interception by ) Tj
+T*
+(54%, improving end-to-end delivery quality.) Tj
+T*
+(2020.07 - 2022.06    Bilibili    Junior Security Engineer) Tj
+T*
+(- Handled security incidents and produced postmortems, with experience documented and shared internally.) Tj
+T*
+(- Owned secure backend development and vulnerability remediation \(SQLi, privilege escalation, XSS\), reuse) Tj
+T*
+(d across multiple business lines.) Tj
+T*
+(- Designed unified auth and permission models with OAuth2 and RBAC and multi-tenant isolation, recognized) Tj
+T*
+( by stakeholders and peers.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Unified Auth & Risk-Control Platform \(Spring Cloud Gateway + OAuth2\)) Tj
+T*
+(- Built risk rules and lists.) Tj
+T*
+(- Raised risk interception by 54%, and key metrics improved steadily.) Tj
+T*
+(- Unified auth and rate limiting at the gateway.) Tj
+T*
+(- Implemented OAuth2 and RBAC.) Tj
+T*
+(Data Security & Audit Platform \(Java + Encryption + Audit\)) Tj
+T*
+(- Encrypted and masked sensitive data.) Tj
+T*
+(- Kept full operation audit trails.) Tj
+T*
+(- Met compliance requirements.) Tj
+T*
+(- Integrated vuln scanning into CI, with experience documented and shared internally.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Built a reusable methodology and docs around unit testing and quality, adopted by several teams) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1093 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Work around root-cause analysis and postmortems delivered about 54% efficiency gains and was reused acr) Tj
+T*
+(oss the team) Tj
+T*
+(- Led a major technical effort involving OAuth2 and RBAC, staying stable at 12000 QPS peak) Tj
+T*
+(- Drove a focused effort on project management and planning, reducing related issues by about 16%) Tj
+T*
+(- Continuously optimized design patterns and refactoring, cutting key-path latency from 1200ms to 420ms) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Java, Compliance, Risk control and lists, Risk Control) Tj
+T*
+(Proficient in: Common web security vulnerabilities, Auditing and compliance, Code scanning and baselines,) Tj
+T*
+( OAuth2) Tj
+T*
+(Familiar with: Encryption, OAuth2 and RBAC, Secure Development, Data encryption and masking, Vulnerabilit) Tj
+T*
+(y, Audit) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Curious about new tech, continuously learning LLM and cloud-native topics and applying them in practice) Tj
+T*
+(- Strong communication and collaboration with product, QA and ops to deliver projects on time) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002868 00000 n 
+0000003043 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4188
+%%EOF

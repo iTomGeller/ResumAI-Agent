@@ -2,6 +2,7 @@ package com.resumai.agent.util;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.util.StringUtils;
 
@@ -19,7 +20,32 @@ public final class MarkdownTextUtil {
 
     /** 高置信面试追问章节标题关键词（禁止单独使用「面试」「问题」等宽泛词）。 */
     private static final List<String> INTERVIEW_SECTION_KEYWORDS = List.of(
-            "面试追问", "追问建议", "面试问题", "核心追问", "追问清单"
+            "面试追问", "追问建议", "面试问题", "核心追问", "追问清单", "面试验证", "建议验证点"
+    );
+
+    private static final List<String> STRENGTH_SECTION_KEYWORDS = List.of(
+            "核心优势", "关键优势", "候选人亮点", "优势"
+    );
+
+    private static final List<String> RISK_SECTION_KEYWORDS = List.of(
+            "关键风险", "风险评估", "需验证风险", "主要风险"
+    );
+
+    private static final Set<String> GENERIC_PLACEHOLDERS = Set.of(
+            "技术栈匹配度较好",
+            "项目经历具备追问价值",
+            "关键贡献建议面试验证"
+    );
+
+    private static final List<String> GENERIC_TRANSITION_PHRASES = List.of(
+            "如下",
+            "以下",
+            "基于有限",
+            "尽管核心技能",
+            "必须针对",
+            "围绕",
+            "关键风险如下",
+            "核心优势如下"
     );
 
     private MarkdownTextUtil() {
@@ -154,5 +180,48 @@ public final class MarkdownTextUtil {
             return List.of();
         }
         return items.stream().map(MarkdownTextUtil::stripMarkdown).filter(StringUtils::hasText).toList();
+    }
+
+    public static boolean isGenericPlaceholder(String text) {
+        if (!StringUtils.hasText(text)) {
+            return true;
+        }
+        String normalized = stripMarkdown(text).trim();
+        if (GENERIC_PLACEHOLDERS.contains(normalized)) {
+            return true;
+        }
+        if (normalized.length() < 8) {
+            return true;
+        }
+        for (String phrase : GENERIC_TRANSITION_PHRASES) {
+            if (normalized.contains(phrase)
+                    && (normalized.endsWith("如下") || normalized.endsWith("如下：") || normalized.endsWith("：")
+                    || normalized.endsWith(":") || normalized.length() < 45)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static List<String> filterGenericPlaceholders(List<String> items) {
+        if (items == null || items.isEmpty()) {
+            return List.of();
+        }
+        return items.stream()
+                .map(MarkdownTextUtil::stripMarkdown)
+                .filter(StringUtils::hasText)
+                .filter(item -> !isGenericPlaceholder(item))
+                .distinct()
+                .toList();
+    }
+
+    public record ReportSections(List<String> strengths, List<String> risks, List<String> questions) {
+    }
+
+    public static ReportSections extractReportSections(String markdown) {
+        List<String> strengths = filterGenericPlaceholders(extractSectionItems(markdown, STRENGTH_SECTION_KEYWORDS));
+        List<String> risks = filterGenericPlaceholders(extractSectionItems(markdown, RISK_SECTION_KEYWORDS));
+        List<String> questions = filterGenericPlaceholders(extractInterviewQuestions(markdown));
+        return new ReportSections(strengths, risks, questions);
     }
 }

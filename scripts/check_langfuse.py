@@ -45,6 +45,16 @@ def main():
         run(ssh, "docker logs langfuse-web --tail 20 2>&1")
 
     run(ssh, "curl -sS -o /dev/null -w 'HTTP %{http_code}' http://localhost:3001/ 2>&1")
+    run(ssh, "docker exec ai-resume-workflow python - <<'PY'\n"
+             "import urllib.request\n"
+             "url='http://langfuse-web:3000'\n"
+             "try:\n"
+             "    r=urllib.request.urlopen(url, timeout=5)\n"
+             "    print('workflow_to_langfuse HTTP', r.status)\n"
+             "except Exception as e:\n"
+             "    print('workflow_to_langfuse FAILED', e)\n"
+             "PY")
+    run(ssh, "echo 'Langfuse public URL: http://8.138.10.189:3001'")
 
     ssh.close()
 

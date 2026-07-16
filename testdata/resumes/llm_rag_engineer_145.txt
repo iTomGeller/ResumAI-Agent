@@ -1,0 +1,32 @@
+LLM RAG Engineer Candidate 145
+LLM RAG Engineer | 3 years experience
+Email: candidate145@example.com | GitHub: https://github.com/example-dev
+
+Summary
+Implemented query rewriting, hybrid retrieval, reranking, RAGAS evaluation, and trace analysis. Batch 10, domain scenario 1.
+
+Skills
+RAG, Milvus, rerank, Langfuse, evaluation, REST API, documentation, monitoring, cross-team collaboration.
+
+Experience
+2021.01 - Present  Example Technology  LLM RAG Engineer
+- Delivered production features related to Implemented query rewriting, hybrid retrieval, reranking, RAGAS evaluation, and trace analysis.
+- Collaborated with backend, product, QA, and operations teams.
+- Improved reliability, observability, and delivery quality with measurable engineering practices.
+- Measured outcome: improved P99 latency 38% through design review, rollout control, dashboards, and incident retrospectives.
+
+2019.07 - 2020.12  Prior Systems  Engineer
+- Maintained legacy modules, wrote migration plans, reviewed pull requests, and handled production defects.
+- Worked with customer success and security teams to resolve escalations.
+
+Project
+Domain Platform Improvement 145
+- Designed implementation plan, handled rollout, monitored metrics, and produced post-launch review.
+- Evidence includes dashboards, logs, pull requests, design docs, and incident notes.
+
+Side Project
+Knowledge Base Evaluation 145
+- Built retrieval test cases, labeled relevant snippets, compared lexical, embedding, and hybrid search quality.
+
+Education
+2016.09 - 2020.06  Example University  B.S. Computer Science

@@ -1,0 +1,202 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2852 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Ma Jiahao) Tj
+T*
+(Gender: Male    Objective: AI Agent Engineer    Location: Hangzhou) Tj
+T*
+(Phone: 13886843021    Email: majiahao6292@gmail.com    GitHub: https://github.com/majiahao403) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2011.09 - 2015.06    Huazhong University of Science and Technology    Electronic Information Engineering ) Tj
+T*
+(\(M.S.\)) Tj
+T*
+(Courses: Operating Systems, Computer Networks, Distributed Systems, Machine Learning, Design Patterns, Da) Tj
+T*
+(tabase Systems) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Backend engineer building production AI-agent workflows, RAG pipelines and runtime observability, skilled) Tj
+T*
+( in multi-agent orchestration and tool governance.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2018.07 - Present    Alibaba    Senior AI Agent Engineer) Tj
+T*
+(- Added structured constraints and validation on LLM output to reduce hallucination, raising key-field ex) Tj
+T*
+(traction accuracy above 90%, with experience documented and shared internally.) Tj
+T*
+(- Designed an agent runtime with route plan, tool budget, policy guardrails, trace replay and an evaluati) Tj
+T*
+(on feedback loop, and it became a reusable team best practice.) Tj
+T*
+(- Tuned Milvus index and sharding strategy, reducing retrieval latency from 1200ms to 380ms, significantl) Tj
+T*
+(y lowering maintenance cost.) Tj
+T*
+(- Handled 3380K agent invocations per day while keeping the online service stable, recognized by stakehol) Tj
+T*
+(ders and peers.) Tj
+T*
+(- Implemented hybrid RAG fusing BM25 lexical recall, vector search, reranking and fallback visibility, ra) Tj
+T*
+(ising evidence hit rate by 48%, and related standards were adopted by the team.) Tj
+T*
+(2015.07 - 2018.06    Didi    AI Agent Engineer) Tj
+T*
+(- Built backend of a multi-agent resume evaluation workflow chaining intent router, parser, JD matcher, t) Tj
+T*
+(echnical/risk evaluators and report generator, supporting rapid business growth.) Tj
+T*
+(- Wired the full LLM call chain into Langfuse, tracking hit count, top score, fallback rate and latency p) Tj
+T*
+(er step.) Tj
+T*
+(- Designed prompt templates with version management supporting gray release and A/B, improving iteration ) Tj
+T*
+(speed by 29%, and key metrics improved steadily.) Tj
+T*
+(- Built an offline evaluation set and automated scoring covering faithfulness, relevance and usability.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(ResumAI Agent - Intelligent Resume Evaluation Platform \(Spring Boot + Vue3 + Milvus + Neo4j + DeepSeek\)) Tj
+T*
+(- Integrated Prometheus and Grafana for full-link observability.) Tj
+T*
+(- Orchestrated a multi-agent evaluation flow with a DAG covering parsing, matching, evaluation and report) Tj
+T*
+( generation.) Tj
+T*
+(- Built a Neo4j knowledge graph linking job skills and candidate abilities, and it became a reusable team) Tj
+T*
+( best practice.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 2336 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Implemented RAG evidence retrieval with citation tracing for explainable conclusions, and it became a r) Tj
+T*
+(eusable team best practice.) Tj
+T*
+(Enterprise Knowledge Base QA \(LangChain + Milvus + Redis\)) Tj
+T*
+(- Added reranking and citation tracing to reduce off-topic answers.) Tj
+T*
+(- Supported multi-turn conversation memory and context management.) Tj
+T*
+(- Implemented document chunking and multi-route recall to improve long-document QA, reused across multipl) Tj
+T*
+(e business lines.) Tj
+T*
+(- Built online evaluation and a feedback loop.) Tj
+T*
+(Customer Service Agent \(FastAPI + LangGraph\)) Tj
+T*
+(- Improved user satisfaction by 48%, significantly lowering maintenance cost.) Tj
+T*
+(- Designed tool orchestration and function calling to connect business systems, and related standards wer) Tj
+T*
+(e adopted by the team.) Tj
+T*
+(- Implemented intent recognition and slot filling to raise resolution rate, reused across multiple busine) Tj
+T*
+(ss lines.) Tj
+T*
+(- Designed human fallback and escalation for better experience.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Led a major technical effort involving LLM observability and tracing, staying stable at 3000 QPS peak) Tj
+T*
+(- Work around Spring AI / FastAPI services delivered about 48% efficiency gains and was reused across the) Tj
+T*
+( team) Tj
+T*
+(- Drove a focused effort on requirement analysis and documentation, reducing related issues by about 29%) Tj
+T*
+(- Continuously optimized unit testing and quality, cutting key-path latency from 1200ms to 380ms) Tj
+T*
+(- Built a reusable methodology and docs around Git collaboration and code review, adopted by several team) Tj
+T*
+(s) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: RAG retrieval and reranking, LangGraph, RAG, Spring AI, Milvus vector database) Tj
+T*
+(Proficient in: Prompt engineering and evaluation, LLM, Observability, Milvus, Spring AI / FastAPI service) Tj
+T*
+(s) Tj
+T*
+(Familiar with: MCP, Agent, Python, Tool Orchestration, LangGraph/LangChain agent orchestration, LLM obser) Tj
+T*
+(vability and tracing) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Enjoys retrospectives, cares about code quality and observability, and makes data-driven decisions) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000003206 00000 n 
+0000003381 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+5769
+%%EOF

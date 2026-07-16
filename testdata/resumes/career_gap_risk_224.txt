@@ -1,0 +1,32 @@
+Backend Engineer With Career Gap Candidate 224
+Backend Engineer With Career Gap | 2 years experience
+Email: candidate224@example.com | GitHub: https://github.com/example-dev
+
+Summary
+Worked in Java backend, had a 10 month career gap, project details are limited. Batch 15, domain scenario 8.
+
+Skills
+Java, risk, gap, timeline, REST API, documentation, monitoring, cross-team collaboration.
+
+Experience
+2021.01 - Present  Cedar Finance  Backend Engineer With Career Gap
+- Delivered production features related to Worked in Java backend, had a 10 month career gap, project details are limited.
+- Collaborated with backend, product, QA, and operations teams.
+- Improved reliability, observability, and delivery quality with measurable engineering practices.
+- Measured outcome: improved on-call MTTR 45% through design review, rollout control, dashboards, and incident retrospectives.
+
+2019.07 - 2020.12  Prior Systems  Engineer
+- Maintained legacy modules, wrote migration plans, reviewed pull requests, and handled production defects.
+- Worked with customer success and security teams to resolve escalations.
+
+Project
+Domain Platform Improvement 224
+- Designed implementation plan, handled rollout, monitored metrics, and produced post-launch review.
+- Evidence includes dashboards, logs, pull requests, design docs, and incident notes.
+
+Side Project
+Knowledge Base Evaluation 224
+- Built retrieval test cases, labeled relevant snippets, compared lexical, embedding, and hybrid search quality.
+
+Education
+2016.09 - 2020.06  Example University  B.S. Computer Science

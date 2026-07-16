@@ -1,0 +1,783 @@
+{
+  "rule": "relevant(q, doc) = 1 iff |set(q.target_skills) & set(doc.expectedSkills)| >= q.min_overlap (default 2)",
+  "n_docs": 100,
+  "n_queries": 28,
+  "relevant": {
+    "q01": [
+      "senior_backend_001",
+      "senior_backend_002",
+      "senior_backend_003",
+      "senior_backend_004",
+      "senior_backend_005",
+      "senior_backend_006",
+      "senior_backend_007",
+      "senior_backend_008",
+      "senior_backend_009",
+      "senior_backend_010",
+      "senior_backend_011",
+      "senior_backend_012"
+    ],
+    "q02": [
+      "senior_backend_001",
+      "senior_backend_002",
+      "senior_backend_003",
+      "senior_backend_004",
+      "senior_backend_005",
+      "senior_backend_006",
+      "senior_backend_007",
+      "senior_backend_008",
+      "senior_backend_009",
+      "senior_backend_010",
+      "senior_backend_011",
+      "senior_backend_012",
+      "new_grad_088",
+      "new_grad_089",
+      "new_grad_090",
+      "new_grad_091",
+      "new_grad_092",
+      "new_grad_093",
+      "career_gap_094",
+      "career_gap_095",
+      "career_gap_096",
+      "career_gap_097",
+      "sparse_risk_098",
+      "sparse_risk_099",
+      "sparse_risk_100"
+    ],
+    "q03": [
+      "senior_backend_001",
+      "senior_backend_002",
+      "senior_backend_003",
+      "senior_backend_004",
+      "senior_backend_005",
+      "senior_backend_006",
+      "senior_backend_007",
+      "senior_backend_008",
+      "senior_backend_009",
+      "senior_backend_010",
+      "senior_backend_011",
+      "senior_backend_012"
+    ],
+    "q04": [
+      "new_grad_088",
+      "new_grad_089",
+      "new_grad_090",
+      "new_grad_091",
+      "new_grad_092",
+      "new_grad_093"
+    ],
+    "q24": [
+      "senior_backend_001",
+      "senior_backend_002",
+      "senior_backend_003",
+      "senior_backend_004",
+      "senior_backend_005",
+      "senior_backend_006",
+      "senior_backend_007",
+      "senior_backend_008",
+      "senior_backend_009",
+      "senior_backend_010",
+      "senior_backend_011",
+      "senior_backend_012"
+    ],
+    "q27": [
+      "senior_backend_001",
+      "senior_backend_002",
+      "senior_backend_003",
+      "senior_backend_004",
+      "senior_backend_005",
+      "senior_backend_006",
+      "senior_backend_007",
+      "senior_backend_008",
+      "senior_backend_009",
+      "senior_backend_010",
+      "senior_backend_011",
+      "senior_backend_012"
+    ],
+    "q05": [
+      "ai_agent_engineer_013",
+      "ai_agent_engineer_014",
+      "ai_agent_engineer_015",
+      "ai_agent_engineer_016",
+      "ai_agent_engineer_017",
+      "ai_agent_engineer_018",
+      "ai_agent_engineer_019",
+      "ai_agent_engineer_020",
+      "ai_agent_engineer_021",
+      "ai_agent_engineer_022"
+    ],
+    "q08": [
+      "ai_agent_engineer_013",
+      "ai_agent_engineer_014",
+      "ai_agent_engineer_015",
+      "ai_agent_engineer_016",
+      "ai_agent_engineer_017",
+      "ai_agent_engineer_018",
+      "ai_agent_engineer_019",
+      "ai_agent_engineer_020",
+      "ai_agent_engineer_021",
+      "ai_agent_engineer_022"
+    ],
+    "q06": [
+      "llm_rag_engineer_023",
+      "llm_rag_engineer_024",
+      "llm_rag_engineer_025",
+      "llm_rag_engineer_026",
+      "llm_rag_engineer_027",
+      "llm_rag_engineer_028",
+      "llm_rag_engineer_029",
+      "llm_rag_engineer_030"
+    ],
+    "q07": [
+      "llm_rag_engineer_023",
+      "llm_rag_engineer_024",
+      "llm_rag_engineer_025",
+      "llm_rag_engineer_026",
+      "llm_rag_engineer_027",
+      "llm_rag_engineer_028",
+      "llm_rag_engineer_029",
+      "llm_rag_engineer_030"
+    ],
+    "q26": [
+      "llm_rag_engineer_023",
+      "llm_rag_engineer_024",
+      "llm_rag_engineer_025",
+      "llm_rag_engineer_026",
+      "llm_rag_engineer_027",
+      "llm_rag_engineer_028",
+      "llm_rag_engineer_029",
+      "llm_rag_engineer_030"
+    ],
+    "q23": [
+      "ai_agent_engineer_013",
+      "ai_agent_engineer_014",
+      "ai_agent_engineer_015",
+      "ai_agent_engineer_016",
+      "ai_agent_engineer_017",
+      "ai_agent_engineer_018",
+      "ai_agent_engineer_019",
+      "ai_agent_engineer_020",
+      "ai_agent_engineer_021",
+      "ai_agent_engineer_022",
+      "llm_rag_engineer_023",
+      "llm_rag_engineer_024",
+      "llm_rag_engineer_025",
+      "llm_rag_engineer_026",
+      "llm_rag_engineer_027",
+      "llm_rag_engineer_028",
+      "llm_rag_engineer_029",
+      "llm_rag_engineer_030"
+    ],
+    "q09": [
+      "senior_frontend_038",
+      "senior_frontend_039",
+      "senior_frontend_040",
+      "senior_frontend_041",
+      "senior_frontend_042",
+      "senior_frontend_043",
+      "senior_frontend_044"
+    ],
+    "q25": [
+      "senior_frontend_038",
+      "senior_frontend_039",
+      "senior_frontend_040",
+      "senior_frontend_041",
+      "senior_frontend_042",
+      "senior_frontend_043",
+      "senior_frontend_044"
+    ],
+    "q10": [
+      "junior_frontend_031",
+      "junior_frontend_032",
+      "junior_frontend_033",
+      "junior_frontend_034",
+      "junior_frontend_035",
+      "junior_frontend_036",
+      "junior_frontend_037",
+      "senior_frontend_038",
+      "senior_frontend_039",
+      "senior_frontend_040",
+      "senior_frontend_041",
+      "senior_frontend_042",
+      "senior_frontend_043",
+      "senior_frontend_044"
+    ],
+    "q11": [
+      "junior_frontend_031",
+      "junior_frontend_032",
+      "junior_frontend_033",
+      "junior_frontend_034",
+      "junior_frontend_035",
+      "junior_frontend_036",
+      "junior_frontend_037"
+    ],
+    "q28": [
+      "junior_frontend_031",
+      "junior_frontend_032",
+      "junior_frontend_033",
+      "junior_frontend_034",
+      "junior_frontend_035",
+      "junior_frontend_036",
+      "junior_frontend_037",
+      "senior_frontend_038",
+      "senior_frontend_039",
+      "senior_frontend_040",
+      "senior_frontend_041",
+      "senior_frontend_042",
+      "senior_frontend_043",
+      "senior_frontend_044"
+    ],
+    "q12": [
+      "data_platform_053",
+      "data_platform_054",
+      "data_platform_055",
+      "data_platform_056",
+      "data_platform_057",
+      "data_platform_058",
+      "data_platform_059"
+    ],
+    "q22": [
+      "data_platform_053",
+      "data_platform_054",
+      "data_platform_055",
+      "data_platform_056",
+      "data_platform_057",
+      "data_platform_058",
+      "data_platform_059"
+    ],
+    "q13": [
+      "devops_sre_060",
+      "devops_sre_061",
+      "devops_sre_062",
+      "devops_sre_063",
+      "devops_sre_064",
+      "devops_sre_065",
+      "devops_sre_066"
+    ],
+    "q21": [
+      "devops_sre_060",
+      "devops_sre_061",
+      "devops_sre_062",
+      "devops_sre_063",
+      "devops_sre_064",
+      "devops_sre_065",
+      "devops_sre_066"
+    ],
+    "q14": [
+      "algorithm_ml_067",
+      "algorithm_ml_068",
+      "algorithm_ml_069",
+      "algorithm_ml_070",
+      "algorithm_ml_071",
+      "algorithm_ml_072"
+    ],
+    "q15": [
+      "algorithm_ml_067",
+      "algorithm_ml_068",
+      "algorithm_ml_069",
+      "algorithm_ml_070",
+      "algorithm_ml_071",
+      "algorithm_ml_072"
+    ],
+    "q16": [
+      "qa_automation_073",
+      "qa_automation_074",
+      "qa_automation_075",
+      "qa_automation_076",
+      "qa_automation_077"
+    ],
+    "q17": [
+      "security_backend_078",
+      "security_backend_079",
+      "security_backend_080",
+      "security_backend_081",
+      "security_backend_082"
+    ],
+    "q18": [
+      "mobile_engineer_083",
+      "mobile_engineer_084",
+      "mobile_engineer_085",
+      "mobile_engineer_086",
+      "mobile_engineer_087"
+    ],
+    "q19": [
+      "product_manager_045",
+      "product_manager_046",
+      "product_manager_047",
+      "product_manager_048",
+      "product_manager_049",
+      "product_manager_050",
+      "product_manager_051",
+      "product_manager_052"
+    ],
+    "q20": [
+      "product_manager_045",
+      "product_manager_046",
+      "product_manager_047",
+      "product_manager_048",
+      "product_manager_049",
+      "product_manager_050",
+      "product_manager_051",
+      "product_manager_052"
+    ]
+  },
+  "detail": {
+    "q01": {
+      "cluster": "资深后端",
+      "min_overlap": 2,
+      "n_relevant": 12,
+      "overlap_by_doc": {
+        "senior_backend_001": 6,
+        "senior_backend_002": 6,
+        "senior_backend_003": 6,
+        "senior_backend_004": 6,
+        "senior_backend_005": 6,
+        "senior_backend_006": 6,
+        "senior_backend_007": 6,
+        "senior_backend_008": 6,
+        "senior_backend_009": 6,
+        "senior_backend_010": 6,
+        "senior_backend_011": 6,
+        "senior_backend_012": 6
+      }
+    },
+    "q02": {
+      "cluster": "后端(广义)",
+      "min_overlap": 2,
+      "n_relevant": 25,
+      "overlap_by_doc": {
+        "senior_backend_001": 4,
+        "senior_backend_002": 4,
+        "senior_backend_003": 4,
+        "senior_backend_004": 4,
+        "senior_backend_005": 4,
+        "senior_backend_006": 4,
+        "senior_backend_007": 4,
+        "senior_backend_008": 4,
+        "senior_backend_009": 4,
+        "senior_backend_010": 4,
+        "senior_backend_011": 4,
+        "senior_backend_012": 4,
+        "new_grad_088": 4,
+        "new_grad_089": 4,
+        "new_grad_090": 4,
+        "new_grad_091": 4,
+        "new_grad_092": 4,
+        "new_grad_093": 4,
+        "career_gap_094": 2,
+        "career_gap_095": 2,
+        "career_gap_096": 2,
+        "career_gap_097": 2,
+        "sparse_risk_098": 2,
+        "sparse_risk_099": 2,
+        "sparse_risk_100": 2
+      }
+    },
+    "q03": {
+      "cluster": "资深后端",
+      "min_overlap": 2,
+      "n_relevant": 12,
+      "overlap_by_doc": {
+        "senior_backend_001": 4,
+        "senior_backend_002": 4,
+        "senior_backend_003": 4,
+        "senior_backend_004": 4,
+        "senior_backend_005": 4,
+        "senior_backend_006": 4,
+        "senior_backend_007": 4,
+        "senior_backend_008": 4,
+        "senior_backend_009": 4,
+        "senior_backend_010": 4,
+        "senior_backend_011": 4,
+        "senior_backend_012": 4
+      }
+    },
+    "q04": {
+      "cluster": "应届后端",
+      "min_overlap": 2,
+      "n_relevant": 6,
+      "overlap_by_doc": {
+        "new_grad_088": 4,
+        "new_grad_089": 4,
+        "new_grad_090": 4,
+        "new_grad_091": 4,
+        "new_grad_092": 4,
+        "new_grad_093": 4
+      }
+    },
+    "q24": {
+      "cluster": "资深后端",
+      "min_overlap": 2,
+      "n_relevant": 12,
+      "overlap_by_doc": {
+        "senior_backend_001": 4,
+        "senior_backend_002": 4,
+        "senior_backend_003": 4,
+        "senior_backend_004": 4,
+        "senior_backend_005": 4,
+        "senior_backend_006": 4,
+        "senior_backend_007": 4,
+        "senior_backend_008": 4,
+        "senior_backend_009": 4,
+        "senior_backend_010": 4,
+        "senior_backend_011": 4,
+        "senior_backend_012": 4
+      }
+    },
+    "q27": {
+      "cluster": "资深后端",
+      "min_overlap": 2,
+      "n_relevant": 12,
+      "overlap_by_doc": {
+        "senior_backend_001": 5,
+        "senior_backend_002": 5,
+        "senior_backend_003": 5,
+        "senior_backend_004": 5,
+        "senior_backend_005": 5,
+        "senior_backend_006": 5,
+        "senior_backend_007": 5,
+        "senior_backend_008": 5,
+        "senior_backend_009": 5,
+        "senior_backend_010": 5,
+        "senior_backend_011": 5,
+        "senior_backend_012": 5
+      }
+    },
+    "q05": {
+      "cluster": "AI Agent",
+      "min_overlap": 2,
+      "n_relevant": 10,
+      "overlap_by_doc": {
+        "ai_agent_engineer_013": 6,
+        "ai_agent_engineer_014": 6,
+        "ai_agent_engineer_015": 6,
+        "ai_agent_engineer_016": 6,
+        "ai_agent_engineer_017": 6,
+        "ai_agent_engineer_018": 6,
+        "ai_agent_engineer_019": 6,
+        "ai_agent_engineer_020": 6,
+        "ai_agent_engineer_021": 6,
+        "ai_agent_engineer_022": 6
+      }
+    },
+    "q08": {
+      "cluster": "AI Agent",
+      "min_overlap": 2,
+      "n_relevant": 10,
+      "overlap_by_doc": {
+        "ai_agent_engineer_013": 5,
+        "ai_agent_engineer_014": 5,
+        "ai_agent_engineer_015": 5,
+        "ai_agent_engineer_016": 5,
+        "ai_agent_engineer_017": 5,
+        "ai_agent_engineer_018": 5,
+        "ai_agent_engineer_019": 5,
+        "ai_agent_engineer_020": 5,
+        "ai_agent_engineer_021": 5,
+        "ai_agent_engineer_022": 5
+      }
+    },
+    "q06": {
+      "cluster": "大模型应用",
+      "min_overlap": 2,
+      "n_relevant": 8,
+      "overlap_by_doc": {
+        "llm_rag_engineer_023": 6,
+        "llm_rag_engineer_024": 6,
+        "llm_rag_engineer_025": 6,
+        "llm_rag_engineer_026": 6,
+        "llm_rag_engineer_027": 6,
+        "llm_rag_engineer_028": 6,
+        "llm_rag_engineer_029": 6,
+        "llm_rag_engineer_030": 6
+      }
+    },
+    "q07": {
+      "cluster": "大模型应用",
+      "min_overlap": 2,
+      "n_relevant": 8,
+      "overlap_by_doc": {
+        "llm_rag_engineer_023": 4,
+        "llm_rag_engineer_024": 4,
+        "llm_rag_engineer_025": 4,
+        "llm_rag_engineer_026": 4,
+        "llm_rag_engineer_027": 4,
+        "llm_rag_engineer_028": 4,
+        "llm_rag_engineer_029": 4,
+        "llm_rag_engineer_030": 4
+      }
+    },
+    "q26": {
+      "cluster": "大模型应用",
+      "min_overlap": 2,
+      "n_relevant": 8,
+      "overlap_by_doc": {
+        "llm_rag_engineer_023": 4,
+        "llm_rag_engineer_024": 4,
+        "llm_rag_engineer_025": 4,
+        "llm_rag_engineer_026": 4,
+        "llm_rag_engineer_027": 4,
+        "llm_rag_engineer_028": 4,
+        "llm_rag_engineer_029": 4,
+        "llm_rag_engineer_030": 4
+      }
+    },
+    "q23": {
+      "cluster": "AI 跨簇",
+      "min_overlap": 2,
+      "n_relevant": 18,
+      "overlap_by_doc": {
+        "ai_agent_engineer_013": 2,
+        "ai_agent_engineer_014": 2,
+        "ai_agent_engineer_015": 2,
+        "ai_agent_engineer_016": 2,
+        "ai_agent_engineer_017": 2,
+        "ai_agent_engineer_018": 2,
+        "ai_agent_engineer_019": 2,
+        "ai_agent_engineer_020": 2,
+        "ai_agent_engineer_021": 2,
+        "ai_agent_engineer_022": 2,
+        "llm_rag_engineer_023": 4,
+        "llm_rag_engineer_024": 4,
+        "llm_rag_engineer_025": 4,
+        "llm_rag_engineer_026": 4,
+        "llm_rag_engineer_027": 4,
+        "llm_rag_engineer_028": 4,
+        "llm_rag_engineer_029": 4,
+        "llm_rag_engineer_030": 4
+      }
+    },
+    "q09": {
+      "cluster": "资深前端",
+      "min_overlap": 2,
+      "n_relevant": 7,
+      "overlap_by_doc": {
+        "senior_frontend_038": 6,
+        "senior_frontend_039": 6,
+        "senior_frontend_040": 6,
+        "senior_frontend_041": 6,
+        "senior_frontend_042": 6,
+        "senior_frontend_043": 6,
+        "senior_frontend_044": 6
+      }
+    },
+    "q25": {
+      "cluster": "资深前端",
+      "min_overlap": 2,
+      "n_relevant": 7,
+      "overlap_by_doc": {
+        "senior_frontend_038": 4,
+        "senior_frontend_039": 4,
+        "senior_frontend_040": 4,
+        "senior_frontend_041": 4,
+        "senior_frontend_042": 4,
+        "senior_frontend_043": 4,
+        "senior_frontend_044": 4
+      }
+    },
+    "q10": {
+      "cluster": "初级前端",
+      "min_overlap": 2,
+      "n_relevant": 14,
+      "overlap_by_doc": {
+        "junior_frontend_031": 6,
+        "junior_frontend_032": 6,
+        "junior_frontend_033": 6,
+        "junior_frontend_034": 6,
+        "junior_frontend_035": 6,
+        "junior_frontend_036": 6,
+        "junior_frontend_037": 6,
+        "senior_frontend_038": 3,
+        "senior_frontend_039": 3,
+        "senior_frontend_040": 3,
+        "senior_frontend_041": 3,
+        "senior_frontend_042": 3,
+        "senior_frontend_043": 3,
+        "senior_frontend_044": 3
+      }
+    },
+    "q11": {
+      "cluster": "初级前端",
+      "min_overlap": 2,
+      "n_relevant": 7,
+      "overlap_by_doc": {
+        "junior_frontend_031": 2,
+        "junior_frontend_032": 2,
+        "junior_frontend_033": 2,
+        "junior_frontend_034": 2,
+        "junior_frontend_035": 2,
+        "junior_frontend_036": 2,
+        "junior_frontend_037": 2
+      }
+    },
+    "q28": {
+      "cluster": "前端跨簇",
+      "min_overlap": 2,
+      "n_relevant": 14,
+      "overlap_by_doc": {
+        "junior_frontend_031": 2,
+        "junior_frontend_032": 2,
+        "junior_frontend_033": 2,
+        "junior_frontend_034": 2,
+        "junior_frontend_035": 2,
+        "junior_frontend_036": 2,
+        "junior_frontend_037": 2,
+        "senior_frontend_038": 4,
+        "senior_frontend_039": 4,
+        "senior_frontend_040": 4,
+        "senior_frontend_041": 4,
+        "senior_frontend_042": 4,
+        "senior_frontend_043": 4,
+        "senior_frontend_044": 4
+      }
+    },
+    "q12": {
+      "cluster": "数据平台",
+      "min_overlap": 2,
+      "n_relevant": 7,
+      "overlap_by_doc": {
+        "data_platform_053": 6,
+        "data_platform_054": 6,
+        "data_platform_055": 6,
+        "data_platform_056": 6,
+        "data_platform_057": 6,
+        "data_platform_058": 6,
+        "data_platform_059": 6
+      }
+    },
+    "q22": {
+      "cluster": "数据平台",
+      "min_overlap": 2,
+      "n_relevant": 7,
+      "overlap_by_doc": {
+        "data_platform_053": 4,
+        "data_platform_054": 4,
+        "data_platform_055": 4,
+        "data_platform_056": 4,
+        "data_platform_057": 4,
+        "data_platform_058": 4,
+        "data_platform_059": 4
+      }
+    },
+    "q13": {
+      "cluster": "运维/SRE",
+      "min_overlap": 2,
+      "n_relevant": 7,
+      "overlap_by_doc": {
+        "devops_sre_060": 5,
+        "devops_sre_061": 5,
+        "devops_sre_062": 5,
+        "devops_sre_063": 5,
+        "devops_sre_064": 5,
+        "devops_sre_065": 5,
+        "devops_sre_066": 5
+      }
+    },
+    "q21": {
+      "cluster": "运维/SRE",
+      "min_overlap": 2,
+      "n_relevant": 7,
+      "overlap_by_doc": {
+        "devops_sre_060": 2,
+        "devops_sre_061": 2,
+        "devops_sre_062": 2,
+        "devops_sre_063": 2,
+        "devops_sre_064": 2,
+        "devops_sre_065": 2,
+        "devops_sre_066": 2
+      }
+    },
+    "q14": {
+      "cluster": "算法",
+      "min_overlap": 2,
+      "n_relevant": 6,
+      "overlap_by_doc": {
+        "algorithm_ml_067": 6,
+        "algorithm_ml_068": 6,
+        "algorithm_ml_069": 6,
+        "algorithm_ml_070": 6,
+        "algorithm_ml_071": 6,
+        "algorithm_ml_072": 6
+      }
+    },
+    "q15": {
+      "cluster": "算法",
+      "min_overlap": 2,
+      "n_relevant": 6,
+      "overlap_by_doc": {
+        "algorithm_ml_067": 4,
+        "algorithm_ml_068": 4,
+        "algorithm_ml_069": 4,
+        "algorithm_ml_070": 4,
+        "algorithm_ml_071": 4,
+        "algorithm_ml_072": 4
+      }
+    },
+    "q16": {
+      "cluster": "测试",
+      "min_overlap": 2,
+      "n_relevant": 5,
+      "overlap_by_doc": {
+        "qa_automation_073": 6,
+        "qa_automation_074": 6,
+        "qa_automation_075": 6,
+        "qa_automation_076": 6,
+        "qa_automation_077": 6
+      }
+    },
+    "q17": {
+      "cluster": "安全",
+      "min_overlap": 2,
+      "n_relevant": 5,
+      "overlap_by_doc": {
+        "security_backend_078": 7,
+        "security_backend_079": 7,
+        "security_backend_080": 7,
+        "security_backend_081": 7,
+        "security_backend_082": 7
+      }
+    },
+    "q18": {
+      "cluster": "移动端",
+      "min_overlap": 2,
+      "n_relevant": 5,
+      "overlap_by_doc": {
+        "mobile_engineer_083": 5,
+        "mobile_engineer_084": 5,
+        "mobile_engineer_085": 5,
+        "mobile_engineer_086": 5,
+        "mobile_engineer_087": 5
+      }
+    },
+    "q19": {
+      "cluster": "产品经理",
+      "min_overlap": 2,
+      "n_relevant": 8,
+      "overlap_by_doc": {
+        "product_manager_045": 6,
+        "product_manager_046": 6,
+        "product_manager_047": 6,
+        "product_manager_048": 6,
+        "product_manager_049": 6,
+        "product_manager_050": 6,
+        "product_manager_051": 6,
+        "product_manager_052": 6
+      }
+    },
+    "q20": {
+      "cluster": "产品经理",
+      "min_overlap": 2,
+      "n_relevant": 8,
+      "overlap_by_doc": {
+        "product_manager_045": 3,
+        "product_manager_046": 3,
+        "product_manager_047": 3,
+        "product_manager_048": 3,
+        "product_manager_049": 3,
+        "product_manager_050": 3,
+        "product_manager_051": 3,
+        "product_manager_052": 3
+      }
+    }
+  }
+}

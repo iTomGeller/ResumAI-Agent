@@ -1,0 +1,32 @@
+Backend Storage Engineer Candidate 199
+Backend Storage Engineer | 9 years experience
+Email: candidate199@example.com | GitHub: https://github.com/example-dev
+
+Summary
+Optimized MySQL indexes, Redis cache strategy, distributed locks, and hot-key protection. Batch 14, domain scenario 1.
+
+Skills
+MySQL, Redis, Java, SQL, cache, REST API, documentation, monitoring, cross-team collaboration.
+
+Experience
+2021.01 - Present  Cedar Finance  Backend Storage Engineer
+- Delivered production features related to Optimized MySQL indexes, Redis cache strategy, distributed locks, and hot-key protection.
+- Collaborated with backend, product, QA, and operations teams.
+- Improved reliability, observability, and delivery quality with measurable engineering practices.
+- Measured outcome: improved on-call MTTR 45% through design review, rollout control, dashboards, and incident retrospectives.
+
+2019.07 - 2020.12  Prior Systems  Engineer
+- Maintained legacy modules, wrote migration plans, reviewed pull requests, and handled production defects.
+- Worked with customer success and security teams to resolve escalations.
+
+Project
+Domain Platform Improvement 199
+- Designed implementation plan, handled rollout, monitored metrics, and produced post-launch review.
+- Evidence includes dashboards, logs, pull requests, design docs, and incident notes.
+
+Side Project
+Knowledge Base Evaluation 199
+- Built retrieval test cases, labeled relevant snippets, compared lexical, embedding, and hybrid search quality.
+
+Education
+2016.09 - 2020.06  Example University  B.S. Computer Science

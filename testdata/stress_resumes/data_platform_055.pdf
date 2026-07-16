@@ -1,0 +1,168 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2607 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Wang Xue) Tj
+T*
+(Gender: Female    Objective: Data Platform Engineer    Location: Hangzhou) Tj
+T*
+(Phone: 15529495760    Email: wangxue9335@163.com    GitHub: https://github.com/wangxue428) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2017.09 - 2021.06    Shandong University    Computer Science and Technology \(M.S.\)) Tj
+T*
+(Courses: Machine Learning, Distributed Systems, Compilers, Database Systems, Data Structures and Algorith) Tj
+T*
+(ms, Operating Systems) Tj
+T*
+(GPA 3.4/4.0, top 5% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Data platform engineer focused on realtime warehouse, streaming ETL and batch processing with strong data) Tj
+T*
+( modeling and governance.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2023.07 - Present    a SaaS company    Data Engineer) Tj
+T*
+(- Governed metric definitions on a unified platform to reduce inconsistencies, reused across multiple bus) Tj
+T*
+(iness lines.) Tj
+T*
+(- Owned realtime warehouse and streaming ETL with Flink over massive Kafka event data.) Tj
+T*
+(- Supported realtime dashboards and risk features with second-level end-to-end latency.) Tj
+T*
+(- Designed a layered warehouse \(ODS/DWD/DWS/ADS\) and data modeling for BI and ML features, and key metric) Tj
+T*
+(s improved steadily.) Tj
+T*
+(2021.07 - 2023.06    Xiaohongshu    Junior Data Engineer) Tj
+T*
+(- Built data-quality monitoring and lineage with automatic anomaly alerts, supporting rapid business grow) Tj
+T*
+(th.) Tj
+T*
+(- Processed 7460K records per day keeping T+1 and realtime paths stable, and related standards were adopt) Tj
+T*
+(ed by the team.) Tj
+T*
+(- Optimized Spark offline jobs, cutting runtime by 24% and resource cost by 16%, and related standards we) Tj
+T*
+(re adopted by the team.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Realtime Data Platform \(Flink + Kafka + ClickHouse\)) Tj
+T*
+(- Processed 7460K events per day, and key metrics improved steadily.) Tj
+T*
+(- Wrote to ClickHouse for realtime dashboards and ad-hoc queries.) Tj
+T*
+(- Processed Kafka realtime data with Flink at second-level end-to-end latency, and key metrics improved s) Tj
+T*
+(teadily.) Tj
+T*
+(- Designed exactly-once semantics for data accuracy.) Tj
+T*
+(Offline Warehouse & Metrics Platform \(Spark + Hive\)) Tj
+T*
+(- Optimized scheduling, cutting runtime by 24%, and it became a reusable team best practice.) Tj
+T*
+(- Unified metric definitions and dimensional modeling, recognized by stakeholders and peers.) Tj
+T*
+(- Built data-quality and lineage monitoring.) Tj
+T*
+(- Built a layered warehouse with Spark and Hive, significantly lowering maintenance cost.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1166 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Established metrics and reviews around design patterns and refactoring to keep improving delivery quali) Tj
+T*
+(ty) Tj
+T*
+(- Continuously optimized computer networking basics, cutting key-path latency from 2200ms to 260ms) Tj
+T*
+(- Work around cross-team communication delivered about 24% efficiency gains and was reused across the tea) Tj
+T*
+(m) Tj
+T*
+(- Led a major technical effort involving data analysis and metrics, staying stable at 30000 QPS peak) Tj
+T*
+(- Drove a focused effort on Flink stream processing, reducing related issues by about 16%) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Kafka data ingestion, Data governance and lineage, Spark batch processing, Spark) Tj
+T*
+(Proficient in: ETL, Data Warehouse, Kafka, Data Governance) Tj
+T*
+(Familiar with: Python, Hive/ClickHouse, Data warehouse modeling, Hive, Flink stream processing, Flink) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Stays calm under pressure and recovers services quickly during high-concurrency incidents) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002961 00000 n 
+0000003136 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4354
+%%EOF

@@ -1,0 +1,32 @@
+Questionable Project Resume Candidate 15
+Questionable Project Resume | 9 years experience
+Email: candidate15@example.com
+
+Summary
+Lists many buzzwords but no company, no dates, no measurable project outcomes. Batch 1, domain scenario 6.
+
+Skills
+risk, GitHub, project, verification, REST API, documentation, monitoring, cross-team collaboration.
+
+Experience
+2021.01 - Present  Example Technology  Questionable Project Resume
+- Delivered production features related to Lists many buzzwords but no company, no dates, no measurable project outcomes.
+- Collaborated with backend, product, QA, and operations teams.
+- Improved reliability, observability, and delivery quality with measurable engineering practices.
+- Measured outcome: improved P99 latency 38% through design review, rollout control, dashboards, and incident retrospectives.
+
+2019.07 - 2020.12  Prior Systems  Engineer
+- Maintained legacy modules, wrote migration plans, reviewed pull requests, and handled production defects.
+- Worked with customer success and security teams to resolve escalations.
+
+Project
+Domain Platform Improvement 15
+- Designed implementation plan, handled rollout, monitored metrics, and produced post-launch review.
+- Evidence includes dashboards, logs, pull requests, design docs, and incident notes.
+
+Side Project
+Knowledge Base Evaluation 15
+- Built retrieval test cases, labeled relevant snippets, compared lexical, embedding, and hybrid search quality.
+
+Education
+2016.09 - 2020.06  Example University  B.S. Computer Science

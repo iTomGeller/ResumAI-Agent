@@ -28,7 +28,7 @@ public class TaskWorkerService {
     private final TaskQueueService taskQueueService;
     private final TaskQueueRepository taskQueueRepository;
     private final TaskQueueProperties properties;
-    private final MvpEvaluationService evaluationService;
+    private final ResumeEvaluationService evaluationService;
     private final AgentMetrics agentMetrics;
 
     private final AtomicInteger activeWorkers = new AtomicInteger(0);
@@ -40,7 +40,7 @@ public class TaskWorkerService {
     public TaskWorkerService(TaskQueueService taskQueueService,
                              TaskQueueRepository taskQueueRepository,
                              TaskQueueProperties properties,
-                             MvpEvaluationService evaluationService,
+                             ResumeEvaluationService evaluationService,
                              AgentMetrics agentMetrics) {
         this.taskQueueService = taskQueueService;
         this.taskQueueRepository = taskQueueRepository;

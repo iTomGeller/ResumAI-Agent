@@ -1,0 +1,142 @@
+{
+  "generatedAt": "2026-06-26T10:57:30",
+  "base": "http://8.138.10.189",
+  "totals": {
+    "manifest": 100,
+    "collected": 100,
+    "success": 100,
+    "failed": 0,
+    "successRate": 100.0,
+    "failureRate": 0.0
+  },
+  "latencySecServer": {
+    "count": 100,
+    "mean": 38.6,
+    "p50": 38.5,
+    "p90": 48.5,
+    "p95": 51.3,
+    "max": 55.7,
+    "min": 10.7
+  },
+  "latencySecWall": {
+    "count": 100,
+    "mean": 44.5,
+    "p50": 44.1,
+    "p90": 54.9,
+    "p95": 56.8,
+    "max": 63.9,
+    "min": 16.5
+  },
+  "nodeDurationMeanMs": {
+    "intent": 6090.7,
+    "resume_parse": 4405.1,
+    "jd_match": 3077.0,
+    "knowledge_context": 2885.1,
+    "tech_eval": 13857.0,
+    "risk_eval": 4967.6,
+    "evidence_fusion": 107.6,
+    "report": 11933.6,
+    "project_eval": 10894.2
+  },
+  "nodeDurationSampleCount": {
+    "intent": 100,
+    "resume_parse": 100,
+    "jd_match": 100,
+    "knowledge_context": 100,
+    "tech_eval": 97,
+    "risk_eval": 51,
+    "evidence_fusion": 100,
+    "report": 100,
+    "project_eval": 59
+  },
+  "routeModeCounts": {
+    "TECH_SCREEN": 38,
+    "TECH_DEEP_DIVE": 49,
+    "FULL_REVIEW": 10,
+    "FAST_SCREEN": 3
+  },
+  "llm": {
+    "totalSaved": 93,
+    "totalEstimated": 607,
+    "totalFullPipeline": 700,
+    "savingPct": 13.3,
+    "avgEstimatedPerTask": 6.07,
+    "savedDistribution": {
+      "0": 10,
+      "1": 87,
+      "2": 3
+    }
+  },
+  "mcp": {
+    "triggerTasks": 70,
+    "triggerRatePct": 70.0,
+    "totalCalls": 70,
+    "avgLatencyMs": 3147.5,
+    "p90LatencyMs": 3880.2,
+    "maxLatencyMs": 5993.0,
+    "statuses": {
+      "SUCCESS": 70
+    }
+  },
+  "githubEnrichment": {
+    "triggerTasks": 69,
+    "triggerRatePct": 69.0,
+    "totalCalls": 69,
+    "avgLatencyMs": 519.0
+  },
+  "manifestHasGithub": 70,
+  "manifestHasGithubPct": 70.0,
+  "score": {
+    "count": 100,
+    "mean": 73.6,
+    "p50": 72.0,
+    "p90": 85.0,
+    "p95": 85.0,
+    "max": 86.0,
+    "min": 39.0
+  },
+  "recommendationCounts": {
+    "NOT_RECOMMEND": 84,
+    "RECOMMEND": 9,
+    "NEED_MANUAL_REVIEW": 7
+  },
+  "reportLength": {
+    "count": 100,
+    "mean": 154.8,
+    "p50": 101.0,
+    "p90": 363.5,
+    "p95": 395.1,
+    "max": 503.0,
+    "min": 71.0
+  },
+  "interviewQuestions": {
+    "count": 100,
+    "mean": 9.0,
+    "p50": 10.0,
+    "p90": 10.0,
+    "p95": 10.0,
+    "max": 10.0,
+    "min": 4.0
+  },
+  "interviewQuestionsGE8": 87,
+  "interviewQuestionsGE8Pct": 87.0,
+  "strengths": {
+    "count": 100,
+    "mean": 4.6,
+    "p50": 4.0,
+    "p90": 5.1,
+    "p95": 8.0,
+    "max": 8.0,
+    "min": 1.0
+  },
+  "risks": {
+    "count": 100,
+    "mean": 3.8,
+    "p50": 3.0,
+    "p90": 6.0,
+    "p95": 6.0,
+    "max": 6.0,
+    "min": 1.0
+  },
+  "failureReasons": {}
+}

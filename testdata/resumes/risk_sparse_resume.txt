@@ -1,0 +1,5 @@
+Sam Short
+Backend Engineer
+Skills: Java, Spring Boot, Kafka.
+Project: payment system refactor.
+GitHub: https://github.com/example-dev

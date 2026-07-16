@@ -1,0 +1,62 @@
+package com.resumai.agent.api.dto;
+
+import java.util.List;
+import java.util.Map;
+
+public record WorkflowTraceEventRequest(
+        String eventId,
+        String traceId,
+        String nodeId,
+        String agentName,
+        Integer phase,
+        Integer attempt,
+        String kind,
+        Integer roundIndex,
+        String parentEventId,
+        String status,
+        String startedAt,
+        String endedAt,
+        Long durationMs,
+        String modelName,
+        List<Map<String, Object>> inputMessages,
+        Map<String, Object> outputMessage,
+        String inputPreview,
+        String outputPreview,
+        Map<String, Object> tokenUsage,
+        List<WorkflowToolCallRecord> toolCalls,
+        String langfuseTraceId,
+        String langfuseObservationId,
+        String callKind,
+        String callName,
+        String roundRole,
+        String parentRoundId,
+        String decisionText,
+        Boolean hasToolCalls,
+        String finalOutput,
+        String observationKind,
+        String toolOrigin,
+        String toolFamily,
+        List<Map<String, Object>> substeps,
+        Map<String, Object> retrieval
+) {
+    public record WorkflowToolCallRecord(
+            String toolCallId,
+            String name,
+            String category,
+            String origin,
+            String family,
+            String protocol,
+            String server,
+            String operation,
+            String arguments,
+            String result,
+            String startedAt,
+            String endedAt,
+            Long durationMs,
+            String status,
+            String inputHash,
+            Integer dedupedCount,
+            List<Map<String, Object>> substeps,
+            Map<String, Object> retrieval
+    ) {}
+}

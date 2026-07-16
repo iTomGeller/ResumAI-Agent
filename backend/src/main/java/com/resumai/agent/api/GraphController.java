@@ -1,7 +1,7 @@
 package com.resumai.agent.api;
 
 import com.resumai.agent.api.dto.GraphResponse;
-import com.resumai.agent.service.MvpEvaluationService;
+import com.resumai.agent.service.ResumeEvaluationService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -14,9 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/graphs")
 public class GraphController {
 
-    private final MvpEvaluationService evaluationService;
+    private final ResumeEvaluationService evaluationService;
 
-    public GraphController(MvpEvaluationService evaluationService) {
+    public GraphController(ResumeEvaluationService evaluationService) {
         this.evaluationService = evaluationService;
     }
 

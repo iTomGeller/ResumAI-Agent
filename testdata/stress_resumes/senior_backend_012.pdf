@@ -1,0 +1,196 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2872 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Han Xinyi) Tj
+T*
+(Gender: Female    Objective: Senior Backend Engineer    Location: Xian) Tj
+T*
+(Phone: 13235679836    Email: hanxinyi1125@163.com    GitHub: https://github.com/hanxinyi285) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2012.09 - 2016.06    Tongji University    Information Security \(B.S.\)) Tj
+T*
+(Courses: Computer Networks, Computer Organization, Data Structures and Algorithms, Database Systems, Soft) Tj
+T*
+(ware Engineering, Machine Learning) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Seven years of backend experience focused on payment/transaction systems, distributed architecture, high ) Tj
+T*
+(concurrency and production incident response.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2019.07 - Present    Huawei    Senior Backend Engineer) Tj
+T*
+(- Rebuilt the config and template management service to support hot template reload without restart, cutt) Tj
+T*
+(ing release time by 25%, with experience documented and shared internally.) Tj
+T*
+(- Tuned Redis caching for hot keys and cache breakdown with local cache and distributed locks, raising hi) Tj
+T*
+(t rate above 90%, supporting rapid business growth.) Tj
+T*
+(- Owned backend of core transaction and order services, splitting the monolith into order, settlement and) Tj
+T*
+( risk-control microservices.) Tj
+T*
+(- Investigated rising instance memory rss using GC logs, heap dump and arthas, found an unbounded cache a) Tj
+T*
+(nd cut memory by 47%.) Tj
+T*
+(- Served 7130K requests per day while keeping core-path SLA above 99.9%.) Tj
+T*
+(2016.07 - 2019.06    Ant Group    Backend Engineer) Tj
+T*
+(- Designed a Kafka-based async transaction pipeline with idempotency keys, retry queues and dead-letter h) Tj
+T*
+(andling, sustaining 20000 QPS at peak, with experience documented and shared internally.) Tj
+T*
+(- Fixed a log-collection failure caused by agent backpressure, restoring stability after tuning batch and) Tj
+T*
+( buffer settings.) Tj
+T*
+(- Optimized a file-sort slow SQL on a hot API, added a composite index via gh-ost online DDL, reducing P9) Tj
+T*
+(9 from 2600ms to 260ms, and key metrics improved steadily.) Tj
+T*
+(- Built service observability covering API latency, error rate, JVM GC, thread pools and consumer backlog) Tj
+T*
+( with Prometheus and Grafana, reused across multiple business lines.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(High-Concurrency Flash-Sale & Inventory System \(Java + Redis + RocketMQ\)) Tj
+T*
+(- Pre-deducted inventory in Redis with async DB writes to absorb traffic spikes.) Tj
+T*
+(- Stayed stable at 20000 QPS in load tests with error rate below 0.1%.) Tj
+T*
+(- Designed distributed locks and token-bucket rate limiting to prevent oversell, reused across multiple b) Tj
+T*
+(usiness lines.) Tj
+T*
+(- Built circuit breaking and fallback for downstream failures.) Tj
+T*
+(Enterprise Auth & Gateway Platform \(Spring Cloud Gateway + OAuth2\)) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 2283 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Added circuit breaking to isolate faulty downstreams.) Tj
+T*
+(- Unified auth, rate limiting, gray routing and tracing as reusable platform capabilities.) Tj
+T*
+(- Integrated OAuth2 and RBAC with multi-tenant isolation, and key metrics improved steadily.) Tj
+T*
+(- Shipped a unified SDK to lower integration cost across teams, with experience documented and shared int) Tj
+T*
+(ernally.) Tj
+T*
+(Distributed Payment & Settlement Platform \(Spring Boot + MySQL + Kafka + Redis\)) Tj
+T*
+(- Implemented daily reconciliation across payment gateway, ledger and settlement files with auto-correcti) Tj
+T*
+(on.) Tj
+T*
+(- Applied idempotency and eventual consistency to avoid duplicate charges on retry, with experience docum) Tj
+T*
+(ented and shared internally.) Tj
+T*
+(- Recorded an audit trace id for every payment state transition for compliance, with experience documente) Tj
+T*
+(d and shared internally.) Tj
+T*
+(- Used sharding and read-write splitting to keep single-table rows within tens of millions.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Continuously optimized Distributed transactions and consistency, cutting key-path latency from 2600ms t) Tj
+T*
+(o 260ms) Tj
+T*
+(- Established metrics and reviews around Kafka/RocketMQ messaging to keep improving delivery quality) Tj
+T*
+(- Owned core modules that steadily served 7130K daily visits with 99.9%+ availability) Tj
+T*
+(- Drove a focused effort on data analysis and metrics, reducing related issues by about 25%) Tj
+T*
+(- Built a reusable methodology and docs around unit testing and quality, adopted by several teams) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: High Concurrency, MySQL, Spring Boot, Distributed transactions and consistency, Kafka) Tj
+T*
+(Proficient in: MySQL indexing and slow-query tuning, JVM, Redis, SQL Optimization, Redis caching and dist) Tj
+T*
+(ributed locks) Tj
+T*
+(Familiar with: Microservices, Kafka/RocketMQ messaging, JVM tuning and troubleshooting, Docker and contai) Tj
+T*
+(nerization, Observability, Java) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+(- Curious about new tech, continuously learning LLM and cloud-native topics and applying them in practice) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000003226 00000 n 
+0000003401 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+5736
+%%EOF

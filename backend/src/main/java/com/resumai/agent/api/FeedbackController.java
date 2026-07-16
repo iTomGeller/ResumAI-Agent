@@ -3,7 +3,7 @@ package com.resumai.agent.api;
 import com.resumai.agent.api.dto.FeedbackRequest;
 import com.resumai.agent.api.dto.FeedbackResponse;
 import com.resumai.agent.api.dto.PageResult;
-import com.resumai.agent.service.MvpEvaluationService;
+import com.resumai.agent.service.ResumeEvaluationService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,9 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/feedback")
 public class FeedbackController {
 
-    private final MvpEvaluationService evaluationService;
+    private final ResumeEvaluationService evaluationService;
 
-    public FeedbackController(MvpEvaluationService evaluationService) {
+    public FeedbackController(ResumeEvaluationService evaluationService) {
         this.evaluationService = evaluationService;
     }
 

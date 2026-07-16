@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "resumai.embedding")
 public class EmbeddingProperties {
 
-    /** local | openai | bailian | zhipu | none */
+    /** local | openai | openrouter | bailian | zhipu | none */
     private String provider = "local";
     /** 是否启用向量嵌入；local provider 默认 true。 */
     private boolean enabled = true;
@@ -65,7 +65,8 @@ public class EmbeddingProperties {
 
     public int resolveDimension() {
         return switch (provider == null ? "local" : provider.toLowerCase(Locale.ROOT)) {
-            case "openai", "bailian", "zhipu" -> 1024;
+            case "openai", "openrouter" -> 1536;
+            case "bailian", "zhipu" -> 1024;
             case "local" -> 384;
             default -> 384;
         };
@@ -73,7 +74,8 @@ public class EmbeddingProperties {
 
     public String resolveJdCollectionSuffix() {
         return switch (provider == null ? "local" : provider.toLowerCase(Locale.ROOT)) {
-            case "openai" -> "openai_1024";
+            case "openai" -> "openai_1536";
+            case "openrouter" -> "openrouter_1536";
             case "bailian" -> "bailian_1024";
             case "zhipu" -> "zhipu_1024";
             default -> "local_384";

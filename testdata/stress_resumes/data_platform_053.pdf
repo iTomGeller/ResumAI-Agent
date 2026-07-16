@@ -1,0 +1,162 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2437 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Ma Zihan) Tj
+T*
+(Gender: Female    Objective: Data Platform Engineer    Location: Wuhan) Tj
+T*
+(Phone: 19535952287    Email: mazihan1298@qq.com) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2014.09 - 2018.06    Chongqing University    Computer Science and Technology \(B.S.\)) Tj
+T*
+(Courses: Operating Systems, Computer Organization, Distributed Systems, Design Patterns, Compilers, Datab) Tj
+T*
+(ase Systems) Tj
+T*
+(GPA 3.3/4.0, top 15% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Data platform engineer focused on realtime warehouse, streaming ETL and batch processing with strong data) Tj
+T*
+( modeling and governance.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2020.07 - Present    ByteDance    Data Engineer) Tj
+T*
+(- Optimized Spark offline jobs, cutting runtime by 20% and resource cost by 51%.) Tj
+T*
+(- Tuned Kafka consumption and partitioning, significantly reducing backlog.) Tj
+T*
+(- Designed a layered warehouse \(ODS/DWD/DWS/ADS\) and data modeling for BI and ML features, with experienc) Tj
+T*
+(e documented and shared internally.) Tj
+T*
+(- Governed metric definitions on a unified platform to reduce inconsistencies, recognized by stakeholders) Tj
+T*
+( and peers.) Tj
+T*
+(2018.07 - 2020.06    Xiaohongshu    Junior Data Engineer) Tj
+T*
+(- Processed 6110K records per day keeping T+1 and realtime paths stable.) Tj
+T*
+(- Built data-quality monitoring and lineage with automatic anomaly alerts, and it became a reusable team ) Tj
+T*
+(best practice.) Tj
+T*
+(- Supported realtime dashboards and risk features with second-level end-to-end latency, supporting rapid ) Tj
+T*
+(business growth.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Realtime Data Platform \(Flink + Kafka + ClickHouse\)) Tj
+T*
+(- Processed 6110K events per day.) Tj
+T*
+(- Wrote to ClickHouse for realtime dashboards and ad-hoc queries.) Tj
+T*
+(- Processed Kafka realtime data with Flink at second-level end-to-end latency.) Tj
+T*
+(- Designed exactly-once semantics for data accuracy, recognized by stakeholders and peers.) Tj
+T*
+(Offline Warehouse & Metrics Platform \(Spark + Hive\)) Tj
+T*
+(- Built data-quality and lineage monitoring, significantly lowering maintenance cost.) Tj
+T*
+(- Built a layered warehouse with Spark and Hive.) Tj
+T*
+(- Unified metric definitions and dimensional modeling, significantly lowering maintenance cost.) Tj
+T*
+(- Optimized scheduling, cutting runtime by 20%.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1088 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Led a major technical effort involving data analysis and metrics, staying stable at 3000 QPS peak) Tj
+T*
+(- Drove a focused effort on computer networking basics, reducing related issues by about 51%) Tj
+T*
+(- Built a reusable methodology and docs around Data warehouse modeling, adopted by several teams) Tj
+T*
+(- Work around Linux and shell basics delivered about 20% efficiency gains and was reused across the team) Tj
+T*
+(- Owned core modules that steadily served 6110K daily visits with 99.9%+ availability) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Flink stream processing, Data Governance, Spark, Data Warehouse) Tj
+T*
+(Proficient in: Python, Flink, Hive/ClickHouse, Spark batch processing) Tj
+T*
+(Familiar with: ETL, Data warehouse modeling, Kafka, Data governance and lineage, Hive, Kafka data ingesti) Tj
+T*
+(on) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Strong communication and collaboration with product, QA and ops to deliver projects on time) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002791 00000 n 
+0000002966 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4106
+%%EOF

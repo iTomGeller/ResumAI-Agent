@@ -1,0 +1,25 @@
+Leo Zhang
+Junior Frontend Engineer | 1.5 years experience
+Email: leo.zhang@example.com
+
+Summary
+Frontend engineer focused on Vue dashboards, component reuse, and user interaction details.
+
+Skills
+Vue 3, TypeScript, Vite, Pinia, CSS, ECharts, REST API integration, basic Node.js.
+
+Experience
+2024.02 - Present  Data Analytics Startup  Frontend Engineer
+- Built dashboard pages for candidate list, report view, trace timeline, and feedback management.
+- Improved loading state and pagination interactions, reducing perceived page stutter.
+
+2023.06 - 2023.12  E-commerce Company  Frontend Intern
+- Implemented product search filters and order detail pages.
+- Wrote unit tests for reusable components.
+
+Projects
+Trace Timeline UI
+- Designed grouped phase view with expandable agent rounds and raw protocol debug section.
+
+Education
+2019.09 - 2023.06  Nanjing University of Posts and Telecommunications  B.S. Software Engineering

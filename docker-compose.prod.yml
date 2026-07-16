@@ -24,6 +24,11 @@ services:
       LANGFUSE_OTEL_ENDPOINT: http://langfuse-web:3000/api/public/otel/v1/traces
       LANGFUSE_PUBLIC_KEY: lf_pk_resumai
       LANGFUSE_SECRET_KEY: lf_sk_resumai
+      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-http://8.138.10.189:3001}
+      WORKFLOW_BASE_URL: http://ai-resume-workflow:8090
+      WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:-change-me}
+      RESUMAI_WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:-change-me}
+      WORKFLOW_MODE: python
     expose:
       - "8080"
     volumes:
@@ -34,9 +39,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      neo4j:
-        condition: service_started
-      milvus:
+      ai-resume-workflow:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/api/health || exit 1"]
@@ -44,6 +47,57 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    networks:
+      - resumai-net
+
+  ai-resume-workflow:
+    build:
+      context: ./workflow
+    container_name: ai-resume-workflow
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      JAVA_BACKEND_URL: http://ai-resume-backend:8080
+      WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:-change-me}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-lf_pk_resumai}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-lf_sk_resumai}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+      LANGGRAPH_CHECKPOINT_DB_URI: postgresql://workflow:${WORKFLOW_POSTGRES_PASSWORD:-workflow}@ai-resume-workflow-postgres:5432/langgraph_checkpoints
+    expose:
+      - "8090"
+    depends_on:
+      ai-resume-workflow-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8090/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - resumai-net
+
+  ai-resume-workflow-postgres:
+    image: postgres:16-alpine
+    container_name: ai-resume-workflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: workflow
+      POSTGRES_PASSWORD: ${WORKFLOW_POSTGRES_PASSWORD:-workflow}
+      POSTGRES_DB: langgraph_checkpoints
+    expose:
+      - "5432"
+    volumes:
+      - workflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workflow -d langgraph_checkpoints"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks:
       - resumai-net
 
@@ -61,7 +115,7 @@ services:
       - resumai-net
 
   mysql:
-    image: mysql:8.0
+    image: docker.m.daocloud.io/library/mysql:8.0
     container_name: resumai-mysql
     restart: unless-stopped
     environment:
@@ -89,7 +143,7 @@ services:
       - resumai-net
 
   redis:
-    image: redis:7.2-alpine
+    image: docker.m.daocloud.io/library/redis:7.2-alpine
     container_name: resumai-redis
     restart: unless-stopped
     environment:
@@ -109,7 +163,7 @@ services:
       - resumai-net
 
   neo4j:
-    image: neo4j:5.20-community
+    image: docker.m.daocloud.io/library/neo4j:5.20-community
     container_name: resumai-neo4j
     restart: unless-stopped
     environment:
@@ -134,7 +188,7 @@ services:
       - resumai-net
 
   minio:
-    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
     container_name: resumai-minio
     restart: unless-stopped
     environment:
@@ -155,7 +209,7 @@ services:
       - resumai-net
 
   etcd:
-    image: quay.io/coreos/etcd:v3.5.15
+    image: registry.cn-hangzhou.aliyuncs.com/google_containers/etcd:3.5.15-0
     container_name: resumai-etcd
     restart: unless-stopped
     environment:
@@ -210,7 +264,7 @@ services:
       - resumai-net
 
   prometheus:
-    image: prom/prometheus:v2.53.0
+    image: docker.m.daocloud.io/prom/prometheus:v2.53.0
     container_name: resumai-prometheus
     restart: unless-stopped
     volumes:
@@ -231,7 +285,7 @@ services:
       - resumai-net
 
   grafana:
-    image: grafana/grafana:11.1.0
+    image: docker.m.daocloud.io/grafana/grafana:11.1.0
     container_name: resumai-grafana
     restart: unless-stopped
     environment:
@@ -295,3 +349,5 @@ volumes:
     name: resumai-prometheus-data
   grafana-data:
     name: resumai-grafana-data
+  workflow-postgres-data:
+    name: resumai-workflow-postgres-data

@@ -1,0 +1,160 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2573 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Yang Ming) Tj
+T*
+(Gender: Male    Objective: Machine Learning Engineer    Location: Beijing) Tj
+T*
+(Phone: 15567294424    Email: yangming2822@outlook.com    GitHub: https://github.com/yangming879) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2016.09 - 2020.06    Southeast University    Communication Engineering \(M.S.\)) Tj
+T*
+(Courses: Distributed Systems, Data Structures and Algorithms, Database Systems, Operating Systems, Design) Tj
+T*
+( Patterns, Software Engineering) Tj
+T*
+(GPA 3.8/4.0, top 15% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(ML engineer focused on recommendation/search feature engineering and model iteration with serving and A/B) Tj
+T*
+( evaluation.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2022.07 - Present    a fintech company    Machine Learning Engineer) Tj
+T*
+(- Owned feature engineering and model iteration for recommendation/search, lifting online CTR by 28%, rec) Tj
+T*
+(ognized by stakeholders and peers.) Tj
+T*
+(- Designed A/B experiments to evaluate strategies with metric dashboards, and it became a reusable team b) Tj
+T*
+(est practice.) Tj
+T*
+(- Adopted MLflow for experiment and model version management, supporting rapid business growth.) Tj
+T*
+(- Optimized feature store and realtime features, cutting end-to-end latency by 25%.) Tj
+T*
+(2020.07 - 2022.06    Huawei    Junior Machine Learning Engineer) Tj
+T*
+(- Built model training and serving pipelines for offline training and online inference.) Tj
+T*
+(- Handled class imbalance and cold-start to improve long-tail performance.) Tj
+T*
+(- Implemented deep models with PyTorch with steady offline metric gains.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Recommendation Ranking Model \(PyTorch + Feature Store\)) Tj
+T*
+(- Designed feature engineering and sample construction, significantly lowering maintenance cost.) Tj
+T*
+(- Trained a ranking model with PyTorch, lifting CTR by 28%, and key metrics improved steadily.) Tj
+T*
+(- Validated gains via A/B experiments.) Tj
+T*
+(- Integrated a feature store for realtime features, recognized by stakeholders and peers.) Tj
+T*
+(Model Serving Platform \(MLflow + Triton\)) Tj
+T*
+(- Supported gray release.) Tj
+T*
+(- Managed experiments and model versions with MLflow, and it became a reusable team best practice.) Tj
+T*
+(- Served models for online inference, reused across multiple business lines.) Tj
+T*
+(- Monitored model performance and drift.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Work around cross-team communication delivered about 28% efficiency gains and was reused across the tea) Tj
+T*
+(m) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1058 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Continuously optimized Machine learning and deep learning, cutting key-path latency from 1800ms to 260m) Tj
+T*
+(s) Tj
+T*
+(- Drove a focused effort on requirement analysis and documentation, reducing related issues by about 25%) Tj
+T*
+(- Built a reusable methodology and docs around design patterns and refactoring, adopted by several teams) Tj
+T*
+(- Established metrics and reviews around RESTful API design to keep improving delivery quality) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Recommendation/search systems, A/B experimentation, Feature engineering, MLflow) Tj
+T*
+(Proficient in: Machine Learning, Machine learning and deep learning, A/B Testing, Recommendation) Tj
+T*
+(Familiar with: PyTorch, Feature Engineering, PyTorch modeling, Model serving, Model Serving, Python) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+(- Curious about new tech, continuously learning LLM and cloud-native topics and applying them in practice) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002927 00000 n 
+0000003102 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4212
+%%EOF

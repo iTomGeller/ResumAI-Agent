@@ -1,0 +1,162 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2580 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Chen Yan) Tj
+T*
+(Gender: Female    Objective: DevOps / SRE Engineer    Location: Shenzhen) Tj
+T*
+(Phone: 13727421940    Email: chenyan7748@qq.com    GitHub: https://github.com/chenyan571) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2017.09 - 2021.06    Dalian University of Technology    Artificial Intelligence \(M.S.\)) Tj
+T*
+(Courses: Design Patterns, Operating Systems, Computer Networks, Database Systems, Machine Learning, Compu) Tj
+T*
+(ter Organization) Tj
+T*
+(GPA 3.5/4.0, top 15% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(DevOps/SRE engineer focused on Kubernetes stability, CI/CD and monitoring, skilled in incident handling a) Tj
+T*
+(nd capacity planning.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2023.07 - Present    a SaaS company    DevOps Engineer) Tj
+T*
+(- Wrote Helm charts and CI/CD pipelines enabling blue-green and gray releases, significantly lowering mai) Tj
+T*
+(ntenance cost.) Tj
+T*
+(- Built Prometheus + Grafana monitoring and alerting with SLOs and error budgets, and related standards w) Tj
+T*
+(ere adopted by the team.) Tj
+T*
+(- Built log collection \(ELK/Loki\) and distributed tracing, improving end-to-end delivery quality.) Tj
+T*
+(- Optimized image builds and artifact management, cutting build time significantly, and it became a reusa) Tj
+T*
+(ble team best practice.) Tj
+T*
+(2021.07 - 2023.06    Baidu    Junior DevOps Engineer) Tj
+T*
+(- Handled incidents and capacity planning, reducing MTTR by 20%, and key metrics improved steadily.) Tj
+T*
+(- Wrote automation scripts and an ops platform to cut manual work, recognized by stakeholders and peers.) Tj
+T*
+(- Drove containerization and resource governance, raising cluster utilization by 56%, and related standar) Tj
+T*
+(ds were adopted by the team.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Unified Monitoring & Alerting \(Prometheus + Grafana + Alertmanager\)) Tj
+T*
+(- Alert tiering and noise reduction via Alertmanager.) Tj
+T*
+(- Reduced MTTR by 20%, significantly lowering maintenance cost.) Tj
+T*
+(- Grafana dashboards and SLO management, significantly lowering maintenance cost.) Tj
+T*
+(- Collected multi-dimensional metrics with Prometheus, significantly lowering maintenance cost.) Tj
+T*
+(Containerized Release Platform \(Kubernetes + Helm + ArgoCD\)) Tj
+T*
+(- Raised cluster utilization by 56%, improving end-to-end delivery quality.) Tj
+T*
+(- Adopted ArgoCD for GitOps, reused across multiple business lines.) Tj
+T*
+(- Standardized releases with Kubernetes and Helm.) Tj
+T*
+(- Supported blue-green and gray releases.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1101 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Established metrics and reviews around CI/CD pipelines to keep improving delivery quality) Tj
+T*
+(- Owned core modules that steadily served 1630K daily visits with 99.9%+ availability) Tj
+T*
+(- Led a major technical effort involving Git collaboration and code review, staying stable at 12000 QPS p) Tj
+T*
+(eak) Tj
+T*
+(- Work around Prometheus/Grafana delivered about 56% efficiency gains and was reused across the team) Tj
+T*
+(- Built a reusable methodology and docs around Shell/Python scripting, adopted by several teams) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Helm and GitOps, Kubernetes and container orchestration, Shell, Kubernetes, Docker) Tj
+T*
+(Proficient in: SRE, CI/CD pipelines, Python, Shell/Python scripting, Helm) Tj
+T*
+(Familiar with: CI/CD, Grafana, SRE reliability practices, Prometheus, Prometheus/Grafana) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002934 00000 n 
+0000003109 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4262
+%%EOF

@@ -1,0 +1,32 @@
+Senior Frontend Engineer Candidate 158
+Senior Frontend Engineer | 8 years experience
+Email: candidate158@example.com | GitHub: https://github.com/example-dev
+
+Summary
+Built complex dashboards, trace UI, virtual lists, and frontend performance monitoring. Batch 11, domain scenario 5.
+
+Skills
+Vue, React, TypeScript, performance, dashboard, REST API, documentation, monitoring, cross-team collaboration.
+
+Experience
+2021.01 - Present  Bluefin AI  Senior Frontend Engineer
+- Delivered production features related to Built complex dashboards, trace UI, virtual lists, and frontend performance monitoring.
+- Collaborated with backend, product, QA, and operations teams.
+- Improved reliability, observability, and delivery quality with measurable engineering practices.
+- Measured outcome: improved query cost 31% through design review, rollout control, dashboards, and incident retrospectives.
+
+2019.07 - 2020.12  Prior Systems  Engineer
+- Maintained legacy modules, wrote migration plans, reviewed pull requests, and handled production defects.
+- Worked with customer success and security teams to resolve escalations.
+
+Project
+Domain Platform Improvement 158
+- Designed implementation plan, handled rollout, monitored metrics, and produced post-launch review.
+- Evidence includes dashboards, logs, pull requests, design docs, and incident notes.
+
+Side Project
+Knowledge Base Evaluation 158
+- Built retrieval test cases, labeled relevant snippets, compared lexical, embedding, and hybrid search quality.
+
+Education
+2016.09 - 2020.06  Example University  B.S. Computer Science

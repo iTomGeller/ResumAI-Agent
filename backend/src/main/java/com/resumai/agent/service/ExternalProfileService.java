@@ -127,14 +127,16 @@ public class ExternalProfileService {
             profile.append("公开仓库: ").append(publicRepos != null ? publicRepos : "N/A");
             profile.append(" | 关注者: ").append(followers != null ? followers : "N/A").append("\n");
 
-            String reposJson = httpGet("https://api.github.com/users/" + username + "/repos?sort=stars&per_page=5");
+            String reposJson = httpGet("https://api.github.com/users/" + username + "/repos?sort=stars&per_page=2");
             if (reposJson != null && reposJson.startsWith("[")) {
                 List<String> repos = parseTopRepos(reposJson);
                 if (!repos.isEmpty()) {
-                    profile.append("代表项目:\n");
+                    profile.append("代表项目（含公开元数据与 README 摘要）:\n");
                     for (String repo : repos) {
                         profile.append("  - ").append(repo).append("\n");
                     }
+                } else {
+                    profile.append("代表项目: 未解析到可用仓库详情，外部画像不能作为项目深度证据。\n");
                 }
             }
 
@@ -147,11 +149,20 @@ public class ExternalProfileService {
 
     private String httpGet(String url) {
         try {
+            return httpGet(url, "application/vnd.github+json");
+        } catch (Exception e) {
+            log.debug("HTTP GET failed for {}: {}", url, e.getMessage());
+            return null;
+        }
+    }
+
+    private String httpGet(String url, String accept) {
+        try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
-                    .header("Accept", "application/vnd.github+json")
+                    .header("Accept", accept)
                     .header("User-Agent", "ResumAI-Agent/1.0")
-                    .timeout(Duration.ofSeconds(8))
+                    .timeout(Duration.ofSeconds(4))
                     .GET()
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -188,21 +199,111 @@ public class ExternalProfileService {
     private List<String> parseTopRepos(String reposJson) {
         List<String> repos = new ArrayList<>();
         int idx = 0;
-        while (idx < reposJson.length() && repos.size() < 5) {
+        while (idx < reposJson.length() && repos.size() < 2) {
             int nameIdx = reposJson.indexOf("\"full_name\"", idx);
             if (nameIdx < 0) break;
-            String name = extractJsonString(reposJson.substring(nameIdx - 1), "full_name");
-            String desc = extractJsonString(reposJson.substring(nameIdx - 1), "description");
-            String lang = extractJsonString(reposJson.substring(nameIdx - 1), "language");
-            String stars = extractJsonString(reposJson.substring(nameIdx - 1), "stargazers_count");
+            String repoJson = reposJson.substring(nameIdx - 1);
+            String name = extractJsonString(repoJson, "full_name");
+            String desc = extractJsonString(repoJson, "description");
+            String lang = extractJsonString(repoJson, "language");
+            String stars = extractJsonString(repoJson, "stargazers_count");
+            String forks = extractJsonString(repoJson, "forks_count");
+            String updatedAt = extractJsonString(repoJson, "updated_at");
+            String pushedAt = extractJsonString(repoJson, "pushed_at");
             StringBuilder entry = new StringBuilder();
             if (name != null) entry.append(name);
             if (lang != null) entry.append(" [").append(lang).append("]");
             if (stars != null && !"0".equals(stars)) entry.append(" ★").append(stars);
+            if (forks != null && !"0".equals(forks)) entry.append(" forks=").append(forks);
+            if (updatedAt != null) entry.append(" updated=").append(updatedAt.substring(0, Math.min(10, updatedAt.length())));
+            if (pushedAt != null) entry.append(" pushed=").append(pushedAt.substring(0, Math.min(10, pushedAt.length())));
             if (desc != null && !desc.isEmpty()) entry.append(" — ").append(desc.length() > 60 ? desc.substring(0, 60) + "..." : desc);
+            if (name != null) {
+                String languages = fetchRepoLanguages(name);
+                if (StringUtils.hasText(languages)) {
+                    entry.append("；语言: ").append(languages);
+                }
+                String files = fetchRootFiles(name);
+                if (StringUtils.hasText(files)) {
+                    entry.append("；关键文件: ").append(files);
+                }
+                String commits = fetchRecentCommits(name);
+                if (StringUtils.hasText(commits)) {
+                    entry.append("；近期提交: ").append(commits);
+                }
+                String readme = fetchReadmeExcerpt(name);
+                if (StringUtils.hasText(readme)) {
+                    entry.append("；README摘要: ").append(readme);
+                } else {
+                    entry.append("；README摘要: 未获取到，不能据此判断项目实现深度");
+                }
+            }
             if (entry.length() > 0) repos.add(entry.toString());
             idx = nameIdx + 10;
         }
         return repos;
+    }
+
+    private String fetchRepoLanguages(String fullName) {
+        String json = httpGet("https://api.github.com/repos/" + fullName + "/languages");
+        if (!StringUtils.hasText(json) || !json.startsWith("{")) return "";
+        List<String> items = new ArrayList<>();
+        Matcher matcher = Pattern.compile("\"([^\"]+)\"\\s*:\\s*(\\d+)").matcher(json);
+        while (matcher.find() && items.size() < 5) {
+            items.add(matcher.group(1) + "=" + matcher.group(2));
+        }
+        return String.join(", ", items);
+    }
+
+    private String fetchRootFiles(String fullName) {
+        String json = httpGet("https://api.github.com/repos/" + fullName + "/contents");
+        if (!StringUtils.hasText(json) || !json.startsWith("[")) return "";
+        List<String> files = new ArrayList<>();
+        Matcher matcher = Pattern.compile("\"name\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
+        while (matcher.find() && files.size() < 12) {
+            String name = matcher.group(1);
+            if (name.equalsIgnoreCase("README.md") || name.equalsIgnoreCase("pom.xml")
+                    || name.equalsIgnoreCase("package.json") || name.equalsIgnoreCase("Dockerfile")
+                    || name.endsWith(".java") || name.endsWith(".py") || name.endsWith(".ts")
+                    || name.equalsIgnoreCase("src") || name.equalsIgnoreCase("docs")) {
+                files.add(name);
+            }
+        }
+        return String.join(", ", files);
+    }
+
+    private String fetchRecentCommits(String fullName) {
+        String json = httpGet("https://api.github.com/repos/" + fullName + "/commits?per_page=3");
+        if (!StringUtils.hasText(json) || !json.startsWith("[")) return "";
+        List<String> commits = new ArrayList<>();
+        int idx = 0;
+        while (idx < json.length() && commits.size() < 3) {
+            int shaIdx = json.indexOf("\"sha\"", idx);
+            if (shaIdx < 0) break;
+            String segment = json.substring(shaIdx, Math.min(json.length(), shaIdx + 2500));
+            String sha = extractJsonString(segment, "sha");
+            String message = extractJsonString(segment, "message");
+            String date = extractJsonString(segment, "date");
+            String item = "";
+            if (sha != null && sha.length() >= 7) item += sha.substring(0, 7);
+            if (date != null && date.length() >= 10) item += "@" + date.substring(0, 10);
+            if (message != null) item += ":" + (message.length() > 80 ? message.substring(0, 80) + "..." : message);
+            if (StringUtils.hasText(item)) commits.add(item);
+            idx = shaIdx + 5;
+        }
+        return String.join(" | ", commits);
+    }
+
+    private String fetchReadmeExcerpt(String fullName) {
+        if (!StringUtils.hasText(fullName) || !fullName.contains("/")) return "";
+        String raw = httpGet("https://api.github.com/repos/" + fullName + "/readme", "application/vnd.github.raw");
+        if (!StringUtils.hasText(raw)) return "";
+        String cleaned = raw
+                .replaceAll("(?s)```.*?```", " ")
+                .replaceAll("[#>*_`\\[\\]()]"," ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (!StringUtils.hasText(cleaned)) return "";
+        return cleaned.length() > 260 ? cleaned.substring(0, 260) + "..." : cleaned;
     }
 }

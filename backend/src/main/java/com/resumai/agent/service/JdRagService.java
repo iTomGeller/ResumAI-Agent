@@ -87,7 +87,7 @@ public class JdRagService {
 
     private record DefaultJd(String jdId, String title, String category, String description) {}
 
-    public JdRagService(@Qualifier("jdEmbeddingStore") MilvusEmbeddingStore jdEmbeddingStore,
+    public JdRagService(@Qualifier("jdEmbeddingStore") @org.springframework.lang.Nullable MilvusEmbeddingStore jdEmbeddingStore,
                         EmbeddingModel embeddingModel,
                         DeepSeekClient deepSeekClient,
                         JdLibraryMapper jdLibraryMapper,

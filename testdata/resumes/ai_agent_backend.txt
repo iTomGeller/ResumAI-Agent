@@ -1,0 +1,28 @@
+Mia Wang
+AI Agent Backend Engineer | 5 years backend + 2 years LLM application experience
+Email: mia.wang@example.com | GitHub: https://github.com/example-dev
+
+Summary
+Backend engineer building production AI agent workflows, retrieval pipelines, and runtime observability.
+
+Skills
+Python, Java, FastAPI, Spring Boot, LangGraph, LangChain, MCP, Milvus, Redis, PostgreSQL, Docker, Kubernetes, Langfuse.
+
+Experience
+2023.03 - Present  AI Recruiting Platform  Agent Platform Engineer
+- Built multi-agent resume evaluation workflow with intent router, parser, JD matcher, technical evaluator, risk evaluator, and report generator.
+- Designed agent harness with route plan, tool budget, policy guard, trace replay, and evaluation feedback loop.
+- Implemented hybrid RAG with BM25-like lexical retrieval, embedding search, reranking, and fallback visibility.
+- Integrated MCP resume evidence server and dynamic skill loading for evidence synthesis.
+
+2020.07 - 2023.02  Cloud Observability Company  Backend Engineer
+- Developed metrics ingestion APIs, alert routing, and dashboard query optimization.
+- Reduced trace query latency by 45% through index redesign and payload compaction.
+
+Projects
+Agentic RAG Evidence Pipeline
+- Added query planner, retrieval evaluator, reranker, confidence scoring, and Langfuse tracing for every retrieval step.
+- Tracked hit count, top score, fallback rate, latency, and answer faithfulness proxy in Grafana.
+
+Education
+2015.09 - 2019.06  Zhejiang University  B.S. Computer Science

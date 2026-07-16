@@ -7,6 +7,7 @@ import com.resumai.agent.config.MysqlObservabilityProperties;
 import com.resumai.agent.config.Neo4jProperties;
 import com.resumai.agent.config.ObjectStorageProperties;
 import com.resumai.agent.config.TaskQueueProperties;
+import com.resumai.agent.config.WorkflowProperties;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -25,7 +26,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         EmbeddingProperties.class,
         MysqlObservabilityProperties.class,
         ObjectStorageProperties.class,
-        TaskQueueProperties.class
+        TaskQueueProperties.class,
+        WorkflowProperties.class
 })
 @MapperScan("com.resumai.agent.dao")
 public class ResumAiAgentApplication {

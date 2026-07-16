@@ -97,4 +97,46 @@ public class AgentExecutionTrace {
     @TableLogic
     @TableField("deleted")
     private Integer deleted;
+
+    @TableField("event_id")
+    private String eventId;
+
+    @TableField("node_id")
+    private String nodeId;
+
+    @TableField("round_index")
+    private Integer roundIndex;
+
+    @TableField("attempt")
+    private Integer attempt;
+
+    @TableField("event_kind")
+    private String eventKind;
+
+    @TableField("raw_input")
+    private String rawInput;
+
+    @TableField("raw_output")
+    private String rawOutput;
+
+    @TableField("parent_event_id")
+    private String parentEventId;
+
+    @TableField("call_kind")
+    private String callKind;
+
+    @TableField("call_name")
+    private String callName;
+
+    @TableField("round_role")
+    private String roundRole;
+
+    @TableField("parent_round_id")
+    private String parentRoundId;
+
+    @TableField("started_at")
+    private LocalDateTime startedAt;
+
+    @TableField("ended_at")
+    private LocalDateTime endedAt;
 }

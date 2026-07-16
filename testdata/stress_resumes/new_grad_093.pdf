@@ -1,0 +1,186 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2914 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Liu Zihan) Tj
+T*
+(Gender: Female    Objective: New Graduate Backend Engineer    Location: Beijing) Tj
+T*
+(Phone: 13000468352    Email: liuzihan1554@qq.com    GitHub: https://github.com/liuzihan660) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2021.09 - 2025.06    Shandong University    Communication Engineering \(B.S.\)) Tj
+T*
+(Courses: Operating Systems, Distributed Systems, Software Engineering, Data Structures and Algorithms, Co) Tj
+T*
+(mputer Organization, Design Patterns) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(New CS graduate with two backend internships, solid Java/Spring Boot and database fundamentals and full p) Tj
+T*
+(roject experience.) Tj
+T*
+() Tj
+T*
+(Internship Experience) Tj
+T*
+(2024.06 - 2024.12    NIO    Intern Backend Engineer) Tj
+T*
+(- Rebuilt the config and template management service to support hot template reload without restart, cutt) Tj
+T*
+(ing release time by 18%.) Tj
+T*
+(- Investigated rising instance memory rss using GC logs, heap dump and arthas, found an unbounded cache a) Tj
+T*
+(nd cut memory by 41%, reused across multiple business lines.) Tj
+T*
+(- Led a production incident review with root-cause analysis and drove an alert-tiering and on-call rotati) Tj
+T*
+(on mechanism, and it became a reusable team best practice.) Tj
+T*
+(2023.07 - 2023.09    Beike    Intern Backend Engineer) Tj
+T*
+(- Designed a Kafka-based async transaction pipeline with idempotency keys, retry queues and dead-letter h) Tj
+T*
+(andling, sustaining 8000 QPS at peak, reused across multiple business lines.) Tj
+T*
+(- Served 2120K requests per day while keeping core-path SLA above 99.9%, reused across multiple business ) Tj
+T*
+(lines.) Tj
+T*
+(- Fixed a log-collection failure caused by agent backpressure, restoring stability after tuning batch and) Tj
+T*
+( buffer settings, improving end-to-end delivery quality.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Distributed Payment & Settlement Platform \(Spring Boot + MySQL + Kafka + Redis\)) Tj
+T*
+(- Used sharding and read-write splitting to keep single-table rows within tens of millions.) Tj
+T*
+(- Implemented daily reconciliation across payment gateway, ledger and settlement files with auto-correcti) Tj
+T*
+(on, and it became a reusable team best practice.) Tj
+T*
+(- Recorded an audit trace id for every payment state transition for compliance, with experience documente) Tj
+T*
+(d and shared internally.) Tj
+T*
+(- Applied idempotency and eventual consistency to avoid duplicate charges on retry.) Tj
+T*
+(High-Concurrency Flash-Sale & Inventory System \(Java + Redis + RocketMQ\)) Tj
+T*
+(- Pre-deducted inventory in Redis with async DB writes to absorb traffic spikes.) Tj
+T*
+(- Designed distributed locks and token-bucket rate limiting to prevent oversell, with experience document) Tj
+T*
+(ed and shared internally.) Tj
+T*
+(- Stayed stable at 8000 QPS in load tests with error rate below 0.1%, recognized by stakeholders and peer) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1753 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(s.) Tj
+T*
+(- Built circuit breaking and fallback for downstream failures.) Tj
+T*
+(Enterprise Auth & Gateway Platform \(Spring Cloud Gateway + OAuth2\)) Tj
+T*
+(- Integrated OAuth2 and RBAC with multi-tenant isolation.) Tj
+T*
+(- Added circuit breaking to isolate faulty downstreams, recognized by stakeholders and peers.) Tj
+T*
+(- Unified auth, rate limiting, gray routing and tracing as reusable platform capabilities, supporting rap) Tj
+T*
+(id business growth.) Tj
+T*
+(- Shipped a unified SDK to lower integration cost across teams.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Owned core modules that steadily served 2120K daily visits with 99.9%+ availability) Tj
+T*
+(- Continuously optimized MySQL indexing and slow-query tuning, cutting key-path latency from 1800ms to 32) Tj
+T*
+(0ms) Tj
+T*
+(- Led a major technical effort involving cross-team communication, staying stable at 8000 QPS peak) Tj
+T*
+(- Built a reusable methodology and docs around root-cause analysis and postmortems, adopted by several te) Tj
+T*
+(ams) Tj
+T*
+(- Drove a focused effort on CI/CD pipelines, reducing related issues by about 18%) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: MySQL, Computer Networks, Docker and containerization, MySQL indexing and slow-query tuning) Tj
+T*
+(Proficient in: JVM tuning and troubleshooting, Redis, Java, Spring Boot) Tj
+T*
+(Familiar with: Distributed transactions and consistency, Kafka/RocketMQ messaging, Data Structures, Redis) Tj
+T*
+( caching and distributed locks, Git) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Stays calm under pressure and recovers services quickly during high-concurrency incidents) Tj
+T*
+(- Strong communication and collaboration with product, QA and ops to deliver projects on time) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000003268 00000 n 
+0000003443 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+5248
+%%EOF

@@ -35,6 +35,16 @@ data/
 __pycache__/
 *.pyc
 
+# Generated evaluation / ML artifacts
+reports/**/cache/
+reports/**/checkpoint.json
+reports/**/raw_results.json
+reports/**/*.aux
+reports/**/*.log
+reports/**/*.out
+reports/**/*.toc
+*.tsbuildinfo
+
 # Docker local overrides
 docker-compose.override.yml
 

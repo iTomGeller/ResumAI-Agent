@@ -39,7 +39,7 @@ public class SkillProvider {
     @PostConstruct
     @Scheduled(fixedDelay = 30000)
     public void scanSkills() {
-        Path root = Path.of(skillsRootPath);
+        Path root = resolveSkillsRoot();
         if (!Files.isDirectory(root)) {
             log.debug("Skills directory not found: {}", root.toAbsolutePath());
             cachedSkills = List.of();
@@ -56,6 +56,22 @@ public class SkillProvider {
         } catch (IOException e) {
             log.warn("Failed to scan skills directory: {}", e.getMessage());
         }
+    }
+
+    private Path resolveSkillsRoot() {
+        Path configured = Path.of(skillsRootPath);
+        if (Files.isDirectory(configured)) {
+            return configured;
+        }
+        for (Path fallback : List.of(
+                Path.of("src/main/resources/skills"),
+                Path.of("backend/src/main/resources/skills"),
+                Path.of("skills"))) {
+            if (Files.isDirectory(fallback)) {
+                return fallback;
+            }
+        }
+        return configured;
     }
 
     private SkillDescriptor parseSkillDirectory(Path skillDir) {
@@ -162,6 +178,47 @@ public class SkillProvider {
                 .filter(s -> s.name().equals(skillName))
                 .findFirst()
                 .orElse(null);
+    }
+
+    /**
+     * Execute a skill and return structured JSON for downstream agents (e.g. ReportAgent).
+     */
+    public Map<String, Object> executeStructured(String skillName, String task) {
+        SkillDescriptor skill = findByName(skillName);
+        if (skill == null) {
+            return Map.of("skillName", skillName, "loaded", false, "error", "Skill not found");
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("skillName", skillName);
+        result.put("loaded", true);
+        result.put("task", task != null ? task : "");
+        result.put("instructionsDigest", compact(skill.fullInstructions(), 800));
+        if ("evidence_synthesis".equals(skillName)) {
+            result.put("evidenceWeights", Map.of(
+                    "resume_text", 0.45,
+                    "jd_match", 0.20,
+                    "rag", 0.15,
+                    "project_depth", 0.10,
+                    "risk", 0.10
+            ));
+            result.put("conflicts", List.of());
+            result.put("missingEvidence", List.of(
+                    "quantified_metrics",
+                    "project_ownership_boundary",
+                    "production_incident_evidence"
+            ));
+            result.put("reportHints", List.of(
+                    "Separate candidate facts from rubric/knowledge-base standards.",
+                    "Prioritize concrete project questions over generic capability questions.",
+                    "Surface evidence gaps explicitly."
+            ));
+        }
+        return result;
+    }
+
+    private String compact(String value, int max) {
+        if (value == null) return "";
+        return value.length() <= max ? value : value.substring(0, max);
     }
 
     /**

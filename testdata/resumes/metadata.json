@@ -1,0 +1,4374 @@
+[
+  {
+    "id": "java_platform_senior",
+    "name": "Alex Chen",
+    "role": "Senior Java Platform Engineer",
+    "expected": [
+      "Java",
+      "Spring Boot",
+      "Kafka",
+      "Kubernetes",
+      "Redis",
+      "MySQL",
+      "payment platform",
+      "observability"
+    ],
+    "txt": "testdata\\resumes\\java_platform_senior.txt",
+    "pdf": "testdata\\resumes\\java_platform_senior.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "ai_agent_backend",
+    "name": "Mia Wang",
+    "role": "AI Agent Backend Engineer",
+    "expected": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "FastAPI",
+      "agent harness",
+      "tool governance"
+    ],
+    "txt": "testdata\\resumes\\ai_agent_backend.txt",
+    "pdf": "testdata\\resumes\\ai_agent_backend.pdf",
+    "textLength": 1509
+  },
+  {
+    "id": "junior_frontend",
+    "name": "Leo Zhang",
+    "role": "Junior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "TypeScript",
+      "CSS",
+      "dashboard",
+      "internship",
+      "risk"
+    ],
+    "txt": "testdata\\resumes\\junior_frontend.txt",
+    "pdf": "testdata\\resumes\\junior_frontend.pdf",
+    "textLength": 925
+  },
+  {
+    "id": "product_manager_llm",
+    "name": "Nora Li",
+    "role": "AI Product Manager",
+    "expected": [
+      "product",
+      "LLM",
+      "RAG",
+      "metrics",
+      "workflow",
+      "stakeholder"
+    ],
+    "txt": "testdata\\resumes\\product_manager_llm.txt",
+    "pdf": "testdata\\resumes\\product_manager_llm.pdf",
+    "textLength": 999
+  },
+  {
+    "id": "risk_sparse_resume",
+    "name": "Sam Short",
+    "role": "Backend Engineer",
+    "expected": [
+      "sparse",
+      "risk",
+      "missing timeline",
+      "missing project detail"
+    ],
+    "txt": "testdata\\resumes\\risk_sparse_resume.txt",
+    "pdf": "testdata\\resumes\\risk_sparse_resume.pdf",
+    "textLength": 134
+  },
+  {
+    "id": "backend_observability_001",
+    "name": "Candidate 1",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_001.txt",
+    "pdf": "testdata\\resumes\\backend_observability_001.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "data_platform_002",
+    "name": "Candidate 2",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_002.txt",
+    "pdf": "testdata\\resumes\\data_platform_002.pdf",
+    "textLength": 1536
+  },
+  {
+    "id": "devops_k8s_003",
+    "name": "Candidate 3",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_003.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_003.pdf",
+    "textLength": 1513
+  },
+  {
+    "id": "redis_mysql_backend_004",
+    "name": "Candidate 4",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_004.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_004.pdf",
+    "textLength": 1557
+  },
+  {
+    "id": "security_backend_005",
+    "name": "Candidate 5",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_005.txt",
+    "pdf": "testdata\\resumes\\security_backend_005.pdf",
+    "textLength": 1546
+  },
+  {
+    "id": "qa_automation_006",
+    "name": "Candidate 6",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_006.txt",
+    "pdf": "testdata\\resumes\\qa_automation_006.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "mobile_engineer_007",
+    "name": "Candidate 7",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_007.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_007.pdf",
+    "textLength": 1502
+  },
+  {
+    "id": "frontend_senior_008",
+    "name": "Candidate 8",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_008.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_008.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "ml_platform_009",
+    "name": "Candidate 9",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_009.txt",
+    "pdf": "testdata\\resumes\\ml_platform_009.pdf",
+    "textLength": 1483
+  },
+  {
+    "id": "llm_rag_engineer_010",
+    "name": "Candidate 10",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_010.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_010.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "product_growth_011",
+    "name": "Candidate 11",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_011.txt",
+    "pdf": "testdata\\resumes\\product_growth_011.pdf",
+    "textLength": 1502
+  },
+  {
+    "id": "ops_customer_success_012",
+    "name": "Candidate 12",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_012.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_012.pdf",
+    "textLength": 1500
+  },
+  {
+    "id": "new_grad_java_013",
+    "name": "Candidate 13",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_013.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_013.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "career_gap_risk_014",
+    "name": "Candidate 14",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_014.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_014.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "fake_project_risk_015",
+    "name": "Candidate 15",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_015.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_015.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "backend_observability_016",
+    "name": "Candidate 16",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_016.txt",
+    "pdf": "testdata\\resumes\\backend_observability_016.pdf",
+    "textLength": 1577
+  },
+  {
+    "id": "data_platform_017",
+    "name": "Candidate 17",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_017.txt",
+    "pdf": "testdata\\resumes\\data_platform_017.pdf",
+    "textLength": 1540
+  },
+  {
+    "id": "devops_k8s_018",
+    "name": "Candidate 18",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_018.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_018.pdf",
+    "textLength": 1517
+  },
+  {
+    "id": "redis_mysql_backend_019",
+    "name": "Candidate 19",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_019.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_019.pdf",
+    "textLength": 1561
+  },
+  {
+    "id": "security_backend_020",
+    "name": "Candidate 20",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_020.txt",
+    "pdf": "testdata\\resumes\\security_backend_020.pdf",
+    "textLength": 1550
+  },
+  {
+    "id": "qa_automation_021",
+    "name": "Candidate 21",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_021.txt",
+    "pdf": "testdata\\resumes\\qa_automation_021.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "mobile_engineer_022",
+    "name": "Candidate 22",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_022.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_022.pdf",
+    "textLength": 1506
+  },
+  {
+    "id": "frontend_senior_023",
+    "name": "Candidate 23",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_023.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_023.pdf",
+    "textLength": 1568
+  },
+  {
+    "id": "ml_platform_024",
+    "name": "Candidate 24",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_024.txt",
+    "pdf": "testdata\\resumes\\ml_platform_024.pdf",
+    "textLength": 1487
+  },
+  {
+    "id": "llm_rag_engineer_025",
+    "name": "Candidate 25",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_025.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_025.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "product_growth_026",
+    "name": "Candidate 26",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_026.txt",
+    "pdf": "testdata\\resumes\\product_growth_026.pdf",
+    "textLength": 1502
+  },
+  {
+    "id": "ops_customer_success_027",
+    "name": "Candidate 27",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_027.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_027.pdf",
+    "textLength": 1500
+  },
+  {
+    "id": "new_grad_java_028",
+    "name": "Candidate 28",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_028.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_028.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "career_gap_risk_029",
+    "name": "Candidate 29",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_029.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_029.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "fake_project_risk_030",
+    "name": "Candidate 30",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_030.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_030.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "backend_observability_031",
+    "name": "Candidate 31",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_031.txt",
+    "pdf": "testdata\\resumes\\backend_observability_031.pdf",
+    "textLength": 1577
+  },
+  {
+    "id": "data_platform_032",
+    "name": "Candidate 32",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_032.txt",
+    "pdf": "testdata\\resumes\\data_platform_032.pdf",
+    "textLength": 1540
+  },
+  {
+    "id": "devops_k8s_033",
+    "name": "Candidate 33",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_033.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_033.pdf",
+    "textLength": 1517
+  },
+  {
+    "id": "redis_mysql_backend_034",
+    "name": "Candidate 34",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_034.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_034.pdf",
+    "textLength": 1561
+  },
+  {
+    "id": "security_backend_035",
+    "name": "Candidate 35",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_035.txt",
+    "pdf": "testdata\\resumes\\security_backend_035.pdf",
+    "textLength": 1550
+  },
+  {
+    "id": "qa_automation_036",
+    "name": "Candidate 36",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_036.txt",
+    "pdf": "testdata\\resumes\\qa_automation_036.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "mobile_engineer_037",
+    "name": "Candidate 37",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_037.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_037.pdf",
+    "textLength": 1506
+  },
+  {
+    "id": "frontend_senior_038",
+    "name": "Candidate 38",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_038.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_038.pdf",
+    "textLength": 1568
+  },
+  {
+    "id": "ml_platform_039",
+    "name": "Candidate 39",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_039.txt",
+    "pdf": "testdata\\resumes\\ml_platform_039.pdf",
+    "textLength": 1487
+  },
+  {
+    "id": "llm_rag_engineer_040",
+    "name": "Candidate 40",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_040.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_040.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "product_growth_041",
+    "name": "Candidate 41",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_041.txt",
+    "pdf": "testdata\\resumes\\product_growth_041.pdf",
+    "textLength": 1502
+  },
+  {
+    "id": "ops_customer_success_042",
+    "name": "Candidate 42",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_042.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_042.pdf",
+    "textLength": 1500
+  },
+  {
+    "id": "new_grad_java_043",
+    "name": "Candidate 43",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_043.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_043.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "career_gap_risk_044",
+    "name": "Candidate 44",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_044.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_044.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "fake_project_risk_045",
+    "name": "Candidate 45",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_045.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_045.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "backend_observability_046",
+    "name": "Candidate 46",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_046.txt",
+    "pdf": "testdata\\resumes\\backend_observability_046.pdf",
+    "textLength": 1577
+  },
+  {
+    "id": "data_platform_047",
+    "name": "Candidate 47",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_047.txt",
+    "pdf": "testdata\\resumes\\data_platform_047.pdf",
+    "textLength": 1540
+  },
+  {
+    "id": "devops_k8s_048",
+    "name": "Candidate 48",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_048.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_048.pdf",
+    "textLength": 1517
+  },
+  {
+    "id": "redis_mysql_backend_049",
+    "name": "Candidate 49",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_049.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_049.pdf",
+    "textLength": 1561
+  },
+  {
+    "id": "security_backend_050",
+    "name": "Candidate 50",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_050.txt",
+    "pdf": "testdata\\resumes\\security_backend_050.pdf",
+    "textLength": 1550
+  },
+  {
+    "id": "qa_automation_051",
+    "name": "Candidate 51",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_051.txt",
+    "pdf": "testdata\\resumes\\qa_automation_051.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "mobile_engineer_052",
+    "name": "Candidate 52",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_052.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_052.pdf",
+    "textLength": 1506
+  },
+  {
+    "id": "frontend_senior_053",
+    "name": "Candidate 53",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_053.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_053.pdf",
+    "textLength": 1568
+  },
+  {
+    "id": "ml_platform_054",
+    "name": "Candidate 54",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_054.txt",
+    "pdf": "testdata\\resumes\\ml_platform_054.pdf",
+    "textLength": 1487
+  },
+  {
+    "id": "llm_rag_engineer_055",
+    "name": "Candidate 55",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_055.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_055.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "product_growth_056",
+    "name": "Candidate 56",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_056.txt",
+    "pdf": "testdata\\resumes\\product_growth_056.pdf",
+    "textLength": 1502
+  },
+  {
+    "id": "ops_customer_success_057",
+    "name": "Candidate 57",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_057.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_057.pdf",
+    "textLength": 1500
+  },
+  {
+    "id": "new_grad_java_058",
+    "name": "Candidate 58",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_058.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_058.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "career_gap_risk_059",
+    "name": "Candidate 59",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_059.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_059.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "fake_project_risk_060",
+    "name": "Candidate 60",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_060.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_060.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "backend_observability_061",
+    "name": "Candidate 61",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_061.txt",
+    "pdf": "testdata\\resumes\\backend_observability_061.pdf",
+    "textLength": 1577
+  },
+  {
+    "id": "data_platform_062",
+    "name": "Candidate 62",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_062.txt",
+    "pdf": "testdata\\resumes\\data_platform_062.pdf",
+    "textLength": 1540
+  },
+  {
+    "id": "devops_k8s_063",
+    "name": "Candidate 63",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_063.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_063.pdf",
+    "textLength": 1517
+  },
+  {
+    "id": "redis_mysql_backend_064",
+    "name": "Candidate 64",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_064.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_064.pdf",
+    "textLength": 1561
+  },
+  {
+    "id": "security_backend_065",
+    "name": "Candidate 65",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_065.txt",
+    "pdf": "testdata\\resumes\\security_backend_065.pdf",
+    "textLength": 1550
+  },
+  {
+    "id": "qa_automation_066",
+    "name": "Candidate 66",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_066.txt",
+    "pdf": "testdata\\resumes\\qa_automation_066.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "mobile_engineer_067",
+    "name": "Candidate 67",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_067.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_067.pdf",
+    "textLength": 1506
+  },
+  {
+    "id": "frontend_senior_068",
+    "name": "Candidate 68",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_068.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_068.pdf",
+    "textLength": 1568
+  },
+  {
+    "id": "ml_platform_069",
+    "name": "Candidate 69",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_069.txt",
+    "pdf": "testdata\\resumes\\ml_platform_069.pdf",
+    "textLength": 1487
+  },
+  {
+    "id": "llm_rag_engineer_070",
+    "name": "Candidate 70",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_070.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_070.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "product_growth_071",
+    "name": "Candidate 71",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_071.txt",
+    "pdf": "testdata\\resumes\\product_growth_071.pdf",
+    "textLength": 1502
+  },
+  {
+    "id": "ops_customer_success_072",
+    "name": "Candidate 72",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_072.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_072.pdf",
+    "textLength": 1500
+  },
+  {
+    "id": "new_grad_java_073",
+    "name": "Candidate 73",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_073.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_073.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "career_gap_risk_074",
+    "name": "Candidate 74",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_074.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_074.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "fake_project_risk_075",
+    "name": "Candidate 75",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_075.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_075.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "backend_observability_076",
+    "name": "Candidate 76",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_076.txt",
+    "pdf": "testdata\\resumes\\backend_observability_076.pdf",
+    "textLength": 1577
+  },
+  {
+    "id": "data_platform_077",
+    "name": "Candidate 77",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_077.txt",
+    "pdf": "testdata\\resumes\\data_platform_077.pdf",
+    "textLength": 1540
+  },
+  {
+    "id": "devops_k8s_078",
+    "name": "Candidate 78",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_078.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_078.pdf",
+    "textLength": 1517
+  },
+  {
+    "id": "redis_mysql_backend_079",
+    "name": "Candidate 79",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_079.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_079.pdf",
+    "textLength": 1561
+  },
+  {
+    "id": "security_backend_080",
+    "name": "Candidate 80",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_080.txt",
+    "pdf": "testdata\\resumes\\security_backend_080.pdf",
+    "textLength": 1550
+  },
+  {
+    "id": "qa_automation_081",
+    "name": "Candidate 81",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_081.txt",
+    "pdf": "testdata\\resumes\\qa_automation_081.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "mobile_engineer_082",
+    "name": "Candidate 82",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_082.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_082.pdf",
+    "textLength": 1506
+  },
+  {
+    "id": "frontend_senior_083",
+    "name": "Candidate 83",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_083.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_083.pdf",
+    "textLength": 1568
+  },
+  {
+    "id": "ml_platform_084",
+    "name": "Candidate 84",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_084.txt",
+    "pdf": "testdata\\resumes\\ml_platform_084.pdf",
+    "textLength": 1487
+  },
+  {
+    "id": "llm_rag_engineer_085",
+    "name": "Candidate 85",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_085.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_085.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "product_growth_086",
+    "name": "Candidate 86",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_086.txt",
+    "pdf": "testdata\\resumes\\product_growth_086.pdf",
+    "textLength": 1502
+  },
+  {
+    "id": "ops_customer_success_087",
+    "name": "Candidate 87",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_087.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_087.pdf",
+    "textLength": 1500
+  },
+  {
+    "id": "new_grad_java_088",
+    "name": "Candidate 88",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_088.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_088.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "career_gap_risk_089",
+    "name": "Candidate 89",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_089.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_089.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "fake_project_risk_090",
+    "name": "Candidate 90",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_090.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_090.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "backend_observability_091",
+    "name": "Candidate 91",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_091.txt",
+    "pdf": "testdata\\resumes\\backend_observability_091.pdf",
+    "textLength": 1577
+  },
+  {
+    "id": "data_platform_092",
+    "name": "Candidate 92",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_092.txt",
+    "pdf": "testdata\\resumes\\data_platform_092.pdf",
+    "textLength": 1540
+  },
+  {
+    "id": "devops_k8s_093",
+    "name": "Candidate 93",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_093.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_093.pdf",
+    "textLength": 1517
+  },
+  {
+    "id": "redis_mysql_backend_094",
+    "name": "Candidate 94",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_094.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_094.pdf",
+    "textLength": 1561
+  },
+  {
+    "id": "security_backend_095",
+    "name": "Candidate 95",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_095.txt",
+    "pdf": "testdata\\resumes\\security_backend_095.pdf",
+    "textLength": 1550
+  },
+  {
+    "id": "qa_automation_096",
+    "name": "Candidate 96",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_096.txt",
+    "pdf": "testdata\\resumes\\qa_automation_096.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "mobile_engineer_097",
+    "name": "Candidate 97",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_097.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_097.pdf",
+    "textLength": 1506
+  },
+  {
+    "id": "frontend_senior_098",
+    "name": "Candidate 98",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_098.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_098.pdf",
+    "textLength": 1568
+  },
+  {
+    "id": "ml_platform_099",
+    "name": "Candidate 99",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_099.txt",
+    "pdf": "testdata\\resumes\\ml_platform_099.pdf",
+    "textLength": 1487
+  },
+  {
+    "id": "llm_rag_engineer_100",
+    "name": "Candidate 100",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_100.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_100.pdf",
+    "textLength": 1568
+  },
+  {
+    "id": "product_growth_101",
+    "name": "Candidate 101",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_101.txt",
+    "pdf": "testdata\\resumes\\product_growth_101.pdf",
+    "textLength": 1506
+  },
+  {
+    "id": "ops_customer_success_102",
+    "name": "Candidate 102",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_102.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_102.pdf",
+    "textLength": 1504
+  },
+  {
+    "id": "new_grad_java_103",
+    "name": "Candidate 103",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_103.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_103.pdf",
+    "textLength": 1559
+  },
+  {
+    "id": "career_gap_risk_104",
+    "name": "Candidate 104",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_104.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_104.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "fake_project_risk_105",
+    "name": "Candidate 105",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_105.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_105.pdf",
+    "textLength": 1520
+  },
+  {
+    "id": "backend_observability_106",
+    "name": "Candidate 106",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_106.txt",
+    "pdf": "testdata\\resumes\\backend_observability_106.pdf",
+    "textLength": 1581
+  },
+  {
+    "id": "data_platform_107",
+    "name": "Candidate 107",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_107.txt",
+    "pdf": "testdata\\resumes\\data_platform_107.pdf",
+    "textLength": 1544
+  },
+  {
+    "id": "devops_k8s_108",
+    "name": "Candidate 108",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_108.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_108.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "redis_mysql_backend_109",
+    "name": "Candidate 109",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_109.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_109.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "security_backend_110",
+    "name": "Candidate 110",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_110.txt",
+    "pdf": "testdata\\resumes\\security_backend_110.pdf",
+    "textLength": 1554
+  },
+  {
+    "id": "qa_automation_111",
+    "name": "Candidate 111",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_111.txt",
+    "pdf": "testdata\\resumes\\qa_automation_111.pdf",
+    "textLength": 1515
+  },
+  {
+    "id": "mobile_engineer_112",
+    "name": "Candidate 112",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_112.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_112.pdf",
+    "textLength": 1510
+  },
+  {
+    "id": "frontend_senior_113",
+    "name": "Candidate 113",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_113.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_113.pdf",
+    "textLength": 1572
+  },
+  {
+    "id": "ml_platform_114",
+    "name": "Candidate 114",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_114.txt",
+    "pdf": "testdata\\resumes\\ml_platform_114.pdf",
+    "textLength": 1491
+  },
+  {
+    "id": "llm_rag_engineer_115",
+    "name": "Candidate 115",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_115.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_115.pdf",
+    "textLength": 1568
+  },
+  {
+    "id": "product_growth_116",
+    "name": "Candidate 116",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_116.txt",
+    "pdf": "testdata\\resumes\\product_growth_116.pdf",
+    "textLength": 1506
+  },
+  {
+    "id": "ops_customer_success_117",
+    "name": "Candidate 117",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_117.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_117.pdf",
+    "textLength": 1504
+  },
+  {
+    "id": "new_grad_java_118",
+    "name": "Candidate 118",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_118.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_118.pdf",
+    "textLength": 1559
+  },
+  {
+    "id": "career_gap_risk_119",
+    "name": "Candidate 119",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_119.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_119.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "fake_project_risk_120",
+    "name": "Candidate 120",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_120.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_120.pdf",
+    "textLength": 1520
+  },
+  {
+    "id": "backend_observability_121",
+    "name": "Candidate 121",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_121.txt",
+    "pdf": "testdata\\resumes\\backend_observability_121.pdf",
+    "textLength": 1581
+  },
+  {
+    "id": "data_platform_122",
+    "name": "Candidate 122",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_122.txt",
+    "pdf": "testdata\\resumes\\data_platform_122.pdf",
+    "textLength": 1544
+  },
+  {
+    "id": "devops_k8s_123",
+    "name": "Candidate 123",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_123.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_123.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "redis_mysql_backend_124",
+    "name": "Candidate 124",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_124.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_124.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "security_backend_125",
+    "name": "Candidate 125",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_125.txt",
+    "pdf": "testdata\\resumes\\security_backend_125.pdf",
+    "textLength": 1554
+  },
+  {
+    "id": "qa_automation_126",
+    "name": "Candidate 126",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_126.txt",
+    "pdf": "testdata\\resumes\\qa_automation_126.pdf",
+    "textLength": 1515
+  },
+  {
+    "id": "mobile_engineer_127",
+    "name": "Candidate 127",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_127.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_127.pdf",
+    "textLength": 1510
+  },
+  {
+    "id": "frontend_senior_128",
+    "name": "Candidate 128",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_128.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_128.pdf",
+    "textLength": 1572
+  },
+  {
+    "id": "ml_platform_129",
+    "name": "Candidate 129",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_129.txt",
+    "pdf": "testdata\\resumes\\ml_platform_129.pdf",
+    "textLength": 1491
+  },
+  {
+    "id": "llm_rag_engineer_130",
+    "name": "Candidate 130",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_130.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_130.pdf",
+    "textLength": 1568
+  },
+  {
+    "id": "product_growth_131",
+    "name": "Candidate 131",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_131.txt",
+    "pdf": "testdata\\resumes\\product_growth_131.pdf",
+    "textLength": 1506
+  },
+  {
+    "id": "ops_customer_success_132",
+    "name": "Candidate 132",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_132.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_132.pdf",
+    "textLength": 1504
+  },
+  {
+    "id": "new_grad_java_133",
+    "name": "Candidate 133",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_133.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_133.pdf",
+    "textLength": 1559
+  },
+  {
+    "id": "career_gap_risk_134",
+    "name": "Candidate 134",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_134.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_134.pdf",
+    "textLength": 1564
+  },
+  {
+    "id": "fake_project_risk_135",
+    "name": "Candidate 135",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_135.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_135.pdf",
+    "textLength": 1520
+  },
+  {
+    "id": "backend_observability_136",
+    "name": "Candidate 136",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_136.txt",
+    "pdf": "testdata\\resumes\\backend_observability_136.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_137",
+    "name": "Candidate 137",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_137.txt",
+    "pdf": "testdata\\resumes\\data_platform_137.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_138",
+    "name": "Candidate 138",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_138.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_138.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_139",
+    "name": "Candidate 139",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_139.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_139.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_140",
+    "name": "Candidate 140",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_140.txt",
+    "pdf": "testdata\\resumes\\security_backend_140.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_141",
+    "name": "Candidate 141",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_141.txt",
+    "pdf": "testdata\\resumes\\qa_automation_141.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_142",
+    "name": "Candidate 142",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_142.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_142.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_143",
+    "name": "Candidate 143",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_143.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_143.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_144",
+    "name": "Candidate 144",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_144.txt",
+    "pdf": "testdata\\resumes\\ml_platform_144.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_145",
+    "name": "Candidate 145",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_145.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_145.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_146",
+    "name": "Candidate 146",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_146.txt",
+    "pdf": "testdata\\resumes\\product_growth_146.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_147",
+    "name": "Candidate 147",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_147.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_147.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_148",
+    "name": "Candidate 148",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_148.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_148.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_149",
+    "name": "Candidate 149",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_149.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_149.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_150",
+    "name": "Candidate 150",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_150.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_150.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_151",
+    "name": "Candidate 151",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_151.txt",
+    "pdf": "testdata\\resumes\\backend_observability_151.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_152",
+    "name": "Candidate 152",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_152.txt",
+    "pdf": "testdata\\resumes\\data_platform_152.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_153",
+    "name": "Candidate 153",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_153.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_153.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_154",
+    "name": "Candidate 154",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_154.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_154.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_155",
+    "name": "Candidate 155",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_155.txt",
+    "pdf": "testdata\\resumes\\security_backend_155.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_156",
+    "name": "Candidate 156",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_156.txt",
+    "pdf": "testdata\\resumes\\qa_automation_156.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_157",
+    "name": "Candidate 157",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_157.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_157.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_158",
+    "name": "Candidate 158",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_158.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_158.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_159",
+    "name": "Candidate 159",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_159.txt",
+    "pdf": "testdata\\resumes\\ml_platform_159.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_160",
+    "name": "Candidate 160",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_160.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_160.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_161",
+    "name": "Candidate 161",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_161.txt",
+    "pdf": "testdata\\resumes\\product_growth_161.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_162",
+    "name": "Candidate 162",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_162.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_162.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_163",
+    "name": "Candidate 163",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_163.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_163.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_164",
+    "name": "Candidate 164",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_164.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_164.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_165",
+    "name": "Candidate 165",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_165.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_165.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_166",
+    "name": "Candidate 166",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_166.txt",
+    "pdf": "testdata\\resumes\\backend_observability_166.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_167",
+    "name": "Candidate 167",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_167.txt",
+    "pdf": "testdata\\resumes\\data_platform_167.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_168",
+    "name": "Candidate 168",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_168.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_168.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_169",
+    "name": "Candidate 169",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_169.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_169.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_170",
+    "name": "Candidate 170",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_170.txt",
+    "pdf": "testdata\\resumes\\security_backend_170.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_171",
+    "name": "Candidate 171",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_171.txt",
+    "pdf": "testdata\\resumes\\qa_automation_171.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_172",
+    "name": "Candidate 172",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_172.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_172.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_173",
+    "name": "Candidate 173",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_173.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_173.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_174",
+    "name": "Candidate 174",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_174.txt",
+    "pdf": "testdata\\resumes\\ml_platform_174.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_175",
+    "name": "Candidate 175",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_175.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_175.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_176",
+    "name": "Candidate 176",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_176.txt",
+    "pdf": "testdata\\resumes\\product_growth_176.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_177",
+    "name": "Candidate 177",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_177.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_177.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_178",
+    "name": "Candidate 178",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_178.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_178.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_179",
+    "name": "Candidate 179",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_179.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_179.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_180",
+    "name": "Candidate 180",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_180.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_180.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_181",
+    "name": "Candidate 181",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_181.txt",
+    "pdf": "testdata\\resumes\\backend_observability_181.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_182",
+    "name": "Candidate 182",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_182.txt",
+    "pdf": "testdata\\resumes\\data_platform_182.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_183",
+    "name": "Candidate 183",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_183.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_183.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_184",
+    "name": "Candidate 184",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_184.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_184.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_185",
+    "name": "Candidate 185",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_185.txt",
+    "pdf": "testdata\\resumes\\security_backend_185.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_186",
+    "name": "Candidate 186",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_186.txt",
+    "pdf": "testdata\\resumes\\qa_automation_186.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_187",
+    "name": "Candidate 187",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_187.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_187.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_188",
+    "name": "Candidate 188",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_188.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_188.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_189",
+    "name": "Candidate 189",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_189.txt",
+    "pdf": "testdata\\resumes\\ml_platform_189.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_190",
+    "name": "Candidate 190",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_190.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_190.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_191",
+    "name": "Candidate 191",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_191.txt",
+    "pdf": "testdata\\resumes\\product_growth_191.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_192",
+    "name": "Candidate 192",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_192.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_192.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_193",
+    "name": "Candidate 193",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_193.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_193.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_194",
+    "name": "Candidate 194",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_194.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_194.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_195",
+    "name": "Candidate 195",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_195.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_195.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_196",
+    "name": "Candidate 196",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_196.txt",
+    "pdf": "testdata\\resumes\\backend_observability_196.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_197",
+    "name": "Candidate 197",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_197.txt",
+    "pdf": "testdata\\resumes\\data_platform_197.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_198",
+    "name": "Candidate 198",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_198.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_198.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_199",
+    "name": "Candidate 199",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_199.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_199.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_200",
+    "name": "Candidate 200",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_200.txt",
+    "pdf": "testdata\\resumes\\security_backend_200.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_201",
+    "name": "Candidate 201",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_201.txt",
+    "pdf": "testdata\\resumes\\qa_automation_201.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_202",
+    "name": "Candidate 202",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_202.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_202.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_203",
+    "name": "Candidate 203",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_203.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_203.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_204",
+    "name": "Candidate 204",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_204.txt",
+    "pdf": "testdata\\resumes\\ml_platform_204.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_205",
+    "name": "Candidate 205",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_205.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_205.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_206",
+    "name": "Candidate 206",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_206.txt",
+    "pdf": "testdata\\resumes\\product_growth_206.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_207",
+    "name": "Candidate 207",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_207.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_207.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_208",
+    "name": "Candidate 208",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_208.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_208.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_209",
+    "name": "Candidate 209",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_209.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_209.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_210",
+    "name": "Candidate 210",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_210.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_210.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_211",
+    "name": "Candidate 211",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_211.txt",
+    "pdf": "testdata\\resumes\\backend_observability_211.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_212",
+    "name": "Candidate 212",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_212.txt",
+    "pdf": "testdata\\resumes\\data_platform_212.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_213",
+    "name": "Candidate 213",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_213.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_213.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_214",
+    "name": "Candidate 214",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_214.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_214.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_215",
+    "name": "Candidate 215",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_215.txt",
+    "pdf": "testdata\\resumes\\security_backend_215.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_216",
+    "name": "Candidate 216",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_216.txt",
+    "pdf": "testdata\\resumes\\qa_automation_216.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_217",
+    "name": "Candidate 217",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_217.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_217.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_218",
+    "name": "Candidate 218",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_218.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_218.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_219",
+    "name": "Candidate 219",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_219.txt",
+    "pdf": "testdata\\resumes\\ml_platform_219.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_220",
+    "name": "Candidate 220",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_220.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_220.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_221",
+    "name": "Candidate 221",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_221.txt",
+    "pdf": "testdata\\resumes\\product_growth_221.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_222",
+    "name": "Candidate 222",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_222.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_222.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_223",
+    "name": "Candidate 223",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_223.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_223.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_224",
+    "name": "Candidate 224",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_224.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_224.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_225",
+    "name": "Candidate 225",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_225.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_225.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_226",
+    "name": "Candidate 226",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_226.txt",
+    "pdf": "testdata\\resumes\\backend_observability_226.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_227",
+    "name": "Candidate 227",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_227.txt",
+    "pdf": "testdata\\resumes\\data_platform_227.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_228",
+    "name": "Candidate 228",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_228.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_228.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_229",
+    "name": "Candidate 229",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_229.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_229.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_230",
+    "name": "Candidate 230",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_230.txt",
+    "pdf": "testdata\\resumes\\security_backend_230.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_231",
+    "name": "Candidate 231",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_231.txt",
+    "pdf": "testdata\\resumes\\qa_automation_231.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_232",
+    "name": "Candidate 232",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_232.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_232.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_233",
+    "name": "Candidate 233",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_233.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_233.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_234",
+    "name": "Candidate 234",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_234.txt",
+    "pdf": "testdata\\resumes\\ml_platform_234.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_235",
+    "name": "Candidate 235",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_235.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_235.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_236",
+    "name": "Candidate 236",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_236.txt",
+    "pdf": "testdata\\resumes\\product_growth_236.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_237",
+    "name": "Candidate 237",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_237.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_237.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_238",
+    "name": "Candidate 238",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_238.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_238.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_239",
+    "name": "Candidate 239",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_239.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_239.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_240",
+    "name": "Candidate 240",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_240.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_240.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_241",
+    "name": "Candidate 241",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_241.txt",
+    "pdf": "testdata\\resumes\\backend_observability_241.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_242",
+    "name": "Candidate 242",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_242.txt",
+    "pdf": "testdata\\resumes\\data_platform_242.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_243",
+    "name": "Candidate 243",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_243.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_243.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_244",
+    "name": "Candidate 244",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_244.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_244.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_245",
+    "name": "Candidate 245",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_245.txt",
+    "pdf": "testdata\\resumes\\security_backend_245.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_246",
+    "name": "Candidate 246",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_246.txt",
+    "pdf": "testdata\\resumes\\qa_automation_246.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_247",
+    "name": "Candidate 247",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_247.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_247.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_248",
+    "name": "Candidate 248",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_248.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_248.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_249",
+    "name": "Candidate 249",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_249.txt",
+    "pdf": "testdata\\resumes\\ml_platform_249.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_250",
+    "name": "Candidate 250",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_250.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_250.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_251",
+    "name": "Candidate 251",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_251.txt",
+    "pdf": "testdata\\resumes\\product_growth_251.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_252",
+    "name": "Candidate 252",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_252.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_252.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_253",
+    "name": "Candidate 253",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_253.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_253.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_254",
+    "name": "Candidate 254",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_254.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_254.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_255",
+    "name": "Candidate 255",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_255.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_255.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_256",
+    "name": "Candidate 256",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_256.txt",
+    "pdf": "testdata\\resumes\\backend_observability_256.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_257",
+    "name": "Candidate 257",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_257.txt",
+    "pdf": "testdata\\resumes\\data_platform_257.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_258",
+    "name": "Candidate 258",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_258.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_258.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_259",
+    "name": "Candidate 259",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_259.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_259.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_260",
+    "name": "Candidate 260",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_260.txt",
+    "pdf": "testdata\\resumes\\security_backend_260.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_261",
+    "name": "Candidate 261",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_261.txt",
+    "pdf": "testdata\\resumes\\qa_automation_261.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_262",
+    "name": "Candidate 262",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_262.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_262.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_263",
+    "name": "Candidate 263",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_263.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_263.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_264",
+    "name": "Candidate 264",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_264.txt",
+    "pdf": "testdata\\resumes\\ml_platform_264.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_265",
+    "name": "Candidate 265",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_265.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_265.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_266",
+    "name": "Candidate 266",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_266.txt",
+    "pdf": "testdata\\resumes\\product_growth_266.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_267",
+    "name": "Candidate 267",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_267.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_267.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_268",
+    "name": "Candidate 268",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_268.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_268.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_269",
+    "name": "Candidate 269",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_269.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_269.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_270",
+    "name": "Candidate 270",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_270.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_270.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_271",
+    "name": "Candidate 271",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_271.txt",
+    "pdf": "testdata\\resumes\\backend_observability_271.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_272",
+    "name": "Candidate 272",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_272.txt",
+    "pdf": "testdata\\resumes\\data_platform_272.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_273",
+    "name": "Candidate 273",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_273.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_273.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_274",
+    "name": "Candidate 274",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_274.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_274.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_275",
+    "name": "Candidate 275",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_275.txt",
+    "pdf": "testdata\\resumes\\security_backend_275.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_276",
+    "name": "Candidate 276",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_276.txt",
+    "pdf": "testdata\\resumes\\qa_automation_276.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_277",
+    "name": "Candidate 277",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_277.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_277.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_278",
+    "name": "Candidate 278",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_278.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_278.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_279",
+    "name": "Candidate 279",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_279.txt",
+    "pdf": "testdata\\resumes\\ml_platform_279.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_280",
+    "name": "Candidate 280",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_280.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_280.pdf",
+    "textLength": 1569
+  },
+  {
+    "id": "product_growth_281",
+    "name": "Candidate 281",
+    "role": "Growth Product Manager",
+    "expected": [
+      "product",
+      "metrics",
+      "A/B",
+      "funnel"
+    ],
+    "txt": "testdata\\resumes\\product_growth_281.txt",
+    "pdf": "testdata\\resumes\\product_growth_281.pdf",
+    "textLength": 1507
+  },
+  {
+    "id": "ops_customer_success_282",
+    "name": "Candidate 282",
+    "role": "Customer Success Ops",
+    "expected": [
+      "operations",
+      "SLA",
+      "customer",
+      "workflow"
+    ],
+    "txt": "testdata\\resumes\\ops_customer_success_282.txt",
+    "pdf": "testdata\\resumes\\ops_customer_success_282.pdf",
+    "textLength": 1505
+  },
+  {
+    "id": "new_grad_java_283",
+    "name": "Candidate 283",
+    "role": "New Graduate Java Engineer",
+    "expected": [
+      "Java",
+      "Spring",
+      "internship",
+      "project"
+    ],
+    "txt": "testdata\\resumes\\new_grad_java_283.txt",
+    "pdf": "testdata\\resumes\\new_grad_java_283.pdf",
+    "textLength": 1560
+  },
+  {
+    "id": "career_gap_risk_284",
+    "name": "Candidate 284",
+    "role": "Backend Engineer With Career Gap",
+    "expected": [
+      "Java",
+      "risk",
+      "gap",
+      "timeline"
+    ],
+    "txt": "testdata\\resumes\\career_gap_risk_284.txt",
+    "pdf": "testdata\\resumes\\career_gap_risk_284.pdf",
+    "textLength": 1565
+  },
+  {
+    "id": "fake_project_risk_285",
+    "name": "Candidate 285",
+    "role": "Questionable Project Resume",
+    "expected": [
+      "risk",
+      "GitHub",
+      "project",
+      "verification"
+    ],
+    "txt": "testdata\\resumes\\fake_project_risk_285.txt",
+    "pdf": "testdata\\resumes\\fake_project_risk_285.pdf",
+    "textLength": 1521
+  },
+  {
+    "id": "backend_observability_286",
+    "name": "Candidate 286",
+    "role": "Backend Observability Engineer",
+    "expected": [
+      "Java",
+      "OpenTelemetry",
+      "Prometheus",
+      "Grafana",
+      "incident"
+    ],
+    "txt": "testdata\\resumes\\backend_observability_286.txt",
+    "pdf": "testdata\\resumes\\backend_observability_286.pdf",
+    "textLength": 1582
+  },
+  {
+    "id": "data_platform_287",
+    "name": "Candidate 287",
+    "role": "Data Platform Engineer",
+    "expected": [
+      "Python",
+      "Flink",
+      "Kafka",
+      "Spark",
+      "warehouse"
+    ],
+    "txt": "testdata\\resumes\\data_platform_287.txt",
+    "pdf": "testdata\\resumes\\data_platform_287.pdf",
+    "textLength": 1545
+  },
+  {
+    "id": "devops_k8s_288",
+    "name": "Candidate 288",
+    "role": "DevOps Kubernetes Engineer",
+    "expected": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "SRE"
+    ],
+    "txt": "testdata\\resumes\\devops_k8s_288.txt",
+    "pdf": "testdata\\resumes\\devops_k8s_288.pdf",
+    "textLength": 1522
+  },
+  {
+    "id": "redis_mysql_backend_289",
+    "name": "Candidate 289",
+    "role": "Backend Storage Engineer",
+    "expected": [
+      "MySQL",
+      "Redis",
+      "Java",
+      "SQL",
+      "cache"
+    ],
+    "txt": "testdata\\resumes\\redis_mysql_backend_289.txt",
+    "pdf": "testdata\\resumes\\redis_mysql_backend_289.pdf",
+    "textLength": 1566
+  },
+  {
+    "id": "security_backend_290",
+    "name": "Candidate 290",
+    "role": "Security Backend Engineer",
+    "expected": [
+      "Java",
+      "OAuth",
+      "audit",
+      "risk",
+      "compliance"
+    ],
+    "txt": "testdata\\resumes\\security_backend_290.txt",
+    "pdf": "testdata\\resumes\\security_backend_290.pdf",
+    "textLength": 1555
+  },
+  {
+    "id": "qa_automation_291",
+    "name": "Candidate 291",
+    "role": "QA Automation Engineer",
+    "expected": [
+      "Python",
+      "Selenium",
+      "CI",
+      "test",
+      "quality"
+    ],
+    "txt": "testdata\\resumes\\qa_automation_291.txt",
+    "pdf": "testdata\\resumes\\qa_automation_291.pdf",
+    "textLength": 1516
+  },
+  {
+    "id": "mobile_engineer_292",
+    "name": "Candidate 292",
+    "role": "Mobile Engineer",
+    "expected": [
+      "Android",
+      "Kotlin",
+      "performance",
+      "crash"
+    ],
+    "txt": "testdata\\resumes\\mobile_engineer_292.txt",
+    "pdf": "testdata\\resumes\\mobile_engineer_292.pdf",
+    "textLength": 1511
+  },
+  {
+    "id": "frontend_senior_293",
+    "name": "Candidate 293",
+    "role": "Senior Frontend Engineer",
+    "expected": [
+      "Vue",
+      "React",
+      "TypeScript",
+      "performance",
+      "dashboard"
+    ],
+    "txt": "testdata\\resumes\\frontend_senior_293.txt",
+    "pdf": "testdata\\resumes\\frontend_senior_293.pdf",
+    "textLength": 1573
+  },
+  {
+    "id": "ml_platform_294",
+    "name": "Candidate 294",
+    "role": "ML Platform Engineer",
+    "expected": [
+      "Python",
+      "MLflow",
+      "Kubernetes",
+      "model serving"
+    ],
+    "txt": "testdata\\resumes\\ml_platform_294.txt",
+    "pdf": "testdata\\resumes\\ml_platform_294.pdf",
+    "textLength": 1492
+  },
+  {
+    "id": "llm_rag_engineer_295",
+    "name": "Candidate 295",
+    "role": "LLM RAG Engineer",
+    "expected": [
+      "RAG",
+      "Milvus",
+      "rerank",
+      "Langfuse",
+      "evaluation"
+    ],
+    "txt": "testdata\\resumes\\llm_rag_engineer_295.txt",
+    "pdf": "testdata\\resumes\\llm_rag_engineer_295.pdf",
+    "textLength": 1569
+  }
+]

@@ -1,0 +1,166 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2571 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Chen Haoran) Tj
+T*
+(Gender: Male    Objective: Machine Learning Engineer    Location: Shenzhen) Tj
+T*
+(Phone: 13933873006    Email: chenhaoran3849@gmail.com    GitHub: https://github.com/chenhaoran666) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2016.09 - 2020.06    Beijing University of Posts and Telecommunications    Computer Science and Technolog) Tj
+T*
+(y \(M.S.\)) Tj
+T*
+(Courses: Operating Systems, Data Structures and Algorithms, Computer Organization, Computer Networks, Des) Tj
+T*
+(ign Patterns, Machine Learning) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(ML engineer focused on recommendation/search feature engineering and model iteration with serving and A/B) Tj
+T*
+( evaluation.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2022.07 - Present    Lalamove    Machine Learning Engineer) Tj
+T*
+(- Collaborated with engineering to launch and monitor models, significantly lowering maintenance cost.) Tj
+T*
+(- Optimized feature store and realtime features, cutting end-to-end latency by 47%, ensuring online servi) Tj
+T*
+(ce stability.) Tj
+T*
+(- Owned feature engineering and model iteration for recommendation/search, lifting online CTR by 30%, rec) Tj
+T*
+(ognized by stakeholders and peers.) Tj
+T*
+(- Adopted MLflow for experiment and model version management, supporting rapid business growth.) Tj
+T*
+(2020.07 - 2022.06    Baidu    Junior Machine Learning Engineer) Tj
+T*
+(- Designed A/B experiments to evaluate strategies with metric dashboards, and key metrics improved steadi) Tj
+T*
+(ly.) Tj
+T*
+(- Implemented deep models with PyTorch with steady offline metric gains, reused across multiple business ) Tj
+T*
+(lines.) Tj
+T*
+(- Built model training and serving pipelines for offline training and online inference, and key metrics i) Tj
+T*
+(mproved steadily.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Recommendation Ranking Model \(PyTorch + Feature Store\)) Tj
+T*
+(- Trained a ranking model with PyTorch, lifting CTR by 30%, significantly lowering maintenance cost.) Tj
+T*
+(- Validated gains via A/B experiments.) Tj
+T*
+(- Integrated a feature store for realtime features, supporting rapid business growth.) Tj
+T*
+(- Designed feature engineering and sample construction, and related standards were adopted by the team.) Tj
+T*
+(Model Serving Platform \(MLflow + Triton\)) Tj
+T*
+(- Managed experiments and model versions with MLflow, and key metrics improved steadily.) Tj
+T*
+(- Served models for online inference.) Tj
+T*
+(- Supported gray release.) Tj
+T*
+(- Monitored model performance and drift, and it became a reusable team best practice.) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1160 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Highlights) Tj
+T*
+(- Owned core modules that steadily served 8510K daily visits with 99.9%+ availability) Tj
+T*
+(- Established metrics and reviews around Recommendation/search systems to keep improving delivery quality) Tj
+T*
+(- Continuously optimized root-cause analysis and postmortems, cutting key-path latency from 2200ms to 320) Tj
+T*
+(ms) Tj
+T*
+(- Work around CI/CD pipelines delivered about 30% efficiency gains and was reused across the team) Tj
+T*
+(- Drove a focused effort on Feature engineering, reducing related issues by about 47%) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Feature Engineering, Model serving, MLflow, Recommendation) Tj
+T*
+(Proficient in: A/B experimentation, A/B Testing, Machine learning and deep learning, PyTorch) Tj
+T*
+(Familiar with: Python, Model Serving, PyTorch modeling, Machine Learning, Recommendation/search systems, ) Tj
+T*
+(Feature engineering) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002925 00000 n 
+0000003100 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4312
+%%EOF

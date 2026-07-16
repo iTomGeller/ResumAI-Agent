@@ -1,0 +1,160 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2603 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Zheng Ting) Tj
+T*
+(Gender: Female    Objective: DevOps / SRE Engineer    Location: Xiamen) Tj
+T*
+(Phone: 17272311434    Email: zhengting6326@gmail.com    GitHub: https://github.com/zhengting393) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2017.09 - 2021.06    Beijing University of Posts and Telecommunications    Computer Science and Technolog) Tj
+T*
+(y \(M.S.\)) Tj
+T*
+(Courses: Machine Learning, Computer Organization, Distributed Systems, Data Structures and Algorithms, Co) Tj
+T*
+(mputer Networks, Operating Systems) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(DevOps/SRE engineer focused on Kubernetes stability, CI/CD and monitoring, skilled in incident handling a) Tj
+T*
+(nd capacity planning.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2023.07 - Present    a SaaS company    DevOps Engineer) Tj
+T*
+(- Optimized image builds and artifact management, cutting build time significantly, recognized by stakeho) Tj
+T*
+(lders and peers.) Tj
+T*
+(- Handled incidents and capacity planning, reducing MTTR by 49%.) Tj
+T*
+(- Wrote automation scripts and an ops platform to cut manual work, improving end-to-end delivery quality.) Tj
+T*
+(- Built log collection \(ELK/Loki\) and distributed tracing, ensuring online service stability.) Tj
+T*
+(2021.07 - 2023.06    Xiaomi    Junior DevOps Engineer) Tj
+T*
+(- Wrote Helm charts and CI/CD pipelines enabling blue-green and gray releases.) Tj
+T*
+(- Operated Kubernetes clusters and ensured stability across multiple production environments, reused acro) Tj
+T*
+(ss multiple business lines.) Tj
+T*
+(- Drove containerization and resource governance, raising cluster utilization by 34%.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Unified Monitoring & Alerting \(Prometheus + Grafana + Alertmanager\)) Tj
+T*
+(- Alert tiering and noise reduction via Alertmanager, and it became a reusable team best practice.) Tj
+T*
+(- Grafana dashboards and SLO management.) Tj
+T*
+(- Reduced MTTR by 49%.) Tj
+T*
+(- Collected multi-dimensional metrics with Prometheus.) Tj
+T*
+(Containerized Release Platform \(Kubernetes + Helm + ArgoCD\)) Tj
+T*
+(- Standardized releases with Kubernetes and Helm, supporting rapid business growth.) Tj
+T*
+(- Adopted ArgoCD for GitOps.) Tj
+T*
+(- Supported blue-green and gray releases, and key metrics improved steadily.) Tj
+T*
+(- Raised cluster utilization by 34%, reused across multiple business lines.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Drove a focused effort on computer networking basics, reducing related issues by about 49%) Tj
+T*
+(- Work around design patterns and refactoring delivered about 34% efficiency gains and was reused across ) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 876 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(the team) Tj
+T*
+(- Continuously optimized CI/CD pipelines, cutting key-path latency from 1200ms to 320ms) Tj
+T*
+(- Built a reusable methodology and docs around RESTful API design, adopted by several teams) Tj
+T*
+(- Owned core modules that steadily served 4990K daily visits with 99.9%+ availability) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: CI/CD, Helm, Python, SRE, Shell) Tj
+T*
+(Proficient in: Kubernetes, CI/CD pipelines, SRE reliability practices, Prometheus, Docker) Tj
+T*
+(Familiar with: Prometheus/Grafana, Kubernetes and container orchestration, Shell/Python scripting, Helm a) Tj
+T*
+(nd GitOps, Grafana) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Stays calm under pressure and recovers services quickly during high-concurrency incidents) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002957 00000 n 
+0000003132 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4059
+%%EOF

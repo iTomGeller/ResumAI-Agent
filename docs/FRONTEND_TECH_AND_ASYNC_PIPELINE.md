@@ -130,13 +130,13 @@ flowchart LR
 | 步骤 | 组件 | 说明 |
 |------|------|------|
 | 1 | `TaskController.uploadTaskAutoMatch` | 接收 `multipart/form-data`，默认 `executionMode=DAG_CONCURRENT`。 |
-| 2 | `MvpEvaluationService.createTaskFromUploadAutoMatch` | PDF/文本解析、`ResumeFileService.save` 落盘/对象存储；**不在此步做 JD 匹配**（AUTO 类别，匹配进 DAG）。 |
+| 2 | `ResumeEvaluationService.createTaskFromUploadAutoMatch` | PDF/文本解析、`ResumeFileService.save` 落盘/对象存储；**不在此步做 JD 匹配**（AUTO 类别，匹配进 DAG）。 |
 | 3 | `createTaskInternal` | 生成 `traceId`，内存 `MutableTask` + `persistResumeTask` 写 MySQL；`queue_status=QUEUED`，`status=QUEUED`，记录 `uploadedBy`（`HrContext`，请求头 `X-HR-Id`）。 |
 | 4 | `TaskQueueService.enqueue` | 向 Redis Stream 写入 `{ traceId, taskId, tenantId, uploadedBy, priority }`；Consumer Group：`resume-workers`。 |
 | 5 | HTTP 响应 | 立即返回 `TaskResponse`（含 `queue` 字段）；前端 `loadTasks` + `startPolling`。 |
 | 6 | `TaskWorkerService.pollLoop` | 单线程 poll Redis；线程池 `maxWorkers`（默认 6）执行；满负载时 sleep 等待。 |
 | 7 | `TaskQueueRepository.claimTask` | **条件更新**：仅当 `queue_status ∈ {QUEUED, RETRYING}` 时改为 `RUNNING`，设置 `worker_id`、`started_at`，防止重复消费。 |
-| 8 | `MvpEvaluationService.runQueuedEvaluation` | 加载任务，跑 Orchestrator + 多 Agent DAG（含 AUTO JD 匹配、RAG、报告生成）。 |
+| 8 | `ResumeEvaluationService.runQueuedEvaluation` | 加载任务，跑 Orchestrator + 多 Agent DAG（含 AUTO JD 匹配、RAG、报告生成）。 |
 | 9 | 结束落库 | 成功：`queue_status=SUCCESS`，`status=SUCCESS`；失败：重试或 `FAILED`；`executeTask` finally 更新 `result_payload`。 |
 | 10 | `ack` | Redis 消息 ACK；失败按 `maxAttempts` 退避重新 `enqueue`。 |
 | 11 | 卡住恢复 | 启动时 + 每 60s `recoverStuckRunning`：超时 `RUNNING` → `RETRYING` 并重新入队。 |
@@ -163,7 +163,7 @@ flowchart LR
 | 能力 | 路径 |
 |------|------|
 | 上传 API | `backend/.../api/TaskController.java` |
-| 创建 + 入队 | `backend/.../service/MvpEvaluationService.java` |
+| 创建 + 入队 | `backend/.../service/ResumeEvaluationService.java` |
 | Redis Stream | `backend/.../service/TaskQueueService.java` |
 | Worker | `backend/.../service/TaskWorkerService.java` |
 | MySQL 抢占 | `backend/.../service/TaskQueueRepository.java` |

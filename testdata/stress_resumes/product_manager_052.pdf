@@ -1,0 +1,176 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2455 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Hu Qiang) Tj
+T*
+(Gender: Male    Objective: AI Product Manager    Location: Xian) Tj
+T*
+(Phone: 18609673725    Email: huqiang901@gmail.com    GitHub: https://github.com/huqiang588) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2016.09 - 2020.06    Nanjing University    Artificial Intelligence \(M.S.\)) Tj
+T*
+(Courses: Software Engineering, Data Structures and Algorithms, Distributed Systems, Computer Organization) Tj
+T*
+(, Database Systems, Machine Learning) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Six years of product experience in B2B workflow products and LLM features, skilled in data-driven iterati) Tj
+T*
+(on and cross-team delivery.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2022.07 - Present    a fintech company    Product Manager) Tj
+T*
+(- Mined pain points via user interviews and data analysis and shaped the roadmap, supporting rapid busine) Tj
+T*
+(ss growth.) Tj
+T*
+(- Designed an LLM report-quality feedback system and evaluation dashboard to lift generation quality, and) Tj
+T*
+( it became a reusable team best practice.) Tj
+T*
+(- Led requirement reviews and PRDs, coordinating engineering, data and CS teams for enterprise rollout, s) Tj
+T*
+(upporting rapid business growth.) Tj
+T*
+(- Owned end-to-end design of an AI resume-screening product from upload to HR feedback, and key metrics i) Tj
+T*
+(mproved steadily.) Tj
+T*
+(2020.07 - 2022.06    Pinduoduo    Junior Product Manager) Tj
+T*
+(- Owned competitive analysis and market research with a differentiation strategy, and it became a reusabl) Tj
+T*
+(e team best practice.) Tj
+T*
+(- Ran A/B experiments validating key features, lifting core conversion by 35%, with experience documented) Tj
+T*
+( and shared internally.) Tj
+T*
+(- Drove monetization and pricing, growing quarterly revenue by 25%.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Recruiting Data Analytics Platform \(Analytics\)) Tj
+T*
+(- Designed A/B experiments.) Tj
+T*
+(- Delivered insights to support decisions, with experience documented and shared internally.) Tj
+T*
+(- Shaped the product roadmap, significantly lowering maintenance cost.) Tj
+T*
+(- Defined funnel and conversion metrics.) Tj
+T*
+(LLM Report Quality Evaluation System \(LLM Evaluation\)) Tj
+T*
+(- Designed a feedback taxonomy, supporting rapid business growth.) Tj
+T*
+(- Improved generated report quality.) Tj
+T*
+(- Built an evaluation dashboard.) Tj
+T*
+(- Closed the quality-improvement loop.) Tj
+T*
+(AI Resume Screening Workflow \(B2B SaaS\)) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1585 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Drove enterprise customer rollout, supporting rapid business growth.) Tj
+T*
+(- Designed the end-to-end flow from upload to feedback.) Tj
+T*
+(- Defined core metrics and dashboards, improving end-to-end delivery quality.) Tj
+T*
+(- Coordinated engineering, data and CS teams, and it became a reusable team best practice.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Owned core modules that steadily served 4000K daily visits with 99.9%+ availability) Tj
+T*
+(- Continuously optimized Project management and cross-team collaboration, cutting key-path latency from 9) Tj
+T*
+(00ms to 420ms) Tj
+T*
+(- Established metrics and reviews around cross-team communication to keep improving delivery quality) Tj
+T*
+(- Led a major technical effort involving Linux and shell basics, staying stable at 20000 QPS peak) Tj
+T*
+(- Drove a focused effort on CI/CD pipelines, reducing related issues by about 25%) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Requirement Analysis, A/B Testing, Data Analysis, Requirement analysis and PRD writing) Tj
+T*
+(Proficient in: Basic SQL for data pulls, User Research, LLM Application, Monetization) Tj
+T*
+(Familiar with: PRD, Data analysis and metric systems, Project Management, Project management and cross-te) Tj
+T*
+(am collaboration, A/B experiment design, LLM application boundaries) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Stays calm under pressure and recovers services quickly during high-concurrency incidents) Tj
+T*
+(- Curious about new tech, continuously learning LLM and cloud-native topics and applying them in practice) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002809 00000 n 
+0000002984 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4621
+%%EOF

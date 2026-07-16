@@ -1,0 +1,190 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2604 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Zhou Peng) Tj
+T*
+(Gender: Male    Objective: Senior Frontend Engineer    Location: Beijing) Tj
+T*
+(Phone: 19077182353    Email: zhoupeng8012@163.com) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2013.09 - 2017.06    University of Electronic Science and Technology of China    Computer Science and Tec) Tj
+T*
+(hnology \(B.S.\)) Tj
+T*
+(Courses: Compilers, Database Systems, Software Engineering, Computer Networks, Distributed Systems, Compu) Tj
+T*
+(ter Organization) Tj
+T*
+(GPA 3.6/4.0, top 20% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Senior frontend engineer skilled in complex dashboards, visualization, performance optimization and tooli) Tj
+T*
+(ng, having led micro-frontend splits.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2020.07 - Present    Meituan    Senior Frontend Engineer) Tj
+T*
+(- Optimized first-screen load and long-list rendering with virtual scrolling and lazy loading, cutting fi) Tj
+T*
+(rst-screen time by 60%, and related standards were adopted by the team.) Tj
+T*
+(- Built admin and dashboard frontends including candidate list, report detail, trace timeline and feedbac) Tj
+T*
+(k pages, with experience documented and shared internally.) Tj
+T*
+(- Drove engineering migration to Vite, significantly speeding up local startup and builds.) Tj
+T*
+(- Split a micro-frontend and onboarded sub-apps to reduce cross-team coupling, and it became a reusable t) Tj
+T*
+(eam best practice.) Tj
+T*
+(- Wrote unit and end-to-end tests to keep core interactions stable.) Tj
+T*
+(2017.07 - 2020.06    Xiaomi    Frontend Engineer) Tj
+T*
+(- Built a shared component library and scaffolding, unifying interaction and style specs and raising reus) Tj
+T*
+(e to 29%, significantly lowering maintenance cost.) Tj
+T*
+(- Defined API contracts with backend and wrapped a unified request layer and error handling, supporting r) Tj
+T*
+(apid business growth.) Tj
+T*
+(- Implemented permission routing and multi-theme switching with dark mode and i18n.) Tj
+T*
+(- Added tracking and frontend monitoring for blank screen, JS errors and API latency with a quality dashb) Tj
+T*
+(oard.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Component Library & Design System \(Vue3 + Storybook\)) Tj
+T*
+(- Documented components with Storybook.) Tj
+T*
+(- Improved reuse across teams.) Tj
+T*
+(- Unified interaction and style specs, and key metrics improved steadily.) Tj
+T*
+(- Added unit and e2e tests, reused across multiple business lines.) Tj
+T*
+(Realtime Data Visualization Dashboard \(Vue3 + ECharts + WebSocket\)) Tj
+T*
+(- Rendered complex charts over large datasets while staying smooth.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1852 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Implemented live updates over WebSocket.) Tj
+T*
+(- Supported theme switching and dark mode.) Tj
+T*
+(- Optimized repaint and memory usage, and key metrics improved steadily.) Tj
+T*
+(Resume Evaluation Platform Frontend \(Vue3 + TypeScript + Vite + Pinia\)) Tj
+T*
+(- Built candidate list, report detail and trace timeline pages.) Tj
+T*
+(- Added tracking and frontend monitoring, significantly lowering maintenance cost.) Tj
+T*
+(- Optimized first-screen and long-list rendering for smoother interaction, significantly lowering mainten) Tj
+T*
+(ance cost.) Tj
+T*
+(- Built a reusable component library and scaffolding.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Led a major technical effort involving unit testing and quality, staying stable at 8000 QPS peak) Tj
+T*
+(- Work around Frontend performance optimization delivered about 60% efficiency gains and was reused acros) Tj
+T*
+(s the team) Tj
+T*
+(- Established metrics and reviews around CI/CD pipelines to keep improving delivery quality) Tj
+T*
+(- Drove a focused effort on RESTful API design, reducing related issues by about 29%) Tj
+T*
+(- Built a reusable methodology and docs around Git collaboration and code review, adopted by several team) Tj
+T*
+(s) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Vite, TypeScript, Vue3 and Composition API, Webpack, Vue3) Tj
+T*
+(Proficient in: Performance, TypeScript and tooling, Frontend performance optimization, React and micro-fr) Tj
+T*
+(ontends, Micro-frontend) Tj
+T*
+(Familiar with: Vite/Webpack builds, Visualization, Node.js, React, ECharts data visualization, Engineerin) Tj
+T*
+(g) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Stays calm under pressure and recovers services quickly during high-concurrency incidents) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002958 00000 n 
+0000003133 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+5037
+%%EOF

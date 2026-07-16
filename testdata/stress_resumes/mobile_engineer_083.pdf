@@ -1,0 +1,152 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2590 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Chen Jiahao) Tj
+T*
+(Gender: Male    Objective: Android Engineer    Location: Shanghai) Tj
+T*
+(Phone: 17018605035    Email: chenjiahao215@gmail.com) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2016.09 - 2020.06    Zhejiang University    Communication Engineering \(M.S.\)) Tj
+T*
+(Courses: Compilers, Data Structures and Algorithms, Machine Learning, Computer Organization, Operating Sy) Tj
+T*
+(stems, Database Systems) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Android engineer focused on architecture evolution, startup/crash governance and componentization.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2022.07 - Present    NetEase    Android Engineer) Tj
+T*
+(- Refactored pages with Jetpack components for maintainability, supporting rapid business growth.) Tj
+T*
+(- Built device monitoring and gray-release capabilities, and it became a reusable team best practice.) Tj
+T*
+(- Improved weak-network experience with backend.) Tj
+T*
+(- Optimized startup, reducing cold-start from 1800ms to 180ms, reused across multiple business lines.) Tj
+T*
+(2020.07 - 2022.06    Lalamove    Junior Android Engineer) Tj
+T*
+(- Governed crashes and ANRs, reducing crash rate by 51%, and related standards were adopted by the team.) Tj
+T*
+(- Integrated payment and media SDKs while keeping core paths stable, reused across multiple business line) Tj
+T*
+(s.) Tj
+T*
+(- Owned Android client development and architecture evolution with componentization, and key metrics impr) Tj
+T*
+(oved steadily.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(E-commerce Android App \(Kotlin + Jetpack\)) Tj
+T*
+(- Optimized startup and memory, significantly lowering maintenance cost.) Tj
+T*
+(- Built with Kotlin and Jetpack, and key metrics improved steadily.) Tj
+T*
+(- Decoupled via componentized architecture.) Tj
+T*
+(- Reduced crash rate by 51%.) Tj
+T*
+(Componentization & Plugin Framework \(Android\)) Tj
+T*
+(- Unified base libraries and conventions.) Tj
+T*
+(- Designed module routing and communication.) Tj
+T*
+(- Supported dynamic loading and hotfix, significantly lowering maintenance cost.) Tj
+T*
+(- Improved team collaboration, improving end-to-end delivery quality.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Led a major technical effort involving data analysis and metrics, staying stable at 3000 QPS peak) Tj
+T*
+(- Continuously optimized Git collaboration and code review, cutting key-path latency from 1800ms to 180ms) Tj
+T*
+(- Built a reusable methodology and docs around RESTful API design, adopted by several teams) Tj
+T*
+(- Drove a focused effort on cross-team communication, reducing related issues by about 49%) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 701 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Established metrics and reviews around Android and Kotlin to keep improving delivery quality) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Componentization and plugins, Performance, Jetpack, Performance and crash governance) Tj
+T*
+(Proficient in: Payment SDK, Android, Android and Kotlin, Device monitoring and gray release) Tj
+T*
+(Familiar with: Kotlin, Componentization, Jetpack components, Crash Governance, Media/payment SDKs) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+(- Enjoys retrospectives, cares about code quality and observability, and makes data-driven decisions) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002944 00000 n 
+0000003119 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+3871
+%%EOF

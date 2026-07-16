@@ -36,7 +36,7 @@ public class ResumeRagService {
     private final EmbeddingAvailability embeddingAvailability;
     private final MilvusVectorMaintenanceService vectorMaintenanceService;
 
-    public ResumeRagService(MilvusEmbeddingStore embeddingStore,
+    public ResumeRagService(@org.springframework.lang.Nullable MilvusEmbeddingStore embeddingStore,
                             EmbeddingModel embeddingModel,
                             AgentMetrics agentMetrics,
                             EmbeddingAvailability embeddingAvailability,
@@ -48,7 +48,18 @@ public class ResumeRagService {
         this.vectorMaintenanceService = vectorMaintenanceService;
     }
 
-    public record RagRetrieveResult(List<String> chunks, int hitCount, double topScore, String fallbackReason, boolean fallbackUsed) {}
+    public record RagRetrieveResult(
+            List<String> chunks,
+            int hitCount,
+            double topScore,
+            String fallbackReason,
+            boolean fallbackUsed,
+            String backend,
+            String strategy,
+            String errorType,
+            String query,
+            boolean usedResumeTextFallback
+    ) {}
 
     public boolean isMilvusAvailable() {
         if (!embeddingAvailability.isOperational()) {
@@ -116,40 +127,267 @@ public class ResumeRagService {
     }
 
     public RagRetrieveResult retrieveDetailed(String jobQuery, int topK, String resumeText, String jdRequirements) {
+        return retrieveDetailed(jobQuery, topK, resumeText, jdRequirements, "hybrid");
+    }
+
+    public RagRetrieveResult retrieveDetailed(String jobQuery, int topK, String resumeText, String jdRequirements, String strategy) {
         long start = System.currentTimeMillis();
+        String query = StringUtils.hasText(jobQuery) ? jobQuery : "";
+        String mode = StringUtils.hasText(strategy) ? strategy.trim().toLowerCase() : "hybrid";
+        List<String> lexicalChunks = lexicalRetrieve(resumeText, query, topK);
+        if ("hybrid".equals(mode) && shouldUseLexicalOnly(resumeText, lexicalChunks)) {
+            agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "SUCCESS", System.currentTimeMillis() - start);
+            return new RagRetrieveResult(lexicalChunks, lexicalChunks.size(), 0.42, null, false,
+                    "hybrid", "lexical_short_resume", null, query, false);
+        }
+        if ("lexical".equals(mode)) {
+            if (!lexicalChunks.isEmpty()) {
+                agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "SUCCESS", System.currentTimeMillis() - start);
+                return new RagRetrieveResult(lexicalChunks, lexicalChunks.size(), 0.42, null, false,
+                        "lexical", "bm25_like", null, query, false);
+            }
+            return withResumeTextFallback(List.of(), 0, 0, "empty_lexical_hits", true,
+                    "lexical", "bm25_like", null, query, resumeText, topK);
+        }
         if (!embeddingAvailability.isOperational()) {
+            if (!lexicalChunks.isEmpty()) {
+                agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "WARNING", System.currentTimeMillis() - start);
+                return new RagRetrieveResult(lexicalChunks, lexicalChunks.size(), 0.42,
+                        embeddingAvailability.disabledReason(), false,
+                        "hybrid", "lexical_only_embedding_disabled", embeddingAvailability.disabledReason(), query, false);
+            }
             agentMetrics.recordRagRetrievalEmptyResults();
             agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "WARNING", System.currentTimeMillis() - start);
-            return new RagRetrieveResult(List.of(), 0, 0, embeddingAvailability.disabledReason(), true);
+            return withResumeTextFallback(List.of(), 0, 0, embeddingAvailability.disabledReason(), true,
+                    "hybrid", "disabled", embeddingAvailability.disabledReason(), query, resumeText, topK);
         }
         String compositeQuery = buildCompositeQuery(jobQuery, resumeText, jdRequirements);
         try {
-            List<String> chunks = retrieveInternal(null, compositeQuery, topK);
-            double topScore = 0;
-            if (!chunks.isEmpty()) {
-                topScore = 0.72;
-            }
-            agentMetrics.recordMilvusChunksRetrieved(chunks.size());
+            List<String> vectorChunks = "lexical".equals(mode) ? List.of() : retrieveInternal(null, compositeQuery, topK);
+            List<String> chunks = "embedding".equals(mode)
+                    ? vectorChunks
+                    : mergeChunks(vectorChunks, lexicalChunks, topK);
+            double topScore = !vectorChunks.isEmpty() ? 0.72 : (!lexicalChunks.isEmpty() ? 0.42 : 0);
+            agentMetrics.recordMilvusChunksRetrieved(vectorChunks.size());
             agentMetrics.recordMilvusSimilarityScore(topScore);
             if (chunks.isEmpty()) {
                 agentMetrics.recordRagRetrievalEmptyResults();
                 agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "SUCCESS",
                         System.currentTimeMillis() - start);
-                return new RagRetrieveResult(List.of(), 0, 0, "empty_vector_hits", true);
+                return withResumeTextFallback(
+                        List.of(), 0, 0, "empty_" + mode + "_hits", true,
+                        "hybrid", mode, null, query, resumeText, topK);
             }
             agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "SUCCESS",
                     System.currentTimeMillis() - start);
-            return new RagRetrieveResult(chunks, chunks.size(), topScore, null, false);
+            String resolvedStrategy = "embedding".equals(mode) ? "embedding" : "hybrid_embedding_bm25";
+            return new RagRetrieveResult(chunks, chunks.size(), topScore, null, false,
+                    "hybrid", resolvedStrategy, null, query, false);
         } catch (Exception e) {
-            log.warn("Milvus retrieve failed: {}", e.getMessage());
+            String errorType = classifyEmbeddingError(e);
+            log.warn("Milvus retrieve failed: {}", errorType);
             agentMetrics.recordMilvusChunksRetrieved(0);
             agentMetrics.recordRagRetrievalEmptyResults();
-            agentMetrics.recordToolCallError("milvus_retrieve", e.getClass().getSimpleName());
+            agentMetrics.recordToolCallError("milvus_retrieve", errorType);
             agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "FAILED",
                     System.currentTimeMillis() - start);
-            return new RagRetrieveResult(List.of(), 0, 0, e.getClass().getSimpleName(), true);
+            if (!lexicalChunks.isEmpty() && !"embedding".equals(mode)) {
+                return new RagRetrieveResult(lexicalChunks, lexicalChunks.size(), 0.42, errorType, false,
+                        "hybrid", "lexical_after_embedding_error", errorType, query, false);
+            }
+            return withResumeTextFallback(
+                    List.of(), 0, 0, errorType, true,
+                    "hybrid", mode, errorType, query, resumeText, topK);
         }
     }
+
+    private String classifyEmbeddingError(Exception e) {
+        String text = (e.getClass().getSimpleName() + " " + (e.getMessage() == null ? "" : e.getMessage())).toLowerCase();
+        if (text.contains("modelnotfound") || text.contains("model not found")) {
+            return "embedding_model_unavailable";
+        }
+        if (text.contains("401") || text.contains("unauthorized")) {
+            return "embedding_api_unauthorized";
+        }
+        return e.getClass().getSimpleName();
+    }
+
+    private RagRetrieveResult withResumeTextFallback(
+            List<String> chunks,
+            int hitCount,
+            double topScore,
+            String fallbackReason,
+            boolean fallbackUsed,
+            String backend,
+            String strategy,
+            String errorType,
+            String query,
+            String resumeText,
+            int topK) {
+        if (!StringUtils.hasText(resumeText)) {
+            return new RagRetrieveResult(chunks, hitCount, topScore, fallbackReason, fallbackUsed,
+                    backend, strategy, errorType, query, false);
+        }
+        List<String> fallbackChunks = resumeTextFallbackChunks(resumeText, query, topK);
+        if (fallbackChunks.isEmpty()) {
+            return new RagRetrieveResult(chunks, hitCount, topScore, fallbackReason, fallbackUsed,
+                    backend, strategy, errorType, query, false);
+        }
+        return new RagRetrieveResult(
+                fallbackChunks,
+                fallbackChunks.size(),
+                topScore > 0 ? topScore : 0.35,
+                fallbackReason != null ? fallbackReason + "+resume_text_fallback" : "resume_text_fallback",
+                true,
+                backend,
+                "resume_text_fallback",
+                errorType,
+                query,
+                true);
+    }
+
+    private List<String> resumeTextFallbackChunks(String resumeText, String query, int topK) {
+        if (!StringUtils.hasText(resumeText)) {
+            return List.of();
+        }
+        String[] keywords = query.split("[\\s,，、/|；;]+");
+        List<String> paragraphs = new ArrayList<>();
+        String[] blocks = resumeText.split("\\n{2,}");
+        if (blocks.length <= 1) {
+            for (String line : resumeText.split("\\n")) {
+                if (StringUtils.hasText(line)) {
+                    paragraphs.add(line.trim());
+                }
+            }
+        } else {
+            for (String block : blocks) {
+                if (StringUtils.hasText(block)) {
+                    paragraphs.add(block.trim());
+                }
+            }
+        }
+        List<String> scored = new ArrayList<>();
+        for (String para : paragraphs) {
+            int score = 0;
+            for (String kw : keywords) {
+                if (kw.length() >= 2 && para.toLowerCase().contains(kw.toLowerCase())) {
+                    score++;
+                }
+            }
+            if (score > 0 || !StringUtils.hasText(query)) {
+                String snippet = para.length() > 500 ? para.substring(0, 500) : para;
+                scored.add(snippet);
+            }
+        }
+        if (scored.isEmpty() && StringUtils.hasText(query)) {
+            String snippet = resumeText.length() > 500 ? resumeText.substring(0, 500) : resumeText;
+            scored.add(snippet);
+        }
+        return scored.stream().limit(topK).toList();
+    }
+
+    private List<String> lexicalRetrieve(String resumeText, String query, int topK) {
+        if (!StringUtils.hasText(resumeText)) {
+            return List.of();
+        }
+        List<String> terms = tokenize(query);
+        if (terms.isEmpty()) {
+            terms = tokenize(extractSkillKeywords(resumeText));
+        }
+        List<String> docs = splitResumeBlocks(resumeText);
+        List<ScoredChunk> scored = new ArrayList<>();
+        int totalDocs = Math.max(docs.size(), 1);
+        for (String doc : docs) {
+            double score = 0;
+            String lower = doc.toLowerCase();
+            for (String term : terms) {
+                long tf = countOccurrences(lower, term.toLowerCase());
+                if (tf <= 0) {
+                    continue;
+                }
+                long df = docs.stream().filter(d -> d.toLowerCase().contains(term.toLowerCase())).count();
+                double idf = Math.log(1 + (totalDocs - df + 0.5) / (df + 0.5));
+                score += (tf * 2.2 / (tf + 1.2)) * idf;
+            }
+            if (score > 0) {
+                scored.add(new ScoredChunk(doc.length() > 600 ? doc.substring(0, 600) : doc, score));
+            }
+        }
+        scored.sort((a, b) -> Double.compare(b.score(), a.score()));
+        return scored.stream().map(ScoredChunk::text).distinct().limit(topK).toList();
+    }
+
+    private boolean shouldUseLexicalOnly(String resumeText, List<String> lexicalChunks) {
+        if (!StringUtils.hasText(resumeText) || lexicalChunks.isEmpty()) {
+            return false;
+        }
+        return resumeText.length() <= 800;
+    }
+
+    private List<String> splitResumeBlocks(String resumeText) {
+        List<String> docs = new ArrayList<>();
+        for (String block : resumeText.split("\\n{2,}")) {
+            if (StringUtils.hasText(block)) {
+                docs.add(block.trim());
+            }
+        }
+        if (docs.size() <= 1) {
+            docs.clear();
+            for (String line : resumeText.split("\\n")) {
+                if (StringUtils.hasText(line)) {
+                    docs.add(line.trim());
+                }
+            }
+        }
+        if (docs.isEmpty() && StringUtils.hasText(resumeText)) {
+            docs.add(resumeText.trim());
+        }
+        return docs;
+    }
+
+    private List<String> tokenize(String text) {
+        if (!StringUtils.hasText(text)) {
+            return List.of();
+        }
+        List<String> terms = new ArrayList<>();
+        for (String token : text.split("[\\s,，、/|；;:：()（）\\[\\]{}]+")) {
+            String trimmed = token.trim();
+            if (trimmed.length() >= 2 && trimmed.length() <= 32 && !trimmed.matches("\\d+")) {
+                terms.add(trimmed);
+            }
+        }
+        return terms.stream().distinct().limit(30).toList();
+    }
+
+    private long countOccurrences(String text, String term) {
+        if (!StringUtils.hasText(text) || !StringUtils.hasText(term)) {
+            return 0;
+        }
+        long count = 0;
+        int idx = 0;
+        while ((idx = text.indexOf(term, idx)) >= 0) {
+            count++;
+            idx += Math.max(term.length(), 1);
+        }
+        return count;
+    }
+
+    private List<String> mergeChunks(List<String> vectorChunks, List<String> lexicalChunks, int topK) {
+        List<String> merged = new ArrayList<>();
+        for (String chunk : vectorChunks) {
+            if (StringUtils.hasText(chunk) && !merged.contains(chunk)) {
+                merged.add(chunk);
+            }
+        }
+        for (String chunk : lexicalChunks) {
+            if (StringUtils.hasText(chunk) && !merged.contains(chunk)) {
+                merged.add(chunk);
+            }
+        }
+        return merged.stream().limit(topK).toList();
+    }
+
+    private record ScoredChunk(String text, double score) {}
 
     private List<String> retrieveInternal(String traceId, String query, int topK) {
         Embedding queryEmbedding = embeddingModel.embed(query).content();

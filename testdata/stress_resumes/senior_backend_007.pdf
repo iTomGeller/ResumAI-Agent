@@ -1,0 +1,198 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2772 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Zhou Wei) Tj
+T*
+(Gender: Male    Objective: Senior Backend Engineer    Location: Beijing) Tj
+T*
+(Phone: 19391119269    Email: zhouwei1817@163.com    GitHub: https://github.com/zhouwei713) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2013.09 - 2017.06    Chongqing University    Computer Science and Technology \(B.S.\)) Tj
+T*
+(Courses: Data Structures and Algorithms, Distributed Systems, Machine Learning, Computer Networks, Design) Tj
+T*
+( Patterns, Compilers) Tj
+T*
+(GPA 3.4/4.0, top 30% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Seven years of backend experience focused on payment/transaction systems, distributed architecture, high ) Tj
+T*
+(concurrency and production incident response.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2020.07 - Present    Kuaishou    Senior Backend Engineer) Tj
+T*
+(- Fixed a log-collection failure caused by agent backpressure, restoring stability after tuning batch and) Tj
+T*
+( buffer settings.) Tj
+T*
+(- Tuned Redis caching for hot keys and cache breakdown with local cache and distributed locks, raising hi) Tj
+T*
+(t rate above 90%.) Tj
+T*
+(- Rebuilt the config and template management service to support hot template reload without restart, cutt) Tj
+T*
+(ing release time by 31%, improving end-to-end delivery quality.) Tj
+T*
+(- Optimized a file-sort slow SQL on a hot API, added a composite index via gh-ost online DDL, reducing P9) Tj
+T*
+(9 from 1500ms to 320ms.) Tj
+T*
+(- Investigated rising instance memory rss using GC logs, heap dump and arthas, found an unbounded cache a) Tj
+T*
+(nd cut memory by 31%.) Tj
+T*
+(2017.07 - 2020.06    JD.com    Backend Engineer) Tj
+T*
+(- Owned backend of core transaction and order services, splitting the monolith into order, settlement and) Tj
+T*
+( risk-control microservices.) Tj
+T*
+(- Served 1270K requests per day while keeping core-path SLA above 99.9%.) Tj
+T*
+(- Built service observability covering API latency, error rate, JVM GC, thread pools and consumer backlog) Tj
+T*
+( with Prometheus and Grafana, and it became a reusable team best practice.) Tj
+T*
+(- Led a production incident review with root-cause analysis and drove an alert-tiering and on-call rotati) Tj
+T*
+(on mechanism, ensuring online service stability.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Distributed Payment & Settlement Platform \(Spring Boot + MySQL + Kafka + Redis\)) Tj
+T*
+(- Used sharding and read-write splitting to keep single-table rows within tens of millions.) Tj
+T*
+(- Applied idempotency and eventual consistency to avoid duplicate charges on retry.) Tj
+T*
+(- Recorded an audit trace id for every payment state transition for compliance.) Tj
+T*
+(- Implemented daily reconciliation across payment gateway, ledger and settlement files with auto-correcti) Tj
+T*
+(on.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 2279 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(High-Concurrency Flash-Sale & Inventory System \(Java + Redis + RocketMQ\)) Tj
+T*
+(- Stayed stable at 30000 QPS in load tests with error rate below 0.1%.) Tj
+T*
+(- Pre-deducted inventory in Redis with async DB writes to absorb traffic spikes, ensuring online service ) Tj
+T*
+(stability.) Tj
+T*
+(- Designed distributed locks and token-bucket rate limiting to prevent oversell.) Tj
+T*
+(- Built circuit breaking and fallback for downstream failures, recognized by stakeholders and peers.) Tj
+T*
+(Enterprise Auth & Gateway Platform \(Spring Cloud Gateway + OAuth2\)) Tj
+T*
+(- Added circuit breaking to isolate faulty downstreams.) Tj
+T*
+(- Unified auth, rate limiting, gray routing and tracing as reusable platform capabilities, and it became ) Tj
+T*
+(a reusable team best practice.) Tj
+T*
+(- Shipped a unified SDK to lower integration cost across teams, and related standards were adopted by the) Tj
+T*
+( team.) Tj
+T*
+(- Integrated OAuth2 and RBAC with multi-tenant isolation.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Led a major technical effort involving MySQL indexing and slow-query tuning, staying stable at 30000 QP) Tj
+T*
+(S peak) Tj
+T*
+(- Built a reusable methodology and docs around Git collaboration and code review, adopted by several team) Tj
+T*
+(s) Tj
+T*
+(- Established metrics and reviews around Kafka/RocketMQ messaging to keep improving delivery quality) Tj
+T*
+(- Work around Distributed transactions and consistency delivered about 31% efficiency gains and was reuse) Tj
+T*
+(d across the team) Tj
+T*
+(- Owned core modules that steadily served 1270K daily visits with 99.9%+ availability) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: MySQL, Docker and containerization, JVM, Microservices, High Concurrency) Tj
+T*
+(Proficient in: Observability, Distributed transactions and consistency, SQL Optimization, MySQL indexing ) Tj
+T*
+(and slow-query tuning, Redis caching and distributed locks) Tj
+T*
+(Familiar with: Kafka/RocketMQ messaging, Spring Boot, Java, Kafka, JVM tuning and troubleshooting, Redis) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000003126 00000 n 
+0000003301 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+5632
+%%EOF

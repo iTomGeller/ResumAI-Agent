@@ -193,6 +193,7 @@ public class ResumeEvaluationOrchestrator {
     private String runAgent(String agentName, String description, int phase, java.util.function.Supplier<String> execution) {
         long start = System.currentTimeMillis();
         traceCapture.agentStart(agentName, description, phase);
+        AgentExecutionContext.set(traceCapture.getActiveTraceId(), agentName);
         try {
             String result = execution.get();
             long duration = System.currentTimeMillis() - start;
@@ -204,6 +205,8 @@ public class ResumeEvaluationOrchestrator {
             traceCapture.agentEnd(agentName, "FAILED", duration, "Error: " + e.getMessage());
             log.warn("Agent {} failed in {}ms: {}", agentName, duration, e.getMessage());
             return "{\"error\": \"" + agentName + " failed: " + e.getMessage() + "\"}";
+        } finally {
+            AgentExecutionContext.clear();
         }
     }
 

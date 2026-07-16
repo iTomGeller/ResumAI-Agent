@@ -1,0 +1,13 @@
+罗雨欣
+求职意向：后端开发工程师
+电话：13981700159
+GitHub：https://github.com/luoyuxin740
+
+技能
+Java、Spring Boot、MySQL
+
+项目
+做过一个支付系统重构项目。
+
+教育背景
+本科，计算机相关专业。

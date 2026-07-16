@@ -1,0 +1,32 @@
+Security Backend Engineer Candidate 260
+Security Backend Engineer | 6 years experience
+Email: candidate260@example.com | GitHub: https://github.com/example-dev
+
+Summary
+Implemented OAuth2, audit logs, permission models, and payment risk controls. Batch 18, domain scenario 8.
+
+Skills
+Java, OAuth, audit, risk, compliance, REST API, documentation, monitoring, cross-team collaboration.
+
+Experience
+2021.01 - Present  Example Technology  Security Backend Engineer
+- Delivered production features related to Implemented OAuth2, audit logs, permission models, and payment risk controls.
+- Collaborated with backend, product, QA, and operations teams.
+- Improved reliability, observability, and delivery quality with measurable engineering practices.
+- Measured outcome: improved P99 latency 38% through design review, rollout control, dashboards, and incident retrospectives.
+
+2019.07 - 2020.12  Prior Systems  Engineer
+- Maintained legacy modules, wrote migration plans, reviewed pull requests, and handled production defects.
+- Worked with customer success and security teams to resolve escalations.
+
+Project
+Domain Platform Improvement 260
+- Designed implementation plan, handled rollout, monitored metrics, and produced post-launch review.
+- Evidence includes dashboards, logs, pull requests, design docs, and incident notes.
+
+Side Project
+Knowledge Base Evaluation 260
+- Built retrieval test cases, labeled relevant snippets, compared lexical, embedding, and hybrid search quality.
+
+Education
+2016.09 - 2020.06  Example University  B.S. Computer Science

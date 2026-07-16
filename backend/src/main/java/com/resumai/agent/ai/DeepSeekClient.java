@@ -72,7 +72,7 @@ public class DeepSeekClient {
 
     public LlmCallResult evaluateResume(String prompt, String agent, String purpose, String traceId, String spanId) {
         if (!StringUtils.hasText(properties.getApiKey())) {
-            String fallback = "DeepSeek API Key 未配置，当前返回 MVP 本地评估：候选人具备基础岗位匹配度，建议补充真实简历文本后进行 AI 深度评估。";
+            String fallback = "DeepSeek API Key 未配置，当前返回本地评估：候选人具备基础岗位匹配度，建议补充真实简历文本后进行 AI 深度评估。";
             LlmInvocation saved = llmInvocationService.saveInvocation(
                     traceId, spanId, MODEL_NAME, agent, purpose, 0L,
                     prompt, fallback, estimateTokens(prompt), estimateTokens(fallback),

@@ -3,6 +3,7 @@ package com.resumai.agent.service;
 import com.resumai.agent.api.dto.TaskResponse;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.resumai.agent.ai.DeepSeekClient;
 import com.resumai.agent.ai.ResumeEvaluationOrchestrator;
@@ -11,30 +12,37 @@ import com.resumai.agent.ai.agents.EvaluationResult;
 import com.resumai.agent.api.dto.CreateTaskRequest;
 import com.resumai.agent.api.dto.RecommendationDecision;
 import com.resumai.agent.util.HrContext;
+import com.resumai.agent.util.MarkdownTextUtil;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import com.resumai.agent.config.AgentMetrics;
+import com.resumai.agent.config.WorkflowProperties;
 import com.resumai.agent.api.dto.DashboardMetricsResponse;
 import com.resumai.agent.api.dto.FeedbackRequest;
 import com.resumai.agent.api.dto.FeedbackResponse;
 import com.resumai.agent.api.dto.GraphResponse;
 import com.resumai.agent.api.dto.JdMatchResult;
 import com.resumai.agent.api.dto.PageResult;
+import com.resumai.agent.api.dto.WorkflowResultRequest;
+import com.resumai.agent.api.dto.WorkflowTraceEventRequest;
 import com.resumai.agent.api.dto.TaskListItemResponse;
 import com.resumai.agent.api.dto.TaskQueueFields;
 import com.resumai.agent.api.dto.TraceEventResponse;
 import com.resumai.agent.dao.AgentExecutionTraceMapper;
 import com.resumai.agent.dao.DynamicSkillPromptMapper;
 import com.resumai.agent.dao.HumanFeedbackLogMapper;
+import com.resumai.agent.dao.MetaEvolutionHistoryMapper;
 import com.resumai.agent.dao.RagasEvalMetricsMapper;
 import com.resumai.agent.dao.ResumeTaskMapper;
 import com.resumai.agent.dao.SystemOrchestrationRuleMapper;
 import com.resumai.agent.domain.entity.AgentExecutionTrace;
 import com.resumai.agent.domain.entity.DynamicSkillPrompt;
 import com.resumai.agent.domain.entity.HumanFeedbackLog;
+import com.resumai.agent.domain.entity.MetaEvolutionHistory;
 import com.resumai.agent.domain.entity.RagasEvalMetrics;
 import com.resumai.agent.domain.entity.ResumeTask;
+import com.resumai.agent.domain.enums.EvolutionType;
 import com.resumai.agent.domain.enums.QueueStatus;
 import com.resumai.agent.domain.dag.DagStepRegistry;
 import com.resumai.agent.domain.dag.DagStepRegistry.StepDefinition;
@@ -57,33 +65,38 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * MVP 简历评估服务。
+ * 简历评估核心服务 — 管理评估任务生命周期、Agent执行追踪与持久化。
  *
  * <p>MySQL 承担任务/JD/反馈/Trace 的事实查询，内存与 Redis 仅承接 RUNNING 运行态缓存。</p>
  */
 @Service
-public class MvpEvaluationService {
+public class ResumeEvaluationService {
 
-    private static final Logger log = LoggerFactory.getLogger(MvpEvaluationService.class);
+    private static final Logger log = LoggerFactory.getLogger(ResumeEvaluationService.class);
     private static final long MAX_UPLOAD_BYTES = 20L * 1024L * 1024L;
     private static final int MAX_RESUME_TEXT_LENGTH = 20000;
 
@@ -102,6 +115,7 @@ public class MvpEvaluationService {
     private final ResumeTaskMapper resumeTaskMapper;
     private final AgentExecutionTraceMapper agentExecutionTraceMapper;
     private final HumanFeedbackLogMapper humanFeedbackLogMapper;
+    private final MetaEvolutionHistoryMapper metaEvolutionHistoryMapper;
     private final RagasEvalMetricsMapper ragasEvalMetricsMapper;
     private final SystemOrchestrationRuleMapper ruleMapper;
     private final DynamicSkillPromptMapper skillPromptMapper;
@@ -117,14 +131,20 @@ public class MvpEvaluationService {
     private final Tracer tracer;
     private final ResumeEvaluationOrchestrator evaluationOrchestrator;
     private final AgentTraceCapture agentTraceCapture;
+    private final WorkflowClient workflowClient;
+    private final WorkflowProperties workflowProperties;
 
-    public MvpEvaluationService(DeepSeekClient deepSeekClient,
+    @Value("${langfuse.public-url:}")
+    private String langfusePublicUrl;
+
+    public ResumeEvaluationService(DeepSeekClient deepSeekClient,
                                 SseTraceHub sseTraceHub,
                                 ResumeGraphService resumeGraphService,
                                 ResumeRagService resumeRagService,
                                 ResumeTaskMapper resumeTaskMapper,
                                 AgentExecutionTraceMapper agentExecutionTraceMapper,
                                 HumanFeedbackLogMapper humanFeedbackLogMapper,
+                                MetaEvolutionHistoryMapper metaEvolutionHistoryMapper,
                                 RagasEvalMetricsMapper ragasEvalMetricsMapper,
                                 SystemOrchestrationRuleMapper ruleMapper,
                                 DynamicSkillPromptMapper skillPromptMapper,
@@ -140,7 +160,9 @@ public class MvpEvaluationService {
                                 ObjectMapper objectMapper,
                                 OpenTelemetry openTelemetry,
                                 ResumeEvaluationOrchestrator evaluationOrchestrator,
-                                AgentTraceCapture agentTraceCapture) {
+                                AgentTraceCapture agentTraceCapture,
+                                WorkflowClient workflowClient,
+                                WorkflowProperties workflowProperties) {
         this.deepSeekClient = deepSeekClient;
         this.sseTraceHub = sseTraceHub;
         this.resumeGraphService = resumeGraphService;
@@ -148,6 +170,7 @@ public class MvpEvaluationService {
         this.resumeTaskMapper = resumeTaskMapper;
         this.agentExecutionTraceMapper = agentExecutionTraceMapper;
         this.humanFeedbackLogMapper = humanFeedbackLogMapper;
+        this.metaEvolutionHistoryMapper = metaEvolutionHistoryMapper;
         this.ragasEvalMetricsMapper = ragasEvalMetricsMapper;
         this.ruleMapper = ruleMapper;
         this.skillPromptMapper = skillPromptMapper;
@@ -164,6 +187,8 @@ public class MvpEvaluationService {
         this.tracer = openTelemetry.getTracer("resumai-agent");
         this.evaluationOrchestrator = evaluationOrchestrator;
         this.agentTraceCapture = agentTraceCapture;
+        this.workflowClient = workflowClient;
+        this.workflowProperties = workflowProperties;
         agentMetrics.registerSseActiveSubscribersGauge(sseTraceHub::getActiveSubscriberCount);
         agentMetrics.registerTaskCacheSizeGauge(() -> tasks.size());
         agentMetrics.registerNeo4jConnectionPoolGauge(() -> resumeGraphService.isNeo4jAvailable() ? 1 : 0);
@@ -172,8 +197,24 @@ public class MvpEvaluationService {
 
     @PostConstruct
     void restorePersistedState() {
+        initTaskIdFromDb();
         restoreTasksFromDb();
         restoreFeedbacksFromDb();
+        if (!workflowProperties.isPythonMode()) {
+            agentTraceCapture.setPersistenceListener(this::persistAgentEventImmediately);
+        }
+    }
+
+    private void initTaskIdFromDb() {
+        try {
+            ResumeTask maxRow = resumeTaskMapper.selectOne(
+                    new QueryWrapper<ResumeTask>().orderByDesc("id").last("limit 1"));
+            if (maxRow != null && maxRow.getId() != null && maxRow.getId() > taskId.get()) {
+                taskId.set(maxRow.getId());
+            }
+        } catch (Exception e) {
+            log.warn("[eval] init task id from db failed: {}", e.getMessage());
+        }
     }
 
     private void restoreTasksFromDb() {
@@ -197,7 +238,7 @@ public class MvpEvaluationService {
                 }
             }
         } catch (Exception e) {
-            log.warn("[mvp] restore tasks from db failed: {}", e.getMessage());
+            log.warn("[eval] restore tasks from db failed: {}", e.getMessage());
         }
     }
 
@@ -206,7 +247,7 @@ public class MvpEvaluationService {
             PageResult<FeedbackResponse> page = queryFeedbacks(null, null, 1, 200);
             feedbacks.addAll(page.items());
         } catch (Exception e) {
-            log.warn("[mvp] restore feedbacks failed: {}", e.getMessage());
+            log.warn("[eval] restore feedbacks failed: {}", e.getMessage());
         }
     }
 
@@ -242,6 +283,7 @@ public class MvpEvaluationService {
                 stringValue(payload.get("decisionRationale"), null),
                 stringValue(payload.get("riskSummary"), null)
         );
+        task.finalReport = stringValue(payload.get("fullReport"), stringValue(payload.get("summary"), ""));
         Object topMatches = payload.get("topJdMatches");
         if (topMatches instanceof List<?>) {
             task.topJdMatches = objectMapper.convertValue(topMatches, new TypeReference<>() {});
@@ -400,7 +442,7 @@ public class MvpEvaluationService {
                 traces.putIfAbsent(traceId, new ArrayList<>());
                 return hydrated;
             } catch (Exception e) {
-                log.warn("[mvp] hydrate queued task failed (trace={}): {}", traceId, e.getMessage());
+                log.warn("[eval] hydrate queued task failed (trace={}): {}", traceId, e.getMessage());
             }
         }
         LocalDateTime now = LocalDateTime.now();
@@ -433,7 +475,7 @@ public class MvpEvaluationService {
      * 从上传文件中抽取简历正文并创建评估任务。
      *
      * <p>真实 HR 使用场景通常从 PDF 简历开始，不能要求用户先手工复制文本。
-     * 当前公网 MVP 支持 PDF、TXT、Markdown 和 CSV；Word 简历会给出明确错误，
+     * 当前支持 PDF、TXT、Markdown 和 CSV；Word 简历会给出明确错误，
      * 避免把不可解析内容静默送入 Agent 导致假评估。</p>
      *
      * @param file 简历文件
@@ -572,7 +614,7 @@ public class MvpEvaluationService {
             entity.setUpdateTime(task.updateTime);
             resumeTaskMapper.insert(entity);
         } catch (DataAccessException e) {
-            log.warn("[mvp] persist resume_task failed (trace={}): {}", task.traceId, e.getMessage());
+            log.warn("[eval] persist resume_task failed (trace={}): {}", task.traceId, e.getMessage());
         }
     }
 
@@ -609,7 +651,7 @@ public class MvpEvaluationService {
                 runtimeStateService.evictRunningTask(task.traceId);
             }
         } catch (DataAccessException e) {
-            log.warn("[mvp] update resume_task failed (trace={}): {}", task.traceId, e.getMessage());
+            log.warn("[eval] update resume_task failed (trace={}): {}", task.traceId, e.getMessage());
         }
     }
 
@@ -699,6 +741,52 @@ public class MvpEvaluationService {
     }
 
     /**
+     * 删除任务及其关联数据。
+     */
+    public void deleteTask(String traceId) {
+        tasks.remove(traceId);
+        traces.remove(traceId);
+        traceSequences.remove(traceId);
+        traceRoundCounters.remove(traceId);
+        CompletableFuture.runAsync(() -> {
+            try {
+                resumeTaskMapper.delete(new LambdaQueryWrapper<ResumeTask>()
+                        .eq(ResumeTask::getTraceId, traceId));
+                agentExecutionTraceMapper.delete(new LambdaQueryWrapper<AgentExecutionTrace>()
+                        .eq(AgentExecutionTrace::getTraceId, traceId));
+                log.info("[eval] task DB records deleted: {}", traceId);
+            } catch (Exception e) {
+                log.warn("[eval] delete task from DB failed (trace={}): {}", traceId, e.getMessage());
+            }
+        });
+        log.info("[eval] task deleted from memory: {}", traceId);
+    }
+
+    /**
+     * 批量删除任务。
+     */
+    public void deleteTasks(List<String> traceIds) {
+        for (String traceId : traceIds) {
+            tasks.remove(traceId);
+            traces.remove(traceId);
+            traceSequences.remove(traceId);
+            traceRoundCounters.remove(traceId);
+        }
+        CompletableFuture.runAsync(() -> {
+            try {
+                resumeTaskMapper.delete(new LambdaQueryWrapper<ResumeTask>()
+                        .in(ResumeTask::getTraceId, traceIds));
+                agentExecutionTraceMapper.delete(new LambdaQueryWrapper<AgentExecutionTrace>()
+                        .in(AgentExecutionTrace::getTraceId, traceIds));
+                log.info("[eval] batch deleted {} tasks from DB", traceIds.size());
+            } catch (Exception e) {
+                log.warn("[eval] batch delete from DB failed: {}", e.getMessage());
+            }
+        });
+        log.info("[eval] batch deleted {} tasks from memory", traceIds.size());
+    }
+
+    /**
      * 查询任务详情。
      *
      * @param traceId 全局链路 ID
@@ -718,6 +806,76 @@ public class MvpEvaluationService {
      * Returns the agent execution tree for a given task trace.
      * Uses data from AgentExecutionTrace table to build a hierarchical view.
      */
+    /**
+     * Server-side robust extraction of the latest agent-harness plan from trace payloads, so the
+     * frontend gets a clean top-level object instead of fragile client-side brace matching.
+     */
+    private Map<String, Object> extractHarnessPlan(List<AgentExecutionTrace> traces) {
+        com.fasterxml.jackson.databind.JsonNode found = null;
+        for (AgentExecutionTrace t : traces) {
+            String payload = t.getPayload();
+            if (payload == null || !payload.contains("agent-harness-v1")) {
+                continue;
+            }
+            try {
+                com.fasterxml.jackson.databind.JsonNode plan = findHarnessPlanNode(objectMapper.readTree(payload));
+                if (plan != null) {
+                    found = plan; // keep the latest occurrence in execution order
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        if (found == null) {
+            return null;
+        }
+        try {
+            return objectMapper.convertValue(found, Map.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode findHarnessPlanNode(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node == null) {
+            return null;
+        }
+        if (node.isObject()) {
+            com.fasterxml.jackson.databind.JsonNode version = node.get("version");
+            if (version != null && "agent-harness-v1".equals(version.asText()) && node.has("route")) {
+                return node;
+            }
+            java.util.Iterator<Map.Entry<String, com.fasterxml.jackson.databind.JsonNode>> it = node.fields();
+            while (it.hasNext()) {
+                com.fasterxml.jackson.databind.JsonNode child = it.next().getValue();
+                if (child.isTextual()) {
+                    String text = child.asText();
+                    if (text.contains("agent-harness-v1")) {
+                        try {
+                            com.fasterxml.jackson.databind.JsonNode parsed = findHarnessPlanNode(objectMapper.readTree(text));
+                            if (parsed != null) {
+                                return parsed;
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                } else {
+                    com.fasterxml.jackson.databind.JsonNode parsed = findHarnessPlanNode(child);
+                    if (parsed != null) {
+                        return parsed;
+                    }
+                }
+            }
+        } else if (node.isArray()) {
+            for (com.fasterxml.jackson.databind.JsonNode child : node) {
+                com.fasterxml.jackson.databind.JsonNode parsed = findHarnessPlanNode(child);
+                if (parsed != null) {
+                    return parsed;
+                }
+            }
+        }
+        return null;
+    }
+
     public Map<String, Object> getAgentExecutionTree(String traceId) {
         List<AgentExecutionTrace> traces = agentExecutionTraceMapper.selectList(
                 new LambdaQueryWrapper<AgentExecutionTrace>()
@@ -726,23 +884,77 @@ public class MvpEvaluationService {
 
         Map<String, Object> tree = new LinkedHashMap<>();
         tree.put("traceId", traceId);
-        tree.put("framework", "langchain4j AiServices + MCP + Skills");
+        tree.put("framework", workflowProperties.isPythonMode()
+                ? "LangGraph + DeepSeek + Embedding RAG"
+                : "langchain4j AiServices + MCP + Skills");
         tree.put("architecture", "8-Agent 6-Phase DAG Orchestration");
 
+        List<AgentExecutionTrace> deduped = dedupeTracesByEventId(traces);
+        boolean hasLangGraphEvents = deduped.stream().anyMatch(t -> StringUtils.hasText(t.getEventId()));
+
+        Map<String, List<AgentExecutionTrace>> groupedByNode = new LinkedHashMap<>();
+        Set<String> excludedAgents = Set.of("OrchestratorAgent", "ResumeParserAgent");
+        for (AgentExecutionTrace t : deduped) {
+            if (excludedAgents.contains(t.getAgentRole())) {
+                continue;
+            }
+            String groupKey = hasLangGraphEvents && StringUtils.hasText(t.getNodeId())
+                    ? t.getNodeId()
+                    : t.getAgentRole();
+            groupedByNode.computeIfAbsent(groupKey, k -> new ArrayList<>()).add(t);
+        }
+
         List<Map<String, Object>> executionTree = new ArrayList<>();
-        for (AgentExecutionTrace t : traces) {
+        for (Map.Entry<String, List<AgentExecutionTrace>> entry : groupedByNode.entrySet()) {
+            List<AgentExecutionTrace> nodeTraces = entry.getValue();
+            if (nodeTraces.isEmpty()) {
+                continue;
+            }
+            AgentExecutionTrace representative = nodeTraces.get(nodeTraces.size() - 1);
+            String agentName = representative.getAgentRole();
+
             Map<String, Object> agentNode = new LinkedHashMap<>();
-            agentNode.put("spanId", t.getSpanId());
-            agentNode.put("name", t.getAgentRole());
-            agentNode.put("role", mapAgentDescription(t.getAgentRole()));
-            agentNode.put("phase", mapAgentPhase(t.getAgentRole()));
-            agentNode.put("status", t.getStatus());
-            agentNode.put("durationMs", t.getDurationMs());
-            agentNode.put("output", t.getOutputSummary());
+            agentNode.put("name", agentName);
+            agentNode.put("role", mapAgentDescription(agentName));
+            agentNode.put("phase", mapAgentPhase(agentName));
+            agentNode.put("nodeId", representative.getNodeId());
 
-            List<Map<String, Object>> rounds = buildRoundsFromTrace(t);
+            String agentStatus = "SUCCESS";
+            AgentExecutionTrace nodeEnd = nodeTraces.stream()
+                    .filter(t -> "node".equals(t.getEventKind()) && "node_end".equals(t.getRoundRole()))
+                    .findFirst()
+                    .orElse(null);
+            AgentExecutionTrace nodeStart = nodeTraces.stream()
+                    .filter(t -> "node".equals(t.getEventKind()) && "node_start".equals(t.getRoundRole()))
+                    .findFirst()
+                    .orElse(null);
+            long totalDuration = nodeEnd != null && nodeEnd.getDurationMs() != null ? nodeEnd.getDurationMs() : 0L;
+            for (AgentExecutionTrace t : nodeTraces) {
+                if (totalDuration <= 0 && t.getDurationMs() != null) {
+                    totalDuration += t.getDurationMs();
+                }
+                if ("FAILED".equals(t.getStatus())) {
+                    agentStatus = "FAILED";
+                }
+            }
+            agentNode.put("status", agentStatus);
+            agentNode.put("durationMs", totalDuration);
+            if (nodeStart != null && nodeStart.getStartedAt() != null) {
+                agentNode.put("startedAt", nodeStart.getStartedAt());
+            } else if (nodeEnd != null && nodeEnd.getStartedAt() != null) {
+                agentNode.put("startedAt", nodeEnd.getStartedAt());
+            }
+            if (nodeEnd != null && nodeEnd.getEndedAt() != null) {
+                agentNode.put("endedAt", nodeEnd.getEndedAt());
+            }
+
+            List<Map<String, Object>> rounds = hasLangGraphEvents
+                    ? buildLangGraphRounds(nodeTraces, deduped)
+                    : buildRoundsFromTraces(nodeTraces);
             agentNode.put("rounds", rounds);
-
+            agentNode.put("totalRounds", rounds.size());
+            agentNode.put("output", representative.getOutputSummary());
+            agentNode.put("spanId", representative.getSpanId());
             executionTree.add(agentNode);
         }
 
@@ -751,34 +963,444 @@ public class MvpEvaluationService {
         }
 
         tree.put("executionTree", executionTree);
-        tree.put("langfuseTraceUrl", "/langfuse/trace/" + traceId);
+        tree.put("harnessPlan", extractHarnessPlan(deduped));
+        tree.put("langfuseTraceId", traceId);
+        tree.put("langfuseTraceUrl", buildLangfuseTraceUrl(traceId));
         return tree;
     }
 
-    private List<Map<String, Object>> buildRoundsFromTrace(AgentExecutionTrace t) {
-        List<Map<String, Object>> rounds = new ArrayList<>();
-        Map<String, Object> round1 = new LinkedHashMap<>();
-        round1.put("type", "generation");
-        round1.put("input", t.getInputSummary());
-        round1.put("output", t.getOutputSummary());
-        round1.put("tokens", t.getCostTokens() != null ? t.getCostTokens() : 0);
-
-        List<Map<String, Object>> toolCalls = new ArrayList<>();
-        if (t.getToolCall() != null && !t.getToolCall().isEmpty()) {
-            Map<String, Object> tool = new LinkedHashMap<>();
-            String toolName = t.getToolCall();
-            tool.put("name", toolName);
-            tool.put("category", categorizeToolCall(toolName));
-            tool.put("input", t.getInputSummary() != null ? t.getInputSummary() : "");
-            tool.put("output", t.getOutputSummary() != null
-                    ? t.getOutputSummary().substring(0, Math.min(200, t.getOutputSummary().length()))
-                    : "");
-            tool.put("durationMs", t.getDurationMs() != null ? t.getDurationMs() / 3 : 0);
-            toolCalls.add(tool);
+    private String buildLangfuseTraceUrl(String traceId) {
+        if (StringUtils.hasText(langfusePublicUrl)) {
+            String base = langfusePublicUrl.endsWith("/")
+                    ? langfusePublicUrl.substring(0, langfusePublicUrl.length() - 1)
+                    : langfusePublicUrl;
+            return base + "/project/resumai-project/traces/" + traceId;
         }
-        round1.put("toolCalls", toolCalls);
-        rounds.add(round1);
+        return "/langfuse/trace/" + traceId;
+    }
+
+    private List<AgentExecutionTrace> dedupeTracesByEventId(List<AgentExecutionTrace> traces) {
+        Map<String, AgentExecutionTrace> latest = new LinkedHashMap<>();
+        for (AgentExecutionTrace trace : traces) {
+            if (!StringUtils.hasText(trace.getEventId())) {
+                continue;
+            }
+            AgentExecutionTrace existing = latest.get(trace.getEventId());
+            if (existing == null
+                    || (trace.getUpdateTime() != null
+                    && existing.getUpdateTime() != null
+                    && trace.getUpdateTime().isAfter(existing.getUpdateTime()))) {
+                latest.put(trace.getEventId(), trace);
+            }
+        }
+        List<AgentExecutionTrace> withoutId = traces.stream()
+                .filter(t -> !StringUtils.hasText(t.getEventId()))
+                .toList();
+        List<AgentExecutionTrace> merged = new ArrayList<>(latest.values());
+        merged.addAll(withoutId);
+        merged.sort(Comparator.comparing(AgentExecutionTrace::getCreateTime, Comparator.nullsLast(Comparator.naturalOrder())));
+        return merged;
+    }
+
+    private List<Map<String, Object>> buildLangGraphRounds(List<AgentExecutionTrace> nodeTraces,
+                                                           List<AgentExecutionTrace> allTraces) {
+        List<AgentExecutionTrace> generations = nodeTraces.stream()
+                .filter(t -> "generation".equals(t.getEventKind()))
+                .sorted(Comparator.comparing(
+                        t -> t.getRoundIndex() != null ? t.getRoundIndex() : 0))
+                .toList();
+
+        Map<String, AgentExecutionTrace> finalsByParent = new LinkedHashMap<>();
+        for (AgentExecutionTrace t : nodeTraces) {
+            if ("final".equals(t.getEventKind()) && StringUtils.hasText(t.getParentSpanId())) {
+                finalsByParent.put(t.getParentSpanId(), t);
+            }
+        }
+
+        Map<String, List<AgentExecutionTrace>> toolsByParent = new LinkedHashMap<>();
+        Set<String> generationEventIds = generations.stream()
+                .map(AgentExecutionTrace::getEventId)
+                .filter(StringUtils::hasText)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        String currentNodeId = nodeTraces.isEmpty() ? null : nodeTraces.get(0).getNodeId();
+        List<Map<String, Object>> orphanToolCalls = new ArrayList<>();
+        for (AgentExecutionTrace t : allTraces) {
+            if (!"tool".equals(t.getEventKind())) {
+                continue;
+            }
+            if (!Objects.equals(t.getNodeId(), currentNodeId)) {
+                continue;
+            }
+            String parent = extractParentEventId(t);
+            if (parent != null && generationEventIds.contains(parent)) {
+                toolsByParent.computeIfAbsent(parent, k -> new ArrayList<>()).add(t);
+            } else {
+                Integer toolRound = t.getRoundIndex();
+                AgentExecutionTrace matchedGen = generations.stream()
+                        .filter(g -> Objects.equals(g.getRoundIndex(), toolRound))
+                        .findFirst()
+                        .orElse(null);
+                if (matchedGen == null && !generations.isEmpty()) {
+                    matchedGen = generations.stream()
+                            .filter(g -> g.getRoundIndex() != null && g.getRoundIndex() >= (toolRound != null ? toolRound : 0))
+                            .findFirst()
+                            .orElse(generations.get(generations.size() - 1));
+                }
+                if (matchedGen != null) {
+                    toolsByParent.computeIfAbsent(matchedGen.getEventId(), k -> new ArrayList<>()).add(t);
+                } else {
+                    orphanToolCalls.addAll(parseToolCallsFromPayload(t));
+                }
+            }
+        }
+
+        List<Map<String, Object>> rounds = new ArrayList<>();
+        for (AgentExecutionTrace gen : generations) {
+            Map<String, Object> round = new LinkedHashMap<>();
+            int roundNum = gen.getRoundIndex() != null ? gen.getRoundIndex() : rounds.size() + 1;
+            String eventId = gen.getEventId();
+            round.put("id", eventId);
+            round.put("eventId", eventId);
+            round.put("nodeId", gen.getNodeId());
+            round.put("roundNum", roundNum);
+            round.put("type", "generation");
+            round.put("status", gen.getStatus());
+            round.put("input", gen.getInputSummary());
+            round.put("output", gen.getOutputSummary());
+            round.put("tokens", gen.getCostTokens() != null ? gen.getCostTokens() : 0);
+            round.put("inputMessages", parseInputMessages(gen));
+            round.put("outputMessage", parseOutputMessage(gen));
+
+            Map<String, Object> payload = parsePayloadMap(gen);
+            boolean hasToolCalls = boolValue(payload.get("hasToolCalls"));
+            String decisionText = stringValue(payload.get("decisionText"), null);
+            String finalOutput = stringValue(payload.get("finalOutput"), null);
+            String roundRole = stringValue(payload.get("roundRole"), null);
+            if (!StringUtils.hasText(decisionText) && hasToolCalls) {
+                decisionText = gen.getOutputSummary();
+            }
+
+            List<Map<String, Object>> toolCalls = new ArrayList<>();
+            LinkedHashMap<String, Map<String, Object>> toolCallMap = new LinkedHashMap<>();
+            List<AgentExecutionTrace> parentTools = toolsByParent.getOrDefault(eventId, List.of());
+            for (AgentExecutionTrace toolTrace : parentTools) {
+                for (Map<String, Object> tc : parseToolCallsFromPayload(toolTrace)) {
+                    mergeToolCall(toolCallMap, tc);
+                }
+            }
+
+            round.put("hasToolCalls", hasToolCalls || !toolCallMap.isEmpty());
+            round.put("decisionText", decisionText);
+            round.put("roundRole", roundRole);
+            round.put("toolCalls", new ArrayList<>(toolCallMap.values()));
+
+            AgentExecutionTrace finalEvent = finalsByParent.get(eventId);
+            if (finalEvent != null) {
+                round.put("final", true);
+                String fo = stringValue(parsePayloadMap(finalEvent).get("finalOutput"), finalEvent.getOutputSummary());
+                round.put("finalOutput", fo);
+                if (StringUtils.hasText(fo)) {
+                    round.put("output", fo);
+                }
+            } else if ("final".equals(roundRole) || Boolean.FALSE.equals(payload.get("hasToolCalls"))) {
+                round.put("final", true);
+                round.put("finalOutput", finalOutput != null ? finalOutput : gen.getOutputSummary());
+            } else {
+                round.put("final", false);
+            }
+            rounds.add(round);
+        }
+
         return rounds;
+    }
+
+    private Map<String, Object> parsePayloadMap(AgentExecutionTrace trace) {
+        if (!StringUtils.hasText(trace.getPayload())) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(trace.getPayload(), new TypeReference<>() {});
+        } catch (Exception ignored) {
+            return Map.of();
+        }
+    }
+
+    private String extractParentEventId(AgentExecutionTrace trace) {
+        if (StringUtils.hasText(trace.getParentEventId())) {
+            return trace.getParentEventId();
+        }
+        if (trace.getPayload() != null) {
+            try {
+                Map<String, Object> payload = objectMapper.readValue(trace.getPayload(), new TypeReference<>() {});
+                Object parent = payload.get("parentEventId");
+                if (parent != null) {
+                    return String.valueOf(parent);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return trace.getParentSpanId();
+    }
+
+    private List<Map<String, Object>> parseInputMessages(AgentExecutionTrace trace) {
+        if (StringUtils.hasText(trace.getRawInput())) {
+            try {
+                Object parsed = objectMapper.readValue(trace.getRawInput(), Object.class);
+                if (parsed instanceof List<?> list) {
+                    return list.stream().map(item -> (Map<String, Object>) item).toList();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        if (trace.getPayload() != null) {
+            try {
+                Map<String, Object> payload = objectMapper.readValue(trace.getPayload(), new TypeReference<>() {});
+                Object msgs = payload.get("inputMessages");
+                if (msgs instanceof List<?> list) {
+                    return list.stream().map(item -> (Map<String, Object>) item).toList();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return List.of();
+    }
+
+    private Map<String, Object> parseOutputMessage(AgentExecutionTrace trace) {
+        if (StringUtils.hasText(trace.getRawOutput())) {
+            try {
+                return objectMapper.readValue(trace.getRawOutput(), new TypeReference<>() {});
+            } catch (Exception ignored) {
+            }
+        }
+        if (trace.getPayload() != null) {
+            try {
+                Map<String, Object> payload = objectMapper.readValue(trace.getPayload(), new TypeReference<>() {});
+                Object out = payload.get("outputMessage");
+                if (out instanceof Map<?, ?> map) {
+                    return (Map<String, Object>) map;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return Map.of();
+    }
+
+    public void publishWorkflowTraceEvent(WorkflowTraceEventRequest request) {
+        int tokenCost = 0;
+        if (request.tokenUsage() != null && request.tokenUsage().get("total_tokens") instanceof Number n) {
+            tokenCost = n.intValue();
+        }
+        TraceEventResponse event = new TraceEventResponse(
+                request.traceId(),
+                request.eventId(),
+                request.parentEventId(),
+                request.agentName(),
+                request.kind(),
+                request.agentName() + " " + request.kind(),
+                request.outputPreview() != null ? request.outputPreview() : "",
+                request.status() != null ? request.status() : "SUCCESS",
+                request.durationMs(),
+                tokenCost,
+                LocalDateTime.now(),
+                null, null, request.kind(), "BOTH",
+                request.agentName(), null, null,
+                request.agentName(), null, request.inputPreview(),
+                request.inputPreview(), request.outputPreview(),
+                null, null, null, null,
+                request.nodeId(), null, null,
+                request.phase() != null ? String.valueOf(request.phase()) : null,
+                false, request.roundIndex(),
+                null, null, null,
+                null,
+                request.roundIndex(), null, null, null, null, null, null);
+        traces.computeIfAbsent(request.traceId(), ignored -> new ArrayList<>()).add(event);
+        sseTraceHub.publish(event);
+    }
+
+    public void applyWorkflowResult(WorkflowResultRequest request) {
+        MutableTask task = ensureMutableTask(request.traceId());
+        long start = task.startedAt != null
+                ? Duration.between(task.startedAt, LocalDateTime.now()).toMillis()
+                : request.durationMs() != null ? request.durationMs() : 0L;
+
+        if ("SUCCESS".equals(request.status())) {
+            task.status = "SUCCESS";
+            task.queueStatus = QueueStatus.SUCCESS.name();
+            String fullReport = StringUtils.hasText(request.summary())
+                    ? request.summary()
+                    : buildWorkflowSummaryFallback(request.strengths(), request.risks(), request.interviewQuestions());
+            task.finalReport = fullReport;
+            task.overallScore = request.overallScore() != null ? request.overallScore() : 0;
+            task.recommendation = normalizeRecommendation(request.recommendation(), task.overallScore);
+            task.aiRecommendation = request.recommendation();
+            task.summary = buildListSummary(fullReport, task.overallScore, task.recommendation);
+            task.strengths = new ArrayList<>(MarkdownTextUtil.filterGenericPlaceholders(request.strengths()));
+            task.risks = new ArrayList<>(MarkdownTextUtil.filterGenericPlaceholders(request.risks()));
+            task.interviewQuestions = new ArrayList<>(MarkdownTextUtil.filterGenericPlaceholders(request.interviewQuestions()));
+            if (task.strengths.isEmpty() || task.risks.isEmpty() || task.interviewQuestions.isEmpty()) {
+                MarkdownTextUtil.ReportSections sections = MarkdownTextUtil.extractReportSections(fullReport);
+                if (task.strengths.isEmpty() && !sections.strengths().isEmpty()) {
+                    task.strengths = new ArrayList<>(sections.strengths());
+                }
+                if (task.risks.isEmpty() && !sections.risks().isEmpty()) {
+                    task.risks = new ArrayList<>(sections.risks());
+                }
+                if (task.interviewQuestions.isEmpty() && !sections.questions().isEmpty()) {
+                    task.interviewQuestions = new ArrayList<>(sections.questions());
+                }
+            }
+            task.riskSummary = buildRiskSummary(task.risks);
+            task.decisionRationale = task.recommendation.equals(request.recommendation())
+                    ? "LangGraph DAG: Intent→Parse→JdMatch→(TechEval+ProjectEval+Risk)→EvidenceFusion→Report"
+                    : "系统兜底：综合评分低于推荐阈值，已从 AI 原始建议降级为人工复核/不推荐";
+            task.durationMs = request.durationMs() != null ? request.durationMs() : start;
+            task.tokenCost = request.tokenCost() != null ? request.tokenCost() : 0;
+            agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "SUCCESS", task.recommendation);
+            agentMetrics.recordFunnelScoreDistribution(task.jobCategory, task.overallScore);
+            agentMetrics.recordFunnelRecommendation(task.recommendation);
+            agentMetrics.recordFunnelTimeToScreen(task.jobCategory, task.durationMs);
+            persistFullTaskResult(task);
+        } else {
+            task.status = "FAILED";
+            task.queueStatus = QueueStatus.FAILED.name();
+            task.summary = request.errorMessage() != null ? request.errorMessage() : "Workflow failed";
+            task.durationMs = request.durationMs() != null ? request.durationMs() : start;
+            agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "FAILED", "NONE");
+        }
+        task.finishedAt = LocalDateTime.now();
+        task.updateTime = LocalDateTime.now();
+        updateResumeTask(task);
+        runtimeStateService.evictRunningTask(task.traceId);
+        agentMetrics.agentTaskFinished();
+    }
+
+    private List<Map<String, Object>> buildRoundsFromTraces(List<AgentExecutionTrace> agentTraces) {
+        List<Map<String, Object>> rounds = new ArrayList<>();
+        int roundNum = 0;
+        for (AgentExecutionTrace t : agentTraces) {
+            roundNum++;
+            Map<String, Object> round = new LinkedHashMap<>();
+            round.put("roundNum", roundNum);
+            String eventType = t.getToolCall();
+            round.put("type", "LLM_TOOL_CALL".equals(eventType) ? "tool_call" : "generation");
+            round.put("input", t.getInputSummary());
+            round.put("output", t.getOutputSummary());
+            round.put("tokens", t.getCostTokens() != null ? t.getCostTokens() : 0);
+
+            List<Map<String, Object>> toolCalls = parseToolCallsFromPayload(t);
+            round.put("toolCalls", toolCalls);
+            rounds.add(round);
+        }
+        return rounds;
+    }
+
+    private List<Map<String, Object>> parseToolCallsFromPayload(AgentExecutionTrace t) {
+        List<Map<String, Object>> toolCalls = new ArrayList<>();
+        if (t.getPayload() != null) {
+            try {
+                Map<String, Object> payload = objectMapper.readValue(t.getPayload(), new TypeReference<>() {});
+                Object tcRaw = payload.get("toolCalls");
+                Object mcpRaw = payload.get("mcpCalls");
+                if (tcRaw instanceof List<?> tcList) {
+                    for (Object item : tcList) {
+                        if (item instanceof Map<?, ?> rawMap) {
+                            Map<String, Object> mapItem = objectMapper.convertValue(rawMap, new TypeReference<Map<String, Object>>() {});
+                            Map<String, Object> tc = new LinkedHashMap<>();
+                            tc.put("name", stringValue(mapItem.get("name"), "unknown"));
+                            tc.put("toolCallId", stringValue(mapItem.get("toolCallId"), stringValue(mapItem.get("id"), "")));
+                            tc.put("category", stringValue(mapItem.get("type"), stringValue(mapItem.get("category"), stringValue(mapItem.get("family"), "tool"))));
+                            tc.put("origin", stringValue(mapItem.get("origin"), null));
+                            tc.put("family", stringValue(mapItem.get("family"), stringValue(tc.get("category"), "tool")));
+                            tc.put("protocol", stringValue(mapItem.get("protocol"), null));
+                            tc.put("server", stringValue(mapItem.get("server"), null));
+                            tc.put("operation", stringValue(mapItem.get("operation"), null));
+                            tc.put("input", stringValue(mapItem.get("arguments"), stringValue(mapItem.get("input"), "")));
+                            tc.put("output", stringValue(mapItem.get("result"), stringValue(mapItem.get("output"), "")));
+                            tc.put("durationMs", intValue(mapItem.get("durationMs"), 0));
+                            tc.put("status", stringValue(mapItem.get("status"), t.getStatus() != null ? t.getStatus() : "SUCCESS"));
+                            tc.put("startedAt", stringValue(mapItem.get("startedAt"), null));
+                            tc.put("endedAt", stringValue(mapItem.get("endedAt"), null));
+                            tc.put("inputHash", stringValue(mapItem.get("inputHash"), null));
+                            tc.put("dedupedCount", intValue(mapItem.get("dedupedCount"), 0));
+                            tc.put("substeps", mapItem.get("substeps"));
+                            tc.put("retrieval", mapItem.get("retrieval"));
+                            toolCalls.add(tc);
+                        } else {
+                            toolCalls.add(parseToolEntry(item.toString(), "tool"));
+                        }
+                    }
+                }
+                if (mcpRaw instanceof List<?> mcpList) {
+                    for (Object item : mcpList) {
+                        toolCalls.add(parseToolEntry(item.toString(), "mcp"));
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        if (toolCalls.isEmpty() && t.getToolCall() != null && !"AGENT_EXECUTION".equals(t.getToolCall())
+                && !"LLM_GENERATION".equals(t.getToolCall())) {
+            Map<String, Object> tc = new LinkedHashMap<>();
+            tc.put("name", t.getToolCall());
+            tc.put("category", categorizeToolCall(t.getToolCall()));
+            tc.put("input", "");
+            tc.put("output", "");
+            tc.put("durationMs", 0);
+            tc.put("status", t.getStatus() != null ? t.getStatus() : "SUCCESS");
+            toolCalls.add(tc);
+        }
+        return toolCalls;
+    }
+
+    private void mergeToolCall(LinkedHashMap<String, Map<String, Object>> toolCallMap, Map<String, Object> tc) {
+        String name = stringValue(tc.get("name"), "unknown");
+        String inputHash = stringValue(tc.get("inputHash"), "");
+        String input = stringValue(tc.get("input"), "");
+        String key = StringUtils.hasText(inputHash)
+                ? name + ":" + inputHash
+                : name + ":" + Integer.toUnsignedString(input.hashCode());
+
+        Map<String, Object> existing = toolCallMap.get(key);
+        if (existing == null) {
+            toolCallMap.put(key, tc);
+            return;
+        }
+        int deduped = intValue(existing.get("dedupedCount"), 0) + 1;
+        existing.put("dedupedCount", deduped);
+    }
+
+    private Map<String, Object> parseToolEntry(String entry, String defaultCategory) {
+        Map<String, Object> tc = new LinkedHashMap<>();
+        // Try JSON format first: {"name":"...", "type":"...", "arguments":"...", "result":"..."}
+        if (entry.startsWith("{")) {
+            try {
+                Map<String, Object> jsonEntry = objectMapper.readValue(entry, new TypeReference<>() {});
+                tc.put("name", jsonEntry.getOrDefault("name", "unknown"));
+                tc.put("toolCallId", jsonEntry.getOrDefault("toolCallId", jsonEntry.get("id")));
+                tc.put("category", jsonEntry.getOrDefault("type", defaultCategory));
+                tc.put("input", jsonEntry.getOrDefault("arguments", ""));
+                tc.put("output", jsonEntry.getOrDefault("result", ""));
+                tc.put("durationMs", jsonEntry.getOrDefault("durationMs", 0));
+                tc.put("status", jsonEntry.getOrDefault("status", "SUCCESS"));
+                return tc;
+            } catch (Exception ignored) {}
+        }
+        // Legacy format: name(args)→result
+        int parenIdx = entry.indexOf('(');
+        int arrowIdx = entry.indexOf("→");
+        if (parenIdx > 0 && arrowIdx > parenIdx) {
+            tc.put("name", entry.substring(0, parenIdx));
+            tc.put("category", defaultCategory);
+            int closeParenIdx = entry.lastIndexOf(')', arrowIdx);
+            tc.put("input", closeParenIdx > parenIdx ? entry.substring(parenIdx + 1, closeParenIdx) : "");
+            tc.put("output", entry.substring(arrowIdx + 1).trim());
+        } else {
+            tc.put("name", entry);
+            tc.put("category", defaultCategory);
+            tc.put("input", "");
+            tc.put("output", "");
+        }
+        tc.put("durationMs", 0);
+        return tc;
     }
 
     private String categorizeToolCall(String toolName) {
@@ -862,7 +1484,7 @@ public class MvpEvaluationService {
                     null, null, null,
                     buildQueueFields(row)));
         } catch (Exception e) {
-            log.warn("[mvp] load task from db failed (trace={}): {}", traceId, e.getMessage());
+            log.warn("[eval] load task from db failed (trace={}): {}", traceId, e.getMessage());
             return Optional.empty();
         }
     }
@@ -896,14 +1518,16 @@ public class MvpEvaluationService {
             }
             return result;
         } catch (DataAccessException e) {
-            log.warn("[mvp] load trace from db failed (trace={}): {}", traceId, e.getMessage());
+            log.warn("[eval] load trace from db failed (trace={}): {}", traceId, e.getMessage());
             return List.of();
         }
     }
 
     private TraceEventResponse fromPersistedTrace(AgentExecutionTrace row) {
         Map<String, Object> payload = parseTracePayload(row.getPayload());
-        if (payload != null && payload.containsKey("stepKind")) {
+        if (payload != null && (payload.containsKey("stepKind")
+                || payload.containsKey("kind")
+                || payload.containsKey("eventId"))) {
             return buildTraceFromPayload(row, payload);
         }
         return new TraceEventResponse(
@@ -929,7 +1553,7 @@ public class MvpEvaluationService {
             return objectMapper.readValue(payloadJson, new TypeReference<>() {
             });
         } catch (Exception e) {
-            log.warn("[mvp] parse trace payload failed: {}", e.getMessage());
+            log.warn("[eval] parse trace payload failed: {}", e.getMessage());
             return null;
         }
     }
@@ -941,8 +1565,8 @@ public class MvpEvaluationService {
                 row.getSpanId(),
                 row.getParentSpanId(),
                 stringValue(payload.get("agentRole"), row.getAgentRole()),
-                stringValue(payload.get("eventType"), row.getToolCall()),
-                stringValue(payload.get("title"), row.getInputSummary()),
+                stringValue(payload.get("eventType"), stringValue(payload.get("kind"), row.getToolCall())),
+                stringValue(payload.get("title"), row.getAgentRole() + " " + stringValue(row.getEventKind(), "")),
                 stringValue(payload.get("detail"), row.getOutputSummary()),
                 stringValue(payload.get("status"), row.getStatus()),
                 row.getDurationMs(),
@@ -964,7 +1588,7 @@ public class MvpEvaluationService {
                 (List<String>) payload.get("mcpCalls"),
                 stringValue(payload.get("sandboxSummary"), null),
                 stringValue(payload.get("llmInvocationId"), null),
-                stringValue(payload.get("nodeId"), null),
+                stringValue(payload.get("nodeId"), row.getNodeId()),
                 (List<String>) payload.get("dependsOn"),
                 stringValue(payload.get("edgeLabel"), null),
                 stringValue(payload.get("phase"), null),
@@ -974,14 +1598,37 @@ public class MvpEvaluationService {
                 stringValue(payload.get("fullInput"), null),
                 stringValue(payload.get("fullOutput"), null),
                 payload.get("sequence") == null ? null : intValue(payload.get("sequence"), 0),
-                payload.get("roundIndex") == null ? null : intValue(payload.get("roundIndex"), 0),
-                stringValue(payload.get("roundRole"), null),
-                stringValue(payload.get("callKind"), null),
-                stringValue(payload.get("callName"), null),
+                payload.get("roundIndex") == null
+                        ? row.getRoundIndex()
+                        : intValue(payload.get("roundIndex"), row.getRoundIndex() != null ? row.getRoundIndex() : 0),
+                stringValue(payload.get("roundRole"), row.getRoundRole()),
+                stringValue(payload.get("callKind"), row.getCallKind()),
+                stringValue(payload.get("callName"), row.getCallName()),
                 stringValue(payload.get("parentAgentSpanId"), null),
-                stringValue(payload.get("parentRoundId"), null),
-                stringValue(payload.get("ioJson"), null)
+                stringValue(payload.get("parentRoundId"), row.getParentRoundId()),
+                buildIoJson(row, payload)
         );
+    }
+
+    private String buildIoJson(AgentExecutionTrace row, Map<String, Object> payload) {
+        Object ioJson = payload.get("ioJson");
+        if (ioJson != null) {
+            return String.valueOf(ioJson);
+        }
+        if (StringUtils.hasText(row.getRawInput()) || StringUtils.hasText(row.getRawOutput())) {
+            try {
+                Map<String, Object> io = new LinkedHashMap<>();
+                if (StringUtils.hasText(row.getRawInput())) {
+                    io.put("inputMessages", objectMapper.readValue(row.getRawInput(), Object.class));
+                }
+                if (StringUtils.hasText(row.getRawOutput())) {
+                    io.put("outputMessage", objectMapper.readValue(row.getRawOutput(), Object.class));
+                }
+                return objectMapper.writeValueAsString(io);
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
     }
 
     private List<TraceEventResponse> enrichWithExpectedDagNodes(String traceId, List<TraceEventResponse> events) {
@@ -1317,7 +1964,7 @@ public class MvpEvaluationService {
                 return row.getStatus();
             }
         } catch (DataAccessException e) {
-            log.warn("[mvp] resolve task status failed (trace={}): {}", traceId, e.getMessage());
+            log.warn("[eval] resolve task status failed (trace={}): {}", traceId, e.getMessage());
         }
         return "RUNNING";
     }
@@ -1382,7 +2029,7 @@ public class MvpEvaluationService {
             entity.setUpdateTime(now);
             humanFeedbackLogMapper.insert(entity);
         } catch (DataAccessException e) {
-            log.warn("[mvp] persist human_feedback_log failed (trace={}): {}", request.traceId(), e.getMessage());
+            log.warn("[eval] persist human_feedback_log failed (trace={}): {}", request.traceId(), e.getMessage());
         }
         agentMetrics.recordFunnelFeedbackSubmitted(request.ratingScore() == null ? 0 : request.ratingScore());
         agentMetrics.recordFunnelFeedbackAgreement(computeFeedbackAgreement(request));
@@ -1425,7 +2072,7 @@ public class MvpEvaluationService {
     /**
      * 查询大盘指标。
      *
-     * @return MVP 指标响应
+     * @return 仪表盘指标响应
      */
     public DashboardMetricsResponse metrics() {
         List<MutableTask> snapshot = List.copyOf(tasks.values());
@@ -1495,6 +2142,40 @@ public class MvpEvaluationService {
     }
 
     private void executeTask(MutableTask task) {
+        if (workflowProperties.isPythonMode()) {
+            executeTaskViaPython(task);
+            return;
+        }
+        executeTaskViaJavaOrchestrator(task);
+    }
+
+    private void executeTaskViaPython(MutableTask task) {
+        agentMetrics.agentTaskStarted();
+        try {
+            workflowClient.startWorkflow(
+                    task.traceId,
+                    task.resumeText,
+                    task.jobCategory,
+                    task.jobDescription,
+                    task.executionMode);
+            task.summary = "LangGraph workflow 已启动，正在异步评估。";
+            task.updateTime = LocalDateTime.now();
+            updateResumeTask(task);
+        } catch (Exception e) {
+            task.status = "FAILED";
+            task.queueStatus = QueueStatus.FAILED.name();
+            task.summary = "启动 Python workflow 失败：" + e.getMessage();
+            task.finishedAt = LocalDateTime.now();
+            task.updateTime = LocalDateTime.now();
+            agentMetrics.recordAgentError("WorkflowClient", e.getClass().getSimpleName());
+            agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "FAILED", "NONE");
+            updateResumeTask(task);
+            runtimeStateService.evictRunningTask(task.traceId);
+            agentMetrics.agentTaskFinished();
+        }
+    }
+
+    private void executeTaskViaJavaOrchestrator(MutableTask task) {
         long start = System.currentTimeMillis();
         agentMetrics.agentTaskStarted();
 
@@ -1580,7 +2261,7 @@ public class MvpEvaluationService {
             entity.setAnswerRelevancy(new BigDecimal("0.900"));
             entity.setOverallScore(new BigDecimal("0.875"));
             entity.setPassed(1);
-            entity.setJudgeReason("MVP 阈值通过：faithfulness>=0.85 且 answerRelevancy>=0.85");
+            entity.setJudgeReason("质量阈值通过：faithfulness>=0.85 且 answerRelevancy>=0.85");
             entity.setCreateTime(LocalDateTime.now());
             entity.setUpdateTime(LocalDateTime.now());
             ragasEvalMetricsMapper.insert(entity);
@@ -1589,7 +2270,7 @@ public class MvpEvaluationService {
             agentMetrics.recordRagContextPrecision(0.88);
             agentMetrics.recordRagOverallQuality(0.875);
         } catch (DataAccessException e) {
-            log.warn("[mvp] persist ragas_eval_metrics failed (trace={}): {}", task.traceId, e.getMessage());
+            log.warn("[eval] persist ragas_eval_metrics failed (trace={}): {}", task.traceId, e.getMessage());
         }
     }
 
@@ -1731,7 +2412,7 @@ public class MvpEvaluationService {
             entity.setPayload(buildTracePayloadJson(event));
             agentExecutionTraceMapper.insert(entity);
         } catch (DataAccessException e) {
-            log.warn("[mvp] persist agent_execution_trace failed (trace={}): {}", traceId, e.getMessage());
+            log.warn("[eval] persist agent_execution_trace failed (trace={}): {}", traceId, e.getMessage());
         }
     }
 
@@ -1778,7 +2459,7 @@ public class MvpEvaluationService {
         try {
             return objectMapper.writeValueAsString(payload);
         } catch (Exception e) {
-            log.warn("[mvp] serialize trace payload failed: {}", e.getMessage());
+            log.warn("[eval] serialize trace payload failed: {}", e.getMessage());
             return null;
         }
     }
@@ -1808,7 +2489,7 @@ public class MvpEvaluationService {
                 task.jobCategory,
                 task.executionMode,
                 StringUtils.hasText(task.jobDescription) ? task.jobDescription : "未填写岗位描述，请按通用技术岗位标准评估。",
-                StringUtils.hasText(task.resumeText) ? task.resumeText : "未填写简历正文，请基于文件名和岗位类别给出低风险 MVP 评估。",
+                StringUtils.hasText(task.resumeText) ? task.resumeText : "未填写简历正文，请基于文件名和岗位类别给出低风险评估。",
                 ragSection,
                 enrichSection
         );
@@ -1849,6 +2530,75 @@ public class MvpEvaluationService {
             agentMetrics.recordSkillInvoked(agent, skillName, false);
         }
         return fallback;
+    }
+
+    private String buildWorkflowSummaryFallback(List<String> strengths, List<String> risks, List<String> questions) {
+        StringBuilder sb = new StringBuilder();
+        if (strengths != null && !strengths.isEmpty()) {
+            sb.append("关键优势：\n");
+            strengths.stream().limit(3).forEach(item -> sb.append("- ").append(item).append('\n'));
+        }
+        if (risks != null && !risks.isEmpty()) {
+            if (!sb.isEmpty()) {
+                sb.append('\n');
+            }
+            sb.append("关键风险：\n");
+            risks.stream().limit(3).forEach(item -> sb.append("- ").append(item).append('\n'));
+        }
+        if (questions != null && !questions.isEmpty()) {
+            if (!sb.isEmpty()) {
+                sb.append('\n');
+            }
+            sb.append("建议追问：\n");
+            questions.stream().limit(3).forEach(item -> sb.append("- ").append(item).append('\n'));
+        }
+        return sb.isEmpty() ? "评估完成，但最终报告为空，请检查 ReportAgent 输出。" : sb.toString().trim();
+    }
+
+    private String buildListSummary(String fullReport, Integer score, String recommendation) {
+        String firstSignal = "";
+        if (StringUtils.hasText(fullReport)) {
+            for (String line : fullReport.split("\\R")) {
+                String stripped = line.replaceAll("[#*_`>\\-]+", "").trim();
+                if (stripped.length() >= 12
+                        && !stripped.startsWith("综合评分")
+                        && !stripped.startsWith("推荐决策")
+                        && !stripped.startsWith("证据来源")) {
+                    firstSignal = stripped;
+                    break;
+                }
+            }
+        }
+        String prefix = "评估完成";
+        if (score != null) {
+            prefix += "，综合评分 " + score + "/100";
+        }
+        if (StringUtils.hasText(recommendation)) {
+            prefix += "，结论 " + recommendation;
+        }
+        return trim(StringUtils.hasText(firstSignal) ? prefix + "。" + firstSignal : prefix, 500);
+    }
+
+    private String normalizeRecommendation(String recommendation, Integer score) {
+        String rec = StringUtils.hasText(recommendation) ? recommendation : "NEED_MANUAL_REVIEW";
+        int safeScore = score != null ? score : 0;
+        if (safeScore < 60) {
+            return "NOT_RECOMMEND";
+        }
+        if (safeScore < 75 && ("RECOMMEND".equals(rec) || "STRONG_RECOMMEND".equals(rec))) {
+            return "NEED_MANUAL_REVIEW";
+        }
+        if (safeScore < 85 && "STRONG_RECOMMEND".equals(rec)) {
+            return "RECOMMEND";
+        }
+        return rec;
+    }
+
+    private String buildRiskSummary(List<String> risks) {
+        if (risks == null || risks.isEmpty()) {
+            return "未发现明确高风险，但仍建议面试官复核项目真实性。";
+        }
+        return risks.stream().limit(2).collect(Collectors.joining("；"));
     }
 
     private TaskResponse toResponse(MutableTask task) {
@@ -1931,13 +2681,13 @@ public class MvpEvaluationService {
     }
 
     private void persistOrchestratorEvents(String traceId) {
-        // Handled inside persistFullTaskResult
+        // Now handled immediately via persistAgentEventImmediately callback
     }
 
-    private void persistOrchestratorEventsInternal(String traceId) {
+    private void persistAgentEventImmediately(String traceId, AgentTraceCapture.AgentEvent event) {
         try {
-            List<AgentTraceCapture.AgentEvent> events = agentTraceCapture.consumeEvents(traceId);
-            for (AgentTraceCapture.AgentEvent event : events) {
+            List<AgentTraceCapture.LlmRound> rounds = event.rounds;
+            if (rounds.isEmpty()) {
                 appendDagTrace(traceId, null, event.agentName, "AGENT_EXECUTION",
                         event.description, event.output != null ? event.output : "",
                         event.status, event.durationMs, 0,
@@ -1945,10 +2695,53 @@ public class MvpEvaluationService {
                         event.description, null, null,
                         event.agentName + " / Phase " + event.phase, null, null,
                         null, event.output, null, null);
+            } else {
+                for (AgentTraceCapture.LlmRound round : rounds) {
+                    List<String> toolCallEntries = new ArrayList<>();
+                    List<String> mcpCallEntries = new ArrayList<>();
+                    for (AgentTraceCapture.ToolCallRecord tc : round.toolCalls) {
+                        String jsonEntry = buildToolCallJson(tc);
+                        if ("mcp".equals(tc.type)) {
+                            mcpCallEntries.add(jsonEntry);
+                        } else {
+                            toolCallEntries.add(jsonEntry);
+                        }
+                    }
+                    String roundTitle = event.agentName + " Round " + round.roundNum;
+                    String eventType = round.toolCalls.isEmpty() ? "LLM_GENERATION" : "LLM_TOOL_CALL";
+                    appendDagTrace(traceId, null, event.agentName, eventType,
+                            roundTitle, round.output != null ? trim(round.output, 500) : "",
+                            event.status, event.durationMs / Math.max(rounds.size(), 1), round.tokens,
+                            null, null, "agent_eval", "BOTH",
+                            event.description, null, null,
+                            event.agentName + " / Phase " + event.phase + " / Round " + round.roundNum,
+                            null, null,
+                            round.input, round.output,
+                            toolCallEntries.isEmpty() ? null : toolCallEntries,
+                            mcpCallEntries.isEmpty() ? null : mcpCallEntries);
+                }
             }
         } catch (Exception e) {
-            log.warn("[mvp] persist orchestrator events failed (trace={}): {}", traceId, e.getMessage());
+            log.warn("persist agent event immediately failed (trace={}, agent={}): {}", traceId, event.agentName, e.getMessage());
         }
+    }
+
+    private String buildToolCallJson(AgentTraceCapture.ToolCallRecord tc) {
+        try {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("name", tc.name);
+            entry.put("type", tc.type);
+            entry.put("arguments", tc.arguments != null ? tc.arguments : "");
+            entry.put("result", tc.result != null ? tc.result : "");
+            entry.put("durationMs", tc.durationMs);
+            return objectMapper.writeValueAsString(entry);
+        } catch (Exception e) {
+            return tc.name + "(" + trim(tc.arguments, 100) + ")→" + trim(tc.result, 100);
+        }
+    }
+
+    private void persistOrchestratorEventsInternal(String traceId) {
+        // Legacy: now handled via persistAgentEventImmediately callback per agent
     }
 
     private void persistFullTaskResult(MutableTask task) {
@@ -1965,6 +2758,7 @@ public class MvpEvaluationService {
             payload.put("decisionRationale", task.decisionRationale);
             payload.put("riskSummary", task.riskSummary);
             payload.put("summary", task.summary);
+            payload.put("fullReport", StringUtils.hasText(task.finalReport) ? task.finalReport : task.summary);
             payload.put("durationMs", task.durationMs);
             payload.put("tokenCost", task.tokenCost);
             payload.put("strengths", task.strengths);
@@ -1988,7 +2782,7 @@ public class MvpEvaluationService {
             resumeTaskMapper.updateById(entity);
             runtimeStateService.evictRunningTask(task.traceId);
         } catch (Exception e) {
-            log.warn("[mvp] persist full task result failed (trace={}): {}", task.traceId, e.getMessage());
+            log.warn("[eval] persist full task result failed (trace={}): {}", task.traceId, e.getMessage());
         }
     }
 
@@ -2130,6 +2924,7 @@ public class MvpEvaluationService {
         private String aiRecommendation;
         private String decisionRationale;
         private String riskSummary;
+        private String finalReport;
         private RagOptions ragOptions;
         private String uploadedBy;
         private String tenantId;

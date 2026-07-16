@@ -1,0 +1,184 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2585 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Cao Jiahao) Tj
+T*
+(Gender: Male    Objective: Junior Frontend Engineer    Location: Chengdu) Tj
+T*
+(Phone: 19727676877    Email: caojiahao5999@outlook.com    GitHub: https://github.com/caojiahao582) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2019.09 - 2023.06    University of Electronic Science and Technology of China    Communication Engineerin) Tj
+T*
+(g \(B.S.\)) Tj
+T*
+(Courses: Machine Learning, Data Structures and Algorithms, Computer Organization, Operating Systems, Data) Tj
+T*
+(base Systems, Software Engineering) Tj
+T*
+(GPA 3.7/4.0, top 5% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(1.5 years of frontend experience focused on Vue admin dashboards, component reuse and interaction details) Tj
+T*
+(.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2024.03 - Present    Baidu    Frontend Engineer) Tj
+T*
+(- Implemented complex ECharts visualizations with smooth interaction over large datasets, supporting rapi) Tj
+T*
+(d business growth.) Tj
+T*
+(- Added tracking and frontend monitoring for blank screen, JS errors and API latency with a quality dashb) Tj
+T*
+(oard, recognized by stakeholders and peers.) Tj
+T*
+(- Optimized first-screen load and long-list rendering with virtual scrolling and lazy loading, cutting fi) Tj
+T*
+(rst-screen time by 33%.) Tj
+T*
+(- Wrote unit and end-to-end tests to keep core interactions stable, reused across multiple business lines) Tj
+T*
+(.) Tj
+T*
+(2023.06 - 2023.12    NetEase    Intern Frontend Engineer) Tj
+T*
+(- Drove engineering migration to Vite, significantly speeding up local startup and builds.) Tj
+T*
+(- Built admin and dashboard frontends including candidate list, report detail, trace timeline and feedbac) Tj
+T*
+(k pages.) Tj
+T*
+(- Split a micro-frontend and onboarded sub-apps to reduce cross-team coupling, significantly lowering mai) Tj
+T*
+(ntenance cost.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Resume Evaluation Platform Frontend \(Vue3 + TypeScript + Vite + Pinia\)) Tj
+T*
+(- Optimized first-screen and long-list rendering for smoother interaction.) Tj
+T*
+(- Built candidate list, report detail and trace timeline pages.) Tj
+T*
+(- Added tracking and frontend monitoring, improving end-to-end delivery quality.) Tj
+T*
+(- Built a reusable component library and scaffolding, reused across multiple business lines.) Tj
+T*
+(Component Library & Design System \(Vue3 + Storybook\)) Tj
+T*
+(- Improved reuse across teams, significantly lowering maintenance cost.) Tj
+T*
+(- Unified interaction and style specs.) Tj
+T*
+(- Documented components with Storybook, recognized by stakeholders and peers.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1685 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Added unit and e2e tests, and it became a reusable team best practice.) Tj
+T*
+(Realtime Data Visualization Dashboard \(Vue3 + ECharts + WebSocket\)) Tj
+T*
+(- Supported theme switching and dark mode.) Tj
+T*
+(- Implemented live updates over WebSocket, reused across multiple business lines.) Tj
+T*
+(- Optimized repaint and memory usage, recognized by stakeholders and peers.) Tj
+T*
+(- Rendered complex charts over large datasets while staying smooth, improving end-to-end delivery quality) Tj
+T*
+(.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Led a major technical effort involving computer networking basics, staying stable at 3000 QPS peak) Tj
+T*
+(- Established metrics and reviews around TypeScript and tooling to keep improving delivery quality) Tj
+T*
+(- Drove a focused effort on Linux and shell basics, reducing related issues by about 38%) Tj
+T*
+(- Work around cross-team communication delivered about 33% efficiency gains and was reused across the tea) Tj
+T*
+(m) Tj
+T*
+(- Continuously optimized root-cause analysis and postmortems, cutting key-path latency from 2200ms to 320) Tj
+T*
+(ms) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Pinia, Componentization, CSS, HTTP) Tj
+T*
+(Proficient in: Vite/Webpack builds, Vite, ECharts data visualization, TypeScript) Tj
+T*
+(Familiar with: Vue3, ECharts, React and micro-frontends, Frontend performance optimization, Vue3 and Comp) Tj
+T*
+(osition API, TypeScript and tooling) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002939 00000 n 
+0000003114 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4851
+%%EOF

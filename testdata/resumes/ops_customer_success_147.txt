@@ -1,0 +1,32 @@
+Customer Success Ops Candidate 147
+Customer Success Ops | 5 years experience
+Email: candidate147@example.com
+
+Summary
+Managed enterprise onboarding, issue triage, SLA tracking, and workflow automation. Batch 10, domain scenario 3.
+
+Skills
+operations, SLA, customer, workflow, REST API, documentation, monitoring, cross-team collaboration.
+
+Experience
+2021.01 - Present  Harbor Data  Customer Success Ops
+- Delivered production features related to Managed enterprise onboarding, issue triage, SLA tracking, and workflow automation.
+- Collaborated with backend, product, QA, and operations teams.
+- Improved reliability, observability, and delivery quality with measurable engineering practices.
+- Measured outcome: improved release cycle 40% through design review, rollout control, dashboards, and incident retrospectives.
+
+2019.07 - 2020.12  Prior Systems  Engineer
+- Maintained legacy modules, wrote migration plans, reviewed pull requests, and handled production defects.
+- Worked with customer success and security teams to resolve escalations.
+
+Project
+Domain Platform Improvement 147
+- Designed implementation plan, handled rollout, monitored metrics, and produced post-launch review.
+- Evidence includes dashboards, logs, pull requests, design docs, and incident notes.
+
+Side Project
+Knowledge Base Evaluation 147
+- Built retrieval test cases, labeled relevant snippets, compared lexical, embedding, and hybrid search quality.
+
+Education
+2016.09 - 2020.06  Example University  B.S. Computer Science

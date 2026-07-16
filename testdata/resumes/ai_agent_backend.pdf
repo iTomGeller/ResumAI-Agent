@@ -1,0 +1,99 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1809 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Mia Wang) Tj
+T*
+(AI Agent Backend Engineer | 5 years backend + 2 years LLM application experience) Tj
+T*
+(Email: mia.wang@example.com | GitHub: https://github.com/example-dev) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Backend engineer building production AI agent workflows, retrieval pipelines, and runtime observability.) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Python, Java, FastAPI, Spring Boot, LangGraph, LangChain, MCP, Milvus, Redis, PostgreSQL, Docker, Kuberne) Tj
+T*
+(tes, Langfuse.) Tj
+T*
+() Tj
+T*
+(Experience) Tj
+T*
+(2023.03 - Present  AI Recruiting Platform  Agent Platform Engineer) Tj
+T*
+(- Built multi-agent resume evaluation workflow with intent router, parser, JD matcher, technical evaluato) Tj
+T*
+(r, risk evaluator, and report generator.) Tj
+T*
+(- Designed agent harness with route plan, tool budget, policy guard, trace replay, and evaluation feedbac) Tj
+T*
+(k loop.) Tj
+T*
+(- Implemented hybrid RAG with BM25-like lexical retrieval, embedding search, reranking, and fallback visi) Tj
+T*
+(bility.) Tj
+T*
+(- Integrated MCP resume evidence server and dynamic skill loading for evidence synthesis.) Tj
+T*
+() Tj
+T*
+(2020.07 - 2023.02  Cloud Observability Company  Backend Engineer) Tj
+T*
+(- Developed metrics ingestion APIs, alert routing, and dashboard query optimization.) Tj
+T*
+(- Reduced trace query latency by 45% through index redesign and payload compaction.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Agentic RAG Evidence Pipeline) Tj
+T*
+(- Added query planner, retrieval evaluator, reranker, confidence scoring, and Langfuse tracing for every ) Tj
+T*
+(retrieval step.) Tj
+T*
+(- Tracked hit count, top score, fallback rate, latency, and answer faithfulness proxy in Grafana.) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2015.09 - 2019.06  Zhejiang University  B.S. Computer Science) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000296 00000 n 
+trailer
+<< /Size 5 /Root 1 0 R >>
+startxref
+2157
+%%EOF

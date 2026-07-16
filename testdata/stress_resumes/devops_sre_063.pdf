@@ -1,0 +1,158 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2762 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Zhu Ming) Tj
+T*
+(Gender: Male    Objective: DevOps / SRE Engineer    Location: Shanghai) Tj
+T*
+(Phone: 18759414477    Email: zhuming396@163.com    GitHub: https://github.com/zhuming787) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2014.09 - 2018.06    Beijing University of Posts and Telecommunications    Information Security \(B.S.\)) Tj
+T*
+(Courses: Computer Networks, Computer Organization, Database Systems, Machine Learning, Compilers, Data St) Tj
+T*
+(ructures and Algorithms) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(DevOps/SRE engineer focused on Kubernetes stability, CI/CD and monitoring, skilled in incident handling a) Tj
+T*
+(nd capacity planning.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2020.07 - Present    Trip.com    DevOps Engineer) Tj
+T*
+(- Built log collection \(ELK/Loki\) and distributed tracing, recognized by stakeholders and peers.) Tj
+T*
+(- Handled incidents and capacity planning, reducing MTTR by 36%, supporting rapid business growth.) Tj
+T*
+(- Wrote automation scripts and an ops platform to cut manual work, improving end-to-end delivery quality.) Tj
+T*
+(- Operated Kubernetes clusters and ensured stability across multiple production environments, with experi) Tj
+T*
+(ence documented and shared internally.) Tj
+T*
+(2018.07 - 2020.06    Didi    Junior DevOps Engineer) Tj
+T*
+(- Wrote Helm charts and CI/CD pipelines enabling blue-green and gray releases.) Tj
+T*
+(- Optimized image builds and artifact management, cutting build time significantly.) Tj
+T*
+(- Drove containerization and resource governance, raising cluster utilization by 37%, with experience doc) Tj
+T*
+(umented and shared internally.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Containerized Release Platform \(Kubernetes + Helm + ArgoCD\)) Tj
+T*
+(- Adopted ArgoCD for GitOps, ensuring online service stability.) Tj
+T*
+(- Raised cluster utilization by 37%.) Tj
+T*
+(- Supported blue-green and gray releases, supporting rapid business growth.) Tj
+T*
+(- Standardized releases with Kubernetes and Helm, with experience documented and shared internally.) Tj
+T*
+(Unified Monitoring & Alerting \(Prometheus + Grafana + Alertmanager\)) Tj
+T*
+(- Alert tiering and noise reduction via Alertmanager, with experience documented and shared internally.) Tj
+T*
+(- Reduced MTTR by 36%.) Tj
+T*
+(- Grafana dashboards and SLO management.) Tj
+T*
+(- Collected multi-dimensional metrics with Prometheus, and it became a reusable team best practice.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Owned core modules that steadily served 7980K daily visits with 99.9%+ availability) Tj
+T*
+(- Drove a focused effort on Prometheus/Grafana, reducing related issues by about 36%) Tj
+T*
+(- Led a major technical effort involving Kubernetes and container orchestration, staying stable at 12000 ) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 817 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(QPS peak) Tj
+T*
+(- Built a reusable methodology and docs around Linux and shell basics, adopted by several teams) Tj
+T*
+(- Work around Helm and GitOps delivered about 37% efficiency gains and was reused across the team) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Python, Helm, Shell, Prometheus/Grafana, Shell/Python scripting) Tj
+T*
+(Proficient in: CI/CD, SRE reliability practices, SRE, Prometheus, Docker) Tj
+T*
+(Familiar with: Grafana, CI/CD pipelines, Helm and GitOps, Kubernetes and container orchestration, Kuberne) Tj
+T*
+(tes) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Strong communication and collaboration with product, QA and ops to deliver projects on time) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000003116 00000 n 
+0000003291 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4159
+%%EOF

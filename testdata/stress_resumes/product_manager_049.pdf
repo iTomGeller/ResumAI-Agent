@@ -1,0 +1,170 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2566 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Ma Ming) Tj
+T*
+(Gender: Male    Objective: AI Product Manager    Location: Xiamen) Tj
+T*
+(Phone: 18594791099    Email: maming9568@foxmail.com    GitHub: https://github.com/maming859) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2014.09 - 2018.06    Xidian University    Communication Engineering \(M.S.\)) Tj
+T*
+(Courses: Data Structures and Algorithms, Computer Organization, Software Engineering, Distributed Systems) Tj
+T*
+(, Operating Systems, Compilers) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Six years of product experience in B2B workflow products and LLM features, skilled in data-driven iterati) Tj
+T*
+(on and cross-team delivery.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2020.07 - Present    Kuaishou    Product Manager) Tj
+T*
+(- Owned end-to-end design of an AI resume-screening product from upload to HR feedback.) Tj
+T*
+(- Designed an LLM report-quality feedback system and evaluation dashboard to lift generation quality, sup) Tj
+T*
+(porting rapid business growth.) Tj
+T*
+(- Ran A/B experiments validating key features, lifting core conversion by 60%.) Tj
+T*
+(- Drove monetization and pricing, growing quarterly revenue by 28%, and related standards were adopted by) Tj
+T*
+( the team.) Tj
+T*
+(2018.07 - 2020.06    NetEase    Junior Product Manager) Tj
+T*
+(- Defined core metrics: time-to-screen, recommendation acceptance, manual override and evidence coverage.) Tj
+T*
+(- Mined pain points via user interviews and data analysis and shaped the roadmap.) Tj
+T*
+(- Led requirement reviews and PRDs, coordinating engineering, data and CS teams for enterprise rollout, a) Tj
+T*
+(nd related standards were adopted by the team.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(LLM Report Quality Evaluation System \(LLM Evaluation\)) Tj
+T*
+(- Built an evaluation dashboard, improving end-to-end delivery quality.) Tj
+T*
+(- Designed a feedback taxonomy.) Tj
+T*
+(- Improved generated report quality.) Tj
+T*
+(- Closed the quality-improvement loop, and key metrics improved steadily.) Tj
+T*
+(Recruiting Data Analytics Platform \(Analytics\)) Tj
+T*
+(- Defined funnel and conversion metrics, and related standards were adopted by the team.) Tj
+T*
+(- Delivered insights to support decisions, and it became a reusable team best practice.) Tj
+T*
+(- Designed A/B experiments.) Tj
+T*
+(- Shaped the product roadmap.) Tj
+T*
+(AI Resume Screening Workflow \(B2B SaaS\)) Tj
+T*
+(- Defined core metrics and dashboards, supporting rapid business growth.) Tj
+T*
+(- Designed the end-to-end flow from upload to feedback.) Tj
+T*
+(- Coordinated engineering, data and CS teams.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1314 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Drove enterprise customer rollout.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Drove a focused effort on requirement analysis and documentation, reducing related issues by about 28%) Tj
+T*
+(- Built a reusable methodology and docs around Linux and shell basics, adopted by several teams) Tj
+T*
+(- Owned core modules that steadily served 3390K daily visits with 99.9%+ availability) Tj
+T*
+(- Established metrics and reviews around computer networking basics to keep improving delivery quality) Tj
+T*
+(- Led a major technical effort involving cross-team communication, staying stable at 20000 QPS peak) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Requirement Analysis, Project management and cross-team collaboration, PRD, Requirement anal) Tj
+T*
+(ysis and PRD writing) Tj
+T*
+(Proficient in: LLM Application, User Research, A/B Testing, Data analysis and metric systems) Tj
+T*
+(Familiar with: Data Analysis, A/B experiment design, LLM application boundaries, Basic SQL for data pulls) Tj
+T*
+(, Monetization, Project Management) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+(- Curious about new tech, continuously learning LLM and cloud-native topics and applying them in practice) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002920 00000 n 
+0000003095 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4461
+%%EOF

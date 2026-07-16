@@ -1,0 +1,206 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2985 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Gao Ying) Tj
+T*
+(Gender: Female    Objective: Senior Backend Engineer    Location: Hangzhou) Tj
+T*
+(Phone: 13509839301    Email: gaoying3751@gmail.com    GitHub: https://github.com/gaoying70) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2010.09 - 2014.06    Nanjing University    Data Science and Big Data Technology \(B.S.\)) Tj
+T*
+(Courses: Database Systems, Operating Systems, Machine Learning, Software Engineering, Design Patterns, Co) Tj
+T*
+(mputer Networks) Tj
+T*
+(GPA 3.8/4.0, top 15% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Seven years of backend experience focused on payment/transaction systems, distributed architecture, high ) Tj
+T*
+(concurrency and production incident response.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2017.07 - Present    Bilibili    Senior Backend Engineer) Tj
+T*
+(- Fixed a log-collection failure caused by agent backpressure, restoring stability after tuning batch and) Tj
+T*
+( buffer settings, recognized by stakeholders and peers.) Tj
+T*
+(- Built service observability covering API latency, error rate, JVM GC, thread pools and consumer backlog) Tj
+T*
+( with Prometheus and Grafana, reused across multiple business lines.) Tj
+T*
+(- Served 3350K requests per day while keeping core-path SLA above 99.9%.) Tj
+T*
+(- Owned backend of core transaction and order services, splitting the monolith into order, settlement and) Tj
+T*
+( risk-control microservices, and key metrics improved steadily.) Tj
+T*
+(- Designed a Kafka-based async transaction pipeline with idempotency keys, retry queues and dead-letter h) Tj
+T*
+(andling, sustaining 5000 QPS at peak, improving end-to-end delivery quality.) Tj
+T*
+(2014.07 - 2017.06    Huawei    Backend Engineer) Tj
+T*
+(- Led a production incident review with root-cause analysis and drove an alert-tiering and on-call rotati) Tj
+T*
+(on mechanism, with experience documented and shared internally.) Tj
+T*
+(- Rebuilt the config and template management service to support hot template reload without restart, cutt) Tj
+T*
+(ing release time by 36%, and related standards were adopted by the team.) Tj
+T*
+(- Optimized a file-sort slow SQL on a hot API, added a composite index via gh-ost online DDL, reducing P9) Tj
+T*
+(9 from 900ms to 380ms, reused across multiple business lines.) Tj
+T*
+(- Investigated rising instance memory rss using GC logs, heap dump and arthas, found an unbounded cache a) Tj
+T*
+(nd cut memory by 22%.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Enterprise Auth & Gateway Platform \(Spring Cloud Gateway + OAuth2\)) Tj
+T*
+(- Unified auth, rate limiting, gray routing and tracing as reusable platform capabilities, and it became ) Tj
+T*
+(a reusable team best practice.) Tj
+T*
+(- Added circuit breaking to isolate faulty downstreams, and it became a reusable team best practice.) Tj
+T*
+(- Integrated OAuth2 and RBAC with multi-tenant isolation.) Tj
+T*
+(- Shipped a unified SDK to lower integration cost across teams, with experience documented and shared int) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 2446 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(ernally.) Tj
+T*
+(Distributed Payment & Settlement Platform \(Spring Boot + MySQL + Kafka + Redis\)) Tj
+T*
+(- Used sharding and read-write splitting to keep single-table rows within tens of millions, improving end) Tj
+T*
+(-to-end delivery quality.) Tj
+T*
+(- Recorded an audit trace id for every payment state transition for compliance, recognized by stakeholder) Tj
+T*
+(s and peers.) Tj
+T*
+(- Applied idempotency and eventual consistency to avoid duplicate charges on retry.) Tj
+T*
+(- Implemented daily reconciliation across payment gateway, ledger and settlement files with auto-correcti) Tj
+T*
+(on.) Tj
+T*
+(High-Concurrency Flash-Sale & Inventory System \(Java + Redis + RocketMQ\)) Tj
+T*
+(- Designed distributed locks and token-bucket rate limiting to prevent oversell, improving end-to-end del) Tj
+T*
+(ivery quality.) Tj
+T*
+(- Pre-deducted inventory in Redis with async DB writes to absorb traffic spikes, and key metrics improved) Tj
+T*
+( steadily.) Tj
+T*
+(- Built circuit breaking and fallback for downstream failures, with experience documented and shared inte) Tj
+T*
+(rnally.) Tj
+T*
+(- Stayed stable at 5000 QPS in load tests with error rate below 0.1%.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Continuously optimized data analysis and metrics, cutting key-path latency from 900ms to 380ms) Tj
+T*
+(- Established metrics and reviews around JVM tuning and troubleshooting to keep improving delivery qualit) Tj
+T*
+(y) Tj
+T*
+(- Built a reusable methodology and docs around requirement analysis and documentation, adopted by several) Tj
+T*
+( teams) Tj
+T*
+(- Drove a focused effort on CI/CD pipelines, reducing related issues by about 36%) Tj
+T*
+(- Owned core modules that steadily served 3350K daily visits with 99.9%+ availability) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Microservices, Observability, Spring Boot, Kafka, SQL Optimization) Tj
+T*
+(Proficient in: MySQL, Java, Docker and containerization, Redis caching and distributed locks, High Concur) Tj
+T*
+(rency) Tj
+T*
+(Familiar with: JVM, JVM tuning and troubleshooting, MySQL indexing and slow-query tuning, Redis, Kafka/Ro) Tj
+T*
+(cketMQ messaging, Distributed transactions and consistency) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Curious about new tech, continuously learning LLM and cloud-native topics and applying them in practice) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000003339 00000 n 
+0000003514 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+6012
+%%EOF

@@ -1,0 +1,196 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2957 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Wang Ming) Tj
+T*
+(Gender: Male    Objective: Senior Backend Engineer    Location: Nanjing) Tj
+T*
+(Phone: 15834735977    Email: wangming6257@qq.com    GitHub: https://github.com/wangming515) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2010.09 - 2014.06    Tongji University    Artificial Intelligence \(B.S.\)) Tj
+T*
+(Courses: Computer Organization, Operating Systems, Computer Networks, Compilers, Database Systems, Design) Tj
+T*
+( Patterns) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Seven years of backend experience focused on payment/transaction systems, distributed architecture, high ) Tj
+T*
+(concurrency and production incident response.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2017.07 - Present    Baidu    Senior Backend Engineer) Tj
+T*
+(- Designed a Kafka-based async transaction pipeline with idempotency keys, retry queues and dead-letter h) Tj
+T*
+(andling, sustaining 20000 QPS at peak, significantly lowering maintenance cost.) Tj
+T*
+(- Investigated rising instance memory rss using GC logs, heap dump and arthas, found an unbounded cache a) Tj
+T*
+(nd cut memory by 53%, ensuring online service stability.) Tj
+T*
+(- Owned backend of core transaction and order services, splitting the monolith into order, settlement and) Tj
+T*
+( risk-control microservices.) Tj
+T*
+(- Served 1910K requests per day while keeping core-path SLA above 99.9%.) Tj
+T*
+(- Optimized a file-sort slow SQL on a hot API, added a composite index via gh-ost online DDL, reducing P9) Tj
+T*
+(9 from 1200ms to 220ms, significantly lowering maintenance cost.) Tj
+T*
+(2014.07 - 2017.06    Bilibili    Backend Engineer) Tj
+T*
+(- Tuned Redis caching for hot keys and cache breakdown with local cache and distributed locks, raising hi) Tj
+T*
+(t rate above 90%, significantly lowering maintenance cost.) Tj
+T*
+(- Built service observability covering API latency, error rate, JVM GC, thread pools and consumer backlog) Tj
+T*
+( with Prometheus and Grafana, significantly lowering maintenance cost.) Tj
+T*
+(- Rebuilt the config and template management service to support hot template reload without restart, cutt) Tj
+T*
+(ing release time by 41%, improving end-to-end delivery quality.) Tj
+T*
+(- Led a production incident review with root-cause analysis and drove an alert-tiering and on-call rotati) Tj
+T*
+(on mechanism, supporting rapid business growth.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Distributed Payment & Settlement Platform \(Spring Boot + MySQL + Kafka + Redis\)) Tj
+T*
+(- Recorded an audit trace id for every payment state transition for compliance.) Tj
+T*
+(- Used sharding and read-write splitting to keep single-table rows within tens of millions.) Tj
+T*
+(- Implemented daily reconciliation across payment gateway, ledger and settlement files with auto-correcti) Tj
+T*
+(on, improving end-to-end delivery quality.) Tj
+T*
+(- Applied idempotency and eventual consistency to avoid duplicate charges on retry, significantly lowerin) Tj
+T*
+(g maintenance cost.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 2308 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Enterprise Auth & Gateway Platform \(Spring Cloud Gateway + OAuth2\)) Tj
+T*
+(- Integrated OAuth2 and RBAC with multi-tenant isolation, recognized by stakeholders and peers.) Tj
+T*
+(- Unified auth, rate limiting, gray routing and tracing as reusable platform capabilities.) Tj
+T*
+(- Shipped a unified SDK to lower integration cost across teams.) Tj
+T*
+(- Added circuit breaking to isolate faulty downstreams, significantly lowering maintenance cost.) Tj
+T*
+(High-Concurrency Flash-Sale & Inventory System \(Java + Redis + RocketMQ\)) Tj
+T*
+(- Pre-deducted inventory in Redis with async DB writes to absorb traffic spikes, and key metrics improved) Tj
+T*
+( steadily.) Tj
+T*
+(- Built circuit breaking and fallback for downstream failures, and key metrics improved steadily.) Tj
+T*
+(- Stayed stable at 20000 QPS in load tests with error rate below 0.1%, and key metrics improved steadily.) Tj
+T*
+(- Designed distributed locks and token-bucket rate limiting to prevent oversell, recognized by stakeholde) Tj
+T*
+(rs and peers.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Continuously optimized project management and planning, cutting key-path latency from 1200ms to 220ms) Tj
+T*
+(- Owned core modules that steadily served 1910K daily visits with 99.9%+ availability) Tj
+T*
+(- Built a reusable methodology and docs around MySQL indexing and slow-query tuning, adopted by several t) Tj
+T*
+(eams) Tj
+T*
+(- Established metrics and reviews around Redis caching and distributed locks to keep improving delivery q) Tj
+T*
+(uality) Tj
+T*
+(- Drove a focused effort on CI/CD pipelines, reducing related issues by about 41%) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: Microservices, JVM, MySQL indexing and slow-query tuning, Spring Boot, Observability) Tj
+T*
+(Proficient in: Java, Redis caching and distributed locks, Kafka/RocketMQ messaging, High Concurrency, JVM) Tj
+T*
+( tuning and troubleshooting) Tj
+T*
+(Familiar with: SQL Optimization, Docker and containerization, MySQL, Kafka, Redis, Distributed transactio) Tj
+T*
+(ns and consistency) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Stays calm under pressure and recovers services quickly during high-concurrency incidents) Tj
+T*
+(- Curious about new tech, continuously learning LLM and cloud-native topics and applying them in practice) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000003311 00000 n 
+0000003486 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+5846
+%%EOF

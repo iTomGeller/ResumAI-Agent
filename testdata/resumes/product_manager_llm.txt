@@ -1,0 +1,25 @@
+Nora Li
+AI Product Manager | 6 years product experience
+Email: nora.li@example.com
+
+Summary
+Product manager experienced in B2B workflow products, LLM features, and data-driven iteration.
+
+Skills
+PRD, user research, funnel metrics, LLM/RAG basics, dashboard design, stakeholder management, SQL basics.
+
+Experience
+2022.01 - Present  HR SaaS Company  Senior Product Manager
+- Owned AI resume screening workflow from upload, parsing, evaluation, report review, to HR feedback.
+- Defined metrics including time-to-screen, recommendation acceptance, manual override rate, and evidence coverage.
+- Coordinated engineering, data, and customer success teams for enterprise rollout.
+
+2018.07 - 2021.12  Collaboration Tools Company  Product Manager
+- Built workflow automation and approval modules for mid-market customers.
+
+Projects
+LLM Report Quality Loop
+- Designed feedback taxonomy and evaluation dashboard for AI-generated hiring reports.
+
+Education
+2014.09 - 2018.06  Fudan University  B.A. Management

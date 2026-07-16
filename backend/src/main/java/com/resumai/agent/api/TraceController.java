@@ -1,7 +1,7 @@
 package com.resumai.agent.api;
 
 import com.resumai.agent.api.dto.TraceEventResponse;
-import com.resumai.agent.service.MvpEvaluationService;
+import com.resumai.agent.service.ResumeEvaluationService;
 import com.resumai.agent.service.SseTraceHub;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,10 +19,10 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping
 public class TraceController {
 
-    private final MvpEvaluationService evaluationService;
+    private final ResumeEvaluationService evaluationService;
     private final SseTraceHub sseTraceHub;
 
-    public TraceController(MvpEvaluationService evaluationService, SseTraceHub sseTraceHub) {
+    public TraceController(ResumeEvaluationService evaluationService, SseTraceHub sseTraceHub) {
         this.evaluationService = evaluationService;
         this.sseTraceHub = sseTraceHub;
     }

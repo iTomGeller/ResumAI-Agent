@@ -84,6 +84,95 @@ interface TraceEvent {
   laneId?: string;
 }
 
+interface TraceSubstepView {
+  name?: string;
+  kind?: string;
+  status?: string;
+  summary?: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface TraceRetrievalView {
+  backend?: string;
+  query?: string;
+  topK?: number;
+  hitCount?: number;
+  topScore?: number;
+  fallbackUsed?: boolean;
+  fallbackReason?: string;
+  usedResumeTextFallback?: boolean;
+  chunks?: unknown[];
+}
+
+interface TraceToolCallView {
+  toolCallId?: string;
+  id?: string;
+  name?: string;
+  category?: string;
+  origin?: string;
+  family?: string;
+  protocol?: string;
+  server?: string;
+  operation?: string;
+  input?: string;
+  output?: string;
+  arguments?: string;
+  result?: string;
+  status?: string;
+  durationMs?: number;
+  inputHash?: string;
+  dedupedCount?: number;
+  substeps?: TraceSubstepView[];
+  retrieval?: TraceRetrievalView;
+}
+
+interface TraceRoundView {
+  id?: string;
+  eventId?: string;
+  roundNum?: number;
+  final?: boolean;
+  hasToolCalls?: boolean;
+  type?: string;
+  message?: string;
+  orphanToolCount?: number;
+  input?: string;
+  output?: string;
+  decisionText?: string;
+  finalOutput?: string;
+  tokens?: number;
+  inputMessages?: Array<Record<string, unknown>>;
+  outputMessage?: Record<string, unknown>;
+  toolCalls?: TraceToolCallView[];
+  orphanToolCalls?: TraceToolCallView[];
+}
+
+interface TraceAgentView {
+  nodeId?: string;
+  name?: string;
+  role?: string;
+  status?: string;
+  phase?: number;
+  durationMs?: number;
+  startedAt?: string;
+  endedAt?: string;
+  output?: string;
+  rounds?: TraceRoundView[];
+}
+
+interface RoundStory {
+  goal: string;
+  judgement: string;
+  nextAction: string;
+}
+
+interface ToolSummary {
+  title: string;
+  purpose: string;
+  input: string;
+  result: string;
+  status: string;
+}
+
 interface Metrics {
   totalTasks: number;
   runningTasks: number;
@@ -159,11 +248,14 @@ const defaultJobs: JobProfile[] = [
   }
 ];
 
-type ViewName = 'dashboard' | 'positions' | 'candidates' | 'detail' | 'analytics';
+type ViewName = 'dashboard' | 'positions' | 'candidates' | 'knowledge' | 'detail' | 'analytics';
 type DetailTab = 'resume' | 'report' | 'trace' | 'graph' | 'feedback';
 
 const appView = ref<ViewName>('dashboard');
 const detailTab = ref<DetailTab>('report');
+const detailLoading = ref(false);
+const detailLoadError = ref('');
+const restoringDeepLink = ref(false);
 const loading = ref(false);
 const refreshing = ref(false);
 const showUploadModal = ref(false);
@@ -189,7 +281,7 @@ const successMessage = ref('');
 const healthStatus = ref('...');
 const embeddingHealth = ref<{ operational?: boolean; provider?: string; message?: string }>({});
 const showRagDrawer = ref(false);
-const ragDrawerTab = ref<'business' | 'compare' | 'expert'>('business');
+const ragDrawerTab = ref<'knowledge' | 'business' | 'compare' | 'expert'>('business');
 const ragPresets = ref<RagPreset[]>([]);
 const currentRagOptions = ref<RagOptions>(loadStoredRagOptions());
 const ragBusinessTopK = ref(currentRagOptions.value.topK);
@@ -197,6 +289,12 @@ const ragStrictness = ref('balanced');
 const ragStrategyChoice = ref(currentRagOptions.value.strategy);
 const ragStyleChoice = ref('balanced');
 const ragRerankerEnabled = ref(currentRagOptions.value.rerankerEnabled);
+const knowledgeBase = ref<any>(null);
+const knowledgeBaseLoading = ref(false);
+const knowledgeBaseError = ref('');
+const knowledgeUploadTitle = ref('');
+const knowledgeUploadType = ref('interview_rubric');
+const knowledgeUploadTags = ref('interview,rubric');
 const ragPreviewText = ref('');
 const ragPreviewResult = ref<any[]>([]);
 const ragCompareResult = ref<Record<string, any>>({});
@@ -248,7 +346,137 @@ const pdfPreviewUrl = computed(() => {
 });
 
 const activeTask = computed(() => tasks.value.find((t) => t.traceId === activeTraceId.value) ?? null);
-const langfuseTraceUrl = computed(() => `http://8.166.136.122:3001/project/resumai-project/sessions/${activeTask.value?.traceId || ''}`);
+
+const finalReportFromTrace = computed(() => {
+  const agents: TraceAgentView[] = agentExecutionTree.value?.executionTree || [];
+  const reportAgent = agents.find((agent) => agent.name === 'ReportAgent');
+  const rounds = reportAgent?.rounds || [];
+  const last = [...rounds].reverse().find((round) =>
+    round.finalOutput || round.output || round.decisionText
+  );
+  return last?.finalOutput || last?.output || last?.decisionText || '';
+});
+
+const displayReport = computed(() => {
+  const task = activeTask.value;
+  const rawSummary = task?.summary || '';
+  const traceReport = finalReportFromTrace.value;
+  const strengths = task?.strengths || [];
+  const risks = task?.risks || [];
+  const questions = task?.interviewQuestions || [];
+  const summaryLooksEmpty = !rawSummary.trim()
+    || rawSummary.includes('评估报告生成中')
+    || rawSummary.trim().length < 30;
+  const fullText = traceReport || (!summaryLooksEmpty
+    ? rawSummary
+    : [
+        strengths.length ? `关键优势：\n${strengths.map((s) => `- ${stripMarkdown(s)}`).join('\n')}` : '',
+        risks.length ? `关键风险：\n${risks.map((r) => `- ${stripMarkdown(r)}`).join('\n')}` : '',
+        questions.length ? `面试追问：\n${questions.map((q) => `- ${stripMarkdown(q)}`).join('\n')}` : '',
+      ].filter(Boolean).join('\n\n'));
+  const summaryLine = stripMarkdown(
+    task?.riskSummary
+      || fullText.split('\n').find((line) => line.trim().length > 10)
+      || '报告结果缺失：请检查 ReportAgent 最终输出和 workflow result summary。'
+  );
+  return { fullText, summaryLine, missing: !fullText.trim() };
+});
+
+const GENERIC_REPORT_PLACEHOLDERS = new Set([
+  '技术栈匹配度较好',
+  '项目经历具备追问价值',
+  '关键贡献建议面试验证',
+]);
+
+function isGenericReportPlaceholder(text: string): boolean {
+  const normalized = stripMarkdown(text || '').trim();
+  if (!normalized) return true;
+  if (GENERIC_REPORT_PLACEHOLDERS.has(normalized)) return true;
+  if (normalized.length < 8) return true;
+  const transition = ['如下', '以下', '基于有限', '尽管核心技能', '必须针对', '围绕', '关键风险如下', '核心优势如下'];
+  return transition.some((phrase) => normalized.includes(phrase))
+    && (/[：:]$/.test(normalized) || normalized.length < 45);
+}
+
+function filterRichBullets(items: string[] = []): string[] {
+  const seen = new Set<string>();
+  return items
+    .map((item) => stripMarkdown(item).trim())
+    .filter((item) => item && !isGenericReportPlaceholder(item))
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function extractReportBullets(source: string, headings: string[], limit = 8): string[] {
+  if (!source?.trim()) return [];
+  const lines = source.split(/\r?\n/);
+  const bullets: string[] = [];
+  let capture = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (/^#{1,6}\s/.test(trimmed)) {
+      const heading = trimmed.replace(/^#+\s*/, '');
+      capture = headings.some((h) => heading.includes(h));
+      continue;
+    }
+    if (!capture) continue;
+    if (/^#{1,6}\s/.test(trimmed) || trimmed.startsWith('---') || trimmed.startsWith('|')) break;
+    const bulletMatch = trimmed.match(/^[-*•]\s+(.+)/) || trimmed.match(/^\d+[.)]\s+(.+)/);
+    if (bulletMatch) {
+      bullets.push(stripMarkdown(bulletMatch[1]));
+    }
+    if (bullets.length >= limit) break;
+  }
+  return filterRichBullets(bullets).slice(0, limit);
+}
+
+const richReportSections = computed(() => {
+  const fullText = displayReport.value.fullText;
+  const task = activeTask.value;
+  const strengths = filterRichBullets(task?.strengths || []);
+  const risks = filterRichBullets(task?.risks || []);
+  const questions = filterRichBullets(task?.interviewQuestions || []);
+  return {
+    strengths: strengths.length
+      ? strengths
+      : extractReportBullets(fullText, ['核心优势', '关键优势', '候选人亮点', '优势'], 8),
+    risks: risks.length
+      ? risks
+      : extractReportBullets(fullText, ['关键风险', '风险评估', '需验证风险', '主要风险'], 6),
+    questions: questions.length
+      ? questions
+      : extractReportBullets(fullText, ['面试追问', '追问建议', '面试验证', '建议验证点'], 10),
+  };
+});
+
+const resumeSourceHint = computed(() => {
+  const task = activeTask.value;
+  if (!task) return '';
+  if (task.resumeFileUrl && task.resumeFileType === 'pdf') {
+    return '该任务保留了 PDF 原件，也提供文本抽取结果用于核对解析质量。';
+  }
+  if (task.resumeText) {
+    return '该任务来自文本输入或 txt 文件，因此没有 PDF 预览；下面展示的是参与评估的简历原文。';
+  }
+  return '原文缺失：后端没有返回 resumeText，需检查任务结果持久化或历史任务是否保存原文。';
+});
+
+const langfuseTraceUrl = computed(() => {
+  const url = agentExecutionTree.value?.langfuseTraceUrl;
+  if (typeof url === 'string' && url.startsWith('http')) return url;
+  const traceId = agentExecutionTree.value?.langfuseTraceId || activeTraceId.value;
+  if (typeof url === 'string' && url.startsWith('/') && traceId) {
+    return `${window.location.origin}${url}`;
+  }
+  return '';
+});
 const selectedJob = computed(() => jobs.value.find((j) => j.id === selectedJobId.value) ?? jobs.value[0]);
 const runningTasks = computed(() => tasks.value.filter((t) => resolveQueueStatus(t) === 'RUNNING'));
 const completedTasks = computed(() => tasks.value.filter((t) => t.status === 'SUCCESS'));
@@ -265,8 +493,12 @@ const jdMatchSuccessRate = computed(() => {
   return Math.round(withMatch / tasks.value.length * 100);
 });
 
+function isPositiveRecommendation(rec?: string): boolean {
+  return rec === 'RECOMMEND' || rec === 'STRONG_RECOMMEND';
+}
+
 const pendingReviewTasks = computed(() =>
-  tasks.value.filter(t => t.status === 'SUCCESS' && !(t.recommendation || '').includes('RECOMMEND'))
+  tasks.value.filter(t => t.status === 'SUCCESS' && !isPositiveRecommendation(t.recommendation))
 );
 
 const jobCategoryStats = computed(() => {
@@ -275,7 +507,7 @@ const jobCategoryStats = computed(() => {
     const cat = t.matchedJdTitle || t.jobCategory || 'UNKNOWN';
     const entry = map.get(cat) || { total: 0, recommended: 0, review: 0, jdSum: 0, jdCount: 0 };
     entry.total++;
-    if ((t.recommendation || '').includes('RECOMMEND')) entry.recommended++;
+    if (isPositiveRecommendation(t.recommendation)) entry.recommended++;
     else entry.review++;
     if (t.jdMatchScore) {
       entry.jdSum += t.jdMatchScore;
@@ -378,13 +610,14 @@ const eduMatchPercent = computed(() => {
 
 const recommendationLabel = computed(() => {
   const r = activeTask.value?.recommendation || '';
-  if (r.includes('STRONG')) return '强烈推荐面试';
-  if (r.includes('RECOMMEND')) return '推荐面试';
+  if (r === 'STRONG_RECOMMEND') return '强烈推荐面试';
+  if (r === 'RECOMMEND') return '推荐面试';
+  if (r === 'NOT_RECOMMEND') return '不推荐';
   return '需要人工复核';
 });
 
-const recommendedCount = computed(() => tasks.value.filter(t => t.status === 'SUCCESS' && (t.recommendation || '').includes('RECOMMEND')).length);
-const reviewCount = computed(() => tasks.value.filter(t => t.status === 'SUCCESS' && !(t.recommendation || '').includes('RECOMMEND')).length);
+const recommendedCount = computed(() => tasks.value.filter(t => t.status === 'SUCCESS' && isPositiveRecommendation(t.recommendation)).length);
+const reviewCount = computed(() => tasks.value.filter(t => t.status === 'SUCCESS' && !isPositiveRecommendation(t.recommendation)).length);
 const passRate = computed(() => {
   if (!completedTasks.value.length) return 0;
   return Math.round(recommendedCount.value / completedTasks.value.length * 100);
@@ -451,12 +684,22 @@ watch([jobSearch, jobCategoryFilter, jobSortBy], () => {
 watch([() => candidatePagination.page.value, () => candidatePagination.pageSize.value], () => void loadCandidateList());
 watch([() => jobPagination.page.value, () => jobPagination.pageSize.value], () => void loadJobList());
 watch(() => jobDraft.description, () => { jobDescriptionPage.value = 1; });
-watch(activeTraceId, () => {
+watch(activeTraceId, (id, prev) => {
   resumeTextPagination.resetPage();
   taskFeedbackPagination.resetPage();
   expandedListKeys.value = {};
+  if (id !== prev) {
+    agentExecutionTree.value = null;
+    traceExpansionInitialized.value = '';
+    expandedPhases.clear();
+    expandedAgentNodes.clear();
+    expandedRounds.clear();
+    expandedToolDetails.clear();
+    knownPhaseCount.value = 0;
+  }
+  if (id) subscribeTrace(id);
 });
-
+watch([appView, activeTraceId, detailTab], () => { syncHash(); });
 const pagedDashboardTasks = dashboardRecentPagination.pageItems;
 const pagedCandidates = computed(() => candidateListItems.value);
 const pagedJobItems = computed(() => jobListItems.value);
@@ -478,14 +721,18 @@ watch(selectedJobId, (id) => { if (id) void loadJobDetail(id); });
 watch(selectedJobId, () => { if (selectedJob.value) Object.assign(jobDraft, selectedJob.value); });
 
 onMounted(async () => {
+  await restoreFromHash();
+  window.addEventListener('hashchange', restoreFromHash);
   if (!selectedJobId.value && jobs.value.length) selectedJobId.value = jobs.value[0].id;
   if (selectedJob.value) Object.assign(jobDraft, selectedJob.value);
   await refreshAll();
+  await restoreFromHash();
   await refreshRunningStages();
   for (const task of tasks.value.filter((t) => isTaskActive(t))) startPolling(task.traceId);
   await loadHealth();
   await loadRagConfig();
   await loadRagAdvisor();
+  await loadKnowledgeBase();
   await loadJobsFromBackend();
   if (activeTraceId.value) subscribeTrace(activeTraceId.value);
   for (const job of jobs.value) { indexJdToBackend(job); }
@@ -497,7 +744,7 @@ watch([activeTraceId, resumeViewMode], () => {
   }
 }, { immediate: true });
 
-onBeforeUnmount(() => { eventSource?.close(); pollTimers.forEach((t) => clearTimeout(t)); });
+onBeforeUnmount(() => { eventSource?.close(); pollTimers.forEach((t) => clearTimeout(t)); window.removeEventListener('hashchange', restoreFromHash); });
 
 async function refreshAll() {
   refreshing.value = true;
@@ -506,6 +753,9 @@ async function refreshAll() {
     await refreshRunningStages();
     if (activeTraceId.value) {
       await Promise.allSettled([loadTraces(activeTraceId.value), loadGraph(activeTraceId.value)]);
+      if (!activeTask.value) {
+        await openTaskDetail(activeTraceId.value, detailTab.value);
+      }
     }
   } finally { refreshing.value = false; }
 }
@@ -546,6 +796,95 @@ async function loadRagAdvisor() {
   } catch {
     ragAdvisor.value = { show: false };
   }
+}
+
+async function loadKnowledgeBase() {
+  knowledgeBaseLoading.value = true;
+  knowledgeBaseError.value = '';
+  try {
+    const r = await fetch('/api/rag/knowledge-base');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    knowledgeBase.value = await r.json();
+    await loadKnowledgeDocuments();
+  } catch {
+    knowledgeBaseError.value = '知识库状态读取失败';
+  } finally {
+    knowledgeBaseLoading.value = false;
+  }
+}
+
+const knowledgeDocuments = ref<any[]>([]);
+const activeKnowledgeDoc = ref<any | null>(null);
+const knowledgeDocLoading = ref(false);
+
+async function loadKnowledgeDocuments() {
+  try {
+    const r = await fetch('/api/rag/knowledge-base/documents');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    knowledgeDocuments.value = data.documents || [];
+  } catch {
+    knowledgeDocuments.value = [];
+  }
+}
+
+async function viewKnowledgeDocument(docId: string) {
+  knowledgeDocLoading.value = true;
+  try {
+    const r = await fetch(`/api/rag/knowledge-base/documents/${encodeURIComponent(docId)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    activeKnowledgeDoc.value = await r.json();
+  } catch {
+    knowledgeBaseError.value = '文档读取失败';
+  } finally {
+    knowledgeDocLoading.value = false;
+  }
+}
+
+function closeKnowledgeDocument() {
+  activeKnowledgeDoc.value = null;
+}
+
+async function deleteKnowledgeDocument(docId: string) {
+  if (!window.confirm('确认删除该评估标准文档？删除后评估将不再检索它。')) return;
+  try {
+    const r = await fetch(`/api/rag/knowledge-base/documents/${encodeURIComponent(docId)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (activeKnowledgeDoc.value?.docId === docId) activeKnowledgeDoc.value = null;
+    await loadKnowledgeBase();
+  } catch {
+    knowledgeBaseError.value = '文档删除失败';
+  }
+}
+
+async function uploadKnowledgeDocument(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  knowledgeBaseLoading.value = true;
+  knowledgeBaseError.value = '';
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('title', knowledgeUploadTitle.value || file.name);
+    form.append('docType', knowledgeUploadType.value || 'general');
+    form.append('tags', knowledgeUploadTags.value || '');
+    const res = await fetch('/api/rag/knowledge-base/upload', { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    successMessage.value = '知识文档已入库';
+    input.value = '';
+    await loadKnowledgeBase();
+  } catch {
+    knowledgeBaseError.value = '知识文档上传失败';
+  } finally {
+    knowledgeBaseLoading.value = false;
+  }
+}
+
+async function openRagPanel(tab: 'knowledge' | 'business' | 'compare' | 'expert' = 'business') {
+  ragDrawerTab.value = tab;
+  showRagDrawer.value = true;
+  if (tab === 'knowledge') await loadKnowledgeBase();
 }
 
 function syncBusinessControlsFromOptions() {
@@ -715,12 +1054,8 @@ async function loadTasks() {
     const r = await fetch(`/api/tasks${q}`);
     if (r.ok) {
       const page = (await r.json()) as PageResult<TaskResponse>;
-      tasks.value = page.items.map((item) => ({
-        ...item,
-        strengths: item.strengths ?? [],
-        risks: item.risks ?? [],
-        interviewQuestions: item.interviewQuestions ?? [],
-      }));
+      const existingByTrace = new Map(tasks.value.map((task) => [task.traceId, task]));
+      tasks.value = page.items.map((item) => mergeTaskListItem(existingByTrace.get(item.traceId), item));
       tasksError.value = false;
     } else {
       tasksError.value = true;
@@ -730,6 +1065,44 @@ async function loadTasks() {
   } finally {
     tasksLoaded.value = true;
   }
+}
+
+function normalizeTaskResponse(task: TaskResponse): TaskResponse {
+  return {
+    ...task,
+    strengths: task.strengths ?? [],
+    risks: task.risks ?? [],
+    interviewQuestions: task.interviewQuestions ?? [],
+  };
+}
+
+function mergeTaskListItem(existing: TaskResponse | undefined, item: TaskResponse): TaskResponse {
+  const normalized = normalizeTaskResponse(item);
+  if (!existing) return normalized;
+  return {
+    ...existing,
+    ...normalized,
+    strengths: normalized.strengths.length ? normalized.strengths : (existing.strengths ?? []),
+    risks: normalized.risks.length ? normalized.risks : (existing.risks ?? []),
+    interviewQuestions: normalized.interviewQuestions.length ? normalized.interviewQuestions : (existing.interviewQuestions ?? []),
+    resumeText: normalized.resumeText || existing.resumeText,
+    resumeFileUrl: normalized.resumeFileUrl || existing.resumeFileUrl,
+    resumeFileType: normalized.resumeFileType || existing.resumeFileType,
+    topJdMatches: normalized.topJdMatches?.length ? normalized.topJdMatches : existing.topJdMatches,
+    aiRecommendation: normalized.aiRecommendation || existing.aiRecommendation,
+    decisionRationale: normalized.decisionRationale || existing.decisionRationale,
+    riskSummary: normalized.riskSummary || existing.riskSummary,
+  };
+}
+
+async function refreshTaskDetail(traceId: string): Promise<TaskResponse | null> {
+  const r = await fetch(`/api/tasks/${encodeURIComponent(traceId)}`);
+  if (!r.ok) return null;
+  const full = normalizeTaskResponse((await r.json()) as TaskResponse);
+  const idx = tasks.value.findIndex((t) => t.traceId === traceId);
+  if (idx >= 0) tasks.value[idx] = full;
+  else tasks.value.unshift(full);
+  return full;
 }
 
 async function loadMetrics() {
@@ -818,32 +1191,34 @@ function selectTask(task: TaskResponse) {
 }
 
 async function openTaskDetail(traceId: string, tab: DetailTab = 'report') {
-  const r = await fetch(`/api/tasks/${encodeURIComponent(traceId)}`);
-  if (r.ok) {
-    const full = (await r.json()) as TaskResponse;
-    const idx = tasks.value.findIndex((t) => t.traceId === traceId);
-    if (idx >= 0) tasks.value[idx] = full;
-    else tasks.value.unshift(full);
-    activeTraceId.value = traceId;
-    detailTab.value = tab;
-    appView.value = 'detail';
-    resumeViewMode.value = full.resumeFileType === 'pdf' ? 'pdf' : 'text';
-    loadTraces(traceId);
-    loadGraph(traceId);
-    loadAgentExecution(traceId);
-    if (full.status === 'RUNNING' || isTaskActive(full)) startPolling(traceId);
-    return;
-  }
-  const task = tasks.value.find((t) => t.traceId === traceId);
-  if (task) {
-    activeTraceId.value = traceId;
-    detailTab.value = tab;
-    appView.value = 'detail';
-    resumeViewMode.value = task.resumeFileType === 'pdf' ? 'pdf' : 'text';
-    loadTraces(traceId);
-    loadGraph(traceId);
-    loadAgentExecution(traceId);
-    if (task.status === 'RUNNING' || isTaskActive(task)) startPolling(traceId);
+  detailLoading.value = true;
+  detailLoadError.value = '';
+  activeTraceId.value = traceId;
+  detailTab.value = tab;
+  appView.value = 'detail';
+  agentExecutionTree.value = null;
+  try {
+    const full = await refreshTaskDetail(traceId);
+    if (full) {
+      resumeViewMode.value = full.resumeFileType === 'pdf' ? 'pdf' : 'text';
+      loadTraces(traceId);
+      loadGraph(traceId);
+      loadAgentExecution(traceId);
+      if (full.status === 'RUNNING' || isTaskActive(full)) startPolling(traceId);
+      return;
+    }
+    const task = tasks.value.find((t) => t.traceId === traceId);
+    if (task) {
+      resumeViewMode.value = task.resumeFileType === 'pdf' ? 'pdf' : 'text';
+      loadTraces(traceId);
+      loadGraph(traceId);
+      loadAgentExecution(traceId);
+      if (task.status === 'RUNNING' || isTaskActive(task)) startPolling(traceId);
+      return;
+    }
+    detailLoadError.value = '任务不存在或已删除';
+  } finally {
+    detailLoading.value = false;
   }
 }
 
@@ -890,8 +1265,9 @@ function stripMarkdown(text?: string): string {
 
 function aiRecommendationText(rec?: string): string {
   if (!rec) return '未生成';
-  if (rec.includes('STRONG')) return '强烈推荐面试';
-  if (rec.includes('RECOMMEND')) return '推荐面试';
+  if (rec === 'STRONG_RECOMMEND') return '强烈推荐面试';
+  if (rec === 'RECOMMEND') return '推荐面试';
+  if (rec === 'NOT_RECOMMEND') return '不推荐';
   return '需要人工复核';
 }
 
@@ -911,18 +1287,128 @@ async function loadJobsFromBackend() {
 function candidateReviewHint(task: TaskResponse): string {
   const qs = resolveQueueStatus(task);
   if (task.status !== 'SUCCESS' && qs !== 'SUCCESS') return taskStatusLabel(task);
-  if ((task.recommendation || '').includes('RECOMMEND')) return '推荐面试';
+  if (isPositiveRecommendation(task.recommendation)) return '推荐面试';
+  if (task.recommendation === 'NOT_RECOMMEND') return '不推荐';
   return stripMarkdown(task.decisionRationale || task.riskSummary || task.risks?.[0] || '需人工复核');
 }
 
 function recommendationShort(rec: string): string {
-  if (rec.includes('STRONG')) return '强烈推荐';
-  if (rec.includes('RECOMMEND')) return '推荐';
+  if (rec === 'STRONG_RECOMMEND') return '强烈推荐';
+  if (rec === 'RECOMMEND') return '推荐';
+  if (rec === 'NOT_RECOMMEND') return '不推荐';
   return '需复核';
 }
 
 function goBack() {
   appView.value = 'candidates';
+  syncHash();
+}
+
+async function confirmDeleteTask(traceId: string) {
+  if (!window.confirm('确认删除该评估记录？删除后不可恢复。')) return;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const r = await fetch(`/api/tasks/${traceId}`, { method: 'DELETE', signal: controller.signal });
+    clearTimeout(timeout);
+    if (!r.ok) throw new Error('delete failed');
+    tasks.value = tasks.value.filter((t) => t.traceId !== traceId);
+    if (activeTraceId.value === traceId) {
+      activeTraceId.value = '';
+      appView.value = 'candidates';
+      syncHash();
+    }
+    successMessage.value = '评估记录已删除';
+    await loadCandidateList();
+  } catch (e: any) {
+    if (e.name === 'AbortError') {
+      tasks.value = tasks.value.filter((t) => t.traceId !== traceId);
+      successMessage.value = '删除已提交（后台处理中）';
+      await loadCandidateList();
+    } else {
+      errorMessage.value = '删除失败，请重试';
+    }
+  }
+}
+
+const selectedForDelete = ref<Set<string>>(new Set());
+const batchSelectMode = ref(false);
+
+function toggleBatchSelect() {
+  batchSelectMode.value = !batchSelectMode.value;
+  if (!batchSelectMode.value) selectedForDelete.value.clear();
+}
+
+function toggleSelectTask(traceId: string) {
+  if (selectedForDelete.value.has(traceId)) selectedForDelete.value.delete(traceId);
+  else selectedForDelete.value.add(traceId);
+}
+
+function selectAllVisible() {
+  for (const t of pagedCandidates.value) selectedForDelete.value.add(t.traceId);
+}
+
+async function batchDelete() {
+  const ids = Array.from(selectedForDelete.value);
+  if (!ids.length) return;
+  if (!window.confirm(`确认批量删除 ${ids.length} 条评估记录？`)) return;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    await fetch('/api/tasks/batch-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ traceIds: ids }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+  } catch { /* fire and forget */ }
+  tasks.value = tasks.value.filter((t) => !selectedForDelete.value.has(t.traceId));
+  selectedForDelete.value.clear();
+  batchSelectMode.value = false;
+  successMessage.value = `已删除 ${ids.length} 条记录`;
+  await loadCandidateList();
+}
+
+function syncHash() {
+  if (restoringDeepLink.value) return;
+  if (appView.value === 'detail' && activeTraceId.value) {
+    const tab = detailTab.value !== 'report' ? `/${detailTab.value}` : '';
+    history.replaceState(null, '', `#/task/${encodeURIComponent(activeTraceId.value)}${tab}`);
+  } else if (appView.value === 'candidates') {
+    history.replaceState(null, '', '#/candidates');
+  } else if (appView.value === 'knowledge') {
+    history.replaceState(null, '', '#/knowledge');
+  } else if (appView.value === 'positions') {
+    history.replaceState(null, '', '#/positions');
+  } else if (appView.value === 'analytics') {
+    history.replaceState(null, '', '#/analytics');
+  } else {
+    history.replaceState(null, '', '#/');
+  }
+}
+
+async function restoreFromHash() {
+  const hash = location.hash || '#/';
+  const taskMatch = hash.match(/^#\/task\/([^/?#]+)(?:\/(resume|report|trace|graph|feedback))?$/);
+  if (taskMatch) {
+    restoringDeepLink.value = true;
+    try {
+      await openTaskDetail(decodeURIComponent(taskMatch[1]), (taskMatch[2] as DetailTab) || 'report');
+    } finally {
+      restoringDeepLink.value = false;
+    }
+    return true;
+  }
+  if (hash.startsWith('#/candidates')) appView.value = 'candidates';
+  else if (hash.startsWith('#/knowledge')) {
+    appView.value = 'knowledge';
+    await loadKnowledgeBase();
+  }
+  else if (hash.startsWith('#/positions')) appView.value = 'positions';
+  else if (hash.startsWith('#/analytics')) appView.value = 'analytics';
+  else appView.value = 'dashboard';
+  return false;
 }
 
 function toggleAgentNode(idx: number) {
@@ -944,6 +1430,9 @@ function getAgentIcon(name: string): string {
 
 const expandedPhases = reactive(new Set<number>([0, 1, 2, 3, 4, 5]));
 const expandedRounds = reactive(new Set<string>());
+const expandedToolDetails = reactive(new Set<string>());
+const traceExpansionInitialized = ref('');
+const knownPhaseCount = ref(0);
 
 function togglePhase(idx: number) {
   if (expandedPhases.has(idx)) expandedPhases.delete(idx);
@@ -955,12 +1444,238 @@ function toggleRound(key: string) {
   else expandedRounds.add(key);
 }
 
+function toggleToolDetail(key: string) {
+  if (expandedToolDetails.has(key)) expandedToolDetails.delete(key);
+  else expandedToolDetails.add(key);
+}
+
+const AGENT_NAME_CN: Record<string, string> = {
+  IntentAgent: '意图识别',
+  ResumeParseAgent: '简历结构化解析',
+  JdMatchAgent: 'JD 匹配',
+  KnowledgeRetrievalAgent: '知识检索与上下文注入',
+  TechEvalAgent: '技术能力评估',
+  ProjectEvalAgent: '项目经历评估',
+  RiskAgent: '风险识别',
+  EvidenceFusionAgent: '证据融合',
+  ReportAgent: '报告生成',
+};
+
+const AGENT_PURPOSE_CN: Record<string, string> = {
+  IntentAgent: '判断候选人类型、经验级别和后续评估策略。',
+  ResumeParseAgent: '把简历文本拆成技能、经历、项目和教育等结构化信息。',
+  JdMatchAgent: '从岗位库里找最匹配的 JD，并提取匹配依据和差距。',
+  KnowledgeRetrievalAgent: '按 Harness 策略检索自助知识库、Rubric 和团队偏好，并注入后续评估 Agent。',
+  TechEvalAgent: '评估技术栈深度、工程经验和可验证证据。',
+  ProjectEvalAgent: '评估项目复杂度、职责边界和业务结果。',
+  RiskAgent: '识别时间线、简历真实性和能力表述风险。',
+  EvidenceFusionAgent: '汇总技术、项目、风险和 JD 证据，形成统一判断。',
+  ReportAgent: '把前面所有证据整理成 HR 能直接看的评估报告。',
+};
+
+const TOOL_NAME_CN: Record<string, string> = {
+  resume_structure_extract: '解析简历结构',
+  jd_requirements_extract: '提取 JD 要求',
+  milvus_resume_search: '检索简历证据库',
+  milvus_resume_batch_search: '批量检索简历证据',
+  milvus_jd_search: '检索岗位库',
+  mcp_resume_evidence_search: '通过 MCP 查询简历证据',
+  mcp_external_profile_search: '通过 MCP 查询外部画像',
+  timeline_validator: '检查时间线风险',
+  github_enrichment: '检查 GitHub/博客外部证据',
+  evidence_merge: '融合多源证据',
+  knowledge_search: '检索自助知识库',
+};
+
+const TOOL_KIND_LABEL: Record<string, string> = {
+  tool: '普通工具',
+  retrieval: 'RAG 检索',
+  mcp: 'MCP 调用',
+  skill: 'Skill 能力',
+  external_enrichment: '外部画像',
+};
+
+const STATUS_CN: Record<string, string> = {
+  SUCCESS: '成功',
+  FAILED: '失败',
+  RUNNING: '运行中',
+  WARNING: '警告',
+};
+
+function agentDisplayName(name?: string): string {
+  return AGENT_NAME_CN[name || ''] || name || 'Agent';
+}
+
+function agentPurposeText(agent: TraceAgentView): string {
+  return AGENT_PURPOSE_CN[agent.name || ''] || agent.role || '执行当前评估步骤。';
+}
+
+function toolDisplayName(tool: TraceToolCallView | string | undefined): string {
+  const name = typeof tool === 'string' ? tool : tool?.name;
+  if (!name) return '工具';
+  const t = typeof tool === 'object' ? tool : undefined;
+  const base = TOOL_NAME_CN[name] || name;
+  if (t?.origin === 'mcp') {
+    return `MCP / ${t.server || 'resume-tools'} / ${base}`;
+  }
+  if (t?.origin === 'skill') {
+    return `Skill / ${base}`;
+  }
+  if (t?.family === 'retrieval' || t?.retrieval) {
+    const backend = t.retrieval?.backend || t.family || 'rag';
+    return `RAG / ${backend} / ${base}`;
+  }
+  return base;
+}
+
+function toolKindLabel(tool: TraceToolCallView): string {
+  const key = tool.family || tool.origin || tool.category || 'tool';
+  return TOOL_KIND_LABEL[key] || key;
+}
+
+type TraceToolGroup = 'embedding_rag' | 'mcp' | 'skill' | 'external' | 'plain' | 'debug';
+
+function toolGroup(tool: TraceToolCallView): TraceToolGroup {
+  const name = tool.name || '';
+  if (tool.status === 'SKIPPED') return 'debug';
+  if (tool.origin === 'skill' || tool.category === 'skill' || name === 'execute_skill' || name === 'list_skills') {
+    return 'skill';
+  }
+  if (tool.origin === 'mcp' || tool.category === 'mcp' || name.startsWith('mcp_')) {
+    return 'mcp';
+  }
+  if (
+    tool.family === 'retrieval'
+    || tool.category === 'retrieval'
+    || !!tool.retrieval
+    || ['milvus_resume_search', 'milvus_resume_batch_search', 'milvus_jd_search'].includes(name)
+  ) {
+    return 'embedding_rag';
+  }
+  if (tool.family === 'external_enrichment' || name === 'github_enrichment') {
+    return 'external';
+  }
+  return 'plain';
+}
+
+function toolsByGroup(round: TraceRoundView): Record<TraceToolGroup, TraceToolCallView[]> {
+  const groups: Record<TraceToolGroup, TraceToolCallView[]> = {
+    embedding_rag: [],
+    mcp: [],
+    skill: [],
+    external: [],
+    plain: [],
+    debug: [],
+  };
+  for (const tool of round.toolCalls || []) {
+    groups[toolGroup(tool)].push(tool);
+  }
+  return groups;
+}
+
+function toolDedupKey(tool: TraceToolCallView): string {
+  const inputKey = tool.inputHash || stableStringHash(tool.input || tool.arguments || '');
+  return `${toolGroup(tool)}:${tool.name || 'tool'}:${inputKey}`;
+}
+
+function stableStringHash(value: string): string {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  }
+  return String(hash >>> 0);
+}
+
+function isRetrievalTool(tool: TraceToolCallView): boolean {
+  return toolGroup(tool) === 'embedding_rag';
+}
+
+function isMcpTool(tool: TraceToolCallView): boolean {
+  return toolGroup(tool) === 'mcp';
+}
+
+function isSkillTool(tool: TraceToolCallView): boolean {
+  return toolGroup(tool) === 'skill';
+}
+
+function isPlainTool(tool: TraceToolCallView): boolean {
+  return toolGroup(tool) === 'plain' || toolGroup(tool) === 'external';
+}
+
+function buildRetrievalSummary(tool: TraceToolCallView): string {
+  const r = tool.retrieval || safeParseJson(tool.output || tool.result || '') || {};
+  const hit = r.hitCount ?? (Array.isArray(r.chunks) ? r.chunks.length : undefined);
+  const parts = [
+    r.backend ? `backend=${r.backend}` : '',
+    hit != null ? `命中 ${hit}/${r.topK ?? '?'}` : '',
+    r.topScore != null ? `topScore=${r.topScore}` : '',
+    r.fallbackUsed ? `降级: ${r.fallbackReason || 'unknown'}` : '',
+    r.usedResumeTextFallback ? '使用原文兜底' : '',
+  ];
+  return parts.filter(Boolean).join('；') || summarizeToolResult(tool);
+}
+
+function buildMcpSummary(tool: TraceToolCallView): string {
+  const parts = [
+    tool.server ? `server=${tool.server}` : '',
+    tool.protocol ? `protocol=${tool.protocol}` : '',
+    traceStatusText(tool.status),
+  ];
+  const data = safeParseJson(tool.output || tool.result || '');
+  if (data?.fallbackReason) parts.push(`fallback=${data.fallbackReason}`);
+  return parts.filter(Boolean).join('；') || 'MCP 调用完成';
+}
+
+function buildSkillSummary(tool: TraceToolCallView): string {
+  const data = safeParseJson(tool.input || tool.arguments || '') || {};
+  const skillName = data.skillName || data.skill_name || tool.name;
+  if (tool.name === 'list_skills') return '发现可用 Skill 列表';
+  return `Skill ${skillName}: 加载指令，将在下一轮 LLM 中应用`;
+}
+
+function roundToolSummary(round: TraceRoundView): string {
+  const tools = round.toolCalls || [];
+  const retrieval = tools.filter(isRetrievalTool).length;
+  const mcp = tools.filter(isMcpTool).length;
+  const skill = tools.filter(isSkillTool).length;
+  const plain = tools.filter(isPlainTool).length;
+  const deduped = tools.reduce((sum, t) => sum + (t.dedupedCount || 0), 0);
+  const parts = [];
+  if (retrieval) parts.push(`${retrieval} 个检索`);
+  if (mcp) parts.push(`${mcp} 个 MCP`);
+  if (skill) parts.push(`${skill} 个 Skill`);
+  if (plain) parts.push(`${plain} 个普通工具`);
+  const base = parts.length ? `请求 ${parts.join(' / ')}` : '';
+  return deduped > 0 ? `${base}（已合并 ${deduped} 个重复调用）` : base;
+}
+
+function agentExecutionProfile(agent: TraceAgentView): string {
+  const rounds = agent.rounds || [];
+  const llmRounds = rounds.filter((round) => round.type !== 'trace_integrity_warning').length;
+  const toolCount = rounds.reduce((sum, round) => sum + ((round.toolCalls || []).filter((tool) => toolGroup(tool) !== 'debug').length), 0);
+  const parts = [`LLM ${llmRounds} 轮`];
+  if (toolCount) parts.push(`工具 ${toolCount} 次`);
+  return parts.join(' / ');
+}
+
+function traceStatusText(status?: string): string {
+  return STATUS_CN[status || ''] || status || '未知';
+}
+
 interface PhaseGroup {
   phase: number;
   title: string;
   status: string;
   totalDuration: number;
-  agents: any[];
+  startedAt?: number;
+  endedAt?: number;
+  agents: TraceAgentView[];
+}
+
+function toMillis(value?: string): number | undefined {
+  if (!value) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
 }
 
 function groupByPhase(tree: any[]): PhaseGroup[] {
@@ -969,7 +1684,7 @@ function groupByPhase(tree: any[]): PhaseGroup[] {
     1: '意图路由',
     2: '简历解析',
     3: '岗位匹配',
-    4: '并行评估（技术 + 项目 + 风险）',
+    4: 'Harness 上下文注入 + 并行评估',
     5: '证据融合',
     6: '报告生成'
   };
@@ -987,7 +1702,17 @@ function groupByPhase(tree: any[]): PhaseGroup[] {
     }
     const group = phaseMap.get(p)!;
     group.agents.push(agent);
-    group.totalDuration += agent.durationMs || 0;
+    const startMs = toMillis(agent.startedAt);
+    const endMs = toMillis(agent.endedAt);
+    if (startMs != null && endMs != null && endMs >= startMs) {
+      group.startedAt = group.startedAt == null ? startMs : Math.min(group.startedAt, startMs);
+      group.endedAt = group.endedAt == null ? endMs : Math.max(group.endedAt, endMs);
+      group.totalDuration = group.endedAt - group.startedAt;
+    } else if (p === 4) {
+      group.totalDuration = Math.max(group.totalDuration, agent.durationMs || 0);
+    } else {
+      group.totalDuration += agent.durationMs || 0;
+    }
     if (agent.status === 'FAILED') group.status = 'FAILED';
     else if (agent.status === 'RUNNING' && group.status !== 'FAILED') group.status = 'RUNNING';
   }
@@ -1003,8 +1728,384 @@ function truncateText(text: string, maxLen: number): string {
 async function loadAgentExecution(traceId: string) {
   try {
     const res = await fetch(`/api/tasks/${traceId}/agent-execution`);
-    if (res.ok) agentExecutionTree.value = await res.json();
+    if (res.ok) {
+      const tree = await res.json();
+      agentExecutionTree.value = dedupeExecutionTree(tree);
+      if (traceExpansionInitialized.value !== traceId) {
+        initTraceExpansion(agentExecutionTree.value, traceId);
+      } else {
+        mergeNewTracePhases(agentExecutionTree.value);
+      }
+    }
   } catch (e) { /* silent */ }
+}
+
+function mergeNewTracePhases(tree: { executionTree?: TraceAgentView[] } | null) {
+  const phases = groupByPhase(tree?.executionTree || []);
+  phases.forEach((_, idx) => {
+    if (idx >= knownPhaseCount.value) expandedPhases.add(idx);
+  });
+  knownPhaseCount.value = Math.max(knownPhaseCount.value, phases.length);
+}
+
+function initTraceExpansion(tree: { executionTree?: TraceAgentView[] } | null, traceId = activeTraceId.value) {
+  expandedRounds.clear();
+  expandedToolDetails.clear();
+  expandedAgentNodes.clear();
+  const agents: TraceAgentView[] = tree?.executionTree || [];
+  const phases = groupByPhase(agents);
+  expandedPhases.clear();
+  phases.forEach((_, idx) => expandedPhases.add(idx));
+  traceExpansionInitialized.value = traceId;
+  knownPhaseCount.value = phases.length;
+
+  phases.forEach((phase, pidx) => {
+    phase.agents.forEach((agent, aidx) => {
+      const nodeKey = pidx * 100 + aidx;
+      const focusAgents = new Set(['IntentAgent', 'ResumeParseAgent', 'ReportAgent']);
+      if (focusAgents.has(agent.name || '')) {
+        expandedAgentNodes.add(nodeKey);
+      }
+      (agent.rounds || []).forEach((round, ridx) => {
+        const roundKey = `${pidx}-${aidx}-${round.roundNum || ridx}`;
+        const isFocusRound = (
+          (agent.name === 'IntentAgent' || agent.name === 'ResumeParseAgent') && (round.roundNum || 1) === 1
+        ) || (agent.name === 'ReportAgent' && (round.final || round.finalOutput));
+        if (isFocusRound) expandedRounds.add(roundKey);
+        (round.toolCalls || []).forEach((tool, tidx) => {
+          if (tool.status === 'FAILED') {
+            expandedToolDetails.add(`${pidx}-${aidx}-${round.roundNum || ridx}-${tool.toolCallId || tidx}`);
+          }
+        });
+      });
+    });
+  });
+}
+
+function dedupeExecutionTree(tree: any) {
+  if (!tree?.executionTree) return tree;
+  const executionTree = tree.executionTree.map((agent: any) => {
+    const roundMap = new Map<string, any>();
+    for (const round of agent.rounds || []) {
+      if (round.type === 'trace_integrity_warning') continue;
+      const key = round.eventId || round.id || `round-${round.roundNum}`;
+      if (!roundMap.has(key)) {
+        roundMap.set(key, { ...round });
+      }
+    }
+    const rounds = Array.from(roundMap.values()).sort((a, b) => (a.roundNum || 0) - (b.roundNum || 0));
+    rounds.forEach((round) => {
+      const toolMap = new Map<string, any>();
+      for (const tool of round.toolCalls || []) {
+        const tkey = toolDedupKey(tool);
+        const existing = toolMap.get(tkey);
+        if (!existing) {
+          toolMap.set(tkey, { ...tool });
+        } else {
+          existing.dedupedCount = (existing.dedupedCount || 0) + 1 + (tool.dedupedCount || 0);
+          existing.durationMs = Math.max(existing.durationMs || 0, tool.durationMs || 0);
+          existing.toolCallIds = [...(existing.toolCallIds || [existing.toolCallId]).filter(Boolean), tool.toolCallId].filter(Boolean);
+        }
+      }
+      round.toolCalls = Array.from(toolMap.values());
+    });
+    return { ...agent, rounds, totalRounds: rounds.length };
+  });
+  return { ...tree, executionTree };
+}
+
+function renderMessages(messages: Array<{ role?: string; type?: string; content?: string; tool_calls?: unknown[]; tool_call_id?: string; name?: string }>) {
+  if (!messages?.length) return '';
+  return messages.map((msg) => {
+    const role = String(msg.role ?? msg.type ?? 'unknown');
+    let content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content ?? '', null, 2);
+    if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+      const details = msg.tool_calls.map((tc: any) => {
+        const name = tc.name ?? tc.function?.name ?? 'tool';
+        const args = tc.args ?? tc.function?.arguments ?? {};
+        return `${name}(${typeof args === 'string' ? args : JSON.stringify(args)})`;
+      }).join(', ');
+      content = `${content}\n[tool_calls: ${details}]`;
+    }
+    if (role === 'tool') {
+      const id = msg.tool_call_id ? ` id=${msg.tool_call_id}` : '';
+      const name = msg.name ? ` name=${msg.name}` : '';
+      content = `[tool${name}${id}]\n${content}`;
+    }
+    return `[${role}]\n${content}`;
+  }).join('\n\n');
+}
+
+function safeParseJson(value: unknown): Record<string, unknown> | null {
+  if (!value) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string') return null;
+  const candidates = [
+    value,
+    value.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, ''),
+    value.slice(Math.max(0, value.indexOf('{')), value.lastIndexOf('}') + 1),
+  ].filter((item) => item && item.includes('{') && item.includes('}'));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      // Try the next shape.
+    }
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function oneLine(value: unknown, maxLen = 220): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
+  return truncateText(text.replace(/\s+/g, ' ').trim(), maxLen);
+}
+
+const harnessPlanView = computed<any | null>(() => {
+  // Backend now extracts the plan server-side as a clean top-level object (robust).
+  const top = agentExecutionTree.value?.harnessPlan;
+  if (top && typeof top === 'object' && top.version) return top;
+  const direct = safeParseJson(agentExecutionTree.value?.harnessPlan);
+  if (direct?.version) return direct;
+  const agents: TraceAgentView[] = agentExecutionTree.value?.executionTree || [];
+  const candidates: string[] = [];
+  for (const agent of agents) {
+    for (const round of agent.rounds || []) {
+      candidates.push(String(round.input || ''), String(round.output || ''), String(round.decisionText || ''));
+      for (const message of round.inputMessages || []) {
+        candidates.push(typeof message.content === 'string' ? message.content : JSON.stringify(message.content || ''));
+      }
+    }
+  }
+  let latestPlan: any | null = null;
+  for (const text of candidates) {
+    if (text.includes('harnessPlan')) {
+      const parsedBundle = safeParseJson(text);
+      if (parsedBundle?.harnessPlan) latestPlan = parsedBundle.harnessPlan;
+    }
+    const markerIndex = text.indexOf('AgentHarness');
+    if (markerIndex < 0) continue;
+    const start = text.indexOf('{', markerIndex);
+    if (start < 0) continue;
+    let depth = 0;
+    for (let idx = start; idx < text.length; idx += 1) {
+      if (text[idx] === '{') depth += 1;
+      if (text[idx] === '}') depth -= 1;
+      if (depth === 0) {
+        const parsed = safeParseJson(text.slice(start, idx + 1));
+        if (parsed?.version) latestPlan = parsed;
+        break;
+      }
+    }
+  }
+  return latestPlan;
+});
+
+function memoryTypeLabel(type: unknown): string {
+  const map: Record<string, string> = {
+    episodic: '历史案例',
+    semantic: '评估标准沉淀',
+    procedural: '评估策略',
+  };
+  return map[String(type)] || '历史记忆';
+}
+
+function memoryAppliesLabel(appliesTo: unknown): string {
+  const raw = String(appliesTo || '');
+  if (raw.includes('question')) return '面试追问方向';
+  if (raw.includes('route')) return '路由决策';
+  if (raw.includes('report')) return '报告校准';
+  if (raw.includes('context')) return '上下文策略';
+  return '评分校准参考';
+}
+
+function harnessAgentLabel(agentId: unknown): string {
+  const map: Record<string, string> = {
+    tech_eval: 'TechEvalAgent 技术评估',
+    project_eval: 'ProjectEvalAgent 项目评估',
+    risk_eval: 'RiskAgent 风险识别',
+    knowledge_context: 'KnowledgeRetrievalAgent 知识检索',
+  };
+  const key = String(agentId || '');
+  return map[key] || key;
+}
+
+function asList(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function arrayText(value: unknown): string {
+  return Array.isArray(value) && value.length ? value.map(String).join('、') : '未明确';
+}
+
+function summarizeIntentOutput(output: unknown): string {
+  const data = safeParseJson(output) || {};
+  const candidateTypeRaw = String(data.candidateType || data.candidate_type || '').trim().toUpperCase();
+  const levelRaw = String(data.experienceLevel || data.experience_level || '').trim().toUpperCase();
+  const strategyRaw = String(data.evaluationStrategy || data.evaluation_strategy || '').trim();
+  const candidateTypeMap: Record<string, string> = {
+    TECH: '技术岗',
+    PRODUCT: '产品岗',
+    DESIGN: '设计岗',
+    OPERATIONS: '运营岗',
+    BUSINESS: '业务岗',
+    UNKNOWN: '未明确',
+  };
+  const levelMap: Record<string, string> = {
+    INTERN: '实习/校招',
+    JUNIOR: '初级',
+    MID: '中级',
+    SENIOR: '高级',
+    STAFF: '专家',
+    UNKNOWN: '未明确',
+  };
+  const strategyMap: Record<string, string> = {
+    focus_on_tech_depth: '重点看技术深度',
+    focus_on_product_sense: '重点看产品判断',
+    focus_on_project_authenticity: '重点核验项目真实性',
+    validate_basic_fit: '先验证基础匹配',
+  };
+  const candidateType = candidateTypeMap[candidateTypeRaw] || String(data.candidateType || data.candidate_type || '未明确');
+  const level = levelMap[levelRaw] || String(data.experienceLevel || data.experience_level || '未明确');
+  const strategy = strategyMap[strategyRaw] || String(data.evaluationStrategy || data.evaluation_strategy || '按通用标准评估');
+  const skills = arrayText(data.requiredSkills);
+  const hints = arrayText(data.routingHints);
+  return `判断结果：候选人类型为${candidateType}，经验级别为${level}；评估策略是${strategy}。关键技能：${skills}。后续关注：${hints}。`;
+}
+
+function summarizeResumeParseOutput(output: unknown): string {
+  const data = safeParseJson(output) || {};
+  const skills = Array.isArray(data.skillKeywords) && data.skillKeywords.length
+    ? (data.skillKeywords as string[]).join('、')
+    : Array.isArray(data.skills) && data.skills.length
+      ? (data.skills as unknown[]).map((item) => typeof item === 'string' ? item : JSON.stringify(item)).join('、')
+    : '未识别到明显技能关键词';
+  const sections = Array.isArray(data.sections) && data.sections.length
+    ? (data.sections as string[]).join('、')
+    : '未识别到标准简历小标题';
+  const timelineCount = Array.isArray(data.timelineEntries) ? data.timelineEntries.length : 0;
+  const textLength = data.textLength ?? data.length ?? '未知';
+  return `解析结果：文本长度 ${textLength} 字；技能关键词：${skills}；结构化段落：${sections}；时间线条目：${timelineCount} 条。`;
+}
+
+function listCount(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function summarizeParsedAgentJson(agent: TraceAgentView, data: Record<string, unknown>): string {
+  if (agent.name === 'JdMatchAgent') {
+    const score = typeof data.matchScore === 'number' ? Math.round(data.matchScore * 100) : data.matchScore;
+    return `岗位匹配结论：匹配度 ${score ?? '未明确'}；要求 ${listCount(data.requirements)} 条，偏好技能 ${listCount(data.preferredSkills)} 条，差距 ${listCount(data.gaps)} 条。`;
+  }
+  if (agent.name === 'TechEvalAgent') {
+    return `技术评估结论：技术分 ${data.overallTechScore ?? '未明确'}；维度 ${listCount(data.dimensions)} 项，亮点 ${listCount(data.highlights)} 条，短板 ${listCount(data.weaknesses)} 条；证据源 ${data.evidenceSource || '未明确'}。`;
+  }
+  if (agent.name === 'ProjectEvalAgent') {
+    return `项目评估结论：项目分 ${data.overallProjectScore ?? '未明确'}；项目 ${listCount(data.projects)} 个，深度亮点 ${listCount(data.depthHighlights)} 条，疑点 ${listCount(data.concerns)} 条；证据源 ${data.evidenceSource || '未明确'}。`;
+  }
+  if (agent.name === 'RiskAgent') {
+    return `风险评估结论：风险等级 ${data.riskLevel || '未明确'}；风险 ${listCount(data.risks)} 条；${oneLine(data.overallAssessment || '', 180) || '等待人工复核重点。'}`;
+  }
+  if (agent.name === 'EvidenceFusionAgent') {
+    return `证据融合结论：证据链 ${listCount(data.evidenceChain)} 条，关键发现 ${listCount(data.keyFindings)} 条，置信度 ${data.confidence ?? '未明确'}。`;
+  }
+  return oneLine(data, 420);
+}
+
+function extractAssistantContent(round: TraceRoundView): string {
+  const message = round.outputMessage || {};
+  const content = message.content ?? round.finalOutput ?? round.output ?? round.decisionText ?? '';
+  return typeof content === 'string' ? content : JSON.stringify(content);
+}
+
+function summarizeAgentOutput(agent: TraceAgentView, round: TraceRoundView): string {
+  const raw = extractAssistantContent(round);
+  if (!raw && round.hasToolCalls) return '系统正在执行证据收集计划，模型最终判断会在后续轮次展示。';
+  if (round.hasToolCalls && /queries|检索|证据|计划/.test(raw)) {
+    const parsed = safeParseJson(raw);
+    const queryCount = Array.isArray(parsed?.queries) ? parsed.queries.length : undefined;
+    return queryCount ? `大模型已生成证据收集计划：${queryCount} 个检索 query。` : '大模型已生成证据收集计划，系统将按计划执行工具。';
+  }
+  if (agent.name === 'IntentAgent') return summarizeIntentOutput(raw);
+  if (agent.name === 'ResumeParseAgent') return summarizeResumeParseOutput(raw);
+  const parsed = safeParseJson(raw);
+  if (parsed) return summarizeParsedAgentJson(agent, parsed);
+  return raw ? oneLine(raw, 420) : '本轮没有文本结论。';
+}
+
+function summarizeToolInput(tool: TraceToolCallView): string {
+  const raw = tool.input || tool.arguments || '';
+  const parsed = safeParseJson(raw);
+  if (parsed?.resumeText) return `候选人简历文本，约 ${String(parsed.resumeText).length} 字`;
+  if (parsed?.query) return `检索 query：${oneLine(parsed.query, 160)}`;
+  if (parsed?.jdRequirements) return `JD 要求：${oneLine(parsed.jdRequirements, 160)}`;
+  return raw ? oneLine(raw, 180) : '无显式入参';
+}
+
+function summarizeToolResult(tool: TraceToolCallView): string {
+  if (isRetrievalTool(tool)) return buildRetrievalSummary(tool);
+  if (isMcpTool(tool)) return buildMcpSummary(tool);
+  if (isSkillTool(tool)) return buildSkillSummary(tool);
+  const raw = tool.output || tool.result || '';
+  const data = safeParseJson(raw);
+  if (!data) return raw ? oneLine(raw, 240) : '无返回内容';
+  if ('hitCount' in data || 'topScore' in data || 'fallbackUsed' in data) {
+    return buildRetrievalSummary({ ...tool, retrieval: data as TraceRetrievalView });
+  }
+  if ('textLength' in data || 'skillKeywords' in data || 'sections' in data) {
+    return summarizeResumeParseOutput(data);
+  }
+  if (Array.isArray(data.items)) return `返回 ${data.items.length} 条候选结果。`;
+  if (Array.isArray(data.chunks)) return `返回 ${data.chunks.length} 段证据。`;
+  return oneLine(data, 260);
+}
+
+function summarizeToolCall(tool: TraceToolCallView): ToolSummary {
+  return {
+    title: toolDisplayName(tool),
+    purpose: `${toolKindLabel(tool)}：${toolDisplayName(tool)}，用于补充当前 Agent 判断所需证据。`,
+    input: summarizeToolInput(tool),
+    result: summarizeToolResult(tool),
+    status: traceStatusText(tool.status),
+  };
+}
+
+function buildRoundStory(agent: TraceAgentView, round: TraceRoundView): RoundStory {
+  const tools = round.toolCalls || [];
+  const summary = roundToolSummary(round);
+  return {
+    goal: agentPurposeText(agent),
+    judgement: summarizeAgentOutput(agent, round),
+    nextAction: tools.length
+      ? `系统执行证据收集计划：${summary || '已完成工具执行'}。底层 assistant/tool_call 协议已折叠到调试区。`
+      : round.final
+        ? '该节点已经形成最终输出，交给后续汇总或报告展示。'
+        : '当前节点完成分析，进入下一步评估。',
+  };
+}
+
+function roundTitle(round: TraceRoundView): string {
+  const num = round.roundNum || 1;
+  if (round.hasToolCalls) return `第 ${num} 轮：证据计划与工具执行`;
+  if (round.final || round.finalOutput) return `第 ${num} 轮：形成结论`;
+  return `第 ${num} 轮：模型分析`;
+}
+
+function displayRoundTitle(agent: TraceAgentView, round: TraceRoundView): string {
+  if (agent.name === 'ReportAgent' && round.hasToolCalls) return 'Skill 准备证据融合规则';
+  if (agent.name === 'ReportAgent' && (round.final || round.finalOutput || round.output)) return '生成最终报告';
+  return roundTitle(round);
+}
+
+function roundKindText(round: TraceRoundView): string {
+  if (round.hasToolCalls) return 'LLM计划 + 工具执行';
+  if (round.final || round.finalOutput) return 'LLM最终分析';
+  return 'LLM分析';
 }
 
 function subscribeTrace(traceId: string) {
@@ -1012,11 +2113,13 @@ function subscribeTrace(traceId: string) {
   eventSource = new EventSource(`/sse/traces/${traceId}`);
   eventSource.addEventListener('trace', (event) => {
     const step = JSON.parse((event as MessageEvent).data) as TraceEvent;
-    traces.value.push(step);
     updateTaskStageFromTrace(step);
     loadTasks();
     loadMetrics();
     loadGraph(traceId);
+    if (activeTraceId.value === traceId) {
+      loadAgentExecution(traceId);
+    }
   });
 }
 
@@ -1076,11 +2179,20 @@ function startPolling(traceId: string) {
   const poll = async () => {
     await refreshAll();
     await refreshRunningStages();
+    if (activeTraceId.value === traceId) {
+      await loadAgentExecution(traceId);
+    }
     const current = tasks.value.find((t) => t.traceId === traceId);
     if (isTaskActive(current)) {
       pollTimers.set(traceId, window.setTimeout(poll, 2000));
     } else {
       pollTimers.delete(traceId);
+      if (activeTraceId.value === traceId) {
+        await refreshTaskDetail(traceId);
+        loadTraces(traceId);
+        loadAgentExecution(traceId);
+        loadGraph(traceId);
+      }
     }
   };
   pollTimers.set(traceId, window.setTimeout(poll, 2000));
@@ -1411,6 +2523,9 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         <button :class="{ active: appView === 'candidates' || appView === 'detail' }" @click="appView = 'candidates'; clearNotices()">
           <span class="nav-icon">○</span> 候选人
         </button>
+        <button :class="{ active: appView === 'knowledge' }" @click="appView = 'knowledge'; clearNotices(); loadKnowledgeBase()">
+          <span class="nav-icon">▣</span> 知识库
+        </button>
         <button :class="{ active: appView === 'analytics' }" @click="appView = 'analytics'; clearNotices()">
           <span class="nav-icon">◈</span> 招聘洞察
         </button>
@@ -1439,7 +2554,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
           <div class="header-actions">
             <button class="btn btn-ghost" :disabled="refreshing" @click="refreshAll">{{ refreshing ? '刷新中...' : '刷新' }}</button>
-            <button class="btn btn-ghost" @click="showRagDrawer = true">RAG 配置</button>
+            <button class="btn btn-ghost" @click="openRagPanel('knowledge')">知识库 / RAG</button>
             <button class="btn btn-primary" @click="showUploadModal = true">上传简历</button>
           </div>
         </div>
@@ -1655,19 +2770,28 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <option value="duration_asc">耗时从低到高</option>
             </select>
             <span class="text-muted text-sm" style="margin-left:auto">共 {{ candidatePagination.total }} 条</span>
+            <button class="btn btn-ghost btn-sm" @click="toggleBatchSelect">{{ batchSelectMode ? '取消选择' : '批量操作' }}</button>
+          </div>
+
+          <div v-if="batchSelectMode" class="batch-toolbar">
+            <button class="btn btn-ghost btn-sm" @click="selectAllVisible">全选本页</button>
+            <span class="text-muted text-sm">已选 {{ selectedForDelete.size }} 条</span>
+            <button class="btn btn-danger btn-sm" :disabled="!selectedForDelete.size" @click="batchDelete">批量删除</button>
           </div>
 
           <table class="data-table" v-if="candidateListItems.length">
-            <thead><tr><th>文件名</th><th>状态</th><th>岗位</th><th>评分</th><th>推荐</th><th>摘要</th><th>耗时</th></tr></thead>
+            <thead><tr><th v-if="batchSelectMode" style="width:30px"></th><th>文件名</th><th>状态</th><th>岗位</th><th>评分</th><th>推荐</th><th>摘要</th><th>耗时</th><th>操作</th></tr></thead>
             <tbody>
-              <tr v-for="task in pagedCandidates" :key="task.traceId" :class="{ active: task.traceId === activeTraceId, 'row-review': task.status === 'SUCCESS' && !(task.recommendation || '').includes('RECOMMEND') }" @click="selectTask(task)">
+              <tr v-for="task in pagedCandidates" :key="task.traceId" :class="{ active: task.traceId === activeTraceId, 'row-review': task.status === 'SUCCESS' && !isPositiveRecommendation(task.recommendation), 'row-selected': selectedForDelete.has(task.traceId) }" @click="batchSelectMode ? toggleSelectTask(task.traceId) : selectTask(task)">
+                <td v-if="batchSelectMode" @click.stop="toggleSelectTask(task.traceId)"><input type="checkbox" :checked="selectedForDelete.has(task.traceId)" /></td>
                 <td><strong>{{ task.fileName }}</strong><div class="text-muted text-xs" v-if="task.matchedJdTitle">{{ task.matchedJdTitle }}</div><div class="text-muted text-xs" v-if="task.queue?.uploadedBy">HR: {{ task.queue.uploadedBy }}</div></td>
                 <td><span class="badge" :class="taskStatusClass(task)">{{ taskStatusLabel(task) }}</span></td>
                 <td>{{ displayJobCategory(task.jobCategory) }}</td>
                 <td><strong>{{ task.overallScore || '-' }}</strong></td>
-                <td><span class="badge" :class="(task.recommendation || '').includes('RECOMMEND') ? 'badge-success' : 'badge-warning'">{{ recommendationShort(task.recommendation || '') }}</span></td>
+                <td><span class="badge" :class="isPositiveRecommendation(task.recommendation) ? 'badge-success' : task.recommendation === 'NOT_RECOMMEND' ? 'badge-danger' : 'badge-warning'">{{ recommendationShort(task.recommendation || '') }}</span></td>
                 <td class="text-muted text-sm truncate" style="max-width:180px">{{ candidateReviewHint(task) }}</td>
                 <td class="text-muted">{{ formatDuration(task.durationMs) }}</td>
+                <td><button class="btn btn-danger btn-xs" @click.stop="confirmDeleteTask(task.traceId)" title="删除">✕</button></td>
               </tr>
             </tbody>
           </table>
@@ -1692,8 +2816,120 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         </div>
       </section>
 
+      <!-- ========== KNOWLEDGE BASE ========== -->
+      <section v-if="appView === 'knowledge'" class="page-stack">
+        <div class="knowledge-hero">
+          <div>
+            <h1>知识库</h1>
+            <p>上传面试标准、项目核验清单和技术题库。系统会在评估时检索这些标准，用来约束报告、评分解释和面试追问；它们不会被当成候选人事实。</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-ghost" :disabled="knowledgeBaseLoading" @click="loadKnowledgeBase">
+              {{ knowledgeBaseLoading ? '刷新中...' : '刷新状态' }}
+            </button>
+            <button class="btn btn-primary" @click="openRagPanel('knowledge')">RAG 调参</button>
+          </div>
+        </div>
+        <div v-if="knowledgeBaseError" class="trace-health-warning">{{ knowledgeBaseError }}</div>
+
+        <div class="knowledge-flow-card">
+          <div><strong>1. 上传标准</strong><span>PDF/TXT/Markdown/CSV</span></div>
+          <div><strong>2. 切分片段</strong><span>按标题和段落智能切分</span></div>
+          <div><strong>3. 命中标准</strong><span>评估时按岗位/项目/技能检索</span></div>
+          <div><strong>4. 约束评估</strong><span>影响报告评分与面试追问</span></div>
+          <div><strong>5. 随时维护</strong><span>可查看全文与增删标准</span></div>
+        </div>
+
+        <div class="card knowledge-upload-card">
+          <div class="knowledge-head">
+            <div>
+              <h3>自助上传知识文档</h3>
+              <p class="text-muted text-sm">支持 PDF/TXT/Markdown/CSV。建议上传面试 Rubric、项目真实性核验清单、技术题库、岗位评分标准；它们只作为评估标准，不会被当成候选人事实。</p>
+            </div>
+            <span class="badge badge-info">评估标准库</span>
+          </div>
+          <div class="rag-expert-grid mt-sm">
+            <label>标题<input v-model="knowledgeUploadTitle" class="form-input" placeholder="如：Java 后端面试 Rubric" /></label>
+            <label>类型<input v-model="knowledgeUploadType" class="form-input" placeholder="interview_rubric / tech_guide / policy" /></label>
+            <label>标签<input v-model="knowledgeUploadTags" class="form-input" placeholder="java,backend,interview" /></label>
+          </div>
+          <input class="form-input mt-sm" type="file" accept=".pdf,.txt,.md,.csv" @change="uploadKnowledgeDocument" />
+        </div>
+
+        <div v-if="knowledgeBase" class="knowledge-grid">
+          <div class="knowledge-metric"><span>评估标准文档</span><strong>{{ knowledgeBase.selfServiceKnowledgeBase?.documentCount ?? 0 }}</strong><small>已上传可检索</small></div>
+          <div class="knowledge-metric"><span>切分片段</span><strong>{{ knowledgeBase.selfServiceKnowledgeBase?.chunkCount ?? 0 }}</strong><small>用于检索命中</small></div>
+          <div class="knowledge-metric"><span>Embedding</span><strong>{{ knowledgeBase.embeddingOperational ? '可用' : '降级' }}</strong><small>{{ knowledgeBase.embeddingProvider || '-' }}</small></div>
+          <div class="knowledge-metric"><span>当前检索策略</span><strong>{{ currentRagOptions.strategy }}</strong><small>TopK {{ currentRagOptions.topK }} · 阈值 {{ currentRagOptions.scoreThreshold }}</small></div>
+        </div>
+
+        <div class="card">
+          <div class="knowledge-head">
+            <div>
+              <h3>已上传的评估标准（{{ knowledgeDocuments.length }}）</h3>
+              <p class="text-muted text-sm">这些是你上传的面试标准/题库/核验清单，可点击查看全文或删除。评估时系统检索它们来约束评分与追问，不会当成候选人事实。</p>
+            </div>
+          </div>
+          <table v-if="knowledgeDocuments.length" class="kb-doc-table">
+            <thead>
+              <tr><th>标题</th><th>类型</th><th>标签</th><th>片段数</th><th>上传时间</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="doc in knowledgeDocuments" :key="doc.docId">
+                <td>{{ doc.title || doc.docId }}</td>
+                <td><span class="rag-chip readonly">{{ doc.docType || 'general' }}</span></td>
+                <td class="text-muted text-xs">{{ (doc.tags || []).join('、') || '-' }}</td>
+                <td>{{ doc.chunkCount ?? 0 }}</td>
+                <td class="text-muted text-xs">{{ (doc.createdAt || '').slice(0, 16).replace('T', ' ') }}</td>
+                <td class="kb-doc-actions">
+                  <button class="btn btn-ghost btn-sm" @click="viewKnowledgeDocument(doc.docId)">查看全文</button>
+                  <button class="btn btn-danger btn-sm" @click="deleteKnowledgeDocument(doc.docId)">删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="text-muted text-sm">暂无评估标准文档。上传一份面试 Rubric 或技术题库后，评估会自动检索并在 Trace 里显示命中的标准。</p>
+        </div>
+
+        <div v-if="activeKnowledgeDoc" class="modal-overlay" @click.self="closeKnowledgeDocument">
+          <div class="modal-panel kb-doc-modal">
+            <div class="modal-head">
+              <div>
+                <h3>{{ activeKnowledgeDoc.title || activeKnowledgeDoc.docId }}</h3>
+                <span class="text-muted text-xs">{{ activeKnowledgeDoc.docType }} · {{ (activeKnowledgeDoc.tags || []).join('、') }} · {{ activeKnowledgeDoc.chunkCount ?? 0 }} 片段</span>
+              </div>
+              <button class="btn btn-ghost btn-sm" @click="closeKnowledgeDocument">关闭</button>
+            </div>
+            <div v-if="knowledgeDocLoading" class="empty-state"><p>加载中...</p></div>
+            <div v-else class="kb-doc-body">
+              <div class="kb-doc-fulltext" v-html="renderMarkdown(activeKnowledgeDoc.content || '')"></div>
+              <h4 class="mt-sm">切分片段（{{ (activeKnowledgeDoc.chunks || []).length }}）</h4>
+              <ul class="knowledge-list">
+                <li v-for="chunk in (activeKnowledgeDoc.chunks || [])" :key="chunk.chunkId">
+                  <strong>{{ chunk.sectionPath || chunk.chunkId }}</strong>
+                  <p class="text-muted text-xs">{{ truncateText(chunk.content || chunk.contentPreview || '', 240) }}</p>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>RAG 检索策略</h3>
+          <div class="rag-choice-row">
+            <span v-for="strategy in (knowledgeBase?.ragStrategies || [])" :key="strategy" class="rag-chip readonly">{{ strategy }}</span>
+          </div>
+        </div>
+      </section>
+
       <!-- ========== CANDIDATE DETAIL ========== -->
-      <section v-if="appView === 'detail' && activeTask">
+      <section v-if="appView === 'detail' && detailLoading && !activeTask">
+        <div class="empty-state"><p>正在加载任务详情...</p></div>
+      </section>
+      <section v-else-if="appView === 'detail' && detailLoadError && !activeTask">
+        <div class="empty-state"><p>{{ detailLoadError }}</p></div>
+      </section>
+      <section v-else-if="appView === 'detail' && activeTask">
         <button class="back-link" @click="goBack">← 返回列表</button>
 
         <div class="detail-header">
@@ -1711,6 +2947,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
           <div class="detail-actions">
             <span class="badge" :class="taskStatusClass(activeTask)">{{ taskStatusLabel(activeTask) }}</span>
+            <button class="btn btn-danger btn-sm" @click="confirmDeleteTask(activeTask.traceId)" title="删除该评估">🗑 删除</button>
           </div>
         </div>
 
@@ -1724,6 +2961,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
         <!-- Resume Tab -->
         <div v-if="detailTab === 'resume'">
+          <div class="trace-explain-banner">{{ resumeSourceHint }}</div>
           <div class="resume-view-toggle" v-if="activeTask.resumeFileUrl">
             <button :class="{ active: resumeViewMode === 'pdf' }" @click="resumeViewMode = 'pdf'">PDF 原件</button>
             <button :class="{ active: resumeViewMode === 'text' }" @click="resumeViewMode = 'text'">文本抽取</button>
@@ -1751,13 +2989,13 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               </div>
             </div>
           </div>
-          <div class="empty-state" v-else><p>简历原文将在解析后展示。PDF 上传后会保留原件预览，文本抽取用于核对解析质量。</p></div>
+          <div class="trace-health-warning" v-else><p>{{ resumeSourceHint }}</p></div>
         </div>
 
         <!-- Report Tab -->
         <div v-if="detailTab === 'report'" class="report-content">
           <div v-if="activeRagFallback" class="notice warning rag-report-hint">{{ activeRagFallback }}</div>
-          <div class="hr-decision-card" :class="recommendationLabel.includes('强烈推荐') ? 'strong' : recommendationLabel.includes('推荐') ? 'recommend' : 'review'">
+          <div class="hr-decision-card" :class="activeTask.recommendation === 'STRONG_RECOMMEND' ? 'strong' : activeTask.recommendation === 'RECOMMEND' ? 'recommend' : 'review'">
             <div class="hr-decision-header">
               <span class="hr-decision-badge">{{ recommendationLabel }}</span>
               <span class="hr-decision-score" v-if="activeTask.overallScore">综合评分 {{ activeTask.overallScore }}</span>
@@ -1768,7 +3006,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <span>系统决策：{{ recommendationLabel }}</span>
               <span v-if="activeTask.decisionRationale">降级原因：{{ stripMarkdown(activeTask.decisionRationale) }}</span>
             </div>
-            <p class="hr-decision-summary">{{ stripMarkdown(activeTask.riskSummary || activeTask.summary?.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 180) || '评估报告生成中...') }}</p>
+            <p class="hr-decision-summary">{{ displayReport.summaryLine }}</p>
             <p class="text-muted text-sm mt-sm">注：综合评分代表候选人整体技术素质，JD 匹配度代表与当前具体岗位的贴合程度。</p>
           </div>
 
@@ -1793,42 +3031,156 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             </div>
           </div>
           <div class="hr-evidence-grid">
-            <div class="hr-evidence-card" v-if="activeTask.strengths?.length">
-              <h3>关键优势</h3>
-              <ul><li v-for="s in listPreview('report-strengths', activeTask.strengths)" :key="s">{{ stripMarkdown(s) }}</li></ul>
-              <button v-if="listHasMore(activeTask.strengths)" class="btn btn-ghost btn-sm show-more-btn" @click="toggleList('report-strengths')">
-                {{ expandedListKeys['report-strengths'] ? '收起' : `展开全部 (${activeTask.strengths.length})` }}
+            <div class="hr-evidence-card" v-if="richReportSections.strengths.length">
+              <h3>候选人亮点</h3>
+              <ul><li v-for="s in listPreview('report-strengths', richReportSections.strengths)" :key="s">{{ stripMarkdown(s) }}</li></ul>
+              <button v-if="listHasMore(richReportSections.strengths)" class="btn btn-ghost btn-sm show-more-btn" @click="toggleList('report-strengths')">
+                {{ expandedListKeys['report-strengths'] ? '收起' : `展开全部 (${richReportSections.strengths.length})` }}
               </button>
             </div>
-            <div class="hr-evidence-card risk" v-if="activeTask.risks?.length">
-              <h3>关键风险</h3>
-              <ul><li v-for="r in listPreview('report-risks', activeTask.risks)" :key="r">{{ stripMarkdown(r) }}</li></ul>
-              <button v-if="listHasMore(activeTask.risks)" class="btn btn-ghost btn-sm show-more-btn" @click="toggleList('report-risks')">
-                {{ expandedListKeys['report-risks'] ? '收起' : `展开全部 (${activeTask.risks.length})` }}
+            <div class="hr-evidence-card risk" v-if="richReportSections.risks.length">
+              <h3>需验证风险</h3>
+              <ul><li v-for="r in listPreview('report-risks', richReportSections.risks)" :key="r">{{ stripMarkdown(r) }}</li></ul>
+              <button v-if="listHasMore(richReportSections.risks)" class="btn btn-ghost btn-sm show-more-btn" @click="toggleList('report-risks')">
+                {{ expandedListKeys['report-risks'] ? '收起' : `展开全部 (${richReportSections.risks.length})` }}
               </button>
             </div>
-            <div class="hr-evidence-card" v-if="activeTask.interviewQuestions?.length">
-              <h3>面试追问</h3>
-              <ol><li v-for="q in listPreview('report-interview', activeTask.interviewQuestions)" :key="q">{{ stripMarkdown(q) }}</li></ol>
-              <button v-if="listHasMore(activeTask.interviewQuestions)" class="btn btn-ghost btn-sm show-more-btn" @click="toggleList('report-interview')">
-                {{ expandedListKeys['report-interview'] ? '收起' : `展开全部 (${activeTask.interviewQuestions.length})` }}
+            <div class="hr-evidence-card" v-if="richReportSections.questions.length">
+              <h3>面试追问清单</h3>
+              <div v-if="richReportSections.questions.length < 5" class="trace-health-warning">追问不足 5 条，需要检查 ReportAgent 是否覆盖具体项目、技术栈和 JD 缺口。</div>
+              <ol><li v-for="q in listPreview('report-interview', richReportSections.questions)" :key="q" class="interview-question-item">{{ stripMarkdown(q) }}</li></ol>
+              <button v-if="listHasMore(richReportSections.questions)" class="btn btn-ghost btn-sm show-more-btn" @click="toggleList('report-interview')">
+                {{ expandedListKeys['report-interview'] ? '收起' : `展开全部 (${richReportSections.questions.length})` }}
               </button>
             </div>
           </div>
-          <details class="report-raw-md" v-if="activeTask.summary">
-            <summary>查看完整 AI 评估原文</summary>
-            <div v-html="renderMarkdown(activeTask.summary)"></div>
-          </details>
-          <div class="empty-state" v-if="!activeTask.summary && !activeTask.strengths?.length"><p>报告生成中...</p></div>
+          <div class="report-raw-md" v-if="displayReport.fullText">
+            <h3>完整 AI 评估报告</h3>
+            <div v-html="renderMarkdown(displayReport.fullText)"></div>
+          </div>
+          <div class="trace-health-warning" v-else-if="displayReport.missing">
+            <p>报告缺失：后端任务 summary 与 ReportAgent 最终输出都为空，需要检查 workflow result 回传。</p>
+          </div>
+          <div class="empty-state" v-else-if="!richReportSections.strengths.length"><p>报告生成中...</p></div>
         </div>
 
         <!-- Trace Tab → Agent Execution Tree + Langfuse -->
         <div v-if="detailTab === 'trace'" class="trace-link-panel">
+          <div class="trace-explain-banner">
+            这不是聊天记录，而是 AI 工作流审计链路。每一轮先展示业务含义；底层 assistant / tool-call 协议只在调试区展开。
+          </div>
+          <div class="card agent-harness-card">
+            <div class="harness-head">
+              <div>
+                <h3>动态路由决策</h3>
+                <p class="text-muted text-sm">根据简历信号、知识库命中和策略记忆，决定本次启用哪些评估 Agent。</p>
+              </div>
+              <span v-if="harnessPlanView?.route?.routeMode" class="badge badge-success">{{ harnessPlanView.route.routeMode }}</span>
+              <span v-else-if="harnessPlanView?.route" class="badge badge-success">已命中路由</span>
+              <span v-else class="badge badge-warning">等待路由数据</span>
+            </div>
+            <div v-if="harnessPlanView?.route" class="harness-grid">
+              <div class="harness-metric wide">
+                <span>启用 Agent</span>
+                <strong>{{ (harnessPlanView.route.selectedAgents || harnessPlanView.route.enabledAgents || []).map(harnessAgentLabel).join('、') || '-' }}</strong>
+              </div>
+              <div class="harness-metric">
+                <span>Memory 命中</span>
+                <strong>{{ harnessPlanView.route.memoryHitCount ?? harnessPlanView.memoryInfluence?.hitCount ?? 0 }}</strong>
+              </div>
+              <div class="harness-metric">
+                <span>知识库命中</span>
+                <strong>{{ harnessPlanView.route.knowledgeHitCount ?? harnessPlanView.knowledgeInfluence?.hitCount ?? 0 }}</strong>
+              </div>
+              <div class="harness-metric" v-if="harnessPlanView.route.estimatedLlmCalls != null">
+                <span>本次 LLM 调用</span>
+                <strong>{{ harnessPlanView.route.estimatedLlmCalls }} / {{ harnessPlanView.route.fullPipelineLlmCalls ?? 7 }}</strong>
+                <small>动态路由省下 {{ harnessPlanView.route.llmCallsSavedVsFull ?? 0 }} 次</small>
+              </div>
+            </div>
+            <div v-if="asList(harnessPlanView?.route?.whySelected).length" class="harness-section">
+              <h4>启用原因</h4>
+              <div class="rag-choice-row">
+                <span v-for="item in asList(harnessPlanView.route.whySelected)" :key="String(item)" class="rag-chip readonly">{{ item }}</span>
+              </div>
+            </div>
+            <div v-if="harnessPlanView?.route?.skippedAgents && Object.keys(harnessPlanView.route.skippedAgents).length" class="harness-section">
+              <h4>跳过的 Agent</h4>
+              <div class="rag-choice-row">
+                <span v-for="(reason, agent) in harnessPlanView.route.skippedAgents" :key="agent" class="rag-chip readonly">
+                  {{ harnessAgentLabel(agent) }}：{{ reason }}
+                </span>
+              </div>
+            </div>
+            <div v-if="asList(harnessPlanView?.route?.whySkipped).length" class="harness-section">
+              <h4>跳过说明</h4>
+              <div class="rag-choice-row">
+                <span v-for="item in asList(harnessPlanView.route.whySkipped)" :key="String(item)" class="rag-chip readonly">{{ item }}</span>
+              </div>
+            </div>
+            <div v-if="harnessPlanView?.route?.noPruningReason" class="harness-section">
+              <h4>未裁剪原因</h4>
+              <p class="text-muted text-sm">{{ harnessPlanView.route.noPruningReason }}</p>
+            </div>
+            <div v-if="harnessPlanView?.memoryInfluence?.calibration?.available" class="harness-section">
+              <h4>Memory 评分校准（episodic 检索）</h4>
+              <div class="route-decision-card">
+                <strong>相似历史候选人 {{ harnessPlanView.memoryInfluence.calibration.sampleSize }} 例 · 均分 {{ harnessPlanView.memoryInfluence.calibration.avgScore }}（区间 {{ (harnessPlanView.memoryInfluence.calibration.scoreRange || []).join('–') }}）</strong>
+                <span>推荐分布：{{ Object.entries(harnessPlanView.memoryInfluence.calibration.recommendationDistribution || {}).map(([k,v]) => k + ':' + v).join('  ') }}</span>
+                <p class="text-muted text-xs">用历史评估校准本次评分一致性，仅作参考、非候选人事实。</p>
+              </div>
+            </div>
+            <div v-if="harnessPlanView?.memoryInfluence?.influences?.length" class="harness-section">
+              <h4>历史相似评估（校准参考）</h4>
+              <p class="text-muted text-xs">命中 {{ harnessPlanView.memoryInfluence.hitCount ?? 0 }} 条历史评估，仅用于评分校准与追问方向参考，不作为候选人事实。</p>
+              <div class="knowledge-list">
+                <li v-for="item in asList(harnessPlanView.memoryInfluence.influences).slice(0, 4)" :key="String(item.memoryId || item.traceId || item.content)">
+                  <strong>{{ memoryTypeLabel(item.type) }} · 用于{{ memoryAppliesLabel(item.appliesTo) }}</strong>
+                  <span>{{ item.matchReason || '按技能/岗位相似度命中' }}</span>
+                  <p class="text-muted text-xs">{{ truncateText(item.recommendedAction || item.content || '', 180) }}</p>
+                </li>
+              </div>
+            </div>
+            <div v-if="harnessPlanView?.knowledgeInfluence" class="harness-section">
+              <h4>知识库命中</h4>
+              <div class="knowledge-list" v-if="asList(harnessPlanView.knowledgeInfluence.chunks).length">
+                <li v-for="chunk in asList(harnessPlanView.knowledgeInfluence.chunks).slice(0, 4)" :key="String(chunk.chunkId || chunk.title)">
+                  <strong>{{ chunk.title || '知识片段' }} · score {{ chunk.score ?? '-' }}</strong>
+                  <span>{{ chunk.docType || '-' }} · {{ chunk.rerankReason || chunk.sectionPath || '-' }}</span>
+                  <p class="text-muted text-xs">{{ truncateText(chunk.contentPreview || '', 180) }}</p>
+                </li>
+              </div>
+              <p v-else class="text-muted text-sm">未命中知识库，因此未注入评估标准。</p>
+            </div>
+            <div v-if="harnessPlanView?.contextManagement" class="harness-section">
+              <h4>上下文管理（context engineering）</h4>
+              <p class="text-muted text-xs">
+                策略 {{ (harnessPlanView.contextManagement.strategy || []).join(' / ') }} ·
+                窗口预算 {{ harnessPlanView.contextManagement.windowBudgetTokens }} tokens ·
+                {{ harnessPlanView.contextManagement.isolation }}
+              </p>
+              <table class="kb-doc-table">
+                <thead><tr><th>上下文分段</th><th>预算(tokens)</th><th>策略</th></tr></thead>
+                <tbody>
+                  <tr v-for="seg in asList(harnessPlanView.contextManagement.segments)" :key="seg.segment">
+                    <td>{{ seg.segment }}</td>
+                    <td>{{ seg.budgetTokens }}</td>
+                    <td class="text-muted text-xs">{{ seg.policy }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="harness-section">
+              <h4>报告生成模式</h4>
+              <span class="rag-chip readonly">{{ harnessPlanView?.reportMode || 'unknown' }}</span>
+            </div>
+            <p v-if="!harnessPlanView" class="text-muted text-sm">当前 Trace 里还没有解析到路由决策。</p>
+          </div>
           <!-- Agent Execution Tree -->
           <div class="card" style="padding:var(--space-xl);margin-bottom:var(--space-lg)">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-lg)">
               <h3 style="margin:0">Multi-Agent 执行链路</h3>
-              <span class="badge badge-info">8-Agent DAG · AiServices + MCP + Skills</span>
+              <span class="badge badge-info">{{ agentExecutionTree.framework || 'LangGraph + DeepSeek + Embedding RAG' }}</span>
             </div>
             <div v-if="agentExecutionTree && agentExecutionTree.executionTree && agentExecutionTree.executionTree.length" class="agent-tree">
               <!-- Phase Groups -->
@@ -1842,51 +3194,113 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                 </div>
                 <div v-if="expandedPhases.has(pidx)" class="phase-children">
                   <!-- Agent Nodes -->
-                  <div v-for="(agent, aidx) in phase.agents" :key="aidx" class="agent-tree-node">
+                  <div v-for="(agent, aidx) in phase.agents" :key="agent.nodeId || agent.name || aidx" class="agent-tree-node">
                     <div class="agent-tree-header" @click="toggleAgentNode(pidx * 100 + aidx)">
                       <span class="agent-arrow">{{ expandedAgentNodes.has(pidx * 100 + aidx) ? '▼' : '▶' }}</span>
-                      <span class="agent-icon">{{ getAgentIcon(agent.name) }}</span>
-                      <span class="agent-name">{{ agent.name }}</span>
-                      <span class="agent-role">{{ agent.role }}</span>
-                      <span :class="['badge', agent.status === 'SUCCESS' ? 'badge-success' : agent.status === 'RUNNING' ? 'badge-warning' : 'badge-danger']">{{ agent.status }}</span>
+                      <span class="agent-icon">{{ getAgentIcon(agent.name || '') }}</span>
+                      <span class="agent-name">{{ agentDisplayName(agent.name) }}</span>
+                      <span class="agent-role agent-purpose">{{ agentPurposeText(agent) }}</span>
+                      <span class="round-tokens">{{ agentExecutionProfile(agent) }}</span>
+                      <span :class="['badge', agent.status === 'SUCCESS' ? 'badge-success' : agent.status === 'RUNNING' ? 'badge-warning' : 'badge-danger']">{{ traceStatusText(agent.status) }}</span>
                       <span v-if="agent.durationMs" class="agent-duration">{{ agent.durationMs }}ms</span>
                     </div>
                     <div v-if="expandedAgentNodes.has(pidx * 100 + aidx)" class="agent-tree-children">
                       <!-- Rounds -->
-                      <div v-for="(round, ridx) in (agent.rounds || [])" :key="ridx" class="round-node">
-                        <div class="round-header" @click="toggleRound(`${pidx}-${aidx}-${ridx}`)">
-                          <span class="round-arrow">{{ expandedRounds.has(`${pidx}-${aidx}-${ridx}`) ? '▼' : '▶' }}</span>
-                          <span class="round-label">Round {{ (ridx as number) + 1 }}</span>
-                          <span class="round-type" v-if="round.type">{{ round.type }}</span>
+                      <div v-for="(round, ridx) in (agent.rounds || [])" :key="round.eventId || round.id || `${agent.name}-${round.roundNum}-${ridx}`" class="round-node">
+                        <div class="round-header" @click="toggleRound(`${pidx}-${aidx}-${round.roundNum || ridx}`)">
+                          <span class="round-arrow">{{ expandedRounds.has(`${pidx}-${aidx}-${round.roundNum || ridx}`) ? '▼' : '▶' }}</span>
+                          <span class="round-label">{{ displayRoundTitle(agent, round) }}</span>
+                          <span class="round-type-badge round-type-gen">{{ roundKindText(round) }}</span>
+                          <span v-if="round.hasToolCalls" class="round-tokens">{{ roundToolSummary(round) }}</span>
                           <span v-if="round.tokens" class="round-tokens">{{ round.tokens }} tokens</span>
                         </div>
-                        <div v-if="expandedRounds.has(`${pidx}-${aidx}-${ridx}`)" class="round-detail">
-                          <div v-if="round.input" class="trace-io-block">
-                            <div class="trace-io-label">LLM 输入</div>
-                            <pre class="trace-io-content">{{ truncateText(round.input, 600) }}</pre>
-                          </div>
-                          <div v-if="round.output" class="trace-io-block">
-                            <div class="trace-io-label">LLM 输出</div>
-                            <pre class="trace-io-content">{{ truncateText(round.output, 600) }}</pre>
-                          </div>
-                          <!-- Tool/MCP/Skill Calls -->
-                          <div v-if="round.toolCalls && round.toolCalls.length" class="tool-calls-section">
-                            <div v-for="(tool, tidx) in round.toolCalls" :key="tidx" class="tool-call-item">
-                              <div class="tool-call-header">
-                                <span :class="['tool-type-badge', `tool-type-${tool.category || 'tool'}`]">{{ tool.category || 'Tool' }}</span>
-                                <span class="tool-name">{{ tool.name }}</span>
-                                <span v-if="tool.durationMs" class="tool-duration">{{ tool.durationMs }}ms</span>
-                              </div>
-                              <div v-if="tool.input" class="tool-io">
-                                <span class="tool-io-label">入参：</span>
-                                <code>{{ truncateText(tool.input, 300) }}</code>
-                              </div>
-                              <div v-if="tool.output" class="tool-io">
-                                <span class="tool-io-label">返回：</span>
-                                <code>{{ truncateText(tool.output, 300) }}</code>
-                              </div>
+                        <div v-if="expandedRounds.has(`${pidx}-${aidx}-${round.roundNum || ridx}`)" class="round-detail">
+                          <div class="trace-story-card">
+                            <div class="story-section">
+                              <strong>本轮目标</strong>
+                              <p>{{ buildRoundStory(agent, round).goal }}</p>
+                            </div>
+                            <div class="story-section">
+                              <strong>模型判断</strong>
+                              <p>{{ buildRoundStory(agent, round).judgement }}</p>
+                            </div>
+                            <div class="story-section">
+                              <strong>下一步动作</strong>
+                              <p>{{ buildRoundStory(agent, round).nextAction }}</p>
                             </div>
                           </div>
+
+                          <details class="raw-debug-details" v-if="round.inputMessages?.length || (round.outputMessage && Object.keys(round.outputMessage).length)">
+                            <summary>查看底层消息协议（调试用）</summary>
+                            <pre class="trace-io-content" v-if="round.inputMessages?.length">{{ truncateText(renderMessages(round.inputMessages as any), 2000) }}</pre>
+                            <pre class="trace-io-content" v-if="round.outputMessage && Object.keys(round.outputMessage).length">{{ truncateText(renderMessages([round.outputMessage] as any), 1200) }}</pre>
+                          </details>
+
+                          <div v-else-if="round.input" class="trace-io-block">
+                            <div class="trace-io-label">输入上下文</div>
+                            <pre class="trace-io-content">{{ truncateText(round.input, 800) }}</pre>
+                          </div>
+                          <!-- Evidence / Tool Calls -->
+                          <div v-if="round.toolCalls && round.toolCalls.length" class="tool-calls-section">
+                            <template v-for="group in [
+                              { key: 'embedding_rag', title: 'Embedding RAG 检索' },
+                              { key: 'mcp', title: 'MCP 协议调用' },
+                              { key: 'external', title: '外部画像补充' },
+                              { key: 'skill', title: 'Skill 能力' },
+                              { key: 'plain', title: '普通工具调用' },
+                            ]" :key="group.key">
+                              <div v-if="toolsByGroup(round)[group.key as TraceToolGroup].length" class="tool-group-block">
+                                <div class="tool-calls-title">
+                                  {{ group.title }} ({{ toolsByGroup(round)[group.key as TraceToolGroup].length }})
+                                </div>
+                                <div
+                                  v-for="tool in toolsByGroup(round)[group.key as TraceToolGroup]"
+                                  :key="toolDedupKey(tool)"
+                                  class="tool-call-item"
+                                >
+                                  <div class="tool-call-header" @click="toggleToolDetail(`${pidx}-${aidx}-${round.roundNum || ridx}-${toolDedupKey(tool)}`)">
+                                    <span class="tool-expand-arrow">
+                                      {{ expandedToolDetails.has(`${pidx}-${aidx}-${round.roundNum || ridx}-${toolDedupKey(tool)}`) ? '▼' : '▶' }}
+                                    </span>
+                                    <span :class="['tool-type-badge', `tool-type-${toolGroup(tool)}`]">{{ toolKindLabel(tool) }}</span>
+                                    <span class="tool-name">{{ toolDisplayName(tool) }}</span>
+                                    <span v-if="tool.dedupedCount" class="tool-duration">合并 {{ tool.dedupedCount }} 次重复</span>
+                                    <span v-if="tool.status" class="tool-duration">{{ traceStatusText(tool.status) }}</span>
+                                    <span v-if="tool.durationMs" class="tool-duration">{{ tool.durationMs }}ms</span>
+                                  </div>
+                                  <div v-if="expandedToolDetails.has(`${pidx}-${aidx}-${round.roundNum || ridx}-${toolDedupKey(tool)}`)" class="tool-detail-body">
+                                    <div class="tool-summary-grid">
+                                      <div><span>调用目的</span><strong>{{ summarizeToolCall(tool).purpose }}</strong></div>
+                                      <div><span>输入摘要</span><strong>{{ summarizeToolCall(tool).input }}</strong></div>
+                                      <div><span>返回摘要</span><strong>{{ summarizeToolCall(tool).result }}</strong></div>
+                                      <div><span>状态</span><strong>{{ summarizeToolCall(tool).status }}</strong></div>
+                                    </div>
+                                    <div v-if="tool.substeps?.length" class="tool-substeps">
+                                      <div v-for="(step, sidx) in tool.substeps" :key="sidx" class="text-muted text-xs">
+                                        {{ step.summary || step.name }}
+                                      </div>
+                                    </div>
+                                    <details class="raw-debug-details" v-if="tool.input || tool.output">
+                                      <summary>底层协议入参与返回（调试）</summary>
+                                      <pre class="trace-io-content" v-if="tool.input">{{ truncateText(tool.input, 1000) }}</pre>
+                                      <pre class="trace-io-content" v-if="tool.output">{{ truncateText(tool.output, 1600) }}</pre>
+                                    </details>
+                                  </div>
+                                </div>
+                              </div>
+                            </template>
+                            <details v-if="toolsByGroup(round).debug.length" class="raw-debug-details">
+                              <summary>被压缩/跳过的底层 tool_calls（{{ toolsByGroup(round).debug.length }}）</summary>
+                              <pre class="trace-io-content">{{ truncateText(JSON.stringify(toolsByGroup(round).debug, null, 2), 2000) }}</pre>
+                            </details>
+                          </div>
+                          <details v-if="round.orphanToolCalls?.length" class="raw-debug-details warning">
+                            <summary>Trace 完整性警告：未挂载工具事件（{{ round.orphanToolCalls.length }}）</summary>
+                            <pre class="trace-io-content">{{ truncateText(JSON.stringify(round.orphanToolCalls, null, 2), 2000) }}</pre>
+                          </details>
+                          <details v-if="round.type === 'trace_integrity_warning'" class="raw-debug-details warning">
+                            <summary>Trace 完整性警告：{{ round.message || 'orphan tool events' }}（{{ round.orphanToolCount || 0 }}）</summary>
+                          </details>
                         </div>
                       </div>
                       <!-- Fallback: show output if no rounds -->
@@ -1908,8 +3322,13 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
           <!-- Langfuse External Link -->
           <div class="card" style="padding:var(--space-lg);text-align:center">
-            <p style="margin-bottom:var(--space-md);color:var(--text-secondary);font-size:0.9rem">深度调试：在 Langfuse 中查看完整的 OTel Trace 数据（含每轮 LLM 调用 + Tool/MCP/Skill）</p>
-            <a :href="langfuseTraceUrl" target="_blank" class="langfuse-link">在 Langfuse 中查看 Trace →</a>
+            <p style="margin-bottom:var(--space-md);color:var(--text-secondary);font-size:0.9rem">
+              深度调试入口：用于查看完整底层 trace。日常看上面的中文链路即可。
+            </p>
+            <a v-if="langfuseTraceUrl" :href="langfuseTraceUrl" target="_blank" class="langfuse-link">打开 Langfuse Trace</a>
+            <div v-else class="trace-health-warning">
+              Langfuse 外链暂不可用：请检查 langfuse 容器、LANGFUSE_PUBLIC_URL 和 workflow 到 langfuse-web 的内部连通性。
+            </div>
           </div>
         </div>
 
@@ -2253,11 +3672,66 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             <button class="btn btn-ghost btn-sm" @click="showRagDrawer = false">关闭</button>
           </header>
           <div class="rag-drawer-tabs">
+            <button :class="{ active: ragDrawerTab === 'knowledge' }" @click="openRagPanel('knowledge')">知识库</button>
             <button :class="{ active: ragDrawerTab === 'business' }" @click="ragDrawerTab = 'business'">业务模式</button>
             <button :class="{ active: ragDrawerTab === 'compare' }" @click="ragDrawerTab = 'compare'">对比试试不同方案</button>
             <button :class="{ active: ragDrawerTab === 'expert' }" @click="ragDrawerTab = 'expert'">⚙ 专家模式</button>
           </div>
           <div class="rag-drawer-body">
+            <template v-if="ragDrawerTab === 'knowledge'">
+              <div class="knowledge-head">
+                <div>
+                  <h3>RAG 知识库</h3>
+                  <p class="text-muted text-sm">岗位 JD、候选人简历、PDF 解析任务与检索策略的当前状态。</p>
+                </div>
+                <button class="btn btn-ghost btn-sm" :disabled="knowledgeBaseLoading" @click="loadKnowledgeBase">
+                  {{ knowledgeBaseLoading ? '刷新中...' : '刷新' }}
+                </button>
+              </div>
+              <div v-if="knowledgeBaseError" class="trace-health-warning">{{ knowledgeBaseError }}</div>
+              <div class="knowledge-section">
+                <h4>自助上传知识文档</h4>
+                <p class="text-muted text-sm">可上传面试评分标准、技术题库、岗位 Rubric、项目真实性核验规则、团队招聘偏好等文档，进入 RAG 知识库后会参与 Agent 检索。</p>
+                <div class="rag-expert-grid">
+                  <label>标题<input v-model="knowledgeUploadTitle" class="form-input" placeholder="如：Java 后端面试 Rubric" /></label>
+                  <label>类型<input v-model="knowledgeUploadType" class="form-input" placeholder="interview_rubric / tech_guide / policy" /></label>
+                  <label>标签<input v-model="knowledgeUploadTags" class="form-input" placeholder="java,backend,interview" /></label>
+                </div>
+                <input class="form-input" type="file" accept=".pdf,.txt,.md,.csv" @change="uploadKnowledgeDocument" />
+              </div>
+              <div v-if="knowledgeBase" class="knowledge-grid">
+                <div class="knowledge-metric"><span>岗位 JD 文档</span><strong>{{ knowledgeBase.jdCount ?? 0 }}</strong></div>
+                <div class="knowledge-metric"><span>自助知识文档</span><strong>{{ knowledgeBase.selfServiceKnowledgeBase?.documentCount ?? 0 }}</strong><small>{{ knowledgeBase.selfServiceKnowledgeBase?.chunkCount ?? 0 }} chunks</small></div>
+                <div class="knowledge-metric"><span>Embedding</span><strong>{{ knowledgeBase.embeddingOperational ? '可用' : '降级' }}</strong><small>{{ knowledgeBase.embeddingProvider || '-' }}</small></div>
+                <div class="knowledge-metric"><span>当前策略</span><strong>{{ currentRagOptions.strategy }}</strong><small>TopK {{ currentRagOptions.topK }} · 阈值 {{ currentRagOptions.scoreThreshold }}</small></div>
+                <div class="knowledge-metric"><span>重排序</span><strong>{{ currentRagOptions.rerankerEnabled ? '开启' : '关闭' }}</strong><small>{{ currentRagOptions.presetName || 'custom' }}</small></div>
+              </div>
+              <div v-if="knowledgeBase" class="knowledge-section">
+                <h4>检索策略</h4>
+                <div class="rag-choice-row">
+                  <span v-for="strategy in (knowledgeBase.ragStrategies || [])" :key="strategy" class="rag-chip readonly">{{ strategy }}</span>
+                </div>
+              </div>
+              <div v-if="knowledgeBase?.selfServiceKnowledgeBase" class="knowledge-section">
+                <h4>自助知识文档样本 Chunk</h4>
+                <ul class="knowledge-list">
+                  <li v-for="chunk in (knowledgeBase.selfServiceKnowledgeBase.sampleChunks || []).slice(0, 6)" :key="chunk.chunkId">
+                    <strong>{{ chunk.title || chunk.docId }}</strong>
+                    <span>{{ chunk.docType }} · {{ chunk.sectionPath }}</span>
+                    <p class="text-muted text-xs">{{ truncateText(chunk.content || '', 180) }}</p>
+                  </li>
+                </ul>
+              </div>
+              <div v-if="knowledgeBase" class="knowledge-section">
+                <h4>最近入库 JD</h4>
+                <ul class="knowledge-list">
+                  <li v-for="jd in (knowledgeBase.recentJds || [])" :key="jd.jdId || jd.title">
+                    <strong>{{ jd.title || '未命名 JD' }}</strong>
+                    <span>{{ jd.category || '-' }} · v{{ jd.version ?? '-' }}</span>
+                  </li>
+                </ul>
+              </div>
+            </template>
             <template v-if="ragDrawerTab === 'business'">
               <div class="rag-preset-grid">
                 <button

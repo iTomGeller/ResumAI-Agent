@@ -1,0 +1,1938 @@
+[
+  {
+    "id": "senior_backend_001",
+    "name": "高颖",
+    "role": "资深后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_backend_001.pdf",
+    "hasGithub": true,
+    "textLength": 2059,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_002",
+    "name": "王明",
+    "role": "资深后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_backend_002.pdf",
+    "hasGithub": true,
+    "textLength": 2208,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_003",
+    "name": "郑明",
+    "role": "资深后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/senior_backend_003.txt",
+    "hasGithub": true,
+    "textLength": 2363,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_004",
+    "name": "冯婷",
+    "role": "资深后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_backend_004.pdf",
+    "hasGithub": true,
+    "textLength": 2320,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_005",
+    "name": "郑涛",
+    "role": "资深后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/senior_backend_005.txt",
+    "hasGithub": true,
+    "textLength": 2209,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_006",
+    "name": "陈文博",
+    "role": "资深后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/senior_backend_006.txt",
+    "hasGithub": true,
+    "textLength": 2150,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_007",
+    "name": "周伟",
+    "role": "资深后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_backend_007.pdf",
+    "hasGithub": true,
+    "textLength": 2210,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_008",
+    "name": "徐颖",
+    "role": "资深后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/senior_backend_008.txt",
+    "hasGithub": true,
+    "textLength": 2214,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_009",
+    "name": "孙丽",
+    "role": "资深后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_backend_009.pdf",
+    "hasGithub": true,
+    "textLength": 2216,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_010",
+    "name": "徐雪",
+    "role": "资深后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/senior_backend_010.txt",
+    "hasGithub": true,
+    "textLength": 2064,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_011",
+    "name": "黄宇航",
+    "role": "资深后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/senior_backend_011.txt",
+    "hasGithub": false,
+    "textLength": 2006,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "senior_backend_012",
+    "name": "韩欣怡",
+    "role": "资深后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_backend_012.pdf",
+    "hasGithub": true,
+    "textLength": 2094,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Kafka",
+      "Microservices",
+      "High Concurrency",
+      "Observability",
+      "SQL Optimization",
+      "JVM"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_013",
+    "name": "刘文博",
+    "role": "AI Agent 后端工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/ai_agent_engineer_013.txt",
+    "hasGithub": false,
+    "textLength": 2159,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_014",
+    "name": "董颖",
+    "role": "AI Agent 后端工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/ai_agent_engineer_014.txt",
+    "hasGithub": true,
+    "textLength": 2149,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_015",
+    "name": "高磊",
+    "role": "AI Agent 后端工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/ai_agent_engineer_015.txt",
+    "hasGithub": true,
+    "textLength": 2254,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_016",
+    "name": "谢婷",
+    "role": "AI Agent 后端工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/ai_agent_engineer_016.pdf",
+    "hasGithub": true,
+    "textLength": 2225,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_017",
+    "name": "杨一鸣",
+    "role": "AI Agent 后端工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/ai_agent_engineer_017.pdf",
+    "hasGithub": true,
+    "textLength": 2186,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_018",
+    "name": "宋子轩",
+    "role": "AI Agent 后端工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/ai_agent_engineer_018.txt",
+    "hasGithub": false,
+    "textLength": 2073,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_019",
+    "name": "谢思琪",
+    "role": "AI Agent 后端工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/ai_agent_engineer_019.txt",
+    "hasGithub": true,
+    "textLength": 2111,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_020",
+    "name": "杨静",
+    "role": "AI Agent 后端工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/ai_agent_engineer_020.pdf",
+    "hasGithub": true,
+    "textLength": 2247,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_021",
+    "name": "马嘉豪",
+    "role": "AI Agent 后端工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/ai_agent_engineer_021.pdf",
+    "hasGithub": true,
+    "textLength": 2091,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "ai_agent_engineer_022",
+    "name": "梁婷",
+    "role": "AI Agent 后端工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/ai_agent_engineer_022.pdf",
+    "hasGithub": false,
+    "textLength": 2216,
+    "expectedSkills": [
+      "LLM",
+      "RAG",
+      "LangGraph",
+      "MCP",
+      "Milvus",
+      "Agent",
+      "Python",
+      "Spring AI",
+      "Tool Orchestration",
+      "Observability"
+    ]
+  },
+  {
+    "id": "llm_rag_engineer_023",
+    "name": "董雨欣",
+    "role": "大模型应用工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/llm_rag_engineer_023.pdf",
+    "hasGithub": true,
+    "textLength": 2161,
+    "expectedSkills": [
+      "RAG",
+      "Vector Search",
+      "Milvus",
+      "Rerank",
+      "Embedding",
+      "Prompt Engineering",
+      "Evaluation",
+      "LangChain",
+      "Python",
+      "Knowledge Base"
+    ]
+  },
+  {
+    "id": "llm_rag_engineer_024",
+    "name": "王嘉豪",
+    "role": "大模型应用工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/llm_rag_engineer_024.txt",
+    "hasGithub": true,
+    "textLength": 2322,
+    "expectedSkills": [
+      "RAG",
+      "Vector Search",
+      "Milvus",
+      "Rerank",
+      "Embedding",
+      "Prompt Engineering",
+      "Evaluation",
+      "LangChain",
+      "Python",
+      "Knowledge Base"
+    ]
+  },
+  {
+    "id": "llm_rag_engineer_025",
+    "name": "李雪",
+    "role": "大模型应用工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/llm_rag_engineer_025.txt",
+    "hasGithub": false,
+    "textLength": 2302,
+    "expectedSkills": [
+      "RAG",
+      "Vector Search",
+      "Milvus",
+      "Rerank",
+      "Embedding",
+      "Prompt Engineering",
+      "Evaluation",
+      "LangChain",
+      "Python",
+      "Knowledge Base"
+    ]
+  },
+  {
+    "id": "llm_rag_engineer_026",
+    "name": "陈子涵",
+    "role": "大模型应用工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/llm_rag_engineer_026.pdf",
+    "hasGithub": false,
+    "textLength": 2338,
+    "expectedSkills": [
+      "RAG",
+      "Vector Search",
+      "Milvus",
+      "Rerank",
+      "Embedding",
+      "Prompt Engineering",
+      "Evaluation",
+      "LangChain",
+      "Python",
+      "Knowledge Base"
+    ]
+  },
+  {
+    "id": "llm_rag_engineer_027",
+    "name": "黄浩然",
+    "role": "大模型应用工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/llm_rag_engineer_027.txt",
+    "hasGithub": true,
+    "textLength": 2244,
+    "expectedSkills": [
+      "RAG",
+      "Vector Search",
+      "Milvus",
+      "Rerank",
+      "Embedding",
+      "Prompt Engineering",
+      "Evaluation",
+      "LangChain",
+      "Python",
+      "Knowledge Base"
+    ]
+  },
+  {
+    "id": "llm_rag_engineer_028",
+    "name": "董宇航",
+    "role": "大模型应用工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/llm_rag_engineer_028.pdf",
+    "hasGithub": false,
+    "textLength": 2236,
+    "expectedSkills": [
+      "RAG",
+      "Vector Search",
+      "Milvus",
+      "Rerank",
+      "Embedding",
+      "Prompt Engineering",
+      "Evaluation",
+      "LangChain",
+      "Python",
+      "Knowledge Base"
+    ]
+  },
+  {
+    "id": "llm_rag_engineer_029",
+    "name": "冯欣怡",
+    "role": "大模型应用工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/llm_rag_engineer_029.txt",
+    "hasGithub": true,
+    "textLength": 2324,
+    "expectedSkills": [
+      "RAG",
+      "Vector Search",
+      "Milvus",
+      "Rerank",
+      "Embedding",
+      "Prompt Engineering",
+      "Evaluation",
+      "LangChain",
+      "Python",
+      "Knowledge Base"
+    ]
+  },
+  {
+    "id": "llm_rag_engineer_030",
+    "name": "梁军",
+    "role": "大模型应用工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/llm_rag_engineer_030.pdf",
+    "hasGithub": true,
+    "textLength": 2100,
+    "expectedSkills": [
+      "RAG",
+      "Vector Search",
+      "Milvus",
+      "Rerank",
+      "Embedding",
+      "Prompt Engineering",
+      "Evaluation",
+      "LangChain",
+      "Python",
+      "Knowledge Base"
+    ]
+  },
+  {
+    "id": "junior_frontend_031",
+    "name": "郭杰",
+    "role": "初级前端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/junior_frontend_031.pdf",
+    "hasGithub": true,
+    "textLength": 2107,
+    "expectedSkills": [
+      "Vue3",
+      "TypeScript",
+      "Vite",
+      "Pinia",
+      "CSS",
+      "ECharts",
+      "Componentization",
+      "HTTP"
+    ]
+  },
+  {
+    "id": "junior_frontend_032",
+    "name": "林浩然",
+    "role": "初级前端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/junior_frontend_032.pdf",
+    "hasGithub": true,
+    "textLength": 2114,
+    "expectedSkills": [
+      "Vue3",
+      "TypeScript",
+      "Vite",
+      "Pinia",
+      "CSS",
+      "ECharts",
+      "Componentization",
+      "HTTP"
+    ]
+  },
+  {
+    "id": "junior_frontend_033",
+    "name": "杨一鸣",
+    "role": "初级前端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/junior_frontend_033.txt",
+    "hasGithub": true,
+    "textLength": 2353,
+    "expectedSkills": [
+      "Vue3",
+      "TypeScript",
+      "Vite",
+      "Pinia",
+      "CSS",
+      "ECharts",
+      "Componentization",
+      "HTTP"
+    ]
+  },
+  {
+    "id": "junior_frontend_034",
+    "name": "张军",
+    "role": "初级前端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/junior_frontend_034.txt",
+    "hasGithub": true,
+    "textLength": 2354,
+    "expectedSkills": [
+      "Vue3",
+      "TypeScript",
+      "Vite",
+      "Pinia",
+      "CSS",
+      "ECharts",
+      "Componentization",
+      "HTTP"
+    ]
+  },
+  {
+    "id": "junior_frontend_035",
+    "name": "韩静",
+    "role": "初级前端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/junior_frontend_035.txt",
+    "hasGithub": true,
+    "textLength": 2291,
+    "expectedSkills": [
+      "Vue3",
+      "TypeScript",
+      "Vite",
+      "Pinia",
+      "CSS",
+      "ECharts",
+      "Componentization",
+      "HTTP"
+    ]
+  },
+  {
+    "id": "junior_frontend_036",
+    "name": "曹嘉豪",
+    "role": "初级前端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/junior_frontend_036.pdf",
+    "hasGithub": true,
+    "textLength": 2381,
+    "expectedSkills": [
+      "Vue3",
+      "TypeScript",
+      "Vite",
+      "Pinia",
+      "CSS",
+      "ECharts",
+      "Componentization",
+      "HTTP"
+    ]
+  },
+  {
+    "id": "junior_frontend_037",
+    "name": "董勇",
+    "role": "初级前端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/junior_frontend_037.txt",
+    "hasGithub": true,
+    "textLength": 2208,
+    "expectedSkills": [
+      "Vue3",
+      "TypeScript",
+      "Vite",
+      "Pinia",
+      "CSS",
+      "ECharts",
+      "Componentization",
+      "HTTP"
+    ]
+  },
+  {
+    "id": "senior_frontend_038",
+    "name": "黄勇",
+    "role": "资深前端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/senior_frontend_038.txt",
+    "hasGithub": false,
+    "textLength": 2133,
+    "expectedSkills": [
+      "Vue3",
+      "React",
+      "TypeScript",
+      "Performance",
+      "Engineering",
+      "Micro-frontend",
+      "Visualization",
+      "Node.js",
+      "Webpack",
+      "Vite"
+    ]
+  },
+  {
+    "id": "senior_frontend_039",
+    "name": "李婷",
+    "role": "资深前端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/senior_frontend_039.txt",
+    "hasGithub": false,
+    "textLength": 2239,
+    "expectedSkills": [
+      "Vue3",
+      "React",
+      "TypeScript",
+      "Performance",
+      "Engineering",
+      "Micro-frontend",
+      "Visualization",
+      "Node.js",
+      "Webpack",
+      "Vite"
+    ]
+  },
+  {
+    "id": "senior_frontend_040",
+    "name": "周鹏",
+    "role": "资深前端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_frontend_040.pdf",
+    "hasGithub": false,
+    "textLength": 2228,
+    "expectedSkills": [
+      "Vue3",
+      "React",
+      "TypeScript",
+      "Performance",
+      "Engineering",
+      "Micro-frontend",
+      "Visualization",
+      "Node.js",
+      "Webpack",
+      "Vite"
+    ]
+  },
+  {
+    "id": "senior_frontend_041",
+    "name": "罗超",
+    "role": "资深前端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_frontend_041.pdf",
+    "hasGithub": false,
+    "textLength": 2249,
+    "expectedSkills": [
+      "Vue3",
+      "React",
+      "TypeScript",
+      "Performance",
+      "Engineering",
+      "Micro-frontend",
+      "Visualization",
+      "Node.js",
+      "Webpack",
+      "Vite"
+    ]
+  },
+  {
+    "id": "senior_frontend_042",
+    "name": "张明",
+    "role": "资深前端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_frontend_042.pdf",
+    "hasGithub": false,
+    "textLength": 2227,
+    "expectedSkills": [
+      "Vue3",
+      "React",
+      "TypeScript",
+      "Performance",
+      "Engineering",
+      "Micro-frontend",
+      "Visualization",
+      "Node.js",
+      "Webpack",
+      "Vite"
+    ]
+  },
+  {
+    "id": "senior_frontend_043",
+    "name": "黄浩然",
+    "role": "资深前端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_frontend_043.pdf",
+    "hasGithub": true,
+    "textLength": 2332,
+    "expectedSkills": [
+      "Vue3",
+      "React",
+      "TypeScript",
+      "Performance",
+      "Engineering",
+      "Micro-frontend",
+      "Visualization",
+      "Node.js",
+      "Webpack",
+      "Vite"
+    ]
+  },
+  {
+    "id": "senior_frontend_044",
+    "name": "徐文博",
+    "role": "资深前端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/senior_frontend_044.pdf",
+    "hasGithub": true,
+    "textLength": 2137,
+    "expectedSkills": [
+      "Vue3",
+      "React",
+      "TypeScript",
+      "Performance",
+      "Engineering",
+      "Micro-frontend",
+      "Visualization",
+      "Node.js",
+      "Webpack",
+      "Vite"
+    ]
+  },
+  {
+    "id": "product_manager_045",
+    "name": "宋芳",
+    "role": "产品经理（AI 方向）",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/product_manager_045.pdf",
+    "hasGithub": true,
+    "textLength": 2037,
+    "expectedSkills": [
+      "Requirement Analysis",
+      "PRD",
+      "Data Analysis",
+      "User Research",
+      "A/B Testing",
+      "Project Management",
+      "LLM Application",
+      "Monetization"
+    ]
+  },
+  {
+    "id": "product_manager_046",
+    "name": "郑宇航",
+    "role": "产品经理（AI 方向）",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/product_manager_046.txt",
+    "hasGithub": true,
+    "textLength": 2084,
+    "expectedSkills": [
+      "Requirement Analysis",
+      "PRD",
+      "Data Analysis",
+      "User Research",
+      "A/B Testing",
+      "Project Management",
+      "LLM Application",
+      "Monetization"
+    ]
+  },
+  {
+    "id": "product_manager_047",
+    "name": "程杰",
+    "role": "产品经理（AI 方向）",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/product_manager_047.txt",
+    "hasGithub": false,
+    "textLength": 2277,
+    "expectedSkills": [
+      "Requirement Analysis",
+      "PRD",
+      "Data Analysis",
+      "User Research",
+      "A/B Testing",
+      "Project Management",
+      "LLM Application",
+      "Monetization"
+    ]
+  },
+  {
+    "id": "product_manager_048",
+    "name": "曹杰",
+    "role": "产品经理（AI 方向）",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/product_manager_048.txt",
+    "hasGithub": false,
+    "textLength": 2259,
+    "expectedSkills": [
+      "Requirement Analysis",
+      "PRD",
+      "Data Analysis",
+      "User Research",
+      "A/B Testing",
+      "Project Management",
+      "LLM Application",
+      "Monetization"
+    ]
+  },
+  {
+    "id": "product_manager_049",
+    "name": "马明",
+    "role": "产品经理（AI 方向）",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/product_manager_049.pdf",
+    "hasGithub": true,
+    "textLength": 2291,
+    "expectedSkills": [
+      "Requirement Analysis",
+      "PRD",
+      "Data Analysis",
+      "User Research",
+      "A/B Testing",
+      "Project Management",
+      "LLM Application",
+      "Monetization"
+    ]
+  },
+  {
+    "id": "product_manager_050",
+    "name": "何梦瑶",
+    "role": "产品经理（AI 方向）",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/product_manager_050.pdf",
+    "hasGithub": true,
+    "textLength": 2102,
+    "expectedSkills": [
+      "Requirement Analysis",
+      "PRD",
+      "Data Analysis",
+      "User Research",
+      "A/B Testing",
+      "Project Management",
+      "LLM Application",
+      "Monetization"
+    ]
+  },
+  {
+    "id": "product_manager_051",
+    "name": "马勇",
+    "role": "产品经理（AI 方向）",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/product_manager_051.txt",
+    "hasGithub": true,
+    "textLength": 2238,
+    "expectedSkills": [
+      "Requirement Analysis",
+      "PRD",
+      "Data Analysis",
+      "User Research",
+      "A/B Testing",
+      "Project Management",
+      "LLM Application",
+      "Monetization"
+    ]
+  },
+  {
+    "id": "product_manager_052",
+    "name": "胡强",
+    "role": "产品经理（AI 方向）",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/product_manager_052.pdf",
+    "hasGithub": true,
+    "textLength": 2084,
+    "expectedSkills": [
+      "Requirement Analysis",
+      "PRD",
+      "Data Analysis",
+      "User Research",
+      "A/B Testing",
+      "Project Management",
+      "LLM Application",
+      "Monetization"
+    ]
+  },
+  {
+    "id": "data_platform_053",
+    "name": "马子涵",
+    "role": "数据平台开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/data_platform_053.pdf",
+    "hasGithub": false,
+    "textLength": 2354,
+    "expectedSkills": [
+      "Flink",
+      "Spark",
+      "Kafka",
+      "Data Warehouse",
+      "ETL",
+      "Hive",
+      "Data Governance",
+      "Python"
+    ]
+  },
+  {
+    "id": "data_platform_054",
+    "name": "谢军",
+    "role": "数据平台开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/data_platform_054.txt",
+    "hasGithub": false,
+    "textLength": 2202,
+    "expectedSkills": [
+      "Flink",
+      "Spark",
+      "Kafka",
+      "Data Warehouse",
+      "ETL",
+      "Hive",
+      "Data Governance",
+      "Python"
+    ]
+  },
+  {
+    "id": "data_platform_055",
+    "name": "王雪",
+    "role": "数据平台开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/data_platform_055.pdf",
+    "hasGithub": true,
+    "textLength": 2329,
+    "expectedSkills": [
+      "Flink",
+      "Spark",
+      "Kafka",
+      "Data Warehouse",
+      "ETL",
+      "Hive",
+      "Data Governance",
+      "Python"
+    ]
+  },
+  {
+    "id": "data_platform_056",
+    "name": "李鹏",
+    "role": "数据平台开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/data_platform_056.pdf",
+    "hasGithub": false,
+    "textLength": 2157,
+    "expectedSkills": [
+      "Flink",
+      "Spark",
+      "Kafka",
+      "Data Warehouse",
+      "ETL",
+      "Hive",
+      "Data Governance",
+      "Python"
+    ]
+  },
+  {
+    "id": "data_platform_057",
+    "name": "张雅婷",
+    "role": "数据平台开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/data_platform_057.txt",
+    "hasGithub": true,
+    "textLength": 2090,
+    "expectedSkills": [
+      "Flink",
+      "Spark",
+      "Kafka",
+      "Data Warehouse",
+      "ETL",
+      "Hive",
+      "Data Governance",
+      "Python"
+    ]
+  },
+  {
+    "id": "data_platform_058",
+    "name": "陈宇航",
+    "role": "数据平台开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/data_platform_058.txt",
+    "hasGithub": false,
+    "textLength": 2110,
+    "expectedSkills": [
+      "Flink",
+      "Spark",
+      "Kafka",
+      "Data Warehouse",
+      "ETL",
+      "Hive",
+      "Data Governance",
+      "Python"
+    ]
+  },
+  {
+    "id": "data_platform_059",
+    "name": "胡丽",
+    "role": "数据平台开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/data_platform_059.pdf",
+    "hasGithub": true,
+    "textLength": 2278,
+    "expectedSkills": [
+      "Flink",
+      "Spark",
+      "Kafka",
+      "Data Warehouse",
+      "ETL",
+      "Hive",
+      "Data Governance",
+      "Python"
+    ]
+  },
+  {
+    "id": "devops_sre_060",
+    "name": "马宇航",
+    "role": "运维开发工程师 / SRE",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/devops_sre_060.txt",
+    "hasGithub": true,
+    "textLength": 2003,
+    "expectedSkills": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "Prometheus",
+      "Grafana",
+      "SRE",
+      "Shell",
+      "Python"
+    ]
+  },
+  {
+    "id": "devops_sre_061",
+    "name": "郑婷",
+    "role": "运维开发工程师 / SRE",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/devops_sre_061.pdf",
+    "hasGithub": true,
+    "textLength": 2229,
+    "expectedSkills": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "Prometheus",
+      "Grafana",
+      "SRE",
+      "Shell",
+      "Python"
+    ]
+  },
+  {
+    "id": "devops_sre_062",
+    "name": "陈芳",
+    "role": "运维开发工程师 / SRE",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/devops_sre_062.pdf",
+    "hasGithub": true,
+    "textLength": 2138,
+    "expectedSkills": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "Prometheus",
+      "Grafana",
+      "SRE",
+      "Shell",
+      "Python"
+    ]
+  },
+  {
+    "id": "devops_sre_063",
+    "name": "朱明",
+    "role": "运维开发工程师 / SRE",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/devops_sre_063.pdf",
+    "hasGithub": true,
+    "textLength": 2306,
+    "expectedSkills": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "Prometheus",
+      "Grafana",
+      "SRE",
+      "Shell",
+      "Python"
+    ]
+  },
+  {
+    "id": "devops_sre_064",
+    "name": "朱梦瑶",
+    "role": "运维开发工程师 / SRE",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/devops_sre_064.txt",
+    "hasGithub": true,
+    "textLength": 2239,
+    "expectedSkills": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "Prometheus",
+      "Grafana",
+      "SRE",
+      "Shell",
+      "Python"
+    ]
+  },
+  {
+    "id": "devops_sre_065",
+    "name": "胡鹏",
+    "role": "运维开发工程师 / SRE",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/devops_sre_065.txt",
+    "hasGithub": true,
+    "textLength": 2045,
+    "expectedSkills": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "Prometheus",
+      "Grafana",
+      "SRE",
+      "Shell",
+      "Python"
+    ]
+  },
+  {
+    "id": "devops_sre_066",
+    "name": "陈燕",
+    "role": "运维开发工程师 / SRE",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/devops_sre_066.pdf",
+    "hasGithub": true,
+    "textLength": 2021,
+    "expectedSkills": [
+      "Kubernetes",
+      "Docker",
+      "Helm",
+      "CI/CD",
+      "Prometheus",
+      "Grafana",
+      "SRE",
+      "Shell",
+      "Python"
+    ]
+  },
+  {
+    "id": "algorithm_ml_067",
+    "name": "曹婷",
+    "role": "算法工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/algorithm_ml_067.txt",
+    "hasGithub": true,
+    "textLength": 2309,
+    "expectedSkills": [
+      "Python",
+      "PyTorch",
+      "Machine Learning",
+      "Feature Engineering",
+      "Recommendation",
+      "Model Serving",
+      "MLflow",
+      "A/B Testing"
+    ]
+  },
+  {
+    "id": "algorithm_ml_068",
+    "name": "陈浩然",
+    "role": "算法工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/algorithm_ml_068.pdf",
+    "hasGithub": true,
+    "textLength": 2104,
+    "expectedSkills": [
+      "Python",
+      "PyTorch",
+      "Machine Learning",
+      "Feature Engineering",
+      "Recommendation",
+      "Model Serving",
+      "MLflow",
+      "A/B Testing"
+    ]
+  },
+  {
+    "id": "algorithm_ml_069",
+    "name": "冯宇航",
+    "role": "算法工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/algorithm_ml_069.txt",
+    "hasGithub": false,
+    "textLength": 2263,
+    "expectedSkills": [
+      "Python",
+      "PyTorch",
+      "Machine Learning",
+      "Feature Engineering",
+      "Recommendation",
+      "Model Serving",
+      "MLflow",
+      "A/B Testing"
+    ]
+  },
+  {
+    "id": "algorithm_ml_070",
+    "name": "程思琪",
+    "role": "算法工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/algorithm_ml_070.pdf",
+    "hasGithub": true,
+    "textLength": 2259,
+    "expectedSkills": [
+      "Python",
+      "PyTorch",
+      "Machine Learning",
+      "Feature Engineering",
+      "Recommendation",
+      "Model Serving",
+      "MLflow",
+      "A/B Testing"
+    ]
+  },
+  {
+    "id": "algorithm_ml_071",
+    "name": "杨明",
+    "role": "算法工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/algorithm_ml_071.pdf",
+    "hasGithub": true,
+    "textLength": 2288,
+    "expectedSkills": [
+      "Python",
+      "PyTorch",
+      "Machine Learning",
+      "Feature Engineering",
+      "Recommendation",
+      "Model Serving",
+      "MLflow",
+      "A/B Testing"
+    ]
+  },
+  {
+    "id": "algorithm_ml_072",
+    "name": "孙杰",
+    "role": "算法工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/algorithm_ml_072.txt",
+    "hasGithub": true,
+    "textLength": 2050,
+    "expectedSkills": [
+      "Python",
+      "PyTorch",
+      "Machine Learning",
+      "Feature Engineering",
+      "Recommendation",
+      "Model Serving",
+      "MLflow",
+      "A/B Testing"
+    ]
+  },
+  {
+    "id": "qa_automation_073",
+    "name": "林宇航",
+    "role": "测试开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/qa_automation_073.txt",
+    "hasGithub": true,
+    "textLength": 2281,
+    "expectedSkills": [
+      "Test Development",
+      "Python",
+      "Selenium",
+      "API Testing",
+      "Performance Testing",
+      "CI/CD",
+      "Quality Assurance",
+      "Pytest"
+    ]
+  },
+  {
+    "id": "qa_automation_074",
+    "name": "陈一鸣",
+    "role": "测试开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/qa_automation_074.txt",
+    "hasGithub": true,
+    "textLength": 2134,
+    "expectedSkills": [
+      "Test Development",
+      "Python",
+      "Selenium",
+      "API Testing",
+      "Performance Testing",
+      "CI/CD",
+      "Quality Assurance",
+      "Pytest"
+    ]
+  },
+  {
+    "id": "qa_automation_075",
+    "name": "郑敏",
+    "role": "测试开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/qa_automation_075.txt",
+    "hasGithub": false,
+    "textLength": 2058,
+    "expectedSkills": [
+      "Test Development",
+      "Python",
+      "Selenium",
+      "API Testing",
+      "Performance Testing",
+      "CI/CD",
+      "Quality Assurance",
+      "Pytest"
+    ]
+  },
+  {
+    "id": "qa_automation_076",
+    "name": "孙雅婷",
+    "role": "测试开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/qa_automation_076.txt",
+    "hasGithub": true,
+    "textLength": 2130,
+    "expectedSkills": [
+      "Test Development",
+      "Python",
+      "Selenium",
+      "API Testing",
+      "Performance Testing",
+      "CI/CD",
+      "Quality Assurance",
+      "Pytest"
+    ]
+  },
+  {
+    "id": "qa_automation_077",
+    "name": "韩思远",
+    "role": "测试开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/qa_automation_077.pdf",
+    "hasGithub": false,
+    "textLength": 2248,
+    "expectedSkills": [
+      "Test Development",
+      "Python",
+      "Selenium",
+      "API Testing",
+      "Performance Testing",
+      "CI/CD",
+      "Quality Assurance",
+      "Pytest"
+    ]
+  },
+  {
+    "id": "security_backend_078",
+    "name": "杨磊",
+    "role": "安全开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/security_backend_078.txt",
+    "hasGithub": true,
+    "textLength": 2247,
+    "expectedSkills": [
+      "Java",
+      "Secure Development",
+      "OAuth2",
+      "Audit",
+      "Risk Control",
+      "Vulnerability",
+      "Compliance",
+      "Encryption"
+    ]
+  },
+  {
+    "id": "security_backend_079",
+    "name": "韩军",
+    "role": "安全开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/security_backend_079.txt",
+    "hasGithub": true,
+    "textLength": 2145,
+    "expectedSkills": [
+      "Java",
+      "Secure Development",
+      "OAuth2",
+      "Audit",
+      "Risk Control",
+      "Vulnerability",
+      "Compliance",
+      "Encryption"
+    ]
+  },
+  {
+    "id": "security_backend_080",
+    "name": "马浩然",
+    "role": "安全开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/security_backend_080.txt",
+    "hasGithub": true,
+    "textLength": 2018,
+    "expectedSkills": [
+      "Java",
+      "Secure Development",
+      "OAuth2",
+      "Audit",
+      "Risk Control",
+      "Vulnerability",
+      "Compliance",
+      "Encryption"
+    ]
+  },
+  {
+    "id": "security_backend_081",
+    "name": "曹子涵",
+    "role": "安全开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/security_backend_081.txt",
+    "hasGithub": false,
+    "textLength": 2156,
+    "expectedSkills": [
+      "Java",
+      "Secure Development",
+      "OAuth2",
+      "Audit",
+      "Risk Control",
+      "Vulnerability",
+      "Compliance",
+      "Encryption"
+    ]
+  },
+  {
+    "id": "security_backend_082",
+    "name": "王勇",
+    "role": "安全开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/security_backend_082.pdf",
+    "hasGithub": true,
+    "textLength": 2083,
+    "expectedSkills": [
+      "Java",
+      "Secure Development",
+      "OAuth2",
+      "Audit",
+      "Risk Control",
+      "Vulnerability",
+      "Compliance",
+      "Encryption"
+    ]
+  },
+  {
+    "id": "mobile_engineer_083",
+    "name": "陈嘉豪",
+    "role": "Android 开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/mobile_engineer_083.pdf",
+    "hasGithub": false,
+    "textLength": 2215,
+    "expectedSkills": [
+      "Android",
+      "Kotlin",
+      "Performance",
+      "Crash Governance",
+      "Componentization",
+      "Jetpack",
+      "Payment SDK"
+    ]
+  },
+  {
+    "id": "mobile_engineer_084",
+    "name": "陈义健",
+    "role": "Android 开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/mobile_engineer_084.txt",
+    "hasGithub": false,
+    "textLength": 2245,
+    "expectedSkills": [
+      "Android",
+      "Kotlin",
+      "Performance",
+      "Crash Governance",
+      "Componentization",
+      "Jetpack",
+      "Payment SDK"
+    ]
+  },
+  {
+    "id": "mobile_engineer_085",
+    "name": "曹敏",
+    "role": "Android 开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/mobile_engineer_085.txt",
+    "hasGithub": true,
+    "textLength": 2075,
+    "expectedSkills": [
+      "Android",
+      "Kotlin",
+      "Performance",
+      "Crash Governance",
+      "Componentization",
+      "Jetpack",
+      "Payment SDK"
+    ]
+  },
+  {
+    "id": "mobile_engineer_086",
+    "name": "韩子涵",
+    "role": "Android 开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/mobile_engineer_086.pdf",
+    "hasGithub": false,
+    "textLength": 2065,
+    "expectedSkills": [
+      "Android",
+      "Kotlin",
+      "Performance",
+      "Crash Governance",
+      "Componentization",
+      "Jetpack",
+      "Payment SDK"
+    ]
+  },
+  {
+    "id": "mobile_engineer_087",
+    "name": "杨磊",
+    "role": "Android 开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/mobile_engineer_087.txt",
+    "hasGithub": true,
+    "textLength": 2232,
+    "expectedSkills": [
+      "Android",
+      "Kotlin",
+      "Performance",
+      "Crash Governance",
+      "Componentization",
+      "Jetpack",
+      "Payment SDK"
+    ]
+  },
+  {
+    "id": "new_grad_088",
+    "name": "孙宇航",
+    "role": "应届后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/new_grad_088.txt",
+    "hasGithub": true,
+    "textLength": 2150,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Data Structures",
+      "Computer Networks",
+      "Git"
+    ]
+  },
+  {
+    "id": "new_grad_089",
+    "name": "王磊",
+    "role": "应届后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/new_grad_089.pdf",
+    "hasGithub": true,
+    "textLength": 2061,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Data Structures",
+      "Computer Networks",
+      "Git"
+    ]
+  },
+  {
+    "id": "new_grad_090",
+    "name": "梁敏",
+    "role": "应届后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/new_grad_090.txt",
+    "hasGithub": true,
+    "textLength": 2105,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Data Structures",
+      "Computer Networks",
+      "Git"
+    ]
+  },
+  {
+    "id": "new_grad_091",
+    "name": "李雨欣",
+    "role": "应届后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/new_grad_091.txt",
+    "hasGithub": true,
+    "textLength": 2083,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Data Structures",
+      "Computer Networks",
+      "Git"
+    ]
+  },
+  {
+    "id": "new_grad_092",
+    "name": "董义健",
+    "role": "应届后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/new_grad_092.pdf",
+    "hasGithub": false,
+    "textLength": 2186,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Data Structures",
+      "Computer Networks",
+      "Git"
+    ]
+  },
+  {
+    "id": "new_grad_093",
+    "name": "刘子涵",
+    "role": "应届后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/new_grad_093.pdf",
+    "hasGithub": true,
+    "textLength": 2030,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot",
+      "MySQL",
+      "Redis",
+      "Data Structures",
+      "Computer Networks",
+      "Git"
+    ]
+  },
+  {
+    "id": "career_gap_094",
+    "name": "郑子轩",
+    "role": "后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/career_gap_094.pdf",
+    "hasGithub": true,
+    "textLength": 2167,
+    "expectedSkills": [
+      "Java",
+      "Spring",
+      "MySQL",
+      "Backend"
+    ]
+  },
+  {
+    "id": "career_gap_095",
+    "name": "梁雅婷",
+    "role": "后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/career_gap_095.pdf",
+    "hasGithub": false,
+    "textLength": 2073,
+    "expectedSkills": [
+      "Java",
+      "Spring",
+      "MySQL",
+      "Backend"
+    ]
+  },
+  {
+    "id": "career_gap_096",
+    "name": "刘鹏",
+    "role": "后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/career_gap_096.pdf",
+    "hasGithub": false,
+    "textLength": 2095,
+    "expectedSkills": [
+      "Java",
+      "Spring",
+      "MySQL",
+      "Backend"
+    ]
+  },
+  {
+    "id": "career_gap_097",
+    "name": "张燕",
+    "role": "后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/career_gap_097.txt",
+    "hasGithub": true,
+    "textLength": 2159,
+    "expectedSkills": [
+      "Java",
+      "Spring",
+      "MySQL",
+      "Backend"
+    ]
+  },
+  {
+    "id": "sparse_risk_098",
+    "name": "张杰",
+    "role": "后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/sparse_risk_098.pdf",
+    "hasGithub": false,
+    "textLength": 231,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot"
+    ]
+  },
+  {
+    "id": "sparse_risk_099",
+    "name": "罗梦瑶",
+    "role": "后端开发工程师",
+    "fileType": "pdf",
+    "path": "testdata/stress_resumes/sparse_risk_099.pdf",
+    "hasGithub": false,
+    "textLength": 79,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot"
+    ]
+  },
+  {
+    "id": "sparse_risk_100",
+    "name": "罗雨欣",
+    "role": "后端开发工程师",
+    "fileType": "txt",
+    "path": "testdata/stress_resumes/sparse_risk_100.txt",
+    "hasGithub": true,
+    "textLength": 132,
+    "expectedSkills": [
+      "Java",
+      "Spring Boot"
+    ]
+  }
+]

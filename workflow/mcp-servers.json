@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "resume-tools": {
+      "transport": "stdio",
+      "command": "python",
+      "args": ["-m", "app.mcp_servers.resume_tools"]
+    },
+    "fetch": {
+      "transport": "stdio",
+      "command": "python",
+      "args": ["-m", "mcp_server_fetch"]
+    },
+    "time": {
+      "transport": "stdio",
+      "command": "python",
+      "args": ["-m", "mcp_server_time"]
+    }
+  }
+}

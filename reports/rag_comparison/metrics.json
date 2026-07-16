@@ -1,0 +1,123 @@
+{
+  "meta": {
+    "timestamp": "2026-06-26T10:01:08",
+    "n_docs": 100,
+    "n_queries": 28,
+    "dense_backend": "minilm",
+    "dense_degraded": false,
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "rrf_k": 60,
+    "agentic_candidates": 15,
+    "ranking_depth": 20,
+    "graph_hop_decay": 0.4,
+    "metric_ks": {
+      "precision": 5,
+      "recall": 10,
+      "ndcg": 10
+    },
+    "llm_provider": "deepseek",
+    "llm_model": "deepseek-chat"
+  },
+  "index_build_seconds": {
+    "bm25": 0.03,
+    "dense": 53.86
+  },
+  "graph_build_seconds": 20.42,
+  "methods": {
+    "BM25": {
+      "precision_at_5": 0.942857142857143,
+      "recall_at_10": 0.8651218820861679,
+      "mrr": 0.9583333333333333,
+      "ndcg_at_10": 0.9398380875464492,
+      "avg_latency_ms": 227.8268071428572,
+      "p50_latency_ms": 2.1867499999927986
+    },
+    "Dense": {
+      "precision_at_5": 0.8071428571428572,
+      "recall_at_10": 0.7247307256235828,
+      "mrr": 0.8869047619047619,
+      "ndcg_at_10": 0.7990571069914136,
+      "avg_latency_ms": 374.92405000000156,
+      "p50_latency_ms": 333.3583500000046
+    },
+    "Hybrid(RRF)": {
+      "precision_at_5": 0.9357142857142858,
+      "recall_at_10": 0.8308106575963718,
+      "mrr": 0.9642857142857143,
+      "ndcg_at_10": 0.9175270513432279,
+      "avg_latency_ms": 463.9732607142863,
+      "p50_latency_ms": 464.1699000000017
+    },
+    "Agentic": {
+      "precision_at_5": 0.9571428571428572,
+      "recall_at_10": 0.8648667800453514,
+      "mrr": 0.9821428571428571,
+      "ndcg_at_10": 0.9491877039848929,
+      "avg_latency_ms": 6148.771328571429,
+      "p50_latency_ms": 5392.34135000001
+    },
+    "GraphRAG": {
+      "precision_at_5": 0.8642857142857144,
+      "recall_at_10": 0.7761763038548752,
+      "mrr": 0.9494047619047619,
+      "ndcg_at_10": 0.8618321493736667,
+      "avg_latency_ms": 65.95097142857956,
+      "p50_latency_ms": 30.44385000004013
+    }
+  },
+  "method_llm": {
+    "BM25": {
+      "api_calls": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "api_seconds": 0.0,
+      "est_cost_usd": 0.0
+    },
+    "Dense": {
+      "api_calls": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "api_seconds": 0.0,
+      "est_cost_usd": 0.0
+    },
+    "Hybrid(RRF)": {
+      "api_calls": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "api_seconds": 0.0,
+      "est_cost_usd": 0.0
+    },
+    "Agentic": {
+      "api_calls": 56,
+      "prompt_tokens": 71909,
+      "completion_tokens": 6814,
+      "api_seconds": 139.8,
+      "est_cost_usd": 0.0269
+    },
+    "GraphRAG": {
+      "api_calls": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "api_seconds": 0.0,
+      "est_cost_usd": 0.0,
+      "index_build_llm": {
+        "api_calls": 100,
+        "prompt_tokens": 91832,
+        "completion_tokens": 7982,
+        "api_seconds": 141.4,
+        "est_cost_usd": 0.0336,
+        "new_extractions": 100
+      }
+    }
+  },
+  "llm_total": {
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "api_calls": 156,
+    "cache_hits": 0,
+    "prompt_tokens": 163741,
+    "completion_tokens": 14796,
+    "api_seconds": 281.1,
+    "est_cost_usd": 0.0605
+  }
+}

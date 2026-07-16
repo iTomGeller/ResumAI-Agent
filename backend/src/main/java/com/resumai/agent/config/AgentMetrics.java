@@ -43,6 +43,10 @@ public class AgentMetrics {
      */
     private void initializeMetricCatalog() {
         String[] agents = {"OrchestratorAgent", "ResumeParserAgent", "TechAgent"};
+        String[] workflowAgents = {
+                "IntentAgent", "ResumeParseAgent", "JdMatchAgent", "TechEvalAgent",
+                "ProjectEvalAgent", "RiskAgent", "EvidenceFusionAgent", "ReportAgent"
+        };
         String[] tools = {"milvus_index", "milvus_retrieve", "neo4j_populate"};
         String[] models = {"deepseek-chat"};
         String[] stages = {"ResumeParserAgent", "TechAgent"};
@@ -56,6 +60,33 @@ public class AgentMetrics {
             Counter.builder("resumai.agent.skill.invoked").tag("agent", agent).tag("skill_name", "init")
                     .tag("found", "false").register(registry);
         }
+        for (String agent : workflowAgents) {
+            Timer.builder("resumai.workflow.node.duration").tag("node_id", "init").tag("agent", agent)
+                    .tag("status", "SUCCESS").register(registry);
+            Counter.builder("resumai.workflow.node.count").tag("node_id", "init").tag("agent", agent)
+                    .tag("status", "SUCCESS").register(registry);
+            Timer.builder("resumai.workflow.generation.duration").tag("node_id", "init").tag("agent", agent)
+                    .tag("model", "deepseek-chat").tag("round_role", "decision").tag("status", "SUCCESS")
+                    .register(registry);
+            Counter.builder("resumai.workflow.generation.count").tag("node_id", "init").tag("agent", agent)
+                    .tag("round_role", "decision").tag("status", "SUCCESS").register(registry);
+            Timer.builder("resumai.workflow.tool.duration").tag("node_id", "init").tag("agent", agent)
+                    .tag("call_kind", "tool").tag("tool_name", "init").tag("status", "SUCCESS").register(registry);
+            Counter.builder("resumai.workflow.tool.count").tag("node_id", "init").tag("agent", agent)
+                    .tag("call_kind", "tool").tag("tool_name", "init").tag("status", "SUCCESS").register(registry);
+        }
+        DistributionSummary.builder("resumai.workflow.generation.tokens").tag("node_id", "init")
+                .tag("model", "deepseek-chat").register(registry);
+        DistributionSummary.builder("resumai.workflow.tool.input.bytes").tag("tool_name", "init")
+                .tag("call_kind", "tool").register(registry);
+        DistributionSummary.builder("resumai.workflow.tool.output.bytes").tag("tool_name", "init")
+                .tag("call_kind", "tool").register(registry);
+        DistributionSummary.builder("resumai.workflow.rag.hit_count").tag("node_id", "init")
+                .tag("tool_name", "milvus_jd_search").register(registry);
+        DistributionSummary.builder("resumai.workflow.rag.top_score").tag("node_id", "init")
+                .tag("tool_name", "milvus_jd_search").register(registry);
+        Counter.builder("resumai.workflow.rag.fallback.count").tag("node_id", "init")
+                .tag("tool_name", "milvus_jd_search").tag("reason", "none").register(registry);
         Counter.builder("resumai.agent.delegation").tag("from_agent", "OrchestratorAgent")
                 .tag("to_agent", "ResumeParserAgent").register(registry);
         Timer.builder("resumai.agent.delegation.latency").tag("from_agent", "OrchestratorAgent")
@@ -781,5 +812,141 @@ public class AgentMetrics {
                 .tag("agree", String.valueOf(agree))
                 .register(registry)
                 .increment();
+    }
+
+    // ── LangGraph Workflow Metrics ───────────────────────────────────────────
+
+    public void recordWorkflowNode(String traceId, String nodeId, String agentName, String status, long durationMs) {
+        Timer.builder("resumai.workflow.node.duration")
+                .tag("node_id", safeTag(nodeId))
+                .tag("agent", safeTag(agentName))
+                .tag("status", safeTag(status))
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+        Counter.builder("resumai.workflow.node.count")
+                .tag("node_id", safeTag(nodeId))
+                .tag("agent", safeTag(agentName))
+                .tag("status", safeTag(status))
+                .register(registry)
+                .increment();
+    }
+
+    public void recordWorkflowGeneration(String nodeId, String agentName, String model, String roundRole,
+                                         String status, long durationMs, long totalTokens) {
+        Timer.builder("resumai.workflow.generation.duration")
+                .tag("node_id", safeTag(nodeId))
+                .tag("agent", safeTag(agentName))
+                .tag("model", safeTag(model))
+                .tag("round_role", safeTag(roundRole))
+                .tag("status", safeTag(status))
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+        Counter.builder("resumai.workflow.generation.count")
+                .tag("node_id", safeTag(nodeId))
+                .tag("agent", safeTag(agentName))
+                .tag("round_role", safeTag(roundRole))
+                .tag("status", safeTag(status))
+                .register(registry)
+                .increment();
+        DistributionSummary.builder("resumai.workflow.generation.tokens")
+                .tag("node_id", safeTag(nodeId))
+                .tag("model", safeTag(model))
+                .register(registry)
+                .record(totalTokens);
+    }
+
+    public void recordWorkflowHarness(String nodeId, String agentName, String harnessStage,
+                                      String status, long durationMs, int inputBytes, int outputBytes) {
+        Timer.builder("resumai.workflow.harness.duration")
+                .description("Agent harness 控制层耗时")
+                .tag("node_id", safeTag(nodeId))
+                .tag("agent", safeTag(agentName))
+                .tag("stage", safeTag(harnessStage))
+                .tag("status", safeTag(status))
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+        Counter.builder("resumai.workflow.harness.count")
+                .description("Agent harness 控制层事件数")
+                .tag("node_id", safeTag(nodeId))
+                .tag("agent", safeTag(agentName))
+                .tag("stage", safeTag(harnessStage))
+                .tag("status", safeTag(status))
+                .register(registry)
+                .increment();
+        DistributionSummary.builder("resumai.workflow.harness.input.bytes")
+                .tag("stage", safeTag(harnessStage))
+                .register(registry)
+                .record(inputBytes);
+        DistributionSummary.builder("resumai.workflow.harness.output.bytes")
+                .tag("stage", safeTag(harnessStage))
+                .register(registry)
+                .record(outputBytes);
+    }
+
+    public void recordWorkflowTool(String nodeId, String agentName, String callKind, String toolName,
+                                   String status, long durationMs, int inputBytes, int outputBytes) {
+        Timer.builder("resumai.workflow.tool.duration")
+                .tag("node_id", safeTag(nodeId))
+                .tag("agent", safeTag(agentName))
+                .tag("call_kind", safeTag(callKind))
+                .tag("tool_name", safeTag(toolName))
+                .tag("status", safeTag(status))
+                .register(registry)
+                .record(Duration.ofMillis(durationMs));
+        Counter.builder("resumai.workflow.tool.count")
+                .tag("node_id", safeTag(nodeId))
+                .tag("agent", safeTag(agentName))
+                .tag("call_kind", safeTag(callKind))
+                .tag("tool_name", safeTag(toolName))
+                .tag("status", safeTag(status))
+                .register(registry)
+                .increment();
+        DistributionSummary.builder("resumai.workflow.tool.input.bytes")
+                .tag("tool_name", safeTag(toolName))
+                .tag("call_kind", safeTag(callKind))
+                .register(registry)
+                .record(inputBytes);
+        DistributionSummary.builder("resumai.workflow.tool.output.bytes")
+                .tag("tool_name", safeTag(toolName))
+                .tag("call_kind", safeTag(callKind))
+                .register(registry)
+                .record(outputBytes);
+    }
+
+    public void recordWorkflowRag(String nodeId, String toolName, int hitCount, double topScore, boolean fallbackUsed,
+                                  String fallbackReason) {
+        DistributionSummary.builder("resumai.workflow.rag.hit_count")
+                .tag("node_id", safeTag(nodeId))
+                .tag("tool_name", safeTag(toolName))
+                .register(registry)
+                .record(hitCount);
+        DistributionSummary.builder("resumai.workflow.rag.top_score")
+                .tag("node_id", safeTag(nodeId))
+                .tag("tool_name", safeTag(toolName))
+                .register(registry)
+                .record(topScore);
+        DistributionSummary.builder("resumai.workflow.rag.quality.proxy")
+                .description("RAG 质量代理分：fallback=0，否则使用 topScore")
+                .tag("node_id", safeTag(nodeId))
+                .tag("tool_name", safeTag(toolName))
+                .tag("fallback", String.valueOf(fallbackUsed))
+                .register(registry)
+                .record(fallbackUsed ? 0.0 : Math.max(0.0, Math.min(1.0, topScore)));
+        Counter.builder("resumai.workflow.rag.result.count")
+                .description("RAG 检索结果状态计数")
+                .tag("node_id", safeTag(nodeId))
+                .tag("tool_name", safeTag(toolName))
+                .tag("fallback", String.valueOf(fallbackUsed))
+                .tag("has_hits", String.valueOf(hitCount > 0))
+                .register(registry)
+                .increment();
+        if (fallbackUsed) {
+            Counter.builder("resumai.workflow.rag.fallback.count")
+                    .tag("node_id", safeTag(nodeId))
+                    .tag("tool_name", safeTag(toolName))
+                    .tag("reason", safeTag(fallbackReason))
+                    .register(registry)
+                    .increment();
+        }
     }
 }

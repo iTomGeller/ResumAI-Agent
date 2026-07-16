@@ -1,0 +1,192 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2860 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Liang Ting) Tj
+T*
+(Gender: Female    Objective: AI Agent Engineer    Location: Hangzhou) Tj
+T*
+(Phone: 13380049832    Email: liangting1372@gmail.com) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2010.09 - 2014.06    Nanjing University    Data Science and Big Data Technology \(M.S.\)) Tj
+T*
+(Courses: Distributed Systems, Machine Learning, Compilers, Database Systems, Computer Networks, Data Stru) Tj
+T*
+(ctures and Algorithms) Tj
+T*
+(GPA 3.7/4.0, top 5% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Backend engineer building production AI-agent workflows, RAG pipelines and runtime observability, skilled) Tj
+T*
+( in multi-agent orchestration and tool governance.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2017.07 - Present    Meituan    Senior AI Agent Engineer) Tj
+T*
+(- Built an offline evaluation set and automated scoring covering faithfulness, relevance and usability.) Tj
+T*
+(- Handled 8170K agent invocations per day while keeping the online service stable.) Tj
+T*
+(- Integrated an MCP resume-evidence service and dynamic skill loading for evidence synthesis and tool gov) Tj
+T*
+(ernance, with experience documented and shared internally.) Tj
+T*
+(- Added structured constraints and validation on LLM output to reduce hallucination, raising key-field ex) Tj
+T*
+(traction accuracy above 90%.) Tj
+T*
+(- Wired the full LLM call chain into Langfuse, tracking hit count, top score, fallback rate and latency p) Tj
+T*
+(er step.) Tj
+T*
+(2014.07 - 2017.06    Xiaohongshu    AI Agent Engineer) Tj
+T*
+(- Designed prompt templates with version management supporting gray release and A/B, improving iteration ) Tj
+T*
+(speed by 21%.) Tj
+T*
+(- Built backend of a multi-agent resume evaluation workflow chaining intent router, parser, JD matcher, t) Tj
+T*
+(echnical/risk evaluators and report generator.) Tj
+T*
+(- Designed an agent runtime with route plan, tool budget, policy guardrails, trace replay and an evaluati) Tj
+T*
+(on feedback loop, and related standards were adopted by the team.) Tj
+T*
+(- Tuned Milvus index and sharding strategy, reducing retrieval latency from 1200ms to 180ms.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(ResumAI Agent - Intelligent Resume Evaluation Platform \(Spring Boot + Vue3 + Milvus + Neo4j + DeepSeek\)) Tj
+T*
+(- Orchestrated a multi-agent evaluation flow with a DAG covering parsing, matching, evaluation and report) Tj
+T*
+( generation, improving end-to-end delivery quality.) Tj
+T*
+(- Integrated Prometheus and Grafana for full-link observability, significantly lowering maintenance cost.) Tj
+T*
+(- Built a Neo4j knowledge graph linking job skills and candidate abilities.) Tj
+T*
+(- Implemented RAG evidence retrieval with citation tracing for explainable conclusions, and it became a r) Tj
+T*
+(eusable team best practice.) Tj
+T*
+(Enterprise Knowledge Base QA \(LangChain + Milvus + Redis\)) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 2068 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(- Added reranking and citation tracing to reduce off-topic answers, supporting rapid business growth.) Tj
+T*
+(- Supported multi-turn conversation memory and context management.) Tj
+T*
+(- Built online evaluation and a feedback loop.) Tj
+T*
+(- Implemented document chunking and multi-route recall to improve long-document QA, reused across multipl) Tj
+T*
+(e business lines.) Tj
+T*
+(Customer Service Agent \(FastAPI + LangGraph\)) Tj
+T*
+(- Implemented intent recognition and slot filling to raise resolution rate.) Tj
+T*
+(- Designed tool orchestration and function calling to connect business systems, ensuring online service s) Tj
+T*
+(tability.) Tj
+T*
+(- Improved user satisfaction by 29%.) Tj
+T*
+(- Designed human fallback and escalation for better experience, significantly lowering maintenance cost.) Tj
+T*
+() Tj
+T*
+(Highlights) Tj
+T*
+(- Established metrics and reviews around Git collaboration and code review to keep improving delivery qua) Tj
+T*
+(lity) Tj
+T*
+(- Led a major technical effort involving Linux and shell basics, staying stable at 8000 QPS peak) Tj
+T*
+(- Continuously optimized design patterns and refactoring, cutting key-path latency from 1200ms to 180ms) Tj
+T*
+(- Work around RAG retrieval and reranking delivered about 29% efficiency gains and was reused across the ) Tj
+T*
+(team) Tj
+T*
+(- Built a reusable methodology and docs around unit testing and quality, adopted by several teams) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: RAG, Observability, Tool Orchestration, Milvus, Spring AI) Tj
+T*
+(Proficient in: LLM observability and tracing, Prompt engineering and evaluation, Python, LangGraph, MCP) Tj
+T*
+(Familiar with: Agent, LangGraph/LangChain agent orchestration, Milvus vector database, LLM, RAG retrieval) Tj
+T*
+( and reranking, Spring AI / FastAPI services) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Stays calm under pressure and recovers services quickly during high-concurrency incidents) Tj
+T*
+(- Solid engineering fundamentals and strong troubleshooting skills, able to own a module end to end) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000003214 00000 n 
+0000003389 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+5509
+%%EOF

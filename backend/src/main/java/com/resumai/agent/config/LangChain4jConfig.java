@@ -19,7 +19,8 @@ import org.springframework.util.StringUtils;
 public class LangChain4jConfig {
 
     @Bean
-    public ChatModel chatModel(DeepSeekProperties props, TracingChatModelListener tracingListener) {
+    @ConditionalOnProperty(prefix = "resumai.workflow", name = "mode", havingValue = "java")
+    public ChatModel chatModelWithTracing(DeepSeekProperties props, TracingChatModelListener tracingListener) {
         return OpenAiChatModel.builder()
                 .baseUrl("https://api.deepseek.com/v1")
                 .apiKey(props.getApiKey() != null ? props.getApiKey() : "sk-placeholder")
@@ -29,6 +30,21 @@ public class LangChain4jConfig {
                 .maxTokens(8192)
                 .maxRetries(3)
                 .listeners(List.of(tracingListener))
+                .build();
+    }
+
+    @Bean
+    @Primary
+    @ConditionalOnProperty(prefix = "resumai.workflow", name = "mode", havingValue = "python", matchIfMissing = true)
+    public ChatModel chatModelWithoutTracing(DeepSeekProperties props) {
+        return OpenAiChatModel.builder()
+                .baseUrl("https://api.deepseek.com/v1")
+                .apiKey(props.getApiKey() != null ? props.getApiKey() : "sk-placeholder")
+                .modelName(props.getModel())
+                .timeout(Duration.ofMillis(props.getReadTimeoutMs()))
+                .temperature(0.2)
+                .maxTokens(8192)
+                .maxRetries(3)
                 .build();
     }
 
@@ -50,6 +66,22 @@ public class LangChain4jConfig {
                 .baseUrl(embeddingProps.getBaseUrl())
                 .apiKey(embeddingProps.getApiKey())
                 .modelName(embeddingProps.getModel())
+                .timeout(Duration.ofMillis(embeddingProps.getReadTimeoutMs()))
+                .maxRetries(1)
+                .build();
+    }
+
+    @Bean
+    @Primary
+    @ConditionalOnProperty(prefix = "resumai.embedding", name = "provider", havingValue = "openrouter")
+    public EmbeddingModel openRouterEmbeddingModel(EmbeddingProperties embeddingProps) {
+        if (!StringUtils.hasText(embeddingProps.getApiKey())) {
+            return new NoopEmbeddingModel();
+        }
+        return OpenAiEmbeddingModel.builder()
+                .baseUrl(StringUtils.hasText(embeddingProps.getBaseUrl()) ? embeddingProps.getBaseUrl() : "https://openrouter.ai/api/v1")
+                .apiKey(embeddingProps.getApiKey())
+                .modelName(StringUtils.hasText(embeddingProps.getModel()) ? embeddingProps.getModel() : "openai/text-embedding-3-small")
                 .timeout(Duration.ofMillis(embeddingProps.getReadTimeoutMs()))
                 .maxRetries(1)
                 .build();

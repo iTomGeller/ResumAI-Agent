@@ -1,0 +1,107 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1854 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(DevOps Kubernetes Engineer Candidate 168) Tj
+T*
+(DevOps Kubernetes Engineer | 2 years experience) Tj
+T*
+(Email: candidate168@example.com) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(Managed Kubernetes clusters, Helm charts, blue-green deployment, and SLO monitoring. Batch 12, domain sce) Tj
+T*
+(nario 6.) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Kubernetes, Docker, Helm, CI/CD, SRE, REST API, documentation, monitoring, cross-team collaboration.) Tj
+T*
+() Tj
+T*
+(Experience) Tj
+T*
+(2021.01 - Present  Bluefin AI  DevOps Kubernetes Engineer) Tj
+T*
+(- Delivered production features related to Managed Kubernetes clusters, Helm charts, blue-green deploymen) Tj
+T*
+(t, and SLO monitoring.) Tj
+T*
+(- Collaborated with backend, product, QA, and operations teams.) Tj
+T*
+(- Improved reliability, observability, and delivery quality with measurable engineering practices.) Tj
+T*
+(- Measured outcome: improved query cost 31% through design review, rollout control, dashboards, and incid) Tj
+T*
+(ent retrospectives.) Tj
+T*
+() Tj
+T*
+(2019.07 - 2020.12  Prior Systems  Engineer) Tj
+T*
+(- Maintained legacy modules, wrote migration plans, reviewed pull requests, and handled production defect) Tj
+T*
+(s.) Tj
+T*
+(- Worked with customer success and security teams to resolve escalations.) Tj
+T*
+() Tj
+T*
+(Project) Tj
+T*
+(Domain Platform Improvement 168) Tj
+T*
+(- Designed implementation plan, handled rollout, monitored metrics, and produced post-launch review.) Tj
+T*
+(- Evidence includes dashboards, logs, pull requests, design docs, and incident notes.) Tj
+T*
+() Tj
+T*
+(Side Project) Tj
+T*
+(Knowledge Base Evaluation 168) Tj
+T*
+(- Built retrieval test cases, labeled relevant snippets, compared lexical, embedding, and hybrid search q) Tj
+T*
+(uality.) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2016.09 - 2020.06  Example University  B.S. Computer Science) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000296 00000 n 
+trailer
+<< /Size 5 /Root 1 0 R >>
+startxref
+2202
+%%EOF

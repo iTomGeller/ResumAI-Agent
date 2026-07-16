@@ -1,0 +1,166 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2518 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Chen Fang) Tj
+T*
+(Gender: Female    Objective: DevOps / SRE Engineer    Location: Xiamen) Tj
+T*
+(Phone: 19738453500    Email: chenfang1589@163.com    GitHub: https://github.com/chenfang322) Tj
+T*
+() Tj
+T*
+(Education) Tj
+T*
+(2015.09 - 2019.06    University of Electronic Science and Technology of China    Data Science and Big Dat) Tj
+T*
+(a Technology \(M.S.\)) Tj
+T*
+(Courses: Computer Organization, Operating Systems, Compilers, Design Patterns, Software Engineering, Comp) Tj
+T*
+(uter Networks) Tj
+T*
+(GPA 3.5/4.0, top 15% in major; merit scholarship) Tj
+T*
+() Tj
+T*
+(Summary) Tj
+T*
+(DevOps/SRE engineer focused on Kubernetes stability, CI/CD and monitoring, skilled in incident handling a) Tj
+T*
+(nd capacity planning.) Tj
+T*
+() Tj
+T*
+(Work Experience) Tj
+T*
+(2021.07 - Present    a SaaS company    DevOps Engineer) Tj
+T*
+(- Operated Kubernetes clusters and ensured stability across multiple production environments, ensuring on) Tj
+T*
+(line service stability.) Tj
+T*
+(- Built log collection \(ELK/Loki\) and distributed tracing, reused across multiple business lines.) Tj
+T*
+(- Wrote automation scripts and an ops platform to cut manual work, recognized by stakeholders and peers.) Tj
+T*
+(- Built Prometheus + Grafana monitoring and alerting with SLOs and error budgets, supporting rapid busine) Tj
+T*
+(ss growth.) Tj
+T*
+(2019.07 - 2021.06    Meituan    Junior DevOps Engineer) Tj
+T*
+(- Optimized image builds and artifact management, cutting build time significantly, and related standards) Tj
+T*
+( were adopted by the team.) Tj
+T*
+(- Drove containerization and resource governance, raising cluster utilization by 46%, ensuring online ser) Tj
+T*
+(vice stability.) Tj
+T*
+(- Handled incidents and capacity planning, reducing MTTR by 30%.) Tj
+T*
+() Tj
+T*
+(Projects) Tj
+T*
+(Unified Monitoring & Alerting \(Prometheus + Grafana + Alertmanager\)) Tj
+T*
+(- Alert tiering and noise reduction via Alertmanager, significantly lowering maintenance cost.) Tj
+T*
+(- Collected multi-dimensional metrics with Prometheus.) Tj
+T*
+(- Reduced MTTR by 30%.) Tj
+T*
+(- Grafana dashboards and SLO management, reused across multiple business lines.) Tj
+T*
+(Containerized Release Platform \(Kubernetes + Helm + ArgoCD\)) Tj
+T*
+(- Standardized releases with Kubernetes and Helm.) Tj
+T*
+(- Adopted ArgoCD for GitOps.) Tj
+T*
+(- Raised cluster utilization by 46%, and it became a reusable team best practice.) Tj
+T*
+(- Supported blue-green and gray releases, and key metrics improved steadily.) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1123 >>
+stream
+BT
+/F1 10 Tf
+50 790 Td
+14 TL
+(Highlights) Tj
+T*
+(- Drove a focused effort on CI/CD pipelines, reducing related issues by about 30%) Tj
+T*
+(- Owned core modules that steadily served 4360K daily visits with 99.9%+ availability) Tj
+T*
+(- Work around Helm and GitOps delivered about 46% efficiency gains and was reused across the team) Tj
+T*
+(- Established metrics and reviews around computer networking basics to keep improving delivery quality) Tj
+T*
+(- Continuously optimized root-cause analysis and postmortems, cutting key-path latency from 2200ms to 220) Tj
+T*
+(ms) Tj
+T*
+() Tj
+T*
+(Skills) Tj
+T*
+(Core skills: SRE reliability practices, Kubernetes, Kubernetes and container orchestration, CI/CD pipelin) Tj
+T*
+(es, Prometheus) Tj
+T*
+(Proficient in: Prometheus/Grafana, Docker, Helm and GitOps, CI/CD, SRE) Tj
+T*
+(Familiar with: Helm, Grafana, Shell, Shell/Python scripting, Python) Tj
+T*
+() Tj
+T*
+(Self Evaluation) Tj
+T*
+(- Enjoys retrospectives, cares about code quality and observability, and makes data-driven decisions) Tj
+T*
+(- Business-minded, good at balancing technical design against delivery timelines) Tj
+T*
+ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000302 00000 n 
+0000002872 00000 n 
+0000003047 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+4222
+%%EOF
