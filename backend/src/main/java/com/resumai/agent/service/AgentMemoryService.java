@@ -2,7 +2,6 @@ package com.resumai.agent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.resumai.agent.api.dto.WorkflowResultRequest;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,32 +43,37 @@ public class AgentMemoryService {
         }
     }
 
-    public synchronized void recordWorkflowResult(WorkflowResultRequest request) {
-        if (request == null || !StringUtils.hasText(request.traceId())) {
+    /**
+     * File-based episodic/procedural memory for finished evaluations. The
+     * unified run pipeline records the same signals through MemoryService
+     * (memory_entry table); this JSON store remains for the analytics
+     * overview endpoints.
+     */
+    public synchronized void recordRunOutcome(String traceId, String status,
+                                              String recommendation, Integer overallScore,
+                                              Long durationMs, String summary) {
+        if (!StringUtils.hasText(traceId)) {
             return;
         }
-
         Map<String, Object> episodic = memoryRecord(
                 "episodic",
-                "workflow_result",
-                request.traceId(),
-                tagsFor(request),
-                compact(request.summary(), 1200),
+                "run_result",
+                traceId,
+                tagsFor(status, recommendation, overallScore, summary),
+                compact(summary, 1200),
                 Map.of(
-                        "status", valueOrEmpty(request.status()),
-                        "recommendation", valueOrEmpty(request.recommendation()),
-                        "score", request.overallScore() == null ? 0 : request.overallScore(),
-                        "durationMs", request.durationMs() == null ? 0 : request.durationMs()),
+                        "status", valueOrEmpty(status),
+                        "recommendation", valueOrEmpty(recommendation),
+                        "score", overallScore == null ? 0 : overallScore,
+                        "durationMs", durationMs == null ? 0 : durationMs),
                 "future_routing_and_report_context",
                 "Use as similar case only; never as candidate fact evidence.",
-                importance(request),
+                importance(status, recommendation, overallScore, durationMs),
                 0.86);
         prependAndTrim(episodicPath, episodic, 1000);
 
-        for (Map<String, Object> semantic : deriveSemanticMemories(request)) {
-            upsertMemory(semanticPath, semantic, "content", 300);
-        }
-        for (Map<String, Object> procedural : deriveProceduralMemories(request)) {
+        for (Map<String, Object> procedural : deriveProceduralMemories(
+                traceId, summary, durationMs, recommendation, overallScore)) {
             upsertMemory(proceduralPath, procedural, "recommendedAction", 200);
         }
     }
@@ -142,37 +146,31 @@ public class AgentMemoryService {
                 .toList();
     }
 
-    /**
-     * Semantic memory is intentionally disabled: generic keyword-triggered "standards" fired for almost
-     * every resume and read as fabricated. Honest memory = episodic (similar past cases) + procedural
-     * (operational rules). Returning empty keeps memory genuine and explainable.
-     */
-    private List<Map<String, Object>> deriveSemanticMemories(WorkflowResultRequest request) {
-        return new ArrayList<>();
-    }
-
-    private List<Map<String, Object>> deriveProceduralMemories(WorkflowResultRequest request) {
-        String text = compact(request.summary(), 1600);
+    private List<Map<String, Object>> deriveProceduralMemories(String traceId, String summary,
+                                                               Long durationMs,
+                                                               String recommendation,
+                                                               Integer overallScore) {
+        String text = compact(summary, 1600);
         List<Map<String, Object>> records = new ArrayList<>();
-        if (containsAny(text, "resumeTextLength=81", "短简历", "信息较少", "证据不足")) {
-            records.add(memoryRecord("procedural", "routing_policy", request.traceId(),
+        if (containsAny(text, "短简历", "信息较少", "证据不足")) {
+            records.add(memoryRecord("procedural", "routing_policy", traceId,
                     List.of("sparse_resume", "fallback"),
                     "短简历必须启用 sparse evidence policy，减少长上下文 LLM，但报告必须显式说明证据不足。",
                     Map.of("trigger", "short_resume"), "route,report_context",
                     "Use sparse policy and require evidence-gap explanation.", 0.84, 0.86));
         }
-        if (request.durationMs() != null && request.durationMs() > 45000) {
-            records.add(memoryRecord("procedural", "latency_policy", request.traceId(),
+        if (durationMs != null && durationMs > 45000) {
+            records.add(memoryRecord("procedural", "latency_policy", traceId,
                     List.of("latency", "context_pack"),
                     "长 PDF 或慢任务应使用结构化摘要和定向 RAG，避免每个 Agent 重复读取完整简历。",
-                    Map.of("durationMs", request.durationMs()), "context_policy",
+                    Map.of("durationMs", durationMs), "context_policy",
                     "Use context pack and dynamic query pruning.", 0.78, 0.8));
         }
-        if ("NOT_RECOMMEND".equals(request.recommendation()) || (request.overallScore() != null && request.overallScore() < 60)) {
-            records.add(memoryRecord("procedural", "question_policy", request.traceId(),
+        if ("NOT_RECOMMEND".equals(recommendation) || (overallScore != null && overallScore < 60)) {
+            records.add(memoryRecord("procedural", "question_policy", traceId,
                     List.of("low_score", "interview_questions"),
                     "低分或不推荐候选人必须生成具体补充材料和验证型追问，不允许只给泛化问题。",
-                    Map.of("score", request.overallScore() == null ? 0 : request.overallScore()), "questions",
+                    Map.of("score", overallScore == null ? 0 : overallScore), "questions",
                     "Generate concrete evidence-gap questions.", 0.82, 0.82));
         }
         return records;
@@ -214,24 +212,26 @@ public class AgentMemoryService {
         return record;
     }
 
-    private List<String> tagsFor(WorkflowResultRequest request) {
+    private List<String> tagsFor(String status, String recommendation,
+                                 Integer overallScore, String summaryText) {
         List<String> tags = new ArrayList<>();
-        tags.add("workflow");
-        if (StringUtils.hasText(request.recommendation())) tags.add(request.recommendation().toLowerCase());
-        if (request.overallScore() != null && request.overallScore() < 60) tags.add("low_score");
-        String summary = request.summary() == null ? "" : request.summary().toLowerCase();
+        tags.add("run");
+        if (StringUtils.hasText(recommendation)) tags.add(recommendation.toLowerCase());
+        if (overallScore != null && overallScore < 60) tags.add("low_score");
+        String summary = summaryText == null ? "" : summaryText.toLowerCase();
         if (summary.contains("rag")) tags.add("rag");
         if (summary.contains("agent")) tags.add("agent");
         if (summary.contains("github")) tags.add("external_profile");
         return tags.stream().distinct().toList();
     }
 
-    private double importance(WorkflowResultRequest request) {
+    private double importance(String status, String recommendation,
+                              Integer overallScore, Long durationMs) {
         double value = 0.4;
-        if ("FAILED".equals(request.status())) value += 0.4;
-        if ("NOT_RECOMMEND".equals(request.recommendation())) value += 0.2;
-        if (request.overallScore() != null && request.overallScore() < 50) value += 0.2;
-        if (request.durationMs() != null && request.durationMs() > 45000) value += 0.1;
+        if ("FAILED".equals(status)) value += 0.4;
+        if ("NOT_RECOMMEND".equals(recommendation)) value += 0.2;
+        if (overallScore != null && overallScore < 50) value += 0.2;
+        if (durationMs != null && durationMs > 45000) value += 0.1;
         return Math.min(value, 1.0);
     }
 

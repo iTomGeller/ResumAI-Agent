@@ -17,6 +17,7 @@ import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ConversationMessage;
 import com.resumai.agent.domain.entity.ConversationSession;
 import com.resumai.agent.domain.entity.ResumeTask;
+import com.resumai.agent.service.run.AgentRuntimeClient;
 import com.resumai.agent.service.run.RunLifecycleService;
 import com.resumai.agent.service.run.RunQueueService;
 import com.resumai.agent.service.run.RunSchedulerService;
@@ -44,7 +45,7 @@ public class ConversationService {
     private final ResumeEvaluationService evaluationService;
     private final TaskControlService taskControlService;
     private final ConversationIntentClassifier classifier;
-    private final WorkflowClient workflowClient;
+    private final AgentRuntimeClient runtimeClient;
     private final ObjectMapper objectMapper;
     private final RunQueueService runQueueService;
     private final RunSchedulerService runSchedulerService;
@@ -57,7 +58,7 @@ public class ConversationService {
                                ResumeEvaluationService evaluationService,
                                TaskControlService taskControlService,
                                ConversationIntentClassifier classifier,
-                               WorkflowClient workflowClient,
+                               AgentRuntimeClient runtimeClient,
                                ObjectMapper objectMapper,
                                RunQueueService runQueueService,
                                RunSchedulerService runSchedulerService,
@@ -69,7 +70,7 @@ public class ConversationService {
         this.evaluationService = evaluationService;
         this.taskControlService = taskControlService;
         this.classifier = classifier;
-        this.workflowClient = workflowClient;
+        this.runtimeClient = runtimeClient;
         this.objectMapper = objectMapper;
         this.runQueueService = runQueueService;
         this.runSchedulerService = runSchedulerService;
@@ -277,7 +278,8 @@ public class ConversationService {
         String runType = runTypeClassifier.classify(request.content(), session.getJobCategory());
         RunQueueService.SubmitResult submit = runQueueService.submit(
                 session.getId(), session.getUserId(), session.getActiveTraceId(),
-                resultingRevision, runType, queueMode, request.content(), userMessage.getId());
+                resultingRevision, runType, queueMode, request.content(), userMessage.getId(),
+                request.forcedPolicyId());
         runSchedulerService.kick();
 
         AgentRun run = submit.run();
@@ -482,7 +484,7 @@ public class ConversationService {
         context.put("interviewQuestions", activeView.interviewQuestions());
         context.put("risks", activeView.risks());
         request.put("context", context);
-        Optional<Map<String, Object>> runtime = workflowClient.resolveConversationTurn(request);
+        Optional<Map<String, Object>> runtime = runtimeClient.resolveConversationTurn(request);
         if (runtime.isEmpty()) {
             return new RuntimeTurn(localDecision, null);
         }

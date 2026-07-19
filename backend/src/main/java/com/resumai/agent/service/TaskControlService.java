@@ -4,14 +4,22 @@ import com.resumai.agent.api.dto.TaskControlRequest;
 import com.resumai.agent.api.dto.TaskControlResponse;
 import com.resumai.agent.api.ApiConflictException;
 import com.resumai.agent.api.ApiNotFoundException;
+import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ResumeTask;
 import com.resumai.agent.domain.enums.QueueStatus;
+import com.resumai.agent.domain.enums.RunStatus;
+import com.resumai.agent.service.run.RunLifecycleService;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+/**
+ * Control plane for legacy resume_task rows. Since the cutover every task
+ * evaluation is one agent run, so PAUSE/RESUME/CANCEL delegate to the unified
+ * run lifecycle (/agent/runs). Java task status stays authoritative.
+ */
 @Service
 public class TaskControlService {
 
@@ -23,14 +31,14 @@ public class TaskControlService {
 
     private final ResumeEvaluationService evaluationService;
     private final TaskQueueService taskQueueService;
-    private final WorkflowClient workflowClient;
+    private final RunLifecycleService runLifecycleService;
 
     public TaskControlService(ResumeEvaluationService evaluationService,
                               TaskQueueService taskQueueService,
-                              WorkflowClient workflowClient) {
+                              RunLifecycleService runLifecycleService) {
         this.evaluationService = evaluationService;
         this.taskQueueService = taskQueueService;
-        this.workflowClient = workflowClient;
+        this.runLifecycleService = runLifecycleService;
     }
 
     public TaskControlResponse control(String traceId, TaskControlRequest.Action action) {
@@ -53,6 +61,10 @@ public class TaskControlService {
         };
     }
 
+    private AgentRun linkedRun(String runId) {
+        return runLifecycleService.getRun(runId);
+    }
+
     private TaskControlResponse pause(ResumeTask row, String runId) {
         if ("PAUSED".equals(row.getStatus()) || "PAUSING".equals(row.getStatus())) {
             return response(row, "PAUSE", row.getStatus(), "暂停请求已接收。", runId);
@@ -73,27 +85,27 @@ public class TaskControlService {
         }
         if (!evaluationService.compareAndSetControlState(
                 row.getTraceId(), Set.of("RUNNING"), "PAUSING", QueueStatus.RUNNING.name(),
-                "正在安全暂停：当前节点结束后写入 checkpoint。")) {
+                "正在安全暂停：当前 Agent 组结束后写入执行快照。")) {
             return resolveLostTransition(
                     row, "PAUSE", Set.of("PAUSING", "PAUSED"), runId,
                     "暂停请求已由并发操作处理。");
         }
-        try {
-            workflowClient.controlWorkflow(
-                    runId, "PAUSE", row.getTraceId(), row.getConversationId(), row.getRevisionNo());
-        } catch (Exception e) {
-            boolean reverted = evaluationService.compareAndSetControlState(
+        AgentRun run = linkedRun(runId);
+        if (run == null || RunStatus.isTerminal(run.getStatus())) {
+            evaluationService.compareAndSetControlState(
+                    row.getTraceId(), Set.of("PAUSING"), "RUNNING", QueueStatus.RUNNING.name(),
+                    "运行已结束或不可暂停。");
+            throw new ApiConflictException("运行不存在或已结束，无法暂停");
+        }
+        AgentRun latest = runLifecycleService.pauseActiveRun(run, "用户暂停任务");
+        if (!RunStatus.PAUSING.name().equals(latest.getStatus())
+                && !RunStatus.isPaused(latest.getStatus())) {
+            evaluationService.compareAndSetControlState(
                     row.getTraceId(), Set.of("PAUSING"), "RUNNING", QueueStatus.RUNNING.name(),
                     "暂停请求未送达 runtime，任务仍在运行。");
-            if (!reverted) {
-                ResumeTask latest = reload(row.getTraceId());
-                if ("PAUSED".equals(latest.getStatus())) {
-                    return response(latest, "PAUSE", "PAUSED", "已在 checkpoint 安全暂停。", runId);
-                }
-            }
-            throw new IllegalStateException("暂停请求失败，任务仍在运行：" + e.getMessage(), e);
+            throw new IllegalStateException("暂停请求失败，任务仍在运行");
         }
-        return response(row, "PAUSE", "PAUSING", "正在安全暂停，当前节点结束后生效。", runId);
+        return response(row, "PAUSE", "PAUSING", "正在安全暂停，当前 Agent 组结束后生效。", runId);
     }
 
     private TaskControlResponse resume(ResumeTask row, String runId) {
@@ -101,12 +113,9 @@ public class TaskControlService {
             return response(row, "RESUME", "RUNNING", "任务已在运行，无需重复恢复。", runId);
         }
         if ("RESUMING".equals(row.getStatus())) {
-            return response(row, "RESUME", "RESUMING", "任务正在从 checkpoint 恢复。", runId);
+            return response(row, "RESUME", "RESUMING", "任务正在从快照恢复。", runId);
         }
-        if ("PAUSING".equals(row.getStatus())) {
-            return resumeRuntimeTask(row, runId, "PAUSING", "暂停请求已撤回，任务继续运行。");
-        }
-        if (!"PAUSED".equals(row.getStatus())) {
+        if (!"PAUSED".equals(row.getStatus()) && !"PAUSING".equals(row.getStatus())) {
             throw new ApiConflictException("只有 PAUSED 任务可以继续，当前状态：" + row.getStatus());
         }
         if (row.getStartedAt() == null) {
@@ -129,37 +138,29 @@ public class TaskControlService {
             }
             return response(row, "RESUME", "QUEUED", "已恢复并重新入队。", runId);
         }
-        return resumeRuntimeTask(row, runId, "PAUSED", "已从当前 revision 的 checkpoint 继续运行。");
-    }
-
-    private TaskControlResponse resumeRuntimeTask(ResumeTask row, String runId,
-                                                  String expectedStatus, String successMessage) {
+        AgentRun run = linkedRun(runId);
+        if (run == null) {
+            throw new ApiConflictException("找不到对应运行，无法恢复：" + runId);
+        }
         if (!evaluationService.compareAndSetControlState(
-                row.getTraceId(), Set.of(expectedStatus), "RESUMING", QueueStatus.RESUMING.name(),
-                "正在从当前 revision 的 checkpoint 恢复。")) {
+                row.getTraceId(), Set.of("PAUSED", "PAUSING"), "RESUMING",
+                QueueStatus.RESUMING.name(), "正在从执行快照恢复。")) {
             return resolveLostTransition(
                     row, "RESUME", Set.of("RUNNING", "RESUMING"), runId,
                     "恢复请求已由并发操作处理。");
         }
         try {
-            workflowClient.controlWorkflow(
-                    runId, "RESUME", row.getTraceId(), row.getConversationId(), row.getRevisionNo());
+            runLifecycleService.resumePausedRun(run);
         } catch (Exception e) {
             evaluationService.compareAndSetControlState(
-                    row.getTraceId(), Set.of("RESUMING"), expectedStatus,
-                    "PAUSING".equals(expectedStatus) ? QueueStatus.RUNNING.name() : QueueStatus.PAUSED.name(),
-                    "恢复 checkpoint 失败，任务保持原状态。" );
-            throw new IllegalStateException("恢复 checkpoint 失败：" + e.getMessage(), e);
+                    row.getTraceId(), Set.of("RESUMING"), "PAUSED", QueueStatus.PAUSED.name(),
+                    "恢复失败，任务保持暂停。");
+            throw new IllegalStateException("恢复失败：" + e.getMessage(), e);
         }
-        boolean transitioned = evaluationService.compareAndSetControlState(
+        evaluationService.compareAndSetControlState(
                 row.getTraceId(), Set.of("RESUMING"), "RUNNING", QueueStatus.RUNNING.name(),
-                successMessage);
-        if (!transitioned) {
-            return resolveLostTransition(
-                    row, "RESUME", Set.of("RUNNING", "SUCCESS", "PARTIAL_SUCCESS"), runId,
-                    "恢复已完成或任务已结束。");
-        }
-        return response(row, "RESUME", "RUNNING", successMessage, runId);
+                "已从执行快照继续运行。");
+        return response(row, "RESUME", "RUNNING", "已从执行快照继续运行。", runId);
     }
 
     private TaskControlResponse cancel(ResumeTask row, String runId) {
@@ -173,7 +174,15 @@ public class TaskControlService {
                     row, "CANCEL", Set.of("CANCELLED"), runId,
                     "取消请求已由并发操作处理。");
         }
-        tryControl(row, runId, "CANCEL");
+        AgentRun run = linkedRun(runId);
+        if (run != null && !RunStatus.isTerminal(run.getStatus())) {
+            try {
+                runLifecycleService.cancelActiveRun(run, "user_cancelled", "用户取消任务");
+            } catch (Exception e) {
+                // Java status is authoritative; the late-result fence protects us.
+                log.info("run cancel deferred run={}: {}", runId, e.getMessage());
+            }
+        }
         return response(row, "CANCEL", "CANCELLED", "已立即取消；迟到结果会被丢弃。", runId);
     }
 
@@ -193,17 +202,6 @@ public class TaskControlService {
     private ResumeTask reload(String traceId) {
         return evaluationService.loadResumeTaskRow(traceId)
                 .orElseThrow(() -> new ApiNotFoundException("任务不存在：" + traceId));
-    }
-
-    private void tryControl(ResumeTask row, String runId, String action) {
-        try {
-            workflowClient.controlWorkflow(
-                    runId, action, row.getTraceId(), row.getConversationId(), row.getRevisionNo());
-        } catch (Exception e) {
-            // Java status is authoritative. A queued run needs no Python process;
-            // a running run will still be protected by the late-result guard.
-            log.info("workflow control deferred run={} action={}: {}", runId, action, e.getMessage());
-        }
     }
 
     private TaskControlResponse response(ResumeTask row, String action, String status,

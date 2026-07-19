@@ -5,8 +5,6 @@ import com.resumai.agent.api.dto.InternalProfileRequest;
 import com.resumai.agent.api.dto.InternalResumeSearchRequest;
 import com.resumai.agent.api.dto.InternalSkillExecuteRequest;
 import com.resumai.agent.api.dto.JdMatchResult;
-import com.resumai.agent.api.dto.WorkflowResultRequest;
-import com.resumai.agent.api.dto.WorkflowTraceEventRequest;
 import com.resumai.agent.ai.SkillProvider;
 import com.resumai.agent.service.ExternalProfileService;
 import com.resumai.agent.service.AgentMemoryService;
@@ -57,22 +55,6 @@ public class InternalWorkflowController {
         if (!internalWorkflowService.authorize(token)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid internal token");
         }
-    }
-
-    @PostMapping("/workflow/events")
-    public Map<String, String> ingestEvent(@RequestHeader("X-Internal-Token") String token,
-                                           @RequestBody WorkflowTraceEventRequest request) {
-        authorize(token);
-        internalWorkflowService.upsertTraceEvent(request);
-        return Map.of("status", "OK");
-    }
-
-    @PostMapping("/workflow/result")
-    public Map<String, String> ingestResult(@RequestHeader("X-Internal-Token") String token,
-                                            @RequestBody WorkflowResultRequest request) {
-        authorize(token);
-        internalWorkflowService.applyWorkflowResult(request);
-        return Map.of("status", "OK");
     }
 
     @PostMapping("/tools/resume-search")
