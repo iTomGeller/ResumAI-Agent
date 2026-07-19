@@ -1,4 +1,5 @@
-target/
+target/*
+!target/resumai-agent-backend.jar
 .mvn/
 *.iml
 .idea/

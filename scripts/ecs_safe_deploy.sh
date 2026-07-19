@@ -74,6 +74,10 @@ grep -E 'resumai-mysql-data|resumai-redis-data|resumai-workflow-postgres-data' /
 
 log "Java compile + package"
 cd "$SRC_DIR/backend"
+# System default mvn may resolve a JDK without --release 21 support; pin JDK 21.
+if [[ -d /usr/lib/jvm/java-21-openjdk-amd64 ]]; then
+  export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+fi
 if [[ ! -f settings.xml ]]; then
   cat > settings.xml <<'XML'
 <settings>
@@ -87,7 +91,8 @@ if [[ ! -f settings.xml ]]; then
 </settings>
 XML
 fi
-mvn -B -s settings.xml -DskipTests package
+# clean is mandatory: stale target/classes would be repackaged into the jar
+mvn -B -s settings.xml -DskipTests clean package
 JAR="$(ls -1 target/resumai-agent-backend-*.jar 2>/dev/null | grep -v original | head -1)"
 test -n "$JAR"
 cp -f "$JAR" target/resumai-agent-backend.jar
@@ -96,17 +101,23 @@ ls -lh target/resumai-agent-backend.jar
 log "fetch Temurin JRE cache if missing"
 mkdir -p "$SRC_DIR/backend/.jre-cache"
 if [[ ! -f "$SRC_DIR/backend/.jre-cache/temurin-21-jre.tar.gz" ]]; then
+  # Tsinghua Adoptium mirror first (mainland-stable), GitHub as fallback.
+  curl -fsSL --connect-timeout 15 -o "$SRC_DIR/backend/.jre-cache/temurin-21-jre.tar.gz" \
+    "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jre/x64/linux/OpenJDK21U-jre_x64_linux_hotspot_21.0.7_6.tar.gz" || \
   curl -fsSL -o "$SRC_DIR/backend/.jre-cache/temurin-21-jre.tar.gz" \
     "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.7%2B6/OpenJDK21U-jre_x64_linux_hotspot_21.0.7_6.tar.gz"
 fi
+ls -lh "$SRC_DIR/backend/.jre-cache/"
 
 log "frontend build (on ECS only)"
 cd "$SRC_DIR/frontend"
 npm config set registry https://registry.npmmirror.com
 if [[ -f package-lock.json ]]; then
-  npm ci
+  # npm ci is preferred; ECS ships npm 9 whose optional-dep resolution can
+  # disagree with a lockfile written by npm 10 — fall back to install then.
+  npm ci --no-audit --no-fund || npm install --no-audit --no-fund
 else
-  npm install
+  npm install --no-audit --no-fund
 fi
 npm run build
 test -d dist
