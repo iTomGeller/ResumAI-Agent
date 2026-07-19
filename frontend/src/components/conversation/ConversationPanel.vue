@@ -19,6 +19,8 @@ const emit = defineEmits<{
 }>();
 
 const draft = ref('');
+const queueMode = ref<'collect' | 'interrupt'>('collect');
+const feedbackSent = ref<Record<string, boolean>>({});
 const {
   activeTraceId,
   activeRevision,
@@ -30,11 +32,57 @@ const {
   error,
   lastTurn,
   lastControl,
+  activeRun,
+  runElapsedSeconds,
   loadConversation,
   sendMessage,
   controlTask,
+  cancelRun,
+  submitRunFeedback,
   reset,
 } = useConversation();
+
+const runStatusLabels: Record<string, string> = {
+  QUEUED: '排队中',
+  STARTING: '启动中',
+  RUNNING: '分析中',
+  WAITING_LLM: '模型生成中',
+  WAITING_TOOL: '工具执行中',
+  WAITING_SANDBOX: 'Sandbox 执行中',
+  CANCELLING: '取消中',
+  CANCELLED: '已取消',
+  SUCCEEDED: '已完成',
+  FAILED: '失败',
+  TIMED_OUT: '已超时',
+};
+
+const runActive = computed(() => !!activeRun.value
+  && !['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(activeRun.value.status));
+const runStatusLabel = computed(() => activeRun.value
+  ? (runStatusLabels[activeRun.value.status] || activeRun.value.status) : '');
+const lastFinishedRun = computed(() => activeRun.value
+  && ['SUCCEEDED', 'FAILED', 'TIMED_OUT'].includes(activeRun.value.status)
+  ? activeRun.value : null);
+
+async function stopGeneration() {
+  await cancelRun();
+}
+
+async function reanalyze() {
+  const lastUser = [...messages.value].reverse().find((m) => m.role === 'USER');
+  if (!lastUser) return;
+  await sendMessage(`重新分析：${lastUser.content}`, props.revisionNo, 'interrupt');
+}
+
+async function sendRunFeedback(runId: string, positive: boolean) {
+  const result = await submitRunFeedback(runId, {
+    ratingScore: positive ? 5 : 2,
+    accepted: positive,
+    recommendationAgreed: positive,
+    comment: positive ? '结果可用' : '结果需要改进',
+  });
+  if (result) feedbackSent.value = { ...feedbackSent.value, [runId]: true };
+}
 
 const statusLabels: Record<string, string> = {
   QUEUED: '排队中',
@@ -72,9 +120,10 @@ watch(() => props.conversationId || props.traceId, (id) => {
 async function submitMessage() {
   const content = draft.value.trim();
   if (!content) return;
-  const response = await sendMessage(content, props.revisionNo);
+  const response = await sendMessage(content, props.revisionNo, queueMode.value);
   if (!response) return;
   draft.value = '';
+  queueMode.value = 'collect';
   if (response.action === 'REVISION_CREATED' && response.activeTraceId) {
     emit('revisionCreated', response);
   } else if (['PAUSE', 'RESUME', 'CANCEL'].includes(response.action)) {
@@ -124,6 +173,38 @@ async function requestControl(action: ConversationControlAction) {
       </button>
     </div>
 
+    <div v-if="activeRun" class="run-monitor" :data-active="runActive">
+      <div class="run-monitor-row">
+        <span class="conversation-status" :data-status="activeRun.status">{{ runStatusLabel }}</span>
+        <span v-if="activeRun.queuePosition && activeRun.status === 'QUEUED'">队列第 {{ activeRun.queuePosition }} 位</span>
+        <span v-if="runActive" class="run-elapsed">{{ runElapsedSeconds }}s</span>
+        <button
+          v-if="runActive"
+          type="button"
+          class="run-stop"
+          @click="stopGeneration"
+        >停止生成</button>
+      </div>
+      <div v-if="runActive" class="run-monitor-row run-detail">
+        <span v-if="activeRun.currentAgent">Agent: {{ activeRun.currentAgent }}</span>
+        <span v-if="activeRun.currentTool">工具: {{ activeRun.currentTool }}</span>
+        <span v-if="activeRun.llmActive" class="run-llm">● LLM 调用中</span>
+        <span v-if="activeRun.retrying" class="run-retry">重试中…</span>
+        <span v-if="activeRun.policyId">策略: {{ activeRun.policyId }}</span>
+      </div>
+      <div v-if="activeRun.errorMessage" class="run-monitor-row run-error">
+        {{ activeRun.errorCode }} {{ activeRun.errorMessage }}
+      </div>
+      <div v-if="lastFinishedRun && !feedbackSent[lastFinishedRun.runId]" class="run-monitor-row run-feedback">
+        <span>这次结果有帮助吗？</span>
+        <button type="button" @click="sendRunFeedback(lastFinishedRun.runId, true)">👍 有用</button>
+        <button type="button" @click="sendRunFeedback(lastFinishedRun.runId, false)">👎 不准</button>
+      </div>
+      <div v-else-if="lastFinishedRun && feedbackSent[lastFinishedRun.runId]" class="run-monitor-row run-feedback">
+        <span>反馈已记录，将用于策略学习。</span>
+      </div>
+    </div>
+
     <RevisionSwitcher
       :revisions="displayRevisions"
       :active-trace-id="activeTraceId"
@@ -148,6 +229,16 @@ async function requestControl(action: ConversationControlAction) {
     <div v-if="error" class="conversation-error" role="alert">{{ error }}</div>
 
     <form class="conversation-composer" @submit.prevent="submitMessage">
+      <div v-if="runActive" class="queue-mode-picker">
+        <label :class="{ active: queueMode === 'collect' }">
+          <input v-model="queueMode" type="radio" value="collect" />
+          补充信息（当前任务完成后合并执行）
+        </label>
+        <label :class="{ active: queueMode === 'interrupt' }">
+          <input v-model="queueMode" type="radio" value="interrupt" />
+          打断重来（取消当前任务）
+        </label>
+      </div>
       <textarea
         v-model="draft"
         rows="3"
@@ -157,7 +248,16 @@ async function requestControl(action: ConversationControlAction) {
       />
       <div class="conversation-composer-foot">
         <span>Ctrl / ⌘ + Enter 发送</span>
-        <button type="submit" :disabled="sending || !draft.trim()">{{ sending ? '发送中…' : '发送' }}</button>
+        <div class="composer-actions">
+          <button
+            v-if="messages.length"
+            type="button"
+            class="composer-secondary"
+            :disabled="sending"
+            @click="reanalyze"
+          >重新分析</button>
+          <button type="submit" :disabled="sending || !draft.trim()">{{ sending ? '发送中…' : '发送' }}</button>
+        </div>
       </div>
     </form>
   </aside>
@@ -263,6 +363,81 @@ async function requestControl(action: ConversationControlAction) {
 .conversation-notice.is-success { background: var(--color-success-light); color: var(--color-success); }
 .conversation-notice.is-warning { background: var(--color-warning-light); color: var(--color-warning); }
 .conversation-error { background: var(--color-danger-light); color: var(--color-danger); }
+
+.run-monitor {
+  margin: 0 14px 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  font-size: 10px;
+}
+.run-monitor[data-active="true"] { border-color: var(--color-primary); }
+.run-monitor-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-secondary);
+}
+.run-monitor-row + .run-monitor-row { margin-top: 6px; }
+.run-detail span { padding: 1px 6px; border-radius: 6px; background: var(--color-surface); }
+.run-llm { color: var(--color-primary); animation: pulse 1.4s infinite; }
+.run-retry { color: var(--color-warning); }
+.run-elapsed { margin-left: auto; font-variant-numeric: tabular-nums; }
+.run-stop {
+  padding: 3px 10px;
+  border: 1px solid var(--color-danger);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-danger);
+  font-size: 10px;
+  font-weight: 600;
+}
+.run-error { color: var(--color-danger); }
+.run-feedback button {
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  font-size: 10px;
+}
+.conversation-status[data-status="WAITING_LLM"],
+.conversation-status[data-status="WAITING_TOOL"],
+.conversation-status[data-status="WAITING_SANDBOX"],
+.conversation-status[data-status="STARTING"],
+.conversation-status[data-status="CANCELLING"] { background: var(--color-warning-light); color: var(--color-warning); }
+.conversation-status[data-status="SUCCEEDED"] { background: var(--color-success-light); color: var(--color-success); }
+.conversation-status[data-status="TIMED_OUT"] { background: var(--color-danger-light); color: var(--color-danger); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.queue-mode-picker {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.queue-mode-picker label {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  color: var(--color-text-secondary);
+  font-size: 9px;
+  cursor: pointer;
+}
+.queue-mode-picker label.active { border-color: var(--color-primary); color: var(--color-primary); }
+.queue-mode-picker input { margin-right: 4px; }
+
+.composer-actions { display: flex; gap: 6px; }
+.composer-secondary {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
 
 .conversation-composer { padding: 12px 14px 14px; }
 .conversation-composer textarea {

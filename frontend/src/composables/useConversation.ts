@@ -44,6 +44,44 @@ export interface ConversationTurnResponse {
   activeRevision: number;
   supersededTraceId?: string;
   affectedNodes: string[];
+  runId?: string | null;
+  runStatus?: string | null;
+  queuePosition?: number | null;
+  queueMode?: string | null;
+  interruptedRunId?: string | null;
+}
+
+export type QueueMode = 'collect' | 'interrupt';
+
+export interface RunEventPayload {
+  runId: string;
+  conversationId: string;
+  seq: number;
+  eventType: string;
+  agentId?: string;
+  toolName?: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface RunView {
+  runId: string;
+  status: string;
+  runType?: string;
+  queuePosition?: number;
+  currentAgent?: string;
+  currentTool?: string;
+  currentPhase?: string;
+  policyId?: string;
+  answer?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  startedAt?: string;
+  createdAt?: string;
+  llmActive?: boolean;
+  retrying?: boolean;
+  lastEvent?: string;
+  events: RunEventPayload[];
 }
 
 export interface TaskControlResponse {
@@ -141,7 +179,190 @@ export function useConversation() {
     }
   }
 
-  async function sendMessage(content: string, expectedRevision?: number): Promise<ConversationTurnResponse | null> {
+  // ---------------- run tracking (SSE with replay) ----------------
+
+  const activeRun = ref<RunView | null>(null);
+  const runHistory = ref<RunView[]>([]);
+  let runSource: EventSource | null = null;
+  let runTimer: ReturnType<typeof setInterval> | null = null;
+  const runElapsedSeconds = ref(0);
+
+  const TERMINAL_RUN = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT']);
+
+  function closeRunStream() {
+    runSource?.close();
+    runSource = null;
+    if (runTimer) {
+      clearInterval(runTimer);
+      runTimer = null;
+    }
+  }
+
+  function watchRun(runId: string) {
+    closeRunStream();
+    activeRun.value = { runId, status: 'QUEUED', events: [] };
+    runElapsedSeconds.value = 0;
+    const startedAt = Date.now();
+    runTimer = setInterval(() => {
+      runElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000);
+    }, 1000);
+    // EventSource auto-reconnects and resends Last-Event-ID (runId:seq),
+    // so the backend replays missed run_event rows after a disconnect.
+    runSource = new EventSource(`/sse/runs/${encodeURIComponent(runId)}?afterSeq=0`);
+    runSource.addEventListener('run', (raw) => {
+      try {
+        const event = JSON.parse((raw as MessageEvent).data) as RunEventPayload;
+        applyRunEvent(event);
+      } catch {
+        /* malformed frame ignored */
+      }
+    });
+    runSource.onerror = () => {
+      /* EventSource retries automatically; state is rebuilt from replay */
+    };
+  }
+
+  function applyRunEvent(event: RunEventPayload) {
+    const run = activeRun.value && activeRun.value.runId === event.runId
+      ? activeRun.value
+      : { runId: event.runId, status: 'QUEUED', events: [] } as RunView;
+    run.events = [...run.events.slice(-199), event];
+    run.lastEvent = event.eventType;
+    const payload = event.payload || {};
+    if (event.agentId) run.currentAgent = event.agentId;
+    if (event.toolName) run.currentTool = event.toolName;
+    switch (event.eventType) {
+      case 'run.queued':
+        run.status = 'QUEUED';
+        run.queuePosition = Number(payload.queuePosition ?? 0) || undefined;
+        break;
+      case 'run.started':
+        run.status = 'RUNNING';
+        run.policyId = String(payload.policyId ?? '') || undefined;
+        run.queuePosition = undefined;
+        break;
+      case 'llm.started':
+        run.status = 'WAITING_LLM';
+        run.llmActive = true;
+        run.retrying = false;
+        break;
+      case 'llm.retrying':
+        run.retrying = true;
+        break;
+      case 'llm.completed':
+      case 'llm.failed':
+        run.llmActive = false;
+        run.status = 'RUNNING';
+        break;
+      case 'tool.started':
+        run.status = 'WAITING_TOOL';
+        break;
+      case 'tool.completed':
+      case 'tool.failed':
+        run.status = 'RUNNING';
+        run.currentTool = undefined;
+        break;
+      case 'sandbox.started':
+        run.status = 'WAITING_SANDBOX';
+        break;
+      case 'sandbox.completed':
+      case 'sandbox.failed':
+        run.status = 'RUNNING';
+        break;
+      case 'run.cancelling':
+        run.status = 'CANCELLING';
+        break;
+      case 'run.completed':
+        run.status = 'SUCCEEDED';
+        run.answer = String(payload.answer ?? '');
+        break;
+      case 'run.cancelled':
+        run.status = 'CANCELLED';
+        break;
+      case 'run.timed_out':
+        run.status = 'TIMED_OUT';
+        run.errorMessage = String(payload.errorMessage ?? '运行超时');
+        break;
+      case 'run.failed':
+        run.status = 'FAILED';
+        run.errorCode = String(payload.errorCode ?? '');
+        run.errorMessage = String(payload.errorMessage ?? '');
+        break;
+      default:
+        break;
+    }
+    activeRun.value = { ...run };
+    if (TERMINAL_RUN.has(run.status)) {
+      runHistory.value = [{ ...run }, ...runHistory.value].slice(0, 20);
+      closeRunStream();
+      void loadConversation(conversationId.value, true);
+    }
+  }
+
+  async function cancelRun(runId?: string): Promise<boolean> {
+    const target = runId || activeRun.value?.runId;
+    if (!target) return false;
+    try {
+      const response = await fetch(`/api/runs/${encodeURIComponent(target)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: '用户点击停止生成' }),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      if (activeRun.value && activeRun.value.runId === target) {
+        activeRun.value = { ...activeRun.value, status: 'CANCELLING' };
+      }
+      return true;
+    } catch (caught) {
+      error.value = caught instanceof Error ? caught.message : '取消失败';
+      return false;
+    }
+  }
+
+  async function submitRunFeedback(runId: string, payload: {
+    ratingScore: number;
+    comment?: string;
+    accepted?: boolean;
+    recommendationAgreed?: boolean;
+    scoreDelta?: number;
+    missedEvidenceCount?: number;
+    unsupportedClaimCount?: number;
+    riskJudgementCorrect?: boolean;
+  }): Promise<{ reward?: number } | null> {
+    try {
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      return await response.json() as { reward?: number };
+    } catch (caught) {
+      error.value = caught instanceof Error ? caught.message : '反馈提交失败';
+      return null;
+    }
+  }
+
+  async function createConversation(payload: {
+    title?: string; resumeText: string; jobDescription?: string; jobCategory?: string;
+  }): Promise<string | null> {
+    try {
+      const response = await fetch('/api/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const body = await response.json() as { conversationId: string };
+      return body.conversationId;
+    } catch (caught) {
+      error.value = caught instanceof Error ? caught.message : '会话创建失败';
+      return null;
+    }
+  }
+
+  async function sendMessage(content: string, expectedRevision?: number,
+                             queueMode: QueueMode = 'collect'): Promise<ConversationTurnResponse | null> {
     const trimmed = content.trim();
     if (!trimmed || !conversationId.value || sending.value) return null;
 
@@ -167,11 +388,24 @@ export function useConversation() {
           clientMessageId: messageId,
           content: trimmed,
           expectedRevision: activeRevision.value || expectedRevision || undefined,
+          queueMode,
         }),
       });
       if (!response.ok) throw new Error(await responseError(response));
       const turn = await response.json() as ConversationTurnResponse;
       lastTurn.value = turn;
+      if (turn.runId) {
+        watchRun(turn.runId);
+        if (turn.queuePosition) {
+          activeRun.value = {
+            ...(activeRun.value ?? { runId: turn.runId, events: [] }),
+            runId: turn.runId,
+            status: turn.runStatus || 'QUEUED',
+            queuePosition: turn.queuePosition,
+            events: activeRun.value?.events ?? [],
+          };
+        }
+      }
 
       messages.value.push({
         id: optimisticId - 1,
@@ -231,7 +465,10 @@ export function useConversation() {
     }
   }
 
-  onScopeDispose(() => loadController?.abort());
+  onScopeDispose(() => {
+    loadController?.abort();
+    closeRunStream();
+  });
 
   return {
     conversationId,
@@ -245,9 +482,16 @@ export function useConversation() {
     error,
     lastTurn,
     lastControl,
+    activeRun,
+    runHistory,
+    runElapsedSeconds,
     loadConversation,
     sendMessage,
     controlTask,
+    cancelRun,
+    submitRunFeedback,
+    createConversation,
+    watchRun,
     reset,
   };
 }
