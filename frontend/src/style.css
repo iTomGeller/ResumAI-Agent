@@ -543,6 +543,23 @@ select.form-input { appearance: auto; }
   gap: var(--space-sm);
 }
 
+.candidate-detail-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  align-items: start;
+  gap: var(--space-xl);
+}
+
+.candidate-detail-main {
+  min-width: 0;
+}
+
+@media (max-width: 1080px) {
+  .candidate-detail-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* === RESUME PREVIEW === */
 .resume-preview {
   font-size: 13px;

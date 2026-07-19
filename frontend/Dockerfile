@@ -5,10 +5,10 @@ RUN npm config set registry https://registry.npmmirror.com \
     && npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000
 COPY package*.json ./
-RUN npm install --no-audit --no-fund --legacy-peer-deps \
+RUN npm ci --no-audit --no-fund \
     || (npm config set registry https://registry.npmjs.org \
         && npm cache clean --force \
-        && npm install --no-audit --no-fund --legacy-peer-deps)
+        && npm ci --no-audit --no-fund)
 COPY . .
 RUN npm run build
 
