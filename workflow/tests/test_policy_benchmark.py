@@ -1,4 +1,4 @@
-"""Smoke test for the sandbox replay benchmark (repo-root harness).
+"""Contract-benchmark smoke tests (repo-root harness).
 
 Inside the workflow Docker image the repo-root ``harness/`` package and
 ``testdata/`` are not shipped, so this module skips itself there instead of
@@ -14,13 +14,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 CASE_DIR = ROOT / "testdata" / "benchmark"
 
-if not (ROOT / "harness" / "run_policy_benchmark.py").exists() or not CASE_DIR.exists():
+if not (ROOT / "harness" / "run_policy_contract_benchmark.py").exists() \
+        or not CASE_DIR.exists():
     pytest.skip("repo-root harness/testdata not present in this environment",
                 allow_module_level=True)
 
 sys.path.insert(0, str(ROOT))
 
-from harness.run_policy_benchmark import aggregate, load_cases, run_case  # noqa: E402
+from harness.run_policy_contract_benchmark import (  # noqa: E402
+    aggregate,
+    load_cases,
+    run_case,
+)
 
 
 def test_load_cases_schema():
@@ -32,14 +37,29 @@ def test_load_cases_schema():
         assert "mustFind" in case and "mustNotClaim" in case
 
 
-def test_run_case_and_champion():
+def test_contract_run_and_aggregate_without_champion():
     cases = load_cases(CASE_DIR)
     sample = [c for c in cases if c["caseId"] == "gold-java-backend-normal"][0]
     results = [run_case(sample, pid) for pid in ("balanced", "strict_evidence", "low_cost")]
     assert all(r.status == "SUCCEEDED" for r in results)
     summary = aggregate(results)
-    assert summary["championPolicy"] in {"balanced", "strict_evidence", "low_cost"}
-    assert summary["policies"]["strict_evidence"]["evidenceSupportRatio"] >= 0
+    # Contract benchmark must NOT elect a champion — that is E2E-only.
+    assert "championPolicy" not in summary
+    assert "policies" in summary and "failureInjection" in summary
+
+
+def test_failure_injection_separated_from_policy_aggregates():
+    cases = load_cases(CASE_DIR)
+    injected = [c for c in cases
+                if (c.get("metadata") or {}).get("injectFabricatedAnswer")]
+    assert injected, "gold set keeps at least one failure-injection case"
+    results = [run_case(injected[0], "low_cost"), run_case(injected[0], "balanced")]
+    summary = aggregate(results)
+    injection_cases = summary["failureInjection"]["cases"]
+    assert injection_cases >= 1
+    # low_cost (verification off) produces the fabricated answer → dataset
+    # reclassified; balanced answers from tools → stays in its aggregate.
+    assert summary["policies"].get("balanced", {}).get("cases", 0) >= 1
 
 
 def test_expected_answer_not_leaked_into_answer():
