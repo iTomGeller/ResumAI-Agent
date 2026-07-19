@@ -81,12 +81,6 @@ resumai:
   trace:
     langsmith-api-key: ${LANGSMITH_API_KEY:}
     otel-exporter-otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
-
-langfuse:
-  otel-endpoint: ${LANGFUSE_OTEL_ENDPOINT:}
-  public-key: ${LANGFUSE_PUBLIC_KEY:}
-  secret-key: ${LANGFUSE_SECRET_KEY:}
-  public-url: ${LANGFUSE_PUBLIC_URL:}
   mysql:
     observability:
       enabled: true
@@ -134,6 +128,12 @@ langfuse:
     epsilon: ${POLICY_EPSILON:0.10}
   memory:
     cleanup-interval-ms: ${MEMORY_CLEANUP_INTERVAL_MS:600000}
+
+langfuse:
+  otel-endpoint: ${LANGFUSE_OTEL_ENDPOINT:}
+  public-key: ${LANGFUSE_PUBLIC_KEY:}
+  secret-key: ${LANGFUSE_SECRET_KEY:}
+  public-url: ${LANGFUSE_PUBLIC_URL:}
 
 app:
   mcp:
