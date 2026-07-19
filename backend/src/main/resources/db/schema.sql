@@ -1,5 +1,8 @@
 -- ResumAI Agent 全栈 DDL，覆盖 PRD 第 4.1 节定义的 7 张核心表。
 -- MySQL 容器首次启动时由 docker-entrypoint-initdb.d 自动执行。
+-- 对话 Agent Runtime 的新增表（agent_run、run_event、memory_entry、policy_*、
+-- benchmark_* 等）由后端启动时的版本化迁移 db/migrations/V*.sql 幂等创建，
+-- 因此本文件对已有 Volume 和全新 Volume 都保持兼容。
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;

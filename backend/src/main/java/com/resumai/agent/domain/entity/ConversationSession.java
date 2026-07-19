@@ -14,6 +14,30 @@ public class ConversationSession {
     @TableId
     private String id;
 
+    @TableField("user_id")
+    private String userId;
+
+    @TableField("title")
+    private String title;
+
+    @TableField("resume_text")
+    private String resumeText;
+
+    @TableField("job_description")
+    private String jobDescription;
+
+    @TableField("job_category")
+    private String jobCategory;
+
+    @TableField("summary")
+    private String summary;
+
+    @TableField("summary_version")
+    private Integer summaryVersion;
+
+    @TableField("current_goal")
+    private String currentGoal;
+
     @TableField("active_trace_id")
     private String activeTraceId;
 

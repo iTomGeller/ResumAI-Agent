@@ -25,6 +25,18 @@ public class HumanFeedbackLog {
     @TableField("trace_id")
     private String traceId;
 
+    /** 关联的对话 Run。 */
+    @TableField("run_id")
+    private String runId;
+
+    /** Run 使用的策略。 */
+    @TableField("policy_id")
+    private String policyId;
+
+    /** 结构化反馈载荷（分数修正、遗漏证据等）。 */
+    @TableField("structured_payload")
+    private String structuredPayload;
+
     /** 报告 ID。 */
     @TableField("report_id")
     private String reportId;

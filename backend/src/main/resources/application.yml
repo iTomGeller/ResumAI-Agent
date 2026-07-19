@@ -121,6 +121,19 @@ langfuse:
     mode: ${WORKFLOW_MODE:python}
     base-url: ${WORKFLOW_BASE_URL:http://ai-resume-workflow:8090}
     internal-token: ${WORKFLOW_INTERNAL_TOKEN:change-me}
+  agent-run:
+    enabled: ${AGENT_RUN_ENABLED:true}
+    max-global-concurrent: ${RUN_MAX_GLOBAL_CONCURRENT:4}
+    run-timeout-seconds: ${RUN_TIMEOUT_SECONDS:900}
+    dispatch-interval-ms: ${RUN_DISPATCH_INTERVAL_MS:500}
+    watchdog-interval-ms: ${RUN_WATCHDOG_INTERVAL_MS:15000}
+    cancel-grace-seconds: ${RUN_CANCEL_GRACE_SECONDS:90}
+    permit-lease-minutes: ${RUN_PERMIT_LEASE_MINUTES:30}
+    worker-id: ${TASK_WORKER_ID:backend-1}
+  policy:
+    epsilon: ${POLICY_EPSILON:0.10}
+  memory:
+    cleanup-interval-ms: ${MEMORY_CLEANUP_INTERVAL_MS:600000}
 
 app:
   mcp:

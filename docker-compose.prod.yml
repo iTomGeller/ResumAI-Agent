@@ -331,10 +331,11 @@ networks:
 
 volumes:
   mysql-data:
-    # Conversation/runtime schema is initialized from the current schema.sql
-    # on this versioned volume. Treat the suffix as immutable: for a future
-    # incompatible schema, bump it instead of copying/deleting an older volume.
-    name: resumai-mysql-data-conversation-v1
+    # Reuses the original production volume. Schema evolution is handled by
+    # the guarded, versioned migrations in backend/src/main/resources/db/
+    # migrations applied automatically at backend startup — never by
+    # recreating or renaming this volume.
+    name: resumai-mysql-data
   redis-data:
     name: resumai-redis-data
   neo4j-data:

@@ -31,6 +31,12 @@ public class ConversationMessage {
     @TableField("revision_no")
     private Integer revisionNo;
 
+    @TableField("run_id")
+    private String runId;
+
+    @TableField("queue_mode")
+    private String queueMode;
+
     @TableField("metadata_json")
     private String metadataJson;
 
