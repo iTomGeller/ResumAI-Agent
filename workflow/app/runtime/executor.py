@@ -340,10 +340,15 @@ class RunExecutor:
         self.guard.check_error(error_text)
         self.degraded_reasons.append(f"{agent_id}_failed")
         if agent_id in TERMINAL_AGENTS:
+            # A failed terminal agent is never re-queued: retrying it burns the
+            # LLM budget on the same failure. Degrade honestly instead.
             self.report_agent_failed = True
+            return
         self._ensure_terminal_tail()
 
     def _ensure_terminal_tail(self) -> None:
+        if self.report_agent_failed:
+            return
         remaining = [a for g in self.parallel_groups[self.next_group_index:] for a in g]
         if not any(a in TERMINAL_AGENTS for a in remaining):
             self.parallel_groups.append(["ReportAgent"])
@@ -483,11 +488,22 @@ class RunExecutor:
                 if violations:
                     logger.warning("compaction consistency violations: %s", violations)
 
+            is_terminal = definition.agent_id in TERMINAL_AGENTS
             raw = await self.llm.chat(messages, agent_id=agent_id,
                                       purpose=definition.output_type,
-                                      max_tokens=2048)
+                                      max_tokens=3600 if is_terminal else 2048)
             agent_llm_calls += 1
             decision = extract_json_object(raw)
+            if not decision and is_terminal and raw.strip():
+                # Long reports frequently overflow the JSON envelope. The
+                # report IS the deliverable — accept the raw markdown instead
+                # of burning repair calls and failing the terminal agent.
+                decision = {"thought": "", "toolCalls": [],
+                            "output": {"summary": raw.strip()[:400],
+                                       "answer": raw.strip(),
+                                       "claims": [], "evidence": [],
+                                       "confidence": 0.6},
+                            "done": True}
             if not decision:
                 raw = await self.llm.chat(
                     messages + [{"role": "assistant", "content": raw[:1500]},
