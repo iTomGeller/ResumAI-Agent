@@ -187,7 +187,7 @@ export function useConversation() {
   let runTimer: ReturnType<typeof setInterval> | null = null;
   const runElapsedSeconds = ref(0);
 
-  const TERMINAL_RUN = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT']);
+  const TERMINAL_RUN = new Set(['SUCCEEDED', 'PARTIAL_SUCCESS', 'FAILED', 'CANCELLED', 'TIMED_OUT']);
 
   function closeRunStream() {
     runSource?.close();

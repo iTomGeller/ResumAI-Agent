@@ -28,6 +28,12 @@ public class AgentRunProperties {
     /** Lease TTL for conversation/global permits (minutes). */
     private int permitLeaseMinutes = 30;
 
+    /** How long a PAUSED run may keep its conversation reserved (seconds). */
+    private int pauseTtlSeconds = 7200;
+
+    /** How long PAUSING may wait for the snapshot callback before reverting (s). */
+    private int pauseGraceSeconds = 120;
+
     /** Worker identity for diagnostics. */
     private String workerId = "backend-1";
 
@@ -85,6 +91,22 @@ public class AgentRunProperties {
 
     public void setPermitLeaseMinutes(int permitLeaseMinutes) {
         this.permitLeaseMinutes = permitLeaseMinutes;
+    }
+
+    public int getPauseTtlSeconds() {
+        return pauseTtlSeconds;
+    }
+
+    public void setPauseTtlSeconds(int pauseTtlSeconds) {
+        this.pauseTtlSeconds = pauseTtlSeconds;
+    }
+
+    public int getPauseGraceSeconds() {
+        return pauseGraceSeconds;
+    }
+
+    public void setPauseGraceSeconds(int pauseGraceSeconds) {
+        this.pauseGraceSeconds = pauseGraceSeconds;
     }
 
     public String getWorkerId() {

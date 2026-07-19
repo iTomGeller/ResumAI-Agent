@@ -67,6 +67,28 @@ public class PolicyService {
     }
 
     /**
+     * Benchmark/replay path: the caller pinned an exact policy. Recorded as a
+     * FORCED selection so learning statistics can exclude or analyse it.
+     */
+    public Selection forcedSelection(String runId, String taskCategory, String policyId) {
+        PolicyBundleRow bundle = bundleMapper.selectById(policyId);
+        if (bundle == null) {
+            throw new IllegalStateException("forced policy not found: " + policyId);
+        }
+        Selection selection = new Selection(bundle, "FORCED", 0.0);
+        PolicySelectionRow row = new PolicySelectionRow();
+        row.setRunId(runId);
+        row.setPolicyId(policyId);
+        row.setTaskCategory(taskCategory);
+        row.setSelectionMode("FORCED");
+        row.setEpsilon(BigDecimal.ZERO.setScale(3, RoundingMode.HALF_UP));
+        row.setContext("{\"forced\":true}");
+        row.setCreateTime(LocalDateTime.now());
+        selectionMapper.insert(row);
+        return selection;
+    }
+
+    /**
      * Pick the policy for one run and persist the selection record.
      */
     public Selection selectPolicy(String runId, String taskCategory, Map<String, Object> context) {

@@ -9,6 +9,7 @@ import com.resumai.agent.dao.AgentExecutionRecordMapper;
 import com.resumai.agent.dao.AgentRunMapper;
 import com.resumai.agent.dao.ConversationMessageMapper;
 import com.resumai.agent.dao.ConversationSessionMapper;
+import com.resumai.agent.dao.ResumeTaskMapper;
 import com.resumai.agent.dao.ToolCallLogMapper;
 import com.resumai.agent.domain.entity.AgentExecutionRecord;
 import com.resumai.agent.domain.entity.AgentRun;
@@ -46,6 +47,7 @@ public class RunLifecycleService {
     private final ToolCallLogMapper toolCallMapper;
     private final ConversationSessionMapper sessionMapper;
     private final ConversationMessageMapper messageMapper;
+    private final ResumeTaskMapper resumeTaskMapper;
     private final RunEventService eventService;
     private final RunPermitService permitService;
     private final PolicyService policyService;
@@ -60,6 +62,7 @@ public class RunLifecycleService {
                                ToolCallLogMapper toolCallMapper,
                                ConversationSessionMapper sessionMapper,
                                ConversationMessageMapper messageMapper,
+                               ResumeTaskMapper resumeTaskMapper,
                                RunEventService eventService,
                                RunPermitService permitService,
                                PolicyService policyService,
@@ -73,6 +76,7 @@ public class RunLifecycleService {
         this.toolCallMapper = toolCallMapper;
         this.sessionMapper = sessionMapper;
         this.messageMapper = messageMapper;
+        this.resumeTaskMapper = resumeTaskMapper;
         this.eventService = eventService;
         this.permitService = permitService;
         this.policyService = policyService;
@@ -96,8 +100,9 @@ public class RunLifecycleService {
         }
         try {
             Map<String, Object> selectionContext = selectionContext(run, session);
-            PolicyService.Selection selection =
-                    policyService.selectPolicy(runId, category(run), selectionContext);
+            PolicyService.Selection selection = StringUtils.hasText(run.getPolicyId())
+                    ? policyService.forcedSelection(runId, category(run), run.getPolicyId())
+                    : policyService.selectPolicy(runId, category(run), selectionContext);
             PolicyBundleRow bundle = selection.bundle();
             JsonNode config = readJson(bundle.getConfig());
             int runTimeout = config.path("timeoutPolicy").path("runTimeoutSeconds")
@@ -167,6 +172,9 @@ public class RunLifecycleService {
         payload.put("policyId", bundle.getPolicyId());
         payload.put("policyConfig", readJsonAsMap(bundle.getConfig()));
         payload.put("recentMessages", recentMessages(run.getConversationId(), 12));
+        if (StringUtils.hasText(run.getSourceTaskTraceId())) {
+            payload.put("sourceTaskTraceId", run.getSourceTaskTraceId());
+        }
         return payload;
     }
 
@@ -319,7 +327,8 @@ public class RunLifecycleService {
     public record RuntimeResult(String status, String answer, String errorCode, String errorMessage,
                                 Map<String, Object> sharedState, Map<String, Object> metrics,
                                 Map<String, Object> promptVersions, Map<String, Object> skillVersions,
-                                String conversationSummary, String currentGoal) {
+                                String conversationSummary, String currentGoal,
+                                Map<String, Object> executionSnapshot) {
     }
 
     /** Final callback from the runtime. Returns true when accepted. */
@@ -333,19 +342,138 @@ public class RunLifecycleService {
                     runId, result.status(), run.getStatus());
             return false;
         }
-        RunStatus terminal = switch (result.status() != null ? result.status() : "FAILED") {
-            case "SUCCEEDED", "SUCCESS", "PARTIAL_SUCCESS" -> RunStatus.SUCCEEDED;
+        String incoming = result.status() != null ? result.status() : "FAILED";
+        if ("PAUSED".equals(incoming)) {
+            return applyPausedResult(run, result);
+        }
+        RunStatus terminal = switch (incoming) {
+            case "SUCCEEDED", "SUCCESS" -> RunStatus.SUCCEEDED;
+            case "PARTIAL_SUCCESS" -> RunStatus.PARTIAL_SUCCESS;
             case "CANCELLED" -> RunStatus.CANCELLED;
             case "TIMED_OUT" -> RunStatus.TIMED_OUT;
             default -> RunStatus.FAILED;
         };
-        if (RunStatus.CANCELLING.name().equals(run.getStatus()) && terminal == RunStatus.SUCCEEDED) {
+        if (RunStatus.CANCELLING.name().equals(run.getStatus())
+                && (terminal == RunStatus.SUCCEEDED || terminal == RunStatus.PARTIAL_SUCCESS)) {
             // The user asked to stop; a completion racing past the cancel does
             // not overturn it. Keep the answer for audit but finish CANCELLED.
             terminal = RunStatus.CANCELLED;
         }
         finishInternal(run, terminal, result, result.errorCode(), result.errorMessage(), null);
         return true;
+    }
+
+    /** Runtime reached a safe boundary and delivered the execution snapshot. */
+    private boolean applyPausedResult(AgentRun run, RuntimeResult result) {
+        if (!RunStatus.PAUSING.name().equals(run.getStatus())
+                && !RunStatus.isActive(run.getStatus())) {
+            log.info("paused result fenced run={} current={}", run.getRunId(), run.getStatus());
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
+        update.eq("run_id", run.getRunId())
+                .in("status", RunStatus.ACTIVE)
+                .set("status", RunStatus.PAUSED.name())
+                .set("execution_snapshot", writeJson(result.executionSnapshot()))
+                .set("updated_at", now)
+                .set("current_phase", null);
+        if (runMapper.update(null, update) == 0) {
+            return false;
+        }
+        // Free the global slot (another conversation may run); keep the
+        // conversation permit so this conversation stays strictly serial.
+        AgentRun paused = runMapper.selectById(run.getRunId());
+        permitService.releaseGlobal(paused.getGlobalPermitId());
+        UpdateWrapper<AgentRun> clearGlobal = new UpdateWrapper<>();
+        clearGlobal.eq("run_id", run.getRunId()).set("global_permit_id", null);
+        runMapper.update(null, clearGlobal);
+        eventService.publish(run.getRunId(), run.getConversationId(), run.getTraceId(),
+                "run.progress", null, null, Map.of(
+                        "stage", "paused",
+                        "message", "已在安全边界暂停，可随时恢复"));
+        log.info("run paused at safe boundary run={}", run.getRunId());
+        return true;
+    }
+
+    /** User-initiated pause of an active run: CAS to PAUSING then propagate. */
+    public AgentRun pauseActiveRun(AgentRun run, String reason) {
+        UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
+        update.eq("run_id", run.getRunId())
+                .in("status", RunStatus.ACTIVE)
+                .notIn("status", RunStatus.CANCELLING.name(), RunStatus.PAUSING.name())
+                .set("status", RunStatus.PAUSING.name())
+                .set("pause_reason", trim(reason, 480))
+                .set("updated_at", LocalDateTime.now());
+        runMapper.update(null, update);
+        AgentRun latest = runMapper.selectById(run.getRunId());
+        if (RunStatus.PAUSING.name().equals(latest.getStatus())) {
+            try {
+                runtimeClient.pauseRun(latest.getRunId(),
+                        reason != null ? reason : "user_paused");
+            } catch (Exception e) {
+                log.warn("pause propagation failed run={}: {}", latest.getRunId(), e.getMessage());
+                // revert: the runtime never saw the pause request
+                UpdateWrapper<AgentRun> revert = new UpdateWrapper<>();
+                revert.eq("run_id", latest.getRunId())
+                        .eq("status", RunStatus.PAUSING.name())
+                        .set("status", RunStatus.RUNNING.name())
+                        .set("updated_at", LocalDateTime.now());
+                runMapper.update(null, revert);
+                return runMapper.selectById(run.getRunId());
+            }
+        }
+        return latest;
+    }
+
+    /** Resume a PAUSED run using its stored execution snapshot. */
+    public AgentRun resumePausedRun(AgentRun run) {
+        if (!RunStatus.PAUSED.name().equals(run.getStatus())) {
+            return run;
+        }
+        String globalPermit = permitService.tryAcquireGlobal();
+        if (globalPermit == null) {
+            throw new IllegalStateException("全局并发已满，稍后再恢复");
+        }
+        UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
+        update.eq("run_id", run.getRunId())
+                .eq("status", RunStatus.PAUSED.name())
+                .set("status", RunStatus.RESUMING.name())
+                .set("global_permit_id", globalPermit)
+                .set("updated_at", LocalDateTime.now());
+        if (runMapper.update(null, update) == 0) {
+            permitService.releaseGlobal(globalPermit);
+            return runMapper.selectById(run.getRunId());
+        }
+        AgentRun latest = runMapper.selectById(run.getRunId());
+        try {
+            ConversationSession session = sessionMapper.selectById(latest.getConversationId());
+            PolicyBundleRow bundle = policyService.getBundle(latest.getPolicyId());
+            Map<String, Object> payload = buildRuntimePayload(latest, session, bundle);
+            payload.put("resumeSnapshot", readJsonAsMap(latest.getExecutionSnapshot()));
+            runtimeClient.resumeRun(latest.getRunId(), payload);
+            UpdateWrapper<AgentRun> toRunning = new UpdateWrapper<>();
+            toRunning.eq("run_id", latest.getRunId())
+                    .eq("status", RunStatus.RESUMING.name())
+                    .set("status", RunStatus.RUNNING.name())
+                    .set("updated_at", LocalDateTime.now());
+            runMapper.update(null, toRunning);
+            eventService.publish(latest.getRunId(), latest.getConversationId(), latest.getTraceId(),
+                    "run.progress", null, null, Map.of(
+                            "stage", "resumed", "message", "已从暂停快照恢复执行"));
+        } catch (Exception e) {
+            log.warn("resume propagation failed run={}: {}", latest.getRunId(), e.getMessage());
+            permitService.releaseGlobal(globalPermit);
+            UpdateWrapper<AgentRun> revert = new UpdateWrapper<>();
+            revert.eq("run_id", latest.getRunId())
+                    .eq("status", RunStatus.RESUMING.name())
+                    .set("status", RunStatus.PAUSED.name())
+                    .set("global_permit_id", null)
+                    .set("updated_at", LocalDateTime.now());
+            runMapper.update(null, revert);
+            throw new IllegalStateException("恢复运行失败：" + e.getMessage(), e);
+        }
+        return runMapper.selectById(run.getRunId());
     }
 
     // ------------------------------------------------------------------
@@ -431,14 +559,20 @@ public class RunLifecycleService {
         clearPermits(finished.getRunId());
 
         // 2. persist assistant answer as a conversation message
-        if (terminal == RunStatus.SUCCEEDED && result != null && StringUtils.hasText(result.answer())) {
+        boolean answered = (terminal == RunStatus.SUCCEEDED
+                || terminal == RunStatus.PARTIAL_SUCCESS)
+                && result != null && StringUtils.hasText(result.answer());
+        if (answered) {
             saveAssistantMessage(finished, result.answer());
             updateSessionAfterRun(finished, result);
         }
 
+        // 2b. mirror the outcome onto the originating resume_task (if any)
+        syncSourceTask(finished, terminal, result, errorMessage);
+
         // 3. emit terminal SSE event
         String eventType = switch (terminal) {
-            case SUCCEEDED -> "run.completed";
+            case SUCCEEDED, PARTIAL_SUCCESS -> "run.completed";
             case CANCELLED -> "run.cancelled";
             case TIMED_OUT -> "run.timed_out";
             default -> "run.failed";
@@ -455,9 +589,11 @@ public class RunLifecycleService {
 
         // 4. learning signals + episodic memory
         try {
+            boolean succeeded = terminal == RunStatus.SUCCEEDED
+                    || terminal == RunStatus.PARTIAL_SUCCESS;
             if (StringUtils.hasText(finished.getPolicyId())) {
                 policyService.recordRunOutcome(finished.getPolicyId(), category(finished),
-                        terminal == RunStatus.SUCCEEDED);
+                        succeeded);
                 rewardService.recordAutoReward(finished, terminal == RunStatus.SUCCEEDED);
             }
             memoryService.writeEpisodicRunMemory(finished, terminal.name());
@@ -469,6 +605,54 @@ public class RunLifecycleService {
         }
         log.info("run finished run={} status={} conversation={}",
                 finished.getRunId(), terminal, finished.getConversationId());
+    }
+
+    /**
+     * Bridge to the legacy resume_task table: a run created for an uploaded
+     * resume evaluation mirrors its terminal state and answer back so the
+     * task list stays truthful. No score is fabricated — structured fields
+     * are filled only when the report actually contains them.
+     */
+    private void syncSourceTask(AgentRun run, RunStatus terminal, RuntimeResult result,
+                                String errorMessage) {
+        if (!StringUtils.hasText(run.getSourceTaskTraceId())) {
+            return;
+        }
+        try {
+            String taskStatus = switch (terminal) {
+                case SUCCEEDED -> "SUCCESS";
+                case PARTIAL_SUCCESS -> "PARTIAL_SUCCESS";
+                case CANCELLED -> "CANCELLED";
+                default -> "FAILED";
+            };
+            UpdateWrapper<com.resumai.agent.domain.entity.ResumeTask> update = new UpdateWrapper<>();
+            update.eq("trace_id", run.getSourceTaskTraceId())
+                    .notIn("status", "SUCCESS", "PARTIAL_SUCCESS", "CANCELLED", "SUPERSEDED")
+                    .set("status", taskStatus)
+                    .set("queue_status", taskStatus)
+                    .set("finished_at", LocalDateTime.now())
+                    .set("update_time", LocalDateTime.now());
+            if (result != null && StringUtils.hasText(result.answer())) {
+                update.set("summary", result.answer());
+            } else if (StringUtils.hasText(errorMessage)) {
+                update.set("summary", trim(errorMessage, 1900));
+            }
+            if (result != null && result.metrics() != null) {
+                Object latency = result.metrics().get("latencySeconds");
+                if (latency instanceof Number n) {
+                    update.set("duration_ms", (long) (n.doubleValue() * 1000));
+                }
+                Object prompt = result.metrics().get("promptTokens");
+                Object completion = result.metrics().get("completionTokens");
+                if (prompt instanceof Number p && completion instanceof Number c) {
+                    update.set("token_cost", p.intValue() + c.intValue());
+                }
+            }
+            resumeTaskMapper.update(null, update);
+        } catch (Exception e) {
+            log.warn("resume_task sync failed run={} task={}: {}",
+                    run.getRunId(), run.getSourceTaskTraceId(), e.getMessage());
+        }
     }
 
     private void clearPermits(String runId) {
@@ -516,6 +700,33 @@ public class RunLifecycleService {
         if (dirty) {
             session.setUpdateTime(LocalDateTime.now());
             sessionMapper.updateById(session);
+        }
+    }
+
+    /** Watchdog: PAUSING never got its snapshot — the runtime kept going. */
+    public void revertPausing(String runId) {
+        UpdateWrapper<AgentRun> revert = new UpdateWrapper<>();
+        revert.eq("run_id", runId)
+                .eq("status", RunStatus.PAUSING.name())
+                .set("status", RunStatus.RUNNING.name())
+                .set("updated_at", LocalDateTime.now());
+        runMapper.update(null, revert);
+    }
+
+    /** Restart recovery: a PAUSING run whose snapshot landed becomes PAUSED. */
+    public void settlePausedAfterRestart(String runId) {
+        UpdateWrapper<AgentRun> settle = new UpdateWrapper<>();
+        settle.eq("run_id", runId)
+                .eq("status", RunStatus.PAUSING.name())
+                .set("status", RunStatus.PAUSED.name())
+                .set("updated_at", LocalDateTime.now());
+        if (runMapper.update(null, settle) > 0) {
+            AgentRun run = runMapper.selectById(runId);
+            permitService.releaseGlobal(run.getGlobalPermitId());
+            UpdateWrapper<AgentRun> clearGlobal = new UpdateWrapper<>();
+            clearGlobal.eq("run_id", runId).set("global_permit_id", null);
+            runMapper.update(null, clearGlobal);
+            log.info("settled PAUSING run as PAUSED after restart run={}", runId);
         }
     }
 

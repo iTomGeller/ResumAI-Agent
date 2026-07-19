@@ -16,10 +16,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * HTTP client for the Python agent runtime. Start requests are idempotent by
- * runId, so transient transport failures are retried (max 2, exponential
- * backoff with jitter). Cancellation propagates a reason and never retries
- * indefinitely — Java remains the authoritative state owner.
+ * HTTP client for the Python agent runtime (/agent/runs). Start requests are
+ * idempotent by runId, so transient transport failures are retried (max 2,
+ * exponential backoff with jitter). Cancellation propagates a reason and
+ * never retries indefinitely — Java remains the authoritative state owner.
  */
 @Service
 public class AgentRuntimeClient {
@@ -41,6 +41,18 @@ public class AgentRuntimeClient {
 
     public void startRun(Map<String, Object> payload) throws Exception {
         postWithRetry("/agent/runs", payload, Duration.ofSeconds(20), 2);
+    }
+
+    /** Resume a paused run: same runId, payload carries resumeSnapshot. */
+    public void resumeRun(String runId, Map<String, Object> payload) throws Exception {
+        postWithRetry("/agent/runs/" + runId + "/resume", payload,
+                Duration.ofSeconds(20), 2);
+    }
+
+    public void pauseRun(String runId, String reason) throws Exception {
+        postWithRetry("/agent/runs/" + runId + "/pause",
+                Map.of("reason", reason != null ? reason : "user_paused"),
+                Duration.ofSeconds(10), 1);
     }
 
     public void cancelRun(String runId, String reason) {
@@ -72,6 +84,29 @@ public class AgentRuntimeClient {
             return Optional.of(body);
         } catch (Exception e) {
             log.debug("runtime status query failed run={}: {}", runId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /** Conversation-turn intent resolution (rule-first, model fallback). */
+    @SuppressWarnings("unchecked")
+    public Optional<Map<String, Object>> resolveConversationTurn(Map<String, ?> body) {
+        try {
+            String json = objectMapper.writeValueAsString(body);
+            HttpRequest request = builder("/conversation/turns/resolve")
+                    .timeout(Duration.ofSeconds(30))
+                    .header("Content-Type", "application/json; charset=UTF-8")
+                    .POST(HttpRequest.BodyPublishers.ofString(json))
+                    .build();
+            HttpResponse<String> response =
+                    httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 400) {
+                throw new IllegalStateException("HTTP " + response.statusCode());
+            }
+            return Optional.of(objectMapper.readValue(response.body(), Map.class));
+        } catch (Exception e) {
+            log.info("conversation runtime unavailable, using deterministic router: {}",
+                    e.getMessage());
             return Optional.empty();
         }
     }

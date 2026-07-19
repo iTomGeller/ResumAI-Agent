@@ -83,7 +83,8 @@ public class AgentRunInternalController {
                                        Map<String, Object> promptVersions,
                                        Map<String, Object> skillVersions,
                                        String conversationSummary,
-                                       String currentGoal) {
+                                       String currentGoal,
+                                       Map<String, Object> executionSnapshot) {
     }
 
     @PostMapping("/result")
@@ -95,7 +96,8 @@ public class AgentRunInternalController {
                         request.status(), request.answer(), request.errorCode(),
                         request.errorMessage(), request.sharedState(), request.metrics(),
                         request.promptVersions(), request.skillVersions(),
-                        request.conversationSummary(), request.currentGoal()));
+                        request.conversationSummary(), request.currentGoal(),
+                        request.executionSnapshot()));
         schedulerService.kick();
         return Map.of("status", "OK", "accepted", accepted);
     }

@@ -41,6 +41,7 @@ public class RunController {
     private final PolicyService policyService;
     private final MemoryService memoryService;
     private final HumanFeedbackLogMapper feedbackMapper;
+    private final com.resumai.agent.dao.SandboxExecutionMapper sandboxExecutionMapper;
     private final ObjectMapper objectMapper;
 
     public RunController(RunLifecycleService lifecycleService,
@@ -51,6 +52,7 @@ public class RunController {
                          PolicyService policyService,
                          MemoryService memoryService,
                          HumanFeedbackLogMapper feedbackMapper,
+                         com.resumai.agent.dao.SandboxExecutionMapper sandboxExecutionMapper,
                          ObjectMapper objectMapper) {
         this.lifecycleService = lifecycleService;
         this.queueService = queueService;
@@ -60,6 +62,7 @@ public class RunController {
         this.policyService = policyService;
         this.memoryService = memoryService;
         this.feedbackMapper = feedbackMapper;
+        this.sandboxExecutionMapper = sandboxExecutionMapper;
         this.objectMapper = objectMapper;
     }
 
@@ -92,6 +95,36 @@ public class RunController {
             lifecycleService.cancelActiveRun(run, "user_cancelled", reason);
         }
         return toView(lifecycleService.getRun(runId));
+    }
+
+    public record PauseRequest(String reason) {
+    }
+
+    @PostMapping("/api/runs/{runId}/pause")
+    public Map<String, Object> pauseRun(@PathVariable String runId,
+                                        @RequestBody(required = false) PauseRequest request) {
+        AgentRun run = lifecycleService.getRun(runId);
+        if (run == null) {
+            throw new ApiNotFoundException("Run 不存在：" + runId);
+        }
+        if (RunStatus.isTerminal(run.getStatus()) || RunStatus.isPaused(run.getStatus())) {
+            return toView(run);
+        }
+        String reason = request != null && request.reason() != null
+                ? request.reason() : "用户请求暂停";
+        return toView(lifecycleService.pauseActiveRun(run, reason));
+    }
+
+    @PostMapping("/api/runs/{runId}/resume")
+    public Map<String, Object> resumeRun(@PathVariable String runId) {
+        AgentRun run = lifecycleService.getRun(runId);
+        if (run == null) {
+            throw new ApiNotFoundException("Run 不存在：" + runId);
+        }
+        if (!RunStatus.isPaused(run.getStatus())) {
+            return toView(run);
+        }
+        return toView(lifecycleService.resumePausedRun(run));
     }
 
     @GetMapping(value = "/sse/runs/{runId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -177,6 +210,15 @@ public class RunController {
                 "feedbackId", feedback.getId(),
                 "reward", Math.round(reward * 10000.0) / 10000.0,
                 "policyId", run.getPolicyId() != null ? run.getPolicyId() : "");
+    }
+
+    @GetMapping("/api/runs/{runId}/sandbox-executions")
+    public Object sandboxExecutions(@PathVariable String runId) {
+        return sandboxExecutionMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<
+                        com.resumai.agent.domain.entity.SandboxExecutionRow>()
+                        .eq("run_id", runId)
+                        .orderByAsc("id"));
     }
 
     @GetMapping("/api/policies/statistics")

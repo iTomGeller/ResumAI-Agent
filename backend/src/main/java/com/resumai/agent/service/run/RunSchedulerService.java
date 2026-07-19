@@ -174,11 +174,34 @@ public class RunSchedulerService {
                         "CANCEL_FORCED", "取消宽限期已过，强制关闭");
                 continue;
             }
+            if (RunStatus.PAUSING.name().equals(run.getStatus())
+                    && RunLifecycleService.secondsSince(run.getUpdatedAt())
+                    > properties.getPauseGraceSeconds()) {
+                // no snapshot callback arrived; the runtime kept executing
+                log.warn("pause grace exceeded, reverting to RUNNING run={}", run.getRunId());
+                lifecycleService.revertPausing(run.getRunId());
+                continue;
+            }
             if (RunStatus.STARTING.name().equals(run.getStatus())
                     && RunLifecycleService.secondsSince(run.getUpdatedAt()) > 180) {
                 log.warn("run stuck in STARTING, failing run={}", run.getRunId());
                 lifecycleService.forceTerminal(run, RunStatus.FAILED,
                         "START_STUCK", "启动阶段卡死，已失败");
+            }
+        }
+
+        // PAUSED runs: keep the conversation reserved (serial guarantee) but
+        // never forever — expired pauses converge to CANCELLED.
+        for (AgentRun paused : lifecycleService.listByStatuses(
+                List.of(RunStatus.PAUSED.name()), 100)) {
+            if (RunLifecycleService.secondsSince(paused.getUpdatedAt())
+                    > properties.getPauseTtlSeconds()) {
+                log.warn("pause TTL expired, cancelling run={}", paused.getRunId());
+                lifecycleService.forceTerminal(paused, RunStatus.CANCELLED,
+                        "PAUSE_EXPIRED", "暂停超过保留时限，已自动取消；可重新发起分析");
+            } else {
+                permitService.renewLeases(paused.getConversationId(),
+                        paused.getConvPermitId(), null);
             }
         }
         kickIfBacklog();
@@ -209,11 +232,19 @@ public class RunSchedulerService {
                         run.getRunId(), run.getStatus());
                 continue;
             }
+            if (RunStatus.PAUSING.name().equals(run.getStatus())
+                    && run.getExecutionSnapshot() != null) {
+                // snapshot already landed before the crash — settle as PAUSED
+                lifecycleService.settlePausedAfterRestart(run.getRunId());
+                continue;
+            }
             log.warn("orphaned run after restart run={} status={}, closing as FAILED",
                     run.getRunId(), run.getStatus());
             lifecycleService.forceTerminal(run, RunStatus.FAILED,
                     "ORPHANED_ON_RESTART", "服务重启后运行状态无法恢复，已标记失败；可重新发起分析");
         }
+        // PAUSED runs survive restarts by design: their snapshot lives in
+        // MySQL and resume re-dispatches to any live runtime instance.
     }
 
     private Thread daemon(Runnable r, String name) {

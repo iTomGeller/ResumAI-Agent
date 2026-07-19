@@ -52,16 +52,20 @@ const runStatusLabels: Record<string, string> = {
   CANCELLING: '取消中',
   CANCELLED: '已取消',
   SUCCEEDED: '已完成',
+  PARTIAL_SUCCESS: '部分完成',
+  PAUSED: '已暂停',
+  PAUSING: '暂停中',
+  RESUMING: '恢复中',
   FAILED: '失败',
   TIMED_OUT: '已超时',
 };
 
 const runActive = computed(() => !!activeRun.value
-  && !['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(activeRun.value.status));
+  && !['SUCCEEDED', 'PARTIAL_SUCCESS', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(activeRun.value.status));
 const runStatusLabel = computed(() => activeRun.value
   ? (runStatusLabels[activeRun.value.status] || activeRun.value.status) : '');
 const lastFinishedRun = computed(() => activeRun.value
-  && ['SUCCEEDED', 'FAILED', 'TIMED_OUT'].includes(activeRun.value.status)
+  && ['SUCCEEDED', 'PARTIAL_SUCCESS', 'FAILED', 'TIMED_OUT'].includes(activeRun.value.status)
   ? activeRun.value : null);
 
 async function stopGeneration() {

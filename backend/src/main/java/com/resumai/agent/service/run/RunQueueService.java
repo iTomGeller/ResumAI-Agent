@@ -55,6 +55,18 @@ public class RunQueueService {
     public SubmitResult submit(String conversationId, String userId, String traceId,
                                int revision, String runType, String queueMode,
                                String userMessage, Long messageId) {
+        return submit(conversationId, userId, traceId, revision, runType,
+                queueMode, userMessage, messageId, null);
+    }
+
+    /**
+     * @param forcedPolicyId non-null only for benchmark/replay turns: pins the
+     *                       policy (recorded as a FORCED selection at start).
+     */
+    public SubmitResult submit(String conversationId, String userId, String traceId,
+                               int revision, String runType, String queueMode,
+                               String userMessage, Long messageId,
+                               String forcedPolicyId) {
         boolean interrupt = "interrupt".equalsIgnoreCase(queueMode);
         AgentRun active = findActiveRun(conversationId);
         AgentRun interrupted = null;
@@ -108,6 +120,9 @@ public class RunQueueService {
         run.setMergedMessageIds(writeJson(messageId != null ? List.of(messageId) : List.of()));
         run.setStatus(RunStatus.QUEUED.name());
         run.setRetryCount(0);
+        if (StringUtils.hasText(forcedPolicyId)) {
+            run.setPolicyId(forcedPolicyId); // pre-pinned; startRun records FORCED
+        }
         LocalDateTime now = LocalDateTime.now();
         run.setCreatedAt(now);
         run.setUpdatedAt(now);
@@ -120,6 +135,48 @@ public class RunQueueService {
                         "runType", runType,
                         "queueMode", run.getQueueMode()));
         return new SubmitResult(run, false, interrupted);
+    }
+
+    /**
+     * Direct enqueue used by the legacy resume_task bridge: one uploaded-resume
+     * evaluation becomes one queued run tied back to its task via
+     * sourceTaskTraceId. Same queue, same permits, same lifecycle.
+     */
+    public AgentRun enqueueTaskRun(String runId, String conversationId, String userId,
+                                   String traceId, int revision, String runType,
+                                   String userMessage, String sourceTaskTraceId,
+                                   int timeoutSeconds) {
+        AgentRun existing = StringUtils.hasText(runId) ? runMapper.selectById(runId) : null;
+        if (existing != null) {
+            return existing; // idempotent re-dispatch of the same task
+        }
+        AgentRun run = new AgentRun();
+        run.setRunId(StringUtils.hasText(runId) ? runId : "run-" + UUID.randomUUID());
+        run.setConversationId(conversationId);
+        run.setUserId(StringUtils.hasText(userId) ? userId : "demo-hr");
+        run.setTraceId(StringUtils.hasText(traceId) ? traceId : "rt-" + UUID.randomUUID());
+        run.setRevisionNo(Math.max(1, revision));
+        run.setRunType(StringUtils.hasText(runType) ? runType : "full_evaluation");
+        run.setQueueMode("collect");
+        run.setUserMessage(userMessage);
+        run.setMergedMessageIds("[]");
+        run.setStatus(RunStatus.QUEUED.name());
+        run.setRetryCount(0);
+        run.setSourceTaskTraceId(sourceTaskTraceId);
+        LocalDateTime now = LocalDateTime.now();
+        run.setCreatedAt(now);
+        run.setUpdatedAt(now);
+        run.setTimeoutAt(now.plusSeconds(
+                timeoutSeconds > 0 ? timeoutSeconds : properties.getRunTimeoutSeconds()));
+        run.setDeleted(0);
+        runMapper.insert(run);
+        eventService.publish(run.getRunId(), conversationId, run.getTraceId(),
+                "run.queued", null, null, Map.of(
+                        "queuePosition", queuePosition(run),
+                        "runType", run.getRunType(),
+                        "queueMode", "collect",
+                        "sourceTaskTraceId", sourceTaskTraceId != null ? sourceTaskTraceId : ""));
+        return run;
     }
 
     /** The earliest QUEUED run for the conversation (its next unit of work). */

@@ -81,6 +81,17 @@ public class AgentRun {
     @TableField("cancellation_reason")
     private String cancellationReason;
 
+    @TableField("pause_reason")
+    private String pauseReason;
+
+    /** RunExecutionSnapshot JSON captured at the pause boundary. */
+    @TableField("execution_snapshot")
+    private String executionSnapshot;
+
+    /** Set when this run mirrors a legacy resume_task evaluation. */
+    @TableField("source_task_trace_id")
+    private String sourceTaskTraceId;
+
     @TableField("conv_permit_id")
     private String convPermitId;
 
