@@ -1,15 +1,20 @@
 """
 Deploy ResumAI-Agent (full PRD stack) to an Aliyun ECS via SSH.
 
-Required environment variables (or values in `.deploy.local.env`):
+Always-required environment variables (or values in `.deploy.local.env`):
   ALIYUN_HOST
   ALIYUN_PASSWORD or ALIYUN_KEY_PATH
+
+When the remote deployment has no `.env` yet, first bootstrap also requires:
   DEEPSEEK_API_KEY
   MYSQL_ROOT_PASSWORD
   MYSQL_PASSWORD
   REDIS_PASSWORD
   NEO4J_AUTH
   MINIO_ROOT_PASSWORD
+  WORKFLOW_INTERNAL_TOKEN
+  WORKFLOW_POSTGRES_PASSWORD  URL-safe characters only (A-Z a-z 0-9 . _ ~ -)
+  GRAFANA_PASSWORD
 
 Optional environment variables:
   ALIYUN_USER          default root
@@ -24,8 +29,10 @@ Optional environment variables:
 
 This script only opens an SSH session — it never installs project
 dependencies locally. Docker, Maven and npm all run on the ECS.
-The default deployment now launches the **complete PRD stack**:
-backend, frontend, MySQL, Redis, Neo4j, Milvus (etcd + minio).
+The default deployment launches the complete Compose stack. MySQL uses the
+versioned volume declared in ``docker-compose.prod.yml`` and initializes only
+from the current complete ``schema.sql``. No incremental SQL migration runs,
+and legacy volumes are neither copied nor deleted.
 """
 
 from __future__ import annotations
@@ -60,15 +67,66 @@ class DeployConfig:
     repo_url: str
     repo_branch: str
     compose_file: str
-    deepseek_api_key: str
-    mysql_root_password: str
+    deepseek_api_key: Optional[str]
+    mysql_root_password: Optional[str]
     mysql_database: str
     mysql_user: str
-    mysql_password: str
-    redis_password: str
-    neo4j_auth: str
+    mysql_password: Optional[str]
+    redis_password: Optional[str]
+    neo4j_auth: Optional[str]
     minio_root_user: str
-    minio_root_password: str
+    minio_root_password: Optional[str]
+    workflow_internal_token: Optional[str]
+    workflow_postgres_password: Optional[str]
+    grafana_password: Optional[str]
+
+
+BOOTSTRAP_REQUIRED_KEYS = (
+    "DEEPSEEK_API_KEY",
+    "MYSQL_ROOT_PASSWORD",
+    "MYSQL_DATABASE",
+    "MYSQL_USER",
+    "MYSQL_PASSWORD",
+    "REDIS_PASSWORD",
+    "NEO4J_AUTH",
+    "MINIO_ROOT_USER",
+    "MINIO_ROOT_PASSWORD",
+    "WORKFLOW_INTERNAL_TOKEN",
+    "WORKFLOW_POSTGRES_PASSWORD",
+    "GRAFANA_PASSWORD",
+)
+
+# Only these local values may update an existing remote .env. Connection and
+# deploy-only variables (ALIYUN_PASSWORD, key paths, repository URLs, etc.) are
+# deliberately absent so they can never leak into a container env file.
+REMOTE_ENV_OVERRIDE_KEYS = (
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_API_URL",
+    "DEEPSEEK_MODEL",
+    "MYSQL_ROOT_PASSWORD",
+    "MYSQL_DATABASE",
+    "MYSQL_USER",
+    "MYSQL_PASSWORD",
+    "REDIS_PASSWORD",
+    "NEO4J_AUTH",
+    "MINIO_ROOT_USER",
+    "MINIO_ROOT_PASSWORD",
+    "WORKFLOW_INTERNAL_TOKEN",
+    "WORKFLOW_POSTGRES_PASSWORD",
+    "GRAFANA_PASSWORD",
+    "OBJECT_STORAGE_ENABLED",
+    "MINIO_BUCKET",
+    "EXA_API_KEY",
+    "FIRECRAWL_API_KEY",
+    "GITHUB_TOKEN",
+    "TAVILY_API_KEY",
+    "BRAVE_API_KEY",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_HOST",
+    "LANGFUSE_PUBLIC_URL",
+    "LANGFUSE_OTEL_ENDPOINT",
+)
 
 
 def main() -> None:
@@ -115,7 +173,6 @@ def require_env(name: str) -> str:
 def load_config() -> DeployConfig:
     password = os.getenv("ALIYUN_PASSWORD")
     key_path = os.getenv("ALIYUN_KEY_PATH")
-    deepseek_api_key = require_env("DEEPSEEK_API_KEY")
     if not password and not key_path:
         raise SystemExit("Set ALIYUN_PASSWORD or ALIYUN_KEY_PATH before deployment.")
     return DeployConfig(
@@ -128,15 +185,18 @@ def load_config() -> DeployConfig:
         repo_url=os.getenv("REPO_URL", "https://github.com/iTomGeller/ResumAI-Agent.git"),
         repo_branch=os.getenv("REPO_BRANCH", "main"),
         compose_file=os.getenv("COMPOSE_FILE", "docker-compose.prod.yml"),
-        deepseek_api_key=deepseek_api_key,
-        mysql_root_password=require_env("MYSQL_ROOT_PASSWORD"),
+        deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
+        mysql_root_password=os.getenv("MYSQL_ROOT_PASSWORD"),
         mysql_database=os.getenv("MYSQL_DATABASE", "resumai_agent"),
         mysql_user=os.getenv("MYSQL_USER", "resumai"),
-        mysql_password=require_env("MYSQL_PASSWORD"),
-        redis_password=require_env("REDIS_PASSWORD"),
-        neo4j_auth=require_env("NEO4J_AUTH"),
+        mysql_password=os.getenv("MYSQL_PASSWORD"),
+        redis_password=os.getenv("REDIS_PASSWORD"),
+        neo4j_auth=os.getenv("NEO4J_AUTH"),
         minio_root_user=os.getenv("MINIO_ROOT_USER", "resumai"),
-        minio_root_password=require_env("MINIO_ROOT_PASSWORD"),
+        minio_root_password=os.getenv("MINIO_ROOT_PASSWORD"),
+        workflow_internal_token=os.getenv("WORKFLOW_INTERNAL_TOKEN"),
+        workflow_postgres_password=os.getenv("WORKFLOW_POSTGRES_PASSWORD"),
+        grafana_password=os.getenv("GRAFANA_PASSWORD"),
     )
 
 
@@ -233,52 +293,165 @@ def sync_repository(ssh: paramiko.SSHClient, config: DeployConfig) -> None:
     run(ssh, f"cd {config.deploy_dir} && git log -1 --oneline", timeout=30)
 
 
+def read_remote_file(ssh: paramiko.SSHClient, remote_path: str) -> Optional[str]:
+    """Read a remote file without ever writing its contents to stdout."""
+    sftp = ssh.open_sftp()
+    try:
+        try:
+            with sftp.file(remote_path, "r") as remote_file:
+                payload = remote_file.read()
+        except IOError:
+            return None
+    finally:
+        sftp.close()
+    return payload.decode("utf-8") if isinstance(payload, bytes) else str(payload)
+
+
+def parse_env_text(content: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or not key.replace("_", "").isalnum():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def merge_env_text(content: str, updates: dict[str, str]) -> str:
+    """Merge selected keys while preserving comments and untouched secrets."""
+    rendered: list[str] = []
+    written: set[str] = set()
+    for raw_line in content.splitlines():
+        stripped = raw_line.strip()
+        key = stripped.split("=", 1)[0].strip() if "=" in stripped else ""
+        if key in updates:
+            if key not in written:
+                rendered.append(f"{key}={updates[key]}")
+                written.add(key)
+            continue
+        rendered.append(raw_line)
+    for key, value in updates.items():
+        if key not in written:
+            rendered.append(f"{key}={value}")
+    return "\n".join(rendered).rstrip() + "\n"
+
+
 def upload_env(ssh: paramiko.SSHClient, config: DeployConfig) -> None:
-    print("[step] Upload .env to ECS (full PRD stack)")
-    neo4j_user, _, neo4j_pass = config.neo4j_auth.partition("/")
-    env_content = "\n".join(
-        [
-            "SPRING_PROFILES_ACTIVE=prod",
-            "BACKEND_PORT=8080",
-            "FRONTEND_PORT=80",
-            "UPLOAD_DIR=/opt/ai-resume-agent-platform/uploads",
-            f"DEEPSEEK_API_KEY={config.deepseek_api_key}",
-            "DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions",
-            "DEEPSEEK_MODEL=deepseek-chat",
-            "LANGSMITH_API_KEY=",
-            "OTEL_EXPORTER_OTLP_ENDPOINT=",
-            "MYSQL_HOST=mysql",
-            "MYSQL_PORT=3306",
-            f"MYSQL_ROOT_PASSWORD={config.mysql_root_password}",
-            f"MYSQL_DATABASE={config.mysql_database}",
-            f"MYSQL_USER={config.mysql_user}",
-            f"MYSQL_PASSWORD={config.mysql_password}",
-            "REDIS_HOST=redis",
-            "REDIS_PORT=6379",
-            f"REDIS_PASSWORD={config.redis_password}",
-            "NEO4J_URI=bolt://neo4j:7687",
-            f"NEO4J_USERNAME={neo4j_user or 'neo4j'}",
-            f"NEO4J_PASSWORD={neo4j_pass or neo4j_user}",
-            f"NEO4J_AUTH={config.neo4j_auth}",
-            "MILVUS_HOST=milvus",
-            "MILVUS_PORT=19530",
-            "MILVUS_COLLECTION=resume_chunk",
-            "MILVUS_DIMENSION=1024",
-            f"MINIO_ROOT_USER={config.minio_root_user}",
-            f"MINIO_ROOT_PASSWORD={config.minio_root_password}",
-            "",
-        ]
-    )
-    write_remote_file(ssh, f"{config.deploy_dir}/.env", env_content, mode=0o600)
+    remote_path = f"{config.deploy_dir}/.env"
+    existing = read_remote_file(ssh, remote_path)
+    existing_values = parse_env_text(existing or "")
+    explicit_overrides = {
+        key: value
+        for key in REMOTE_ENV_OVERRIDE_KEYS
+        if (value := os.getenv(key)) is not None and value.strip()
+    }
+
+    values_to_write: dict[str, str] = dict(explicit_overrides)
+    if existing is None:
+        print("[step] Bootstrap remote .env (remote file does not exist)")
+        bootstrap_values = {
+            "DEEPSEEK_API_KEY": config.deepseek_api_key or "",
+            "MYSQL_ROOT_PASSWORD": config.mysql_root_password or "",
+            "MYSQL_DATABASE": config.mysql_database,
+            "MYSQL_USER": config.mysql_user,
+            "MYSQL_PASSWORD": config.mysql_password or "",
+            "REDIS_PASSWORD": config.redis_password or "",
+            "NEO4J_AUTH": config.neo4j_auth or "",
+            "MINIO_ROOT_USER": config.minio_root_user,
+            "MINIO_ROOT_PASSWORD": config.minio_root_password or "",
+            "WORKFLOW_INTERNAL_TOKEN": config.workflow_internal_token or "",
+            "WORKFLOW_POSTGRES_PASSWORD": config.workflow_postgres_password or "",
+            "GRAFANA_PASSWORD": config.grafana_password or "",
+        }
+        existing_values.update(bootstrap_values)
+        values_to_write.update(bootstrap_values)
+    else:
+        print(f"[step] Preserve remote .env and merge {len(explicit_overrides)} explicit non-empty overrides")
+
+    existing_values.update(explicit_overrides)
+    defaults = {
+        "SPRING_PROFILES_ACTIVE": "prod",
+        "BACKEND_PORT": "8080",
+        "FRONTEND_PORT": "80",
+        "UPLOAD_DIR": "/opt/ai-resume-agent-platform/uploads",
+        "DEEPSEEK_API_URL": "https://api.deepseek.com/chat/completions",
+        "DEEPSEEK_MODEL": "deepseek-chat",
+        "MYSQL_HOST": "mysql",
+        "MYSQL_PORT": "3306",
+        "REDIS_HOST": "redis",
+        "REDIS_PORT": "6379",
+        "NEO4J_URI": "bolt://neo4j:7687",
+        "MILVUS_HOST": "milvus",
+        "MILVUS_PORT": "19530",
+        "MILVUS_COLLECTION": "resume_chunk",
+        "MILVUS_DIMENSION": "1024",
+        "MINIO_BUCKET": "resumai",
+        "PUBLIC_HOST": config.host,
+    }
+    for key, value in defaults.items():
+        if not existing_values.get(key, "").strip():
+            existing_values[key] = value
+            values_to_write[key] = value
+    # PUBLIC_HOST belongs to this target, not to a previous ECS deployment.
+    existing_values["PUBLIC_HOST"] = config.host
+    values_to_write["PUBLIC_HOST"] = config.host
+
+    neo4j_user, separator, neo4j_password = existing_values.get("NEO4J_AUTH", "").partition("/")
+    if separator:
+        existing_values["NEO4J_USERNAME"] = neo4j_user
+        existing_values["NEO4J_PASSWORD"] = neo4j_password
+        if existing is None or "NEO4J_AUTH" in explicit_overrides or not parse_env_text(existing).get("NEO4J_USERNAME"):
+            values_to_write["NEO4J_USERNAME"] = neo4j_user
+        if existing is None or "NEO4J_AUTH" in explicit_overrides or not parse_env_text(existing).get("NEO4J_PASSWORD"):
+            values_to_write["NEO4J_PASSWORD"] = neo4j_password
+
+    missing = [key for key in BOOTSTRAP_REQUIRED_KEYS if not existing_values.get(key, "").strip()]
+    if missing:
+        mode = "first bootstrap" if existing is None else "remote .env validation"
+        raise SystemExit(f"Missing required keys for {mode}: {', '.join(missing)}")
+    checkpoint_password = existing_values["WORKFLOW_POSTGRES_PASSWORD"]
+    if not all(ch.isalnum() or ch in "._~-" for ch in checkpoint_password):
+        raise SystemExit("WORKFLOW_POSTGRES_PASSWORD must be URL-safe for the checkpoint DSN")
+    for key, value in existing_values.items():
+        if "\r" in value or "\n" in value:
+            raise SystemExit(f"Remote env value contains a newline: {key}")
+
+    env_content = merge_env_text(existing or "", values_to_write)
+    write_remote_file(ssh, remote_path, env_content, mode=0o600)
+    print("[env] remote .env validated and written without logging values")
 
 
 def compose_up(ssh: paramiko.SSHClient, config: DeployConfig) -> None:
     print(f"[step] docker compose up -d --build (file={config.compose_file})")
     run(
         ssh,
+        f"cd {config.deploy_dir} && docker compose -f {config.compose_file} config >/dev/null",
+        timeout=120,
+    )
+    run(
+        ssh,
         f"cd {config.deploy_dir} && docker compose -f {config.compose_file} pull --ignore-pull-failures || true",
         timeout=1800,
         check=False,
+    )
+    run(
+        ssh,
+        f"cd {config.deploy_dir} && docker compose -f {config.compose_file} up -d mysql ai-resume-workflow-postgres",
+        timeout=600,
+    )
+    run(
+        ssh,
+        "for i in $(seq 1 60); do "
+        "[ \"$(docker inspect -f '{{.State.Health.Status}}' resumai-mysql 2>/dev/null)\" = healthy ] "
+        "&& exit 0; sleep 2; done; exit 1",
+        timeout=150,
     )
     run(
         ssh,

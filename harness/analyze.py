@@ -126,10 +126,13 @@ def main() -> None:
     # ---------------- routeMode ----------------
     route_counts = Counter(M(r).get("routeMode") or "UNKNOWN" for r in ok)
 
-    # ---------------- LLM calls saved ----------------
+    # ---------------- planned generation lower bound vs observed calls ----------------
     saved_vals = [M(r).get("llmCallsSavedVsFull") for r in ok if isinstance(M(r).get("llmCallsSavedVsFull"), (int, float))]
     est_vals = [M(r).get("estimatedLlmCalls") for r in ok if isinstance(M(r).get("estimatedLlmCalls"), (int, float))]
-    full_vals = [M(r).get("fullPipelineLlmCalls") or 7 for r in ok]
+    full_vals = [M(r).get("fullPipelineLlmCalls") or 8 for r in ok]
+    observed_vals = [M(r).get("observedLlmCalls") for r in ok if isinstance(M(r).get("observedLlmCalls"), (int, float))]
+    observed_input_tokens = [M(r).get("observedInputTokens") for r in ok if isinstance(M(r).get("observedInputTokens"), (int, float))]
+    observed_output_tokens = [M(r).get("observedOutputTokens") for r in ok if isinstance(M(r).get("observedOutputTokens"), (int, float))]
     total_saved = int(sum(saved_vals))
     total_estimated = int(sum(est_vals))
     total_full = int(sum(full_vals))
@@ -159,7 +162,11 @@ def main() -> None:
 
     summary = {
         "generatedAt": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
-        "base": "http://8.138.10.189",
+        "base": (
+            next(iter({str(r.get("baseUrl")) for r in records if r.get("baseUrl")}))
+            if len({str(r.get("baseUrl")) for r in records if r.get("baseUrl")}) == 1
+            else "MIXED_OR_UNKNOWN"
+        ),
         "totals": {
             "manifest": len(manifest),
             "collected": total,
@@ -174,12 +181,17 @@ def main() -> None:
         "nodeDurationSampleCount": node_counts,
         "routeModeCounts": dict(route_counts),
         "llm": {
+            "estimateBasis": "plan lower bound; not observed provider usage",
             "totalSaved": total_saved,
             "totalEstimated": total_estimated,
             "totalFullPipeline": total_full,
             "savingPct": round(total_saved / total_full * 100, 1) if total_full else 0,
             "avgEstimatedPerTask": round(total_estimated / n_ok, 2) if n_ok else 0,
             "savedDistribution": {str(k): v for k, v in sorted(saved_dist.items())},
+            "totalObservedCalls": int(sum(observed_vals)),
+            "observedCallsPerTask": stats_block(observed_vals),
+            "observedInputTokens": int(sum(observed_input_tokens)),
+            "observedOutputTokens": int(sum(observed_output_tokens)),
         },
         "mcp": {
             "triggerTasks": len(mcp_tasks),
@@ -286,7 +298,7 @@ def main() -> None:
         ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=9)
         savefig(fig, "recommendation_bar.png")
 
-    # 6. LLM calls saved distribution
+    # 6. planned generation lower-bound reduction distribution
     if saved_vals:
         keys = sorted(saved_dist.keys())
         vals = [saved_dist[k] for k in keys]
@@ -294,20 +306,23 @@ def main() -> None:
         bars = ax.bar([str(k) for k in keys], vals, color=GREEN, alpha=0.9)
         for b, v in zip(bars, vals):
             ax.text(b.get_x() + b.get_width() / 2, v, str(v), ha="center", va="bottom")
-        ax.set_xlabel("LLM calls saved vs full pipeline (per resume)")
+        ax.set_xlabel("Planned generation lower-bound reduction vs full route (per resume)")
         ax.set_ylabel("Number of resumes")
-        ax.set_title(f"LLM Call Savings (total saved={total_saved} of {total_full} full-pipeline calls)")
+        ax.set_title(
+            "Route-plan Lower-Bound Reduction "
+            f"(total reduction={total_saved} of {total_full} planned generations)"
+        )
         savefig(fig, "llm_saved_bar.png")
 
-    # 7. MCP fetch latency
+    # 7. public MCP latency (identified by trace provenance)
     if mcp_durations:
         fig, ax = plt.subplots(figsize=(7, 4))
         ax.hist([d / 1000 for d in mcp_durations], bins=18, color="#9333ea", alpha=0.85, edgecolor="white")
         ax.axvline(float(np.mean(mcp_durations)) / 1000, color=RED, linestyle="--",
                    label=f"mean={np.mean(mcp_durations)/1000:.2f}s")
-        ax.set_xlabel("Public MCP fetch latency (seconds)")
+        ax.set_xlabel("Public MCP tool latency (seconds)")
         ax.set_ylabel("Number of calls")
-        ax.set_title(f"Public MCP (mcp-server-fetch) Latency (n={len(mcp_durations)})")
+        ax.set_title(f"Public MCP Tool Latency (n={len(mcp_durations)})")
         ax.legend()
         savefig(fig, "mcp_latency.png")
 

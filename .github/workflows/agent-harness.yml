@@ -1,0 +1,32 @@
+name: Agent Harness Gate
+
+on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-runtime-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run offline Agent harness
+        run: python workflow/run_agent_harness.py --output reports/agent_harness/result.json
+      - name: Install test runner
+        run: python -m pip install --disable-pip-version-check pytest==8.3.5
+      - name: Run runtime contract tests
+        run: python -m pytest workflow/tests -q
+      - name: Upload harness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-harness-evidence
+          path: reports/agent_harness/result.json
+          if-no-files-found: error

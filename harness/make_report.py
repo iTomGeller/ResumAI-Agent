@@ -65,6 +65,8 @@ def main() -> None:
     lat = s["latencySecServer"]
     wall = s["latencySecWall"]
     llm = s["llm"]
+    observed_llm_calls = llm.get("totalObservedCalls", 0)
+    observed_llm_per_task = (llm.get("observedCallsPerTask") or {}).get("mean", 0)
     mcp = s["mcp"]
     gh = s["githubEnrichment"]
     score = s["score"]
@@ -100,7 +102,7 @@ def main() -> None:
         pct = rc[k] / t["success"] * 100 if t["success"] else 0
         rec_rows += f"{esc(k)} & {rc[k]} & {pct:.1f}\\% \\\\\n"
 
-    # llm saved distribution
+    # route-plan generation lower-bound reduction distribution
     sd = llm["savedDistribution"]
     sd_rows = "".join(f"{esc(k)} & {v} \\\\\n" for k, v in sd.items())
 
@@ -114,12 +116,14 @@ def main() -> None:
             f"{fail_rows}\\bottomrule\n\\end{{tabular}}\\end{{table}}\n"
         )
     else:
-        fail_block = "本次压测\\textbf{无失败任务}，100 份简历端到端全部成功。\n"
+        fail_block = (
+            f"本次压测\\textbf{{无失败任务}}，{t['success']} 份已采集简历端到端全部成功。\n"
+        )
 
     mcp_vs_gh = (
-        f"公网 MCP fetch 触发率 {mcp['triggerRatePct']}\\%（{mcp['triggerTasks']}/{t['success']}），"
-        f"与简历清单中含 GitHub/外链比例 {s['manifestHasGithubPct']}\\%"
-        f"（{s['manifestHasGithub']}/{s['totals']['manifest']}）高度吻合"
+        f"公网 MCP 工具触发率 {mcp['triggerRatePct']}\\%（{mcp['triggerTasks']}/{t['success']}）；"
+        f"简历清单中含 GitHub/外链比例为 {s['manifestHasGithubPct']}\\%"
+        f"（{s['manifestHasGithub']}/{s['totals']['manifest']}）。两者仅并列报告，不据此推断因果或覆盖率"
     )
 
     doc = f"""\\documentclass[11pt,a4paper]{{ctexart}}
@@ -139,8 +143,8 @@ def main() -> None:
 \\lhead{{ResumAI Agent 端到端压测报告}}\\rhead{{\\thepage}}
 \\renewcommand{{\\headrulewidth}}{{0.4pt}}
 
-\\title{{\\textbf{{ResumAI Agent 系统\\\\100 份简历端到端压测报告}}}}
-\\author{{自动化压测 Harness · 阿里云 ECS 真实采集}}
+\\title{{\\textbf{{ResumAI Agent 系统\\\\{t['manifest']} 份简历端到端压测报告}}}}
+\\author{{自动化压测 Harness · HTTP 全链路采集}}
 \\date{{生成时间：{esc(s['generatedAt'])}}}
 
 \\begin{{document}}
@@ -148,13 +152,13 @@ def main() -> None:
 \\thispagestyle{{fancy}}
 
 \\begin{{abstract}}
-本报告对部署于阿里云 ECS（后端 base \\texttt{{{esc(s['base'])}}}）的 ResumAI Agent 简历评估系统，
-执行了 \\textbf{{{t['manifest']} 份简历}}的真实端到端压测。采集方式为纯 HTTP 调用（\\texttt{{curl.exe}} 上传 + 轮询任务状态 +
+本报告对后端 base \\texttt{{{esc(s['base'])}}} 的 ResumAI Agent 简历评估系统，
+执行了 \\textbf{{{t['manifest']} 份简历}}的真实端到端压测。采集方式为纯 HTTP 调用（平台 \\texttt{{curl}} 上传 + 轮询任务状态 +
 拉取 agent-execution 全链路 trace），并发上限 4，逐份解析 LangGraph DAG 各节点时延、工具调用、
 动态路由计划与评分结论。\\textbf{{成功 {t['success']}/{t['collected']}（成功率 {t['successRate']}\\%，失败率 {t['failureRate']}\\%）}}。
 端到端处理时延 \\textbf{{p50={lat['p50']}s / p90={lat['p90']}s / p95={lat['p95']}s（均值 {lat['mean']}s，max {lat['max']}s）}}；
-动态路由共出现 \\textbf{{{len(rm)} 种 routeMode}}，相比固定全量流水线累计节省 \\textbf{{{llm['totalSaved']} 次大模型调用}}
-（{llm['totalEstimated']}/{llm['totalFullPipeline']}，节省 {llm['savingPct']}\\%）；
+动态路由共出现 \\textbf{{{len(rm)} 种 routeMode}}；plan lower bound 相比固定全量路径少 \\textbf{{{llm['totalSaved']} 次 generation}}
+（{llm['totalEstimated']}/{llm['totalFullPipeline']}，仅为执行前估算），trace 实际观测 \\textbf{{{observed_llm_calls} 次 LLM generation}}；
 {mcp_vs_gh}，公网 MCP 平均时延 \\textbf{{{mcp['avgLatencyMs']/1000:.2f}s}}。
 所有数据均为真实采集，未做任何编造。
 \\end{{abstract}}
@@ -164,7 +168,7 @@ def main() -> None:
   \\item \\textbf{{数据集}}：\\texttt{{testdata/stress\\_resumes/}} 共 {t['manifest']} 份简历（PDF/TXT 混合，覆盖资深后端、AI Agent、
   大模型应用、前端、产品、数据平台、SRE、算法、测试、安全、移动端、应届、职业空窗、稀疏风险等 15 类角色），
   清单 \\texttt{{manifest.json}} 提供 id/role/fileType/hasGithub/textLength/expectedSkills 等元数据。
-  \\item \\textbf{{提交}}：对每份简历用 \\texttt{{curl.exe -F "file=@<path>;type=..." -F "executionMode=DAG\\_CONCURRENT"}}
+  \\item \\textbf{{提交}}：对每份简历用平台 \\texttt{{curl -F "file=@<path>;type=..." -F "executionMode=DAG\\_CONCURRENT"}}
   调用 \\texttt{{POST /api/tasks/upload-auto}}（subprocess 直接调用，规避 PowerShell 转义），解析返回的 \\texttt{{traceId}}。
   \\item \\textbf{{并发与轮询}}：最多同时 in-flight 4 个任务，提交后每 5s 轮询 \\texttt{{GET /api/tasks/\\{{traceId\\}}}}
   直至 \\texttt{{status}} 为 \\texttt{{SUCCESS/FAILED}}，单任务超时上限 180s。
@@ -182,8 +186,8 @@ ResumAI Agent 采用 \\textbf{{LangGraph DAG 编排}}的多 Agent 流水线，�
   \\item \\textbf{{LangGraph DAG}}：意图识别 $\\to$ 简历解析 $\\to$ JD 匹配 $\\to$ 知识检索 $\\to$（技术/项目/风险评估）$\\to$ 证据融合 $\\to$ 报告生成。
   \\item \\textbf{{动态路由 Harness}}：在 \\texttt{{knowledge\\_context}} 阶段构建 \\texttt{{harnessPlan}}，依据简历复杂度/技术信号/项目信号/
   风险信号，动态选择是否启用 \\texttt{{tech\\_eval / project\\_eval / risk\\_eval}} 可选节点，从而\\textbf{{按需裁剪 DAG、减少大模型调用}}。
-  \\item \\textbf{{公网 MCP fetch}}：通过官方公共 MCP 服务器 \\texttt{{mcp-server-fetch}} 真实抓取候选人外部主页（GitHub/博客），
-  工具名 \\texttt{{mcp\\_fetch[public:mcp-server-fetch]}}，并在 trace 中可观测其时延。
+  \\item \\textbf{{公网 MCP}}：实际启用的 MCP 工具以 trace 中的 \\texttt{{origin=mcp}} 为准，
+  不依赖某个固定 provider 或工具名；调用状态与时延均可观测。
   \\item \\textbf{{GitHub 富集}}：\\texttt{{github\\_enrichment}} 在技术评估阶段对带外链的简历做外部证据增强。
   \\item \\textbf{{知识库 RAG}}：\\texttt{{milvus\\_resume\\_batch\\_search / knowledge\\_search}} 基于向量库注入评分量纲（rubric）证据。
   \\item \\textbf{{分层 Memory}}：路由计划中体现 \\texttt{{memoryHitCount}}，复用历史评估记忆影响裁剪与判定。
@@ -233,40 +237,41 @@ routeMode & 含义 & 数量 & 占比 \\\\
 
 {fig('routemode_dist.png', 'routeMode 分布（饼图 + 柱状）：不同简历走不同评估路径')}
 
-\\section{{动态路由 / Memory 对大模型调用的节省}}
-固定全量流水线每份需 {llm['totalFullPipeline']//max(t['success'],1) if t['success'] else 7} 次 LLM 调用
-（intent+resume\\_parse+jd\\_match+report 固定 4 次，tech/project/risk 可选 3 次；evidence\\_fusion 为确定性无 LLM）。
-动态路由后每份平均仅 \\textbf{{{llm['avgEstimatedPerTask']}}} 次。
-\\textbf{{累计节省 {llm['totalSaved']} 次（{llm['totalEstimated']}/{llm['totalFullPipeline']}，节省 {llm['savingPct']}\\%）}}。
-\\begin{{table}}[H]\\centering\\caption{{每份简历节省的 LLM 调用次数分布}}
+\\section{{动态路由 / Memory 与 LLM generation 观测}}
+固定全量长简历路径的 plan lower bound 为每份 {llm['totalFullPipeline']//max(t['success'],1) if t['success'] else 8} 次 generation
+（intent+resume\\_parse+jd\\_match 固定 3 次，tech/project/risk 可选 3 次，report 并行 2 次；evidence\\_fusion 为确定性）。
+动态路由 lower bound 每份平均 \\textbf{{{llm['avgEstimatedPerTask']}}} 次，累计少 {llm['totalSaved']} 次；
+该数字\\textbf{{不是实际计费量}}，Agent tool loop 可增加 generation round。trace 实际观测总调用 \\textbf{{{observed_llm_calls}}} 次，
+每任务均值 \\textbf{{{observed_llm_per_task}}} 次；token 仅在 provider 返回 usage 时累计。
+\\begin{{table}}[H]\\centering\\caption{{每份简历的计划 generation 下界缩减分布}}
 \\begin{{tabular}}{{r r}}
 \\toprule
-节省次数/份 & 简历数 \\\\
+计划下界缩减/份 & 简历数 \\\\
 \\midrule
 {sd_rows}\\bottomrule
 \\end{{tabular}}\\end{{table}}
 
-{fig('llm_saved_bar.png', 'LLM 调用节省分布（动态路由 + 分层 Memory 的直接收益）')}
+{fig('llm_saved_bar.png', '计划 generation 下界缩减分布（不能等同于实际调用或计费量）')}
 
-\\section{{公网 MCP fetch 与 GitHub 富集}}
+\\section{{公网 MCP 与 GitHub 富集}}
 {mcp_vs_gh}。
 \\begin{{table}}[H]\\centering\\caption{{公网 MCP / GitHub 富集统计}}
 \\begin{{tabular}}{{l r}}
 \\toprule
 指标 & 数值 \\\\
 \\midrule
-MCP fetch 触发任务数 & {mcp['triggerTasks']} \\\\
-MCP fetch 触发率 & {mcp['triggerRatePct']}\\% \\\\
-MCP fetch 调用总次数 & {mcp['totalCalls']} \\\\
-MCP fetch 平均时延 & {mcp['avgLatencyMs']/1000:.2f} s \\\\
-MCP fetch p90 / max 时延 & {mcp['p90LatencyMs']/1000:.2f} / {mcp['maxLatencyMs']/1000:.2f} s \\\\
+公网 MCP 触发任务数 & {mcp['triggerTasks']} \\\\
+公网 MCP 触发率 & {mcp['triggerRatePct']}\\% \\\\
+公网 MCP 调用总次数 & {mcp['totalCalls']} \\\\
+公网 MCP 平均时延 & {mcp['avgLatencyMs']/1000:.2f} s \\\\
+公网 MCP p90 / max 时延 & {mcp['p90LatencyMs']/1000:.2f} / {mcp['maxLatencyMs']/1000:.2f} s \\\\
 github\\_enrichment 触发率 & {gh['triggerRatePct']}\\% \\\\
 github\\_enrichment 平均时延 & {gh['avgLatencyMs']/1000:.2f} s \\\\
 简历清单含外链比例 & {s['manifestHasGithubPct']}\\% \\\\
 \\bottomrule
 \\end{{tabular}}\\end{{table}}
 
-{fig('mcp_latency.png', '公网 MCP（mcp-server-fetch）真实接入时延分布')}
+{fig('mcp_latency.png', '公网 MCP 工具真实接入时延分布（按 trace provenance 统计）')}
 
 \\section{{评分与推荐结论分布}}
 评分均值 {score['mean']}（p50={score['p50']}，max={score['max']}，min={score['min']}）。
@@ -293,23 +298,24 @@ github\\_enrichment 平均时延 & {gh['avgLatencyMs']/1000:.2f} s \\\\
 \\begin{{enumerate}}[leftmargin=1.6em]
   \\item \\textbf{{瓶颈节点：{esc(NODE_CN.get(bottleneck, bottleneck))}（均值 {bn_ms/1000:.2f}s）}}。
   其包含一次 LLM 深度评估 + 向量批量检索 + （含外链时）github\\_enrichment，是端到端时延主要来源。
-  建议：对 \\texttt{{milvus\\_resume\\_batch\\_search}} 的多 query 并行化、对 LLM 评估启用更激进的 fast-lane 阈值、
-  缓存高频 rubric 检索结果。
-  \\item \\textbf{{公网 MCP fetch 平均 {mcp['avgLatencyMs']/1000:.2f}s}}（p90 {mcp['p90LatencyMs']/1000:.2f}s）是外部不可控时延。
+  建议：对 \\texttt{{milvus\\_resume\\_batch\\_search}} 的多 query 并行化、约束各 Agent 的生成预算，
+  并缓存可复用的 rubric 检索结果。
+  \\item \\textbf{{公网 MCP 平均 {mcp['avgLatencyMs']/1000:.2f}s}}（p90 {mcp['p90LatencyMs']/1000:.2f}s）是外部不可控时延。
   建议：对同一外链做结果缓存、设置更紧的超时与并发抓取、失败快速降级（trace 已显式可观测，便于熔断）。
-  \\item \\textbf{{报告生成节点均值 {report_ms/1000:.2f}s}}。已通过\\textbf{{并行报告生成}}将 ReportAgent 从早期约 37s 降到当前量级；
-  可进一步将各章节流式拼接、对确定性段落走模板而非 LLM。
+  \\item \\textbf{{报告生成节点均值 {report_ms/1000:.2f}s}}。当前实现并行生成互不依赖的报告部分；
+  可进一步流式拼接章节，并减少重复上下文输入。
   \\item \\textbf{{并发与排队}}：墙钟 p90（{wall['p90']}s）高于处理 p90（{lat['p90']}s）的部分来自排队，
   说明在 4 并发下后端仍有吞吐余量可挖，建议结合限流与批处理进一步压缩排队。
 \\end{{enumerate}}
 
 \\section{{面试可讲的亮点}}
 \\begin{{itemize}}[leftmargin=1.4em]
-  \\item \\textbf{{动态路由真正省了大模型调用}}：{len(rm)} 种 routeMode 按简历自适应裁剪 DAG，
-  100 份累计省下 {llm['totalSaved']} 次 LLM 调用（{llm['savingPct']}\\%），每份平均仅 {llm['avgEstimatedPerTask']} 次，不是 PPT 数字而是 trace 实测。
-  \\item \\textbf{{公网 MCP 真实接入}}：通过官方 \\texttt{{mcp-server-fetch}} 实抓候选人外部主页，平均 {mcp['avgLatencyMs']/1000:.2f}s，
-  且时延在 trace 中可观测，触发率 {mcp['triggerRatePct']}\\% 与外链简历比例 {s['manifestHasGithubPct']}\\% 吻合，证明是按需真实调用。
-  \\item \\textbf{{并行报告生成}}：ReportAgent 由早期约 37s 降至均值 {report_ms/1000:.2f}s 量级，端到端 p50 仅 {lat['p50']}s。
+  \\item \\textbf{{动态路由与实际调用分开核算}}：{len(rm)} 种 routeMode 按简历自适应裁剪 DAG；
+  plan lower bound 累计少 {llm['totalSaved']} 次 generation，实际 trace 共观测 {observed_llm_calls} 次（每任务均值 {observed_llm_per_task}），避免把计划值冒充实测成本。
+  \\item \\textbf{{公网 MCP 真实接入}}：按 trace 的 \\texttt{{origin=mcp}} 统计实际工具调用，平均 {mcp['avgLatencyMs']/1000:.2f}s；
+  触发率为 {mcp['triggerRatePct']}\\%，且每次调用均保留 provider、状态与时延，可核验而不靠工具名猜测。
+  \\item \\textbf{{并行报告生成}}：本次 trace 实测 ReportAgent 均值 {report_ms/1000:.2f}s，端到端 p50 为 {lat['p50']}s；
+  不引用未随本次产物提供的历史基线。
   \\item \\textbf{{全链路可观测}}：每个节点 durationMs、每次 toolCall 的 name/status/durationMs、harnessPlan 决策依据均落库，
   可做瓶颈定位、成本核算与回归门禁（本压测即基于该 trace 契约）。
   \\item \\textbf{{规模化稳健}}：{t['success']}/{t['collected']} 份成功（成功率 {t['successRate']}\\%），4 并发下 p95={lat['p95']}s，

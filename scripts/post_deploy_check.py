@@ -1,4 +1,10 @@
-"""Wait for ECS health, apply migration-v2/v3/v4.sql, and run read-only acceptance checks."""
+"""Wait for ECS health and run acceptance checks without changing the schema.
+
+Schema mutations are deliberately outside this verifier.  Production MySQL is
+initialized from the repository's complete ``schema.sql`` on a versioned
+volume, so a check must never silently alter the schema it is measuring. The
+E2E portion does create tagged JD/task smoke-test rows.
+"""
 from __future__ import annotations
 
 import json
@@ -17,6 +23,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 REQUIRED_TABLES = (
     "resume_task",
+    "conversation_session",
+    "conversation_message",
     "agent_execution_trace",
     "jd_library",
     "llm_invocation",
@@ -676,20 +684,6 @@ def main() -> None:
 
     ssh = connect_ssh(env)
     try:
-        local_migration_v2 = Path(__file__).resolve().parents[1] / "backend/src/main/resources/db/migration-v2.sql"
-        local_migration_v3 = Path(__file__).resolve().parents[1] / "backend/src/main/resources/db/migration-v3.sql"
-        local_migration_v4 = Path(__file__).resolve().parents[1] / "backend/src/main/resources/db/migration-v4.sql"
-        remote_migration_v2 = f"{deploy_dir}/backend/src/main/resources/db/migration-v2.sql"
-        remote_migration_v3 = f"{deploy_dir}/backend/src/main/resources/db/migration-v3.sql"
-        remote_migration_v4 = f"{deploy_dir}/backend/src/main/resources/db/migration-v4.sql"
-        sftp = ssh.open_sftp()
-        sftp.put(str(local_migration_v2), remote_migration_v2)
-        if local_migration_v3.exists():
-            sftp.put(str(local_migration_v3), remote_migration_v3)
-        if local_migration_v4.exists():
-            sftp.put(str(local_migration_v4), remote_migration_v4)
-        sftp.close()
-
         env_text = run(ssh, f"grep -E '^MYSQL_(ROOT_PASSWORD|DATABASE)=' {deploy_dir}/.env || true", timeout=30)
         mysql_root = env.get("MYSQL_ROOT_PASSWORD", "ResumaiRoot!2026")
         mysql_db = env.get("MYSQL_DATABASE", "resumai_agent")
@@ -699,43 +693,6 @@ def main() -> None:
             elif line.startswith("MYSQL_DATABASE="):
                 mysql_db = line.split("=", 1)[1].strip()
 
-        run(
-            ssh,
-            f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} "
-            f"< {remote_migration_v2}",
-            timeout=60,
-        )
-        if local_migration_v3.exists():
-            run(
-                ssh,
-                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} "
-                f"< {remote_migration_v3}",
-                timeout=60,
-            )
-        if local_migration_v4.exists():
-            run(
-                ssh,
-                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} "
-                f"< {remote_migration_v4}",
-                timeout=60,
-            )
-
-        run(ssh, "docker restart ai-resume-backend", timeout=120)
-        for attempt in range(1, 31):
-            health = run(
-                ssh,
-                "curl -fsS http://127.0.0.1/api/health",
-                timeout=20,
-                allow_fail=True,
-            )
-            print(f"[restart-health] attempt {attempt}: {health[:120]}")
-            if "UP" in health:
-                break
-            time.sleep(6)
-        else:
-            raise SystemExit("backend not healthy after migration restart")
-
-        time.sleep(8)
         started_at = run(
             ssh,
             "docker inspect -f '{{.State.StartedAt}}' ai-resume-backend",
@@ -932,7 +889,11 @@ def main() -> None:
         created = json.loads(create_raw) if create_raw.strip().startswith("{") else {}
         new_trace = created.get("traceId")
         check("E2E create evaluation task", bool(new_trace), str(created.get("status", "")))
-        check("E2E task returns RUNNING immediately", created.get("status") == "RUNNING", str(created.get("status", "")))
+        check(
+            "E2E task is accepted into queue/runtime",
+            created.get("status") in ("QUEUED", "RUNNING"),
+            str(created.get("status", "")),
+        )
 
         if new_trace:
             running_trace_raw = run(ssh, f"curl -fsS http://127.0.0.1/api/traces/{new_trace}", timeout=30)
@@ -948,10 +909,16 @@ def main() -> None:
             for _ in range(40):
                 task_raw = run(ssh, status_cmd, timeout=30, env=env)
                 final_task = json.loads(task_raw) if task_raw.strip().startswith("{") else None
-                if final_task and final_task.get("status") in ("SUCCESS", "FAILED"):
+                if final_task and final_task.get("status") in (
+                    "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "CANCELLED"
+                ):
                     break
                 time.sleep(8)
-            check("E2E task finished", final_task and final_task.get("status") == "SUCCESS", final_task.get("status") if final_task else "missing")
+            check(
+                "E2E task reached an acceptable terminal status",
+                final_task and final_task.get("status") in ("SUCCESS", "PARTIAL_SUCCESS"),
+                final_task.get("status") if final_task else "missing",
+            )
             if final_task:
                 questions = final_task.get("interviewQuestions") or []
                 bad = [q for q in questions if "强相关性" in q or "潜力突出" in q or "风险可控" in q]

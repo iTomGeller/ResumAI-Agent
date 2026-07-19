@@ -1,4 +1,8 @@
-"""Deploy LangGraph workflow to ECS: build, migrate, up, verify."""
+"""Deploy LangGraph workflow to ECS: build, fresh-volume startup, verify.
+
+MySQL is initialized only from the current ``schema.sql`` mounted by Compose;
+this script intentionally never executes incremental migration files.
+"""
 from __future__ import annotations
 
 import json
@@ -53,16 +57,30 @@ def main() -> None:
     )
     try:
         # Merge WORKFLOW_INTERNAL_TOKEN into .env if missing
-        token = env.get("WORKFLOW_INTERNAL_TOKEN", "resumai-workflow-internal-2026")
+        token = env.get("WORKFLOW_INTERNAL_TOKEN")
+        if not token:
+            raise SystemExit("WORKFLOW_INTERNAL_TOKEN is required")
         run(
             ssh,
             f"grep -q '^WORKFLOW_INTERNAL_TOKEN=' {deploy_dir}/.env || echo 'WORKFLOW_INTERNAL_TOKEN={token}' >> {deploy_dir}/.env",
             timeout=30,
         )
-        wpg = env.get("WORKFLOW_POSTGRES_PASSWORD", "workflow")
+        wpg = env.get("WORKFLOW_POSTGRES_PASSWORD")
+        if not wpg:
+            raise SystemExit("WORKFLOW_POSTGRES_PASSWORD is required")
+        if not all(ch.isalnum() or ch in "._~-" for ch in wpg):
+            raise SystemExit("WORKFLOW_POSTGRES_PASSWORD must be URL-safe for the checkpoint DSN")
         run(
             ssh,
             f"grep -q '^WORKFLOW_POSTGRES_PASSWORD=' {deploy_dir}/.env || echo 'WORKFLOW_POSTGRES_PASSWORD={wpg}' >> {deploy_dir}/.env",
+            timeout=30,
+        )
+        grafana_password = env.get("GRAFANA_PASSWORD")
+        if not grafana_password:
+            raise SystemExit("GRAFANA_PASSWORD is required by docker-compose.prod.yml")
+        run(
+            ssh,
+            f"grep -q '^GRAFANA_PASSWORD=' {deploy_dir}/.env || echo 'GRAFANA_PASSWORD={grafana_password}' >> {deploy_dir}/.env",
             timeout=30,
         )
 
@@ -76,34 +94,20 @@ def main() -> None:
 
         code, _ = run(
             ssh,
+            f"cd {deploy_dir} && docker compose -f docker-compose.prod.yml up -d mysql ai-resume-workflow-postgres 2>&1",
+            timeout=600,
+        )
+        if code != 0:
+            raise SystemExit(f"database startup failed ({code})")
+
+        code, _ = run(
+            ssh,
             f"cd {deploy_dir} && docker compose -f docker-compose.prod.yml up -d "
             "ai-resume-workflow-postgres ai-resume-workflow ai-resume-backend ai-resume-frontend 2>&1",
             timeout=600,
         )
         if code != 0:
             raise SystemExit(f"docker up failed ({code})")
-
-        mysql_root = env.get("MYSQL_ROOT_PASSWORD", "")
-        mysql_db = env.get("MYSQL_DATABASE", "resumai_agent")
-        env_text = run(ssh, f"grep -E '^MYSQL_(ROOT_PASSWORD|DATABASE)=' {deploy_dir}/.env || true", timeout=30)[1]
-        for line in env_text.splitlines():
-            if line.startswith("MYSQL_ROOT_PASSWORD="):
-                mysql_root = line.split("=", 1)[1].strip()
-            elif line.startswith("MYSQL_DATABASE="):
-                mysql_db = line.split("=", 1)[1].strip()
-        if mysql_root:
-            for migration in (
-                "migration-v5-langgraph-workflow.sql",
-                "migration-v6-trace-contract.sql",
-            ):
-                run(
-                    ssh,
-                    f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} "
-                    f"< {deploy_dir}/backend/src/main/resources/db/{migration}",
-                    timeout=120,
-                )
-        else:
-            print("[migration] skipped v5/v6 — MYSQL_ROOT_PASSWORD not found")
 
         run(ssh, "free -m && df -h / && docker system df", timeout=60)
         run(ssh, f"cd {deploy_dir} && docker compose -f docker-compose.prod.yml config >/dev/null", timeout=120)

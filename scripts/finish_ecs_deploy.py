@@ -1,4 +1,8 @@
-"""Wait for ECS docker build and bring stack up."""
+"""Wait for the ECS Docker build and bring the fresh-schema stack up.
+
+The versioned MySQL volume is initialized by ``schema.sql`` through Compose.
+No incremental SQL migration is executed here.
+"""
 from __future__ import annotations
 
 import sys
@@ -75,16 +79,6 @@ def main() -> None:
         if code != 0:
             raise SystemExit(f"compose up failed ({code})")
 
-        mysql_root = env.get("MYSQL_ROOT_PASSWORD", "ResumaiRoot!2026")
-        mysql_db = env.get("MYSQL_DATABASE", "resumai_agent")
-        for migration in ("migration-v5-langgraph-workflow.sql", "migration-v6-trace-contract.sql"):
-            run(
-                ssh,
-                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} "
-                f"< {DEPLOY_DIR}/backend/src/main/resources/db/{migration}",
-                timeout=120,
-            )
-
         for attempt in range(1, 41):
             code, out = run(ssh, "curl -fsS http://127.0.0.1/api/health", timeout=20)
             if code == 0 and "UP" in out:
@@ -94,7 +88,7 @@ def main() -> None:
         else:
             raise SystemExit("health check failed")
 
-        run(ssh, "docker compose -f docker-compose.prod.yml ps", timeout=30)
+        run(ssh, f"cd {DEPLOY_DIR} && docker compose -f docker-compose.prod.yml ps", timeout=30)
         print("\n[ok] ECS stack is up")
     finally:
         ssh.close()
