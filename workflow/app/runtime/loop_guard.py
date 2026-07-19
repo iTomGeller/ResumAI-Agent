@@ -133,3 +133,25 @@ class LoopGuard:
         for trip in self.trips:
             kinds[trip.kind] = kinds.get(trip.kind, 0) + 1
         return kinds
+
+    # ---------- pause/resume snapshot ----------
+
+    def export_state(self) -> Dict[str, object]:
+        return {
+            "toolSignatures": dict(self._tool_signatures),
+            "planSignatures": dict(self._plan_signatures),
+            "errorSignatures": dict(self._error_signatures),
+            "agentVisits": dict(self._agent_visits),
+            "completedAgents": sorted(self._completed_agents),
+            "conclusionHashes": dict(self._conclusion_hashes),
+        }
+
+    def restore_state(self, data: Dict[str, object]) -> None:
+        if not isinstance(data, dict):
+            return
+        self._tool_signatures = dict(data.get("toolSignatures") or {})
+        self._plan_signatures = dict(data.get("planSignatures") or {})
+        self._error_signatures = dict(data.get("errorSignatures") or {})
+        self._agent_visits = dict(data.get("agentVisits") or {})
+        self._completed_agents = set(data.get("completedAgents") or [])
+        self._conclusion_hashes = dict(data.get("conclusionHashes") or {})

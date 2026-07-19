@@ -169,9 +169,11 @@ def test_agent_failure_degrades_not_hangs():
     executor, emitter = make_executor(
         request, llm=FakeLlm(fail_agents={"TechAgent"}))
     result = run(executor.execute())
-    # TechAgent 失败后 Coordinator 重规划并降级，Run 仍能给出答案
-    assert result["status"] in ("SUCCEEDED", "FAILED")
-    assert result["status"] == "SUCCEEDED", "one agent failure must not sink the run"
+    # TechAgent 失败后重规划并降级：产生答案，但结果必须如实标记为
+    # PARTIAL_SUCCESS，不能把降级伪装成完整成功。
+    assert result["status"] == "PARTIAL_SUCCESS", \
+        "one agent failure must degrade honestly, not sink or fake the run"
+    assert result["answer"], "degraded run still answers from remaining agents"
     assert any(e["eventType"] == "agent.failed" for e in emitter.events)
     assert any("TechAgent" in r for r in result["metrics"]["degradedReasons"])
 
@@ -192,7 +194,9 @@ def test_tool_whitelist_enforced_per_agent():
 
     executor, emitter = make_executor(request, llm=NaughtyLlm())
     result = run(executor.execute())
-    assert result["status"] == "SUCCEEDED"
+    # ReportAgent 只有一次迭代且把它浪费在越权调用上：白名单拒绝生效，
+    # 运行以明确标注的降级结果收尾而不是伪装成功。
+    assert result["status"] in ("SUCCEEDED", "PARTIAL_SUCCESS")
     rejected = [e for e in emitter.events
                 if e["eventType"] == "tool.started"
                 and e.get("toolName") == "external_profile_lookup"]
@@ -245,4 +249,58 @@ def test_llm_budget_exceeded_degrades():
     executor, _ = make_executor(request, llm=CountingLlm())
     result = run(executor.execute())
     assert result["errorCode"] == "BUDGET_EXCEEDED"
+    assert result["status"] == "PARTIAL_SUCCESS"
     assert result["answer"], "预算耗尽也要基于已有结果降级回答"
+
+
+def test_parallel_specialists_grouped_and_merged():
+    request = make_request(run_type="full_evaluation",
+                           message="请完整评估这份简历")
+    executor, emitter = make_executor(request)
+    result = run(executor.execute())
+    assert result["status"] == "SUCCEEDED"
+    selected = [e for e in emitter.events if e["eventType"] == "agent.selected"]
+    groups = selected[0]["payload"]["parallelGroups"]
+    assert any(len(g) > 1 for g in groups), f"specialists must parallelize: {groups}"
+    agents_used = result["metrics"]["agentsUsed"]
+    for agent in ("TechAgent", "ProjectAgent", "RiskAgent", "ReportAgent"):
+        assert agent in agents_used
+    assert result["metrics"]["agentTimingsMs"], "per-agent profiling recorded"
+
+
+def test_pause_snapshot_and_resume_skips_completed_agents():
+    async def scenario():
+        request = make_request(run_type="full_evaluation")
+        pause_event = asyncio.Event()
+        emitter = NullEmitter(request.runId, request.conversationId, request.traceId)
+        executor = RunExecutor(request, emitter, memory=NullMemoryClient(),
+                               sandbox=LocalSandboxFallback(),
+                               llm=FakeLlm(delay=0.05),
+                               pause_event=pause_event)
+        task = asyncio.create_task(executor.execute())
+        await asyncio.sleep(0.12)
+        pause_event.set()
+        result = await task
+        assert result["status"] == "PAUSED"
+        snapshot = result["executionSnapshot"]
+        assert snapshot["executedAgents"], "pause after at least one agent"
+        assert snapshot["plan"] and snapshot["nextPlanIndex"] >= 1
+        assert snapshot["toolCallLedger"] is not None
+        executed_before = list(snapshot["executedAgents"])
+
+        resume_request = make_request(run_type="full_evaluation")
+        resume_request = resume_request.model_copy(
+            update={"resumeSnapshot": snapshot})
+        resumed_llm = FakeLlm()
+        executor2 = RunExecutor(resume_request,
+                                NullEmitter(request.runId, request.conversationId,
+                                            request.traceId),
+                                memory=NullMemoryClient(),
+                                sandbox=LocalSandboxFallback(), llm=resumed_llm)
+        result2 = await executor2.execute()
+        assert result2["status"] in ("SUCCEEDED", "PARTIAL_SUCCESS")
+        rerun = [c["agent"] for c in resumed_llm.calls
+                 if c["agent"] in executed_before]
+        assert not rerun, f"completed agents must not re-run: {rerun}"
+
+    run(scenario())

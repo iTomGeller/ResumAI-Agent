@@ -160,6 +160,22 @@ class SharedState:
     def snapshot(self) -> Dict[str, Any]:
         return json.loads(json.dumps(self.data, ensure_ascii=False, default=str))
 
+    def restore(self, data: Dict[str, Any]) -> None:
+        """Rehydrate the blackboard from a RunExecutionSnapshot."""
+        if not isinstance(data, dict):
+            return
+        for key in BLACKBOARD_KEYS:
+            if key in data:
+                self.data[key] = data[key]
+
+    def merge_parallel(self, outputs: List[AgentOutput]) -> List[str]:
+        """Merge outputs produced by parallel agents against read-only
+        snapshots. Same-key disagreements become conflicts, never overwrites."""
+        conflicts: List[str] = []
+        for output in outputs:
+            conflicts.extend(self.apply_output(output))
+        return conflicts
+
 
 def _differs(a: Any, b: Any) -> bool:
     try:

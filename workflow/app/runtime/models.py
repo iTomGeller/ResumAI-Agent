@@ -22,10 +22,20 @@ class AgentRunRequest(BaseModel):
     policyId: str = "balanced"
     policyConfig: Dict[str, Any] = Field(default_factory=dict)
     recentMessages: List[Dict[str, Any]] = Field(default_factory=list)
+    # Set by the Java control plane when resuming a PAUSED run: the executor
+    # restores shared state / budgets / executed agents from this snapshot and
+    # never re-runs completed non-idempotent steps.
+    resumeSnapshot: Optional[Dict[str, Any]] = None
+    # Present when this run mirrors a legacy resume_task evaluation.
+    sourceTaskTraceId: Optional[str] = None
 
 
 class CancelRequest(BaseModel):
     reason: str = "user_cancelled"
+
+
+class PauseRequest(BaseModel):
+    reason: str = "user_paused"
 
 
 class ToolBudget(BaseModel):
@@ -82,6 +92,7 @@ class PolicyBundle(BaseModel):
     memoryRetrieval: MemoryRetrieval = Field(default_factory=MemoryRetrieval)
     evidenceVerification: EvidenceVerification = Field(default_factory=EvidenceVerification)
     rewriteRounds: int = 1
+    parallelSpecialists: bool = True
     timeoutPolicy: TimeoutPolicy = Field(default_factory=TimeoutPolicy)
 
     @classmethod
@@ -118,6 +129,20 @@ class RunBudget(BaseModel):
     def elapsed_seconds(self) -> float:
         return time.monotonic() - self.started_at
 
+    def restore(self, counters: Dict[str, Any]) -> None:
+        self.llm_calls = int(counters.get("llmCalls", 0))
+        self.tool_calls = int(counters.get("toolCalls", 0))
+        self.prompt_tokens = int(counters.get("promptTokens", 0))
+        self.completion_tokens = int(counters.get("completionTokens", 0))
+
+    def snapshot(self) -> Dict[str, int]:
+        return {
+            "llmCalls": self.llm_calls,
+            "toolCalls": self.tool_calls,
+            "promptTokens": self.prompt_tokens,
+            "completionTokens": self.completion_tokens,
+        }
+
 
 class BudgetExceeded(RuntimeError):
     def __init__(self, kind: str, detail: str = "") -> None:
@@ -127,3 +152,11 @@ class BudgetExceeded(RuntimeError):
 
 class RunCancelled(RuntimeError):
     pass
+
+
+class RunPaused(RuntimeError):
+    """Raised inside the executor at a safe boundary to unwind into PAUSED."""
+
+    def __init__(self, snapshot: Dict[str, Any]) -> None:
+        super().__init__("run paused at safe boundary")
+        self.snapshot = snapshot

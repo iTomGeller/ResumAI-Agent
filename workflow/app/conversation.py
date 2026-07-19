@@ -494,8 +494,7 @@ async def resolve_turn_with_model(
         return baseline
 
     try:
-        from langchain_core.messages import HumanMessage, SystemMessage
-        from langchain_openai import ChatOpenAI
+        import httpx
 
         from app.config import normalized_deepseek_base_url, settings
 
@@ -532,19 +531,24 @@ async def resolve_turn_with_model(
             ensure_ascii=False,
             default=str,
         )
-        model = ChatOpenAI(
-            base_url=normalized_deepseek_base_url(),
-            api_key=settings.deepseek_api_key,
-            model=settings.deepseek_model,
-            temperature=0,
-            max_tokens=500,
-            streaming=False,
-        )
-        response = await model.ainvoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content=user_payload),
-        ])
-        raw = str(getattr(response, "content", response) or "")
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            response = await client.post(
+                f"{normalized_deepseek_base_url()}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.deepseek_api_key}",
+                         "Content-Type": "application/json"},
+                json={
+                    "model": settings.deepseek_model,
+                    "messages": [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": user_payload},
+                    ],
+                    "temperature": 0,
+                    "max_tokens": 500,
+                    "stream": False,
+                })
+            response.raise_for_status()
+            data = response.json()
+        raw = str(data["choices"][0]["message"]["content"] or "")
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end <= start:
             return baseline

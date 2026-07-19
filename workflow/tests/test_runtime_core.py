@@ -174,7 +174,8 @@ def test_recent_message_overflow_becomes_summary():
 def test_compaction_preserves_protected_sections():
     manager = _manager(window=900, ratio=0.1)
     tool_block = "\n".join(
-        [f"[TOOL_CALL t{i} id=x{i}]\n[TOOL_RESULT t{i} status=SUCCEEDED] " + "长结果" * 120
+        [f"[TOOL_CALL t{i} id=tc-{i:016x}]\n"
+         f"[TOOL_RESULT t{i} id=tc-{i:016x} status=SUCCEEDED] " + "长结果" * 120
          for i in range(4)])
     messages = manager.assemble(
         system_prompt="系统提示",
@@ -204,11 +205,29 @@ def test_compaction_preserves_protected_sections():
 
 def test_consistency_check_detects_broken_tool_pair():
     manager = _manager()
-    messages = [{"role": "user", "content": "[TOOL_CALL a id=1]\n没有结果 用户请求X"}]
+    messages = [{"role": "user",
+                 "content": "[TOOL_CALL a id=tc-00000000000000aa]\n没有结果 用户请求X"}]
     violations = manager.consistency_check(messages, user_request="用户请求X",
                                            current_goal="")
-    assert "tool_call_result_pair_broken" in violations
+    assert any(v.startswith("tool_call_without_result") for v in violations)
+
+
+def test_consistency_check_pairs_by_id_not_count():
+    """One orphan call plus one orphan result would pass a count check but
+    must fail the per-id pairing check."""
+    manager = _manager()
+    messages = [{"role": "user", "content": (
+        "[TOOL_CALL a id=tc-00000000000000aa]\n"
+        "[TOOL_RESULT b id=tc-00000000000000bb status=SUCCEEDED] x\n用户请求X")}]
+    violations = manager.consistency_check(messages, user_request="用户请求X",
+                                           current_goal="")
+    assert any(v.startswith("tool_call_without_result") for v in violations)
+    assert any(v.startswith("tool_result_without_call") for v in violations)
 
 
 def test_token_estimate_positive():
-    assert estimate_tokens("abc" * 100) == 100
+    # ASCII ≈ chars/3.6; CJK ≈ 0.7/char — both must stay positive and sane.
+    ascii_estimate = estimate_tokens("abc" * 100)
+    assert 60 <= ascii_estimate <= 140
+    cjk_estimate = estimate_tokens("简历评估" * 50)
+    assert 120 <= cjk_estimate <= 220

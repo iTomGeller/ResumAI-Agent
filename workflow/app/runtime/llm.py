@@ -110,6 +110,13 @@ class ResilientLlmClient:
                 self.breaker.record_success()
                 self.budget.prompt_tokens += usage.get("prompt_tokens", 0)
                 self.budget.completion_tokens += usage.get("completion_tokens", 0)
+                try:
+                    from app.runtime.context import calibrate, estimate_tokens
+                    estimated = sum(estimate_tokens(m.get("content", ""))
+                                    for m in messages)
+                    calibrate(estimated, usage.get("prompt_tokens", 0))
+                except Exception:  # noqa: BLE001 - calibration is best-effort
+                    pass
                 await self.emitter.emit("llm.completed", agent_id=agent_id, payload={
                     "model": model,
                     "durationMs": int((time.monotonic() - started) * 1000),

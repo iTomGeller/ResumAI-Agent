@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -13,24 +14,36 @@ from app.runtime.models import ContextBudget
 
 logger = logging.getLogger(__name__)
 
+_CJK = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]")
+
+# Calibration state updated from real provider usage (see calibrate()).
+_CALIBRATION = {"factor": 1.0, "samples": 0}
+
 
 def estimate_tokens(text: str) -> int:
-    """Conservative mixed zh/en estimate: ~1 token per 3 chars."""
+    """Mixed zh/en estimate calibrated against provider usage.
+
+    DeepSeek tokenizes CJK at roughly 0.6–0.7 tokens/char and ASCII at
+    roughly 0.25–0.3 tokens/char. We estimate both populations separately,
+    then apply a safety factor continuously calibrated from real API usage
+    (always >= 1.0 so the budget stays conservative).
+    """
     if not text:
         return 0
-    return max(1, len(text) // 3)
+    cjk = len(_CJK.findall(text))
+    other = len(text) - cjk
+    base = cjk * 0.7 + other / 3.6
+    return max(1, int(base * max(1.0, _CALIBRATION["factor"])))
 
 
-@dataclass
-class ContextPart:
-    name: str
-    content: str
-    budget_tokens: int
-    keep_always: bool = False
-
-    @property
-    def tokens(self) -> int:
-        return estimate_tokens(self.content)
+def calibrate(estimated_prompt_tokens: int, actual_prompt_tokens: int) -> None:
+    """Feed real usage back into the estimator (exponential moving average)."""
+    if estimated_prompt_tokens <= 0 or actual_prompt_tokens <= 0:
+        return
+    observed = actual_prompt_tokens / estimated_prompt_tokens
+    weight = 0.2
+    _CALIBRATION["factor"] = (1 - weight) * _CALIBRATION["factor"] + weight * observed
+    _CALIBRATION["samples"] += 1
 
 
 @dataclass
@@ -45,15 +58,19 @@ class CompactionRecord:
     summary: str
 
 
+_TOOL_CALL_ID = re.compile(r"\[TOOL_CALL \S+ id=(tc-[0-9a-f]+)\]")
+_TOOL_RESULT_ID = re.compile(r"\[TOOL_RESULT \S+ id=(tc-[0-9a-f]+)")
+
+
 class ContextManager:
     """Token-budgeted context assembly with structured compaction.
 
-    Assembly order (spec): system → policy → skills → current request →
-    goal → shared state → recent messages → conversation summary → memory →
-    tool results → output schema. Compaction triggers when the estimate
-    crosses compactAtRatio of the model window and never drops the newest
-    user request, the goal, cancellation constraints or unfinished tool
-    call/result pairs (tool results are only ever summarized as one unit).
+    Assembly order: system → policy → skills → current request → goal →
+    shared state → recent messages → conversation summary → memory → tool
+    results → output schema. Compaction triggers when the estimate crosses
+    compactAtRatio of the model window and never drops the newest user
+    request, the goal, cancellation constraints or any tool call whose
+    result would be separated from it (pairing is checked per toolCallId).
     """
 
     def __init__(self, budget: ContextBudget, emitter: RuntimeEmitter,
@@ -92,7 +109,8 @@ class ContextManager:
                 content = str(message.get("content") or "").replace("\n", " ")
                 summary_lines.append(f"- {role}: {content[:120]}")
             summary = "\n".join(summary_lines)
-        return {"kept": kept, "summary": summary, "overflowCount": len(overflow)}
+        return {"kept": kept, "summary": summary, "overflowCount": len(overflow),
+                "overflow": overflow}
 
     # ---------------- assembly ----------------
 
@@ -101,24 +119,15 @@ class ContextManager:
                  shared_state_digest: str, recent_messages: List[Dict[str, Any]],
                  conversation_summary: str, memory_block: str,
                  tool_results_block: str, output_schema: str) -> List[Dict[str, str]]:
-        parts = [
-            ContextPart("system", self._cap(system_prompt, self.budget.systemBudget), self.budget.systemBudget, True),
-            ContextPart("policy", self._cap(policy_instructions, self.budget.policyBudget), self.budget.policyBudget),
-            ContextPart("skills", self._cap(skill_instructions, self.budget.skillBudget), self.budget.skillBudget),
-            ContextPart("request", user_request, 10_000, True),
-            ContextPart("goal", current_goal or "", 600, True),
-            ContextPart("shared_state", shared_state_digest, self.budget.toolResultBudget),
-            ContextPart("memory", self._cap(memory_block, self.budget.memoryBudget), self.budget.memoryBudget),
-            ContextPart("tool_results", self._cap(tool_results_block, self.budget.toolResultBudget), self.budget.toolResultBudget),
-            ContextPart("output_schema", output_schema, 1200, True),
-        ]
         prepared = self.prepare_messages(recent_messages, conversation_summary)
 
-        system_block = parts[0].content
-        if parts[1].content:
-            system_block += "\n\n[策略要求]\n" + parts[1].content
-        if parts[2].content:
-            system_block += "\n\n[技能指令]\n" + parts[2].content
+        system_block = self._cap(system_prompt, self.budget.systemBudget)
+        if policy_instructions:
+            system_block += "\n\n[策略要求]\n" + self._cap(
+                policy_instructions, self.budget.policyBudget)
+        if skill_instructions:
+            system_block += "\n\n[技能指令]\n" + self._cap(
+                skill_instructions, self.budget.skillBudget)
 
         user_block_sections = []
         if prepared["summary"]:
@@ -129,22 +138,24 @@ class ContextManager:
                 f"{str(m.get('content') or '')[:400]}"
                 for m in prepared["kept"][-8:])
             user_block_sections.append("[近期消息]\n" + history)
-        if parts[6].content:
-            user_block_sections.append("[相关记忆]\n" + parts[6].content)
-        if parts[5].content:
-            user_block_sections.append("[共享状态]\n" + parts[5].content)
-        if parts[7].content:
-            user_block_sections.append("[工具观察]\n" + parts[7].content)
-        if parts[4].content:
-            user_block_sections.append("[当前目标]\n" + parts[4].content)
-        user_block_sections.append("[当前请求]\n" + parts[3].content)
-        user_block_sections.append("[输出要求]\n" + parts[8].content)
+        if memory_block:
+            user_block_sections.append("[相关记忆]\n" + self._cap(
+                memory_block, self.budget.memoryBudget))
+        if shared_state_digest:
+            user_block_sections.append("[共享状态]\n" + self._cap(
+                shared_state_digest, self.budget.toolResultBudget))
+        if tool_results_block:
+            user_block_sections.append("[工具观察]\n" + self._cap_tools(
+                tool_results_block, self.budget.toolResultBudget))
+        if current_goal:
+            user_block_sections.append("[当前目标]\n" + current_goal)
+        user_block_sections.append("[当前请求]\n" + user_request)
+        user_block_sections.append("[输出要求]\n" + output_schema)
 
-        messages = [
+        return [
             {"role": "system", "content": system_block},
             {"role": "user", "content": "\n\n".join(user_block_sections)},
         ]
-        return messages
 
     def needs_compaction(self, messages: List[Dict[str, str]]) -> bool:
         total = sum(estimate_tokens(m["content"]) for m in messages)
@@ -155,8 +166,11 @@ class ContextManager:
         return sum(estimate_tokens(m["content"]) for m in messages)
 
     async def compact(self, messages: List[Dict[str, str]], *, reason: str,
-                      protected_markers: List[str]) -> List[Dict[str, str]]:
-        """Shrink the user block while preserving protected sections whole."""
+                      protected_markers: List[str],
+                      recent_messages: Optional[List[Dict[str, Any]]] = None
+                      ) -> List[Dict[str, str]]:
+        """Shrink the user block while preserving protected sections whole and
+        keeping every tool call/result pair together (per toolCallId)."""
         before = self.estimate(messages)
         compacted: List[Dict[str, str]] = []
         for message in messages:
@@ -182,11 +196,23 @@ class ContextManager:
             compacted.append({"role": message["role"], "content": "\n\n".join(kept_sections)})
         after = self.estimate(compacted)
         self.summary_version += 1
+
+        start_id = end_id = first_kept_id = None
+        if recent_messages:
+            ids = [m.get("id") for m in recent_messages
+                   if isinstance(m.get("id"), int)]
+            if ids:
+                start_id, end_id = min(ids), max(ids)
+                prepared = self.prepare_messages(recent_messages, "")
+                kept_ids = [m.get("id") for m in prepared["kept"]
+                            if isinstance(m.get("id"), int)]
+                first_kept_id = min(kept_ids) if kept_ids else end_id
+
         record = CompactionRecord(
             summary_version=self.summary_version,
-            source_message_start_id=None,
-            source_message_end_id=None,
-            first_kept_message_id=None,
+            source_message_start_id=start_id,
+            source_message_end_id=end_id,
+            first_kept_message_id=first_kept_id,
             before_token_estimate=before,
             after_token_estimate=after,
             reason=reason,
@@ -194,45 +220,73 @@ class ContextManager:
         self.compactions.append(record)
         await self.emitter.emit("context.compacted", payload={
             "summaryVersion": record.summary_version,
-            "beforeTokens": before, "afterTokens": after, "reason": reason})
+            "beforeTokens": before, "afterTokens": after, "reason": reason,
+            "sourceMessageStartId": start_id, "sourceMessageEndId": end_id,
+            "firstKeptMessageId": first_kept_id})
         await self._persist(record)
         return compacted
 
     @staticmethod
     def consistency_check(messages: List[Dict[str, str]], *, user_request: str,
                           current_goal: str) -> List[str]:
-        """Post-compaction invariants (spec §14). Returns violation list."""
+        """Post-compaction invariants. Tool calls and results are matched
+        per toolCallId, not by count."""
         violations = []
         joined = "\n".join(m["content"] for m in messages)
         if user_request and user_request[:80] not in joined:
             violations.append("latest_user_request_lost")
         if current_goal and current_goal[:60] and current_goal[:60] not in joined:
             violations.append("current_goal_lost")
-        open_calls = joined.count("[TOOL_CALL ")
-        closed_calls = joined.count("[TOOL_RESULT ")
-        if open_calls != closed_calls:
-            violations.append("tool_call_result_pair_broken")
+        call_ids = set(_TOOL_CALL_ID.findall(joined))
+        result_ids = set(_TOOL_RESULT_ID.findall(joined))
+        if call_ids - result_ids:
+            violations.append(
+                f"tool_call_without_result:{sorted(call_ids - result_ids)[:3]}")
+        if result_ids - call_ids:
+            violations.append(
+                f"tool_result_without_call:{sorted(result_ids - call_ids)[:3]}")
         return violations
 
     @staticmethod
     def _summarize_tools(section: str) -> str:
+        """Compress tool observations while keeping every call/result pair.
+        Pairs are units: either both lines survive (result truncated) or the
+        pair is dropped as a whole and mentioned in the summary line."""
         lines = section.splitlines()
-        header, body = lines[0], lines[1:]
-        summarized: List[str] = [header + "（已压缩，保留关键字段）"]
-        for line in body:
-            if line.startswith("[TOOL_CALL") or line.startswith("[TOOL_RESULT"):
-                summarized.append(line[:300])
-            elif len(summarized) < 24:
-                summarized.append(line[:160])
-        return "\n".join(summarized)
+        header = lines[0]
+        pairs: List[List[str]] = []
+        current: List[str] = []
+        for line in lines[1:]:
+            if line.startswith("[TOOL_CALL"):
+                if current:
+                    pairs.append(current)
+                current = [line]
+            elif current:
+                current.append(line)
+        if current:
+            pairs.append(current)
+        kept_pairs = pairs[-6:]
+        dropped = len(pairs) - len(kept_pairs)
+        out = [header + f"（已压缩，保留最近 {len(kept_pairs)} 组工具调用"
+               + (f"，省略 {dropped} 组" if dropped > 0 else "") + "）"]
+        for pair in kept_pairs:
+            for line in pair[:2]:
+                out.append(line[:300])
+        return "\n".join(out)
 
     def _cap(self, text: str, budget_tokens: int) -> str:
         if not text:
             return ""
-        max_chars = budget_tokens * 3
-        if len(text) <= max_chars:
+        if estimate_tokens(text) <= budget_tokens:
             return text
+        max_chars = int(budget_tokens * 2.5)
         return text[:max_chars] + "\n...[超出预算已截断]"
+
+    def _cap_tools(self, text: str, budget_tokens: int) -> str:
+        """Cap the tool block without splitting a call/result pair."""
+        if estimate_tokens(text) <= budget_tokens:
+            return text
+        return self._summarize_tools("[工具观察]\n" + text).split("\n", 1)[-1]
 
     async def _persist(self, record: CompactionRecord) -> None:
         body = {

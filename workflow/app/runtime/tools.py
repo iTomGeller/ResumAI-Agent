@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from app import tools as legacy_tools
+from app.runtime import gateway
 from app.runtime.events import RuntimeEmitter
 from app.runtime.models import BudgetExceeded, RunBudget
 from app.runtime.sandbox import SANDBOX_TOOLS, SandboxClient, SandboxUnavailable
@@ -270,23 +270,23 @@ class ToolExecutor:
         if defn.kind == "sandbox":
             return await self.sandbox.invoke(defn.name, args)
         if defn.name == "resume_semantic_search":
-            return await legacy_tools.java_resume_search(
+            return await gateway.java_resume_search(
                 query=str(args.get("query") or ""),
                 top_k=int(args.get("topK") or 5),
                 resume_text=str(args.get("resumeText") or ""),
                 jd_requirements=str(self.run_context.get("jobDescription") or "")[:2000],
                 strategy="hybrid")
         if defn.name == "jd_match_search":
-            return await legacy_tools.java_jd_search(
+            return await gateway.java_jd_search(
                 resume_text=str(args.get("resumeText") or ""), top_k=3)
         if defn.name == "knowledge_search":
-            return await legacy_tools.java_knowledge_search(
+            return await gateway.java_knowledge_search(
                 query=str(args.get("query") or ""), top_k=int(args.get("topK") or 5))
         if defn.name == "timeline_validator":
-            return await legacy_tools.timeline_validator(
+            return await gateway.timeline_validator(
                 resume_text=str(args.get("resumeText") or ""))
         if defn.name == "external_profile_lookup":
-            return await legacy_tools.java_external_profile(
+            return await gateway.java_external_profile(
                 resume_text=str(args.get("resumeText") or ""))
         raise ToolValidationError(f"no dispatcher for tool {defn.name}")
 
@@ -319,6 +319,32 @@ class ToolExecutor:
             "toolFailures": failed,
             "duplicateSignatures": sum(1 for v in self.signature_counts.values() if v > 1),
         }
+
+    # ---------- pause/resume snapshot ----------
+
+    def ledger(self) -> List[Dict[str, Any]]:
+        """Completed tool calls by id — the resume path uses this to never
+        re-execute an already finished (potentially non-idempotent) call."""
+        return [
+            {
+                "toolCallId": call.tool_call_id,
+                "tool": call.tool,
+                "status": call.status,
+                "durationMs": call.duration_ms,
+                "retries": call.retries,
+            }
+            for call in self.call_log
+        ]
+
+    def restore_ledger(self, entries: List[Dict[str, Any]]) -> None:
+        for entry in entries or []:
+            self.call_log.append(ToolCallResult(
+                tool_call_id=str(entry.get("toolCallId") or ""),
+                tool=str(entry.get("tool") or ""),
+                status=str(entry.get("status") or "SUCCEEDED"),
+                result=None,
+                duration_ms=int(entry.get("durationMs") or 0),
+                retries=int(entry.get("retries") or 0)))
 
 
 def _preview(value: Any, limit: int = 500) -> str:
