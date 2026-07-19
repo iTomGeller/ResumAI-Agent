@@ -76,6 +76,22 @@ TOOL_SEMANTICS: Dict[str, Dict[str, Any]] = {
         "protocol": "stdio",
         "downstreamApi": "/api/internal/tools/external-profile",
     },
+    "mcp_time[public:mcp-server-time]": {
+        "origin": "mcp",
+        "family": "tool",
+        "operation": "get_current_time",
+        "server": "mcp-server-time",
+        "protocol": "stdio",
+        "backend": "mcp-server-time",
+    },
+    "mcp_fetch[public:mcp-server-fetch]": {
+        "origin": "mcp",
+        "family": "external_enrichment",
+        "operation": "fetch_declared_url",
+        "server": "mcp-server-fetch",
+        "protocol": "stdio",
+        "backend": "mcp-server-fetch",
+    },
 }
 
 RAG_TOOL_NAMES = frozenset(
@@ -99,6 +115,15 @@ TOOL_BUDGET_BY_AGENT: Dict[str, int] = {
 def get_tool_semantics(tool_name: str) -> Dict[str, Any]:
     if tool_name in TOOL_SEMANTICS:
         return dict(TOOL_SEMANTICS[tool_name])
+    public_mcp = re.search(r"\[public:([^\]]+)\]$", tool_name)
+    if public_mcp:
+        return {
+            "origin": "mcp",
+            "family": "mcp",
+            "operation": tool_name.split("[", 1)[0],
+            "server": public_mcp.group(1),
+            "protocol": "stdio",
+        }
     if tool_name.startswith("mcp_"):
         return {
             "origin": "mcp",
@@ -288,21 +313,3 @@ def is_malformed_final_output(text: str) -> bool:
     if text.strip() in ("{}", "[]", "null"):
         return True
     return False
-
-
-def resume_text_fallback_chunks(resume_text: str, query: str, top_k: int = 5) -> List[str]:
-    if not resume_text or not query:
-        return []
-    keywords = [w for w in re.split(r"[\s,，、/|；;]+", query) if len(w) >= 2]
-    if not keywords:
-        keywords = [query[:20]]
-    paragraphs = [p.strip() for p in re.split(r"\n{2,}", resume_text) if p.strip()]
-    if not paragraphs:
-        paragraphs = [line.strip() for line in resume_text.splitlines() if line.strip()]
-    scored: List[tuple[int, str]] = []
-    for para in paragraphs:
-        score = sum(1 for kw in keywords if kw.lower() in para.lower())
-        if score > 0:
-            scored.append((score, para[:500]))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [p for _, p in scored[:top_k]]

@@ -2,21 +2,683 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List
+from datetime import date
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from urllib.parse import urlparse
+
+
+MAX_PROPOSED_TOOL_CALLS_PER_ROUND = 8
 
 
 DEFAULT_AGENT_TOOL_BUDGETS: Dict[str, Dict[str, int]] = {
-    "ResumeParseAgent": {"maxToolCalls": 1, "maxRetrievalQueries": 0},
-    "JdMatchAgent": {"maxToolCalls": 2, "maxRetrievalQueries": 1},
-    "TechEvalAgent": {"maxToolCalls": 2, "maxRetrievalQueries": 3},
-    "ProjectEvalAgent": {"maxToolCalls": 1, "maxRetrievalQueries": 3},
-    "RiskAgent": {"maxToolCalls": 2, "maxRetrievalQueries": 3},
-    "EvidenceFusionAgent": {"maxToolCalls": 0, "maxRetrievalQueries": 0},
-    "ReportAgent": {"maxToolCalls": 1, "maxRetrievalQueries": 0},
+    "IntentAgent": {"maxToolCalls": 2, "maxRetrievalQueries": 0},
+    "ResumeParseAgent": {"maxToolCalls": 2, "maxRetrievalQueries": 0},
+    "JdMatchAgent": {"maxToolCalls": 3, "maxRetrievalQueries": 1},
+    # A batch RAG call may contain four distinct queries. The specialist budget
+    # leaves room for one or two source-bound public lookups without allowing
+    # an unbounded search loop.
+    "TechEvalAgent": {"maxToolCalls": 4, "maxRetrievalQueries": 6},
+    "ProjectEvalAgent": {"maxToolCalls": 4, "maxRetrievalQueries": 6},
+    "RiskAgent": {"maxToolCalls": 4, "maxRetrievalQueries": 4},
+    "EvidenceFusionAgent": {"maxToolCalls": 2, "maxRetrievalQueries": 0},
+    "ReportAgent": {"maxToolCalls": 2, "maxRetrievalQueries": 0},
 }
 
 
-def parse_json_object(raw: str | None) -> Dict[str, Any]:
+_TIMELINE_RANGE_PATTERN = re.compile(
+    r"(?P<start_year>(?:19|20)\d{2})"
+    r"\s*(?:[./\-年]\s*(?P<start_month>0?[1-9]|1[0-2])\s*月?)?"
+    r"(?:"
+    r"\s*(?P<present_cn>至今|现在)"
+    r"|\s*(?:至|到|[-–—~～])\s*(?:"
+    r"(?P<end_year>(?:19|20)\d{2})"
+    r"\s*(?:[./\-年]\s*(?P<end_month>0?[1-9]|1[0-2])\s*月?)?"
+    r"|(?P<present_en>present|current)"
+    r")"
+    r")",
+    re.I,
+)
+
+
+def validate_timeline_text(
+    resume_text: str,
+    *,
+    reference_date: Optional[date] = None,
+) -> Dict[str, Any]:
+    """Parse dated intervals without pretending that ambiguous text was verified.
+
+    Overlaps and gaps are observations for the RiskAgent, not automatic fraud
+    findings: education, internships, and part-time work can legitimately
+    overlap. Invalid or future ranges are explicit issues. If no interval can
+    be parsed, the contract returns NOT_CHECKED instead of a fixed success.
+    """
+
+    today = reference_date or date.today()
+    text = resume_text or ""
+    entries: List[Dict[str, Any]] = []
+    for line_number, raw_line in enumerate(text.splitlines() or [text], start=1):
+        line = raw_line.strip()
+        for match in _TIMELINE_RANGE_PATTERN.finditer(line):
+            start_year = int(match.group("start_year"))
+            start_month = int(match.group("start_month") or 1)
+            is_present = bool(match.group("present_cn") or match.group("present_en"))
+            end_year = today.year if is_present else int(match.group("end_year"))
+            end_month = today.month if is_present else int(match.group("end_month") or 12)
+            start_index = start_year * 12 + start_month - 1
+            end_index = end_year * 12 + end_month - 1
+            entries.append(
+                {
+                    "lineNumber": line_number,
+                    "sourceText": line[:240],
+                    "start": f"{start_year:04d}-{start_month:02d}",
+                    "end": "present" if is_present else f"{end_year:04d}-{end_month:02d}",
+                    "startMonthIndex": start_index,
+                    "endMonthIndex": end_index,
+                    "durationMonths": end_index - start_index + 1,
+                    "isPresent": is_present,
+                }
+            )
+
+    if not entries:
+        return {
+            "status": "NOT_CHECKED",
+            "checked": False,
+            "reason": "no_parseable_date_range",
+            "referenceDate": today.isoformat(),
+            "timelineEntries": [],
+            "issues": [],
+            "overlaps": [],
+            "gaps": [],
+            "riskFlag": False,
+            "requiresHumanReview": True,
+        }
+
+    entries.sort(key=lambda item: (item["startMonthIndex"], item["endMonthIndex"]))
+    issues: List[Dict[str, Any]] = []
+    for entry in entries:
+        if entry["durationMonths"] <= 0:
+            issues.append(
+                {
+                    "kind": "invalid_range",
+                    "start": entry["start"],
+                    "end": entry["end"],
+                    "lineNumber": entry["lineNumber"],
+                }
+            )
+        if entry["startMonthIndex"] > today.year * 12 + today.month - 1:
+            issues.append(
+                {
+                    "kind": "future_start",
+                    "start": entry["start"],
+                    "lineNumber": entry["lineNumber"],
+                }
+            )
+        if not entry["isPresent"] and entry["endMonthIndex"] > today.year * 12 + today.month - 1:
+            issues.append(
+                {
+                    "kind": "future_end",
+                    "end": entry["end"],
+                    "lineNumber": entry["lineNumber"],
+                }
+            )
+
+    overlaps: List[Dict[str, Any]] = []
+    gaps: List[Dict[str, Any]] = []
+    for current, following in zip(entries, entries[1:]):
+        if following["startMonthIndex"] <= current["endMonthIndex"]:
+            overlaps.append(
+                {
+                    "firstLine": current["lineNumber"],
+                    "secondLine": following["lineNumber"],
+                    "overlapMonths": current["endMonthIndex"] - following["startMonthIndex"] + 1,
+                }
+            )
+        else:
+            gap_months = following["startMonthIndex"] - current["endMonthIndex"] - 1
+            if gap_months > 0:
+                gaps.append(
+                    {
+                        "firstLine": current["lineNumber"],
+                        "secondLine": following["lineNumber"],
+                        "gapMonths": gap_months,
+                    }
+                )
+
+    return {
+        "status": "CHECKED",
+        "checked": True,
+        "method": "deterministic_interval_parse_v1",
+        "referenceDate": today.isoformat(),
+        "timelineEntries": entries,
+        "issues": issues,
+        "overlaps": overlaps,
+        "gaps": gaps,
+        "riskFlag": bool(issues),
+        "requiresHumanReview": bool(overlaps or any(gap["gapMonths"] > 6 for gap in gaps)),
+        "limitations": "Overlap/gap observations require role context; they are not automatic candidate risks.",
+    }
+
+
+# This is the executable contract behind the product claim "only rerun the
+# affected nodes".  Keeping the DAG here makes revision planning independently
+# testable; the runtime consumes the returned plan instead of trusting a caller
+# supplied list blindly.
+EVALUATION_NODE_ORDER: Sequence[str] = (
+    "intent",
+    "resume_parse",
+    "jd_match",
+    "knowledge_context",
+    "tech_eval",
+    "project_eval",
+    "risk_eval",
+    "evidence_fusion",
+    "report",
+)
+
+
+def select_phase4_nodes(
+    harness_plan: Mapping[str, Any],
+    revision_plan: Optional[Mapping[str, Any]] = None,
+    *,
+    revision: int = 1,
+) -> List[str]:
+    """Apply dynamic pruning without pruning mandatory revision work.
+
+    Initial runs follow the content-derived route. For a revision, optional
+    evaluators in the invalidation closure are mandatory even if the newly
+    calculated route would otherwise omit them; their old outputs were not
+    copied and evidence fusion must never observe a missing/mixed revision.
+    """
+
+    route = harness_plan.get("route") if isinstance(harness_plan, Mapping) else {}
+    route = route if isinstance(route, Mapping) else {}
+    enabled = set(route.get("selectedAgents") or route.get("enabledAgents") or [])
+    plan = revision_plan if isinstance(revision_plan, Mapping) else {}
+    is_revision = bool(
+        int(revision or 1) > 1
+        or plan.get("baseCheckpointLoaded")
+        or plan.get("baseWorkflowRunId")
+    )
+    if is_revision:
+        execute_nodes = plan.get("execute_nodes") or plan.get("executeNodes") or []
+        enabled.update(
+            node
+            for node in execute_nodes
+            if node in {"tech_eval", "project_eval", "risk_eval"}
+        )
+    selected = [
+        node
+        for node in ("tech_eval", "project_eval", "risk_eval")
+        if node in enabled
+    ]
+    return selected or ["evidence_fusion"]
+
+NODE_DEPENDENCIES: Dict[str, Set[str]] = {
+    "intent": set(),
+    "resume_parse": set(),
+    "jd_match": {"intent", "resume_parse"},
+    "knowledge_context": {"jd_match"},
+    "tech_eval": {"knowledge_context"},
+    "project_eval": {"knowledge_context"},
+    "risk_eval": {"knowledge_context"},
+    "evidence_fusion": {"tech_eval", "project_eval", "risk_eval"},
+    "report": {"evidence_fusion"},
+}
+
+NODE_OUTPUT_FIELDS: Dict[str, Sequence[str]] = {
+    "intent": ("intentResult", "harnessPlan", "harnessContext", "memoryContext"),
+    "resume_parse": ("parseResult",),
+    "jd_match": ("jdResult",),
+    "knowledge_context": ("harnessPlan", "harnessContext", "knowledgeContext"),
+    "tech_eval": ("techResult",),
+    "project_eval": ("projectResult",),
+    "risk_eval": ("riskResult",),
+    "evidence_fusion": ("fusionResult",),
+    "report": (
+        "finalReport",
+        "overallScore",
+        "recommendation",
+        "strengths",
+        "risks",
+        "interviewQuestions",
+        "degradedReasons",
+    ),
+}
+
+
+def terminal_status_for_degradation(degraded_reasons: Sequence[str]) -> str:
+    return "PARTIAL_SUCCESS" if any(str(reason).strip() for reason in degraded_reasons) else "SUCCESS"
+
+
+@dataclass(frozen=True)
+class RevisionExecutionPlan:
+    requested_invalidations: List[str]
+    execute_nodes: List[str]
+    reused_nodes: List[str]
+    cache_miss_nodes: List[str] = field(default_factory=list)
+    unknown_nodes: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _downstream_closure(nodes: Set[str]) -> Set[str]:
+    invalidated = set(nodes)
+    changed = True
+    while changed:
+        changed = False
+        for node, dependencies in NODE_DEPENDENCIES.items():
+            if node not in invalidated and dependencies.intersection(invalidated):
+                invalidated.add(node)
+                changed = True
+    return invalidated
+
+
+def _has_cached_output(base_state: Mapping[str, Any], node: str) -> bool:
+    fields = NODE_OUTPUT_FIELDS[node]
+    # Presence is intentional: score=0, [] and {} can be valid deterministic
+    # outputs.  None/blank strings are incomplete checkpoints and force a rerun.
+    for name in fields:
+        if name not in base_state:
+            return False
+        value = base_state.get(name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return False
+    return True
+
+
+def plan_revision_execution(
+    affected_nodes: Sequence[str],
+    base_state: Optional[Mapping[str, Any]] = None,
+) -> RevisionExecutionPlan:
+    """Build a fail-closed minimal-rerun plan for an immutable revision.
+
+    A node can only be marked reusable when every output in its contract exists
+    in the base checkpoint.  A missing cache entry invalidates that node and its
+    transitive dependants; this prevents a superficially "minimal" run from
+    producing a report with mixed or absent evidence.
+    """
+
+    requested = list(dict.fromkeys(str(node).strip() for node in affected_nodes if str(node).strip()))
+    known = set(EVALUATION_NODE_ORDER)
+    unknown = [node for node in requested if node not in known]
+    requested_known = {node for node in requested if node in known}
+
+    # No base means a first evaluation.  An empty invalidation set on a revision
+    # with a base means a no-op revision and all complete outputs are reusable.
+    if base_state is None or unknown:
+        execute = set(known)
+        cache_misses: Set[str] = set()
+    else:
+        execute = _downstream_closure(requested_known)
+        cache_misses = {
+            node
+            for node in known - execute
+            if not _has_cached_output(base_state, node)
+        }
+        execute.update(_downstream_closure(cache_misses))
+
+    execute_nodes = [node for node in EVALUATION_NODE_ORDER if node in execute]
+    reused_nodes = [
+        node
+        for node in EVALUATION_NODE_ORDER
+        if node not in execute and base_state is not None and _has_cached_output(base_state, node)
+    ]
+    return RevisionExecutionPlan(
+        requested_invalidations=requested,
+        execute_nodes=execute_nodes,
+        reused_nodes=reused_nodes,
+        cache_miss_nodes=[node for node in EVALUATION_NODE_ORDER if node in cache_misses],
+        unknown_nodes=unknown,
+    )
+
+
+def materialize_revision_state(
+    current_state: Mapping[str, Any],
+    affected_nodes: Sequence[str],
+    base_state: Optional[Mapping[str, Any]],
+) -> Tuple[Dict[str, Any], RevisionExecutionPlan]:
+    """Copy only planner-approved outputs into a new immutable revision state."""
+
+    materialized = dict(current_state)
+    plan = plan_revision_execution(affected_nodes, base_state)
+    if base_state is not None:
+        for node_id in plan.reused_nodes:
+            for field_name in NODE_OUTPUT_FIELDS[node_id]:
+                materialized[field_name] = base_state[field_name]
+    materialized["revisionPlan"] = plan.to_dict()
+    materialized["reusedNodes"] = list(plan.reused_nodes)
+    return materialized, plan
+
+
+@dataclass(frozen=True)
+class ToolLoopDecision:
+    allowed: bool
+    reason: str
+    signature: str
+    tool_call_count: int
+    retrieval_query_count: int
+
+
+@dataclass(frozen=True)
+class ToolProposalBatchDecision:
+    allowed: bool
+    reason: str
+    proposed_count: int
+    limit: int
+
+
+def guard_tool_proposal_batch(
+    proposed_count: int,
+    *,
+    limit: int = MAX_PROPOSED_TOOL_CALLS_PER_ROUND,
+) -> ToolProposalBatchDecision:
+    """Bound model-proposed calls before they amplify trace and context size."""
+
+    normalized_count = max(0, int(proposed_count))
+    normalized_limit = max(0, int(limit))
+    allowed = normalized_count <= normalized_limit
+    return ToolProposalBatchDecision(
+        allowed=allowed,
+        reason="allowed" if allowed else "tool_proposal_batch_exceeded",
+        proposed_count=normalized_count,
+        limit=normalized_limit,
+    )
+
+
+class AgentToolLedger:
+    """Deterministic budget and de-duplication guard for an Agent tool loop."""
+
+    def __init__(
+        self,
+        agent_name: str,
+        budgets: Optional[Mapping[str, Mapping[str, int]]] = None,
+    ) -> None:
+        configured = dict((budgets or DEFAULT_AGENT_TOOL_BUDGETS).get(agent_name, {}))
+        self.max_tool_calls = max(0, int(configured.get("maxToolCalls", 0)))
+        self.max_retrieval_queries = max(0, int(configured.get("maxRetrievalQueries", 0)))
+        self.tool_call_count = 0
+        self.retrieval_query_count = 0
+        self._seen: Set[str] = set()
+
+    @staticmethod
+    def signature(tool_name: str, tool_args: Mapping[str, Any]) -> str:
+        normalized = json.dumps(tool_args, ensure_ascii=False, sort_keys=True, default=str)
+        # Full normalized arguments are kept out of traces and logs.  The hash
+        # remains stable across dict ordering and is sufficient for de-dup.
+        import hashlib
+
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+        return f"{tool_name}:{digest}"
+
+    def inspect(
+        self,
+        tool_name: str,
+        tool_args: Mapping[str, Any],
+        *,
+        retrieval_queries: int = 0,
+    ) -> ToolLoopDecision:
+        signature = self.signature(tool_name, tool_args)
+        if signature in self._seen:
+            return self._decision(False, "duplicate_tool_call", signature)
+        if self.tool_call_count >= self.max_tool_calls:
+            return self._decision(False, "tool_budget_exceeded", signature)
+        requested_queries = max(0, int(retrieval_queries))
+        if requested_queries and (
+            self.retrieval_query_count + requested_queries > self.max_retrieval_queries
+        ):
+            return self._decision(False, "retrieval_budget_exceeded", signature)
+
+        self._seen.add(signature)
+        self.tool_call_count += 1
+        self.retrieval_query_count += requested_queries
+        return self._decision(True, "allowed", signature)
+
+    def _decision(self, allowed: bool, reason: str, signature: str) -> ToolLoopDecision:
+        return ToolLoopDecision(
+            allowed=allowed,
+            reason=reason,
+            signature=signature,
+            tool_call_count=self.tool_call_count,
+            retrieval_query_count=self.retrieval_query_count,
+        )
+
+
+@dataclass(frozen=True)
+class ResultFenceDecision:
+    accepted: bool
+    reason: str
+
+
+def fence_workflow_result(
+    *,
+    active_conversation_id: str,
+    active_workflow_run_id: str,
+    active_revision: int,
+    incoming_conversation_id: str,
+    incoming_workflow_run_id: str,
+    incoming_revision: int,
+    active_status: str = "RUNNING",
+) -> ResultFenceDecision:
+    """Reject late/superseded callbacks before they can mutate visible state."""
+
+    if str(active_status).upper() in {"CANCELLED", "SUPERSEDED"}:
+        return ResultFenceDecision(False, "active_run_not_writable")
+    if incoming_conversation_id != active_conversation_id:
+        return ResultFenceDecision(False, "conversation_mismatch")
+    if int(incoming_revision) != int(active_revision):
+        return ResultFenceDecision(False, "revision_mismatch")
+    if incoming_workflow_run_id != active_workflow_run_id:
+        return ResultFenceDecision(False, "workflow_run_mismatch")
+    return ResultFenceDecision(True, "identity_match")
+
+
+@dataclass(frozen=True)
+class ExternalEvidenceAudit:
+    usable: bool
+    reason: str
+    source_urls: List[str] = field(default_factory=list)
+
+
+def audit_external_evidence(raw_result: Any, *, require_source_url: bool = True) -> ExternalEvidenceAudit:
+    """Fail closed when a public MCP/tool fails or returns ungrounded content."""
+
+    parsed: Any = raw_result
+    if isinstance(raw_result, str):
+        try:
+            parsed = json.loads(raw_result)
+        except json.JSONDecodeError:
+            return ExternalEvidenceAudit(False, "non_json_external_result")
+    if not isinstance(parsed, (dict, list)):
+        return ExternalEvidenceAudit(False, "invalid_external_result")
+    if not parsed:
+        return ExternalEvidenceAudit(False, "empty_external_result")
+    urls: List[str] = []
+    failure_seen = False
+    synthetic_seen = False
+    fallback_seen = False
+
+    def visit(value: Any) -> None:
+        nonlocal failure_seen, synthetic_seen, fallback_seen
+        if isinstance(value, Mapping):
+            status = str(value.get("status") or "").strip().upper()
+            failed_branch = bool(
+                value.get("error")
+                or status
+                in {
+                    "FAILED",
+                    "ERROR",
+                    "UNAVAILABLE",
+                    "TIMEOUT",
+                    "CANCELLED",
+                    "SKIPPED",
+                    "RATE_LIMITED",
+                    "RATE-LIMITED",
+                    "NOT_FOUND",
+                }
+                or value.get("ok") is False
+                or value.get("success") is False
+                or value.get("available") is False
+                or value.get("skipped") is True
+                or value.get("rateLimited") is True
+                or value.get("timedOut") is True
+            )
+            synthetic_seen = synthetic_seen or bool(
+                value.get("synthetic")
+                or value.get("fabricated")
+                or value.get("syntheticFallback") is True
+                or value.get("synthetic_fallback") is True
+            )
+            fallback_seen = fallback_seen or bool(
+                value.get("fallbackUsed")
+                or value.get("usedResumeTextFallback")
+                or value.get("fallback") is True
+            )
+            if failed_branch:
+                # A failed branch cannot ground itself by echoing a requested
+                # URL. Other independent result branches may still be usable.
+                failure_seen = True
+                return
+            for key, item in value.items():
+                if str(key).lower() in {"url", "sourceurl", "source_url", "html_url"}:
+                    if isinstance(item, str) and re.match(r"^https?://", item.strip(), re.I):
+                        urls.append(item.strip())
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(parsed)
+    if synthetic_seen:
+        return ExternalEvidenceAudit(False, "synthetic_evidence_forbidden")
+    if fallback_seen:
+        return ExternalEvidenceAudit(False, "fallback_not_external_evidence")
+    urls = dedupe_keep_order(urls)
+    if failure_seen and not urls:
+        return ExternalEvidenceAudit(False, "tool_failed")
+    if require_source_url and not urls:
+        return ExternalEvidenceAudit(False, "missing_source_url")
+    return ExternalEvidenceAudit(True, "source_grounded", urls)
+
+
+def audit_external_subject_binding(
+    tool_metadata: Mapping[str, Any],
+    tool_args: Mapping[str, Any],
+    resume_text: str,
+) -> Optional[str]:
+    """Return a reason when candidate lookup is not bound to a declared identity."""
+
+    evidence = tool_metadata.get("externalEvidence")
+    if not isinstance(evidence, Mapping):
+        return None
+    if evidence.get("subjectBinding") == "not-applicable" or evidence.get("kind") == "deterministic-time":
+        return None
+    declared_urls = re.findall(r"https?://[^\s<>()\]\[\"']+", resume_text or "", re.I)
+    declared_urls_normalized: Set[str] = set()
+    declared_identifiers: Set[str] = set()
+    generic_hosts = {
+        "github.com",
+        "www.github.com",
+        "gitlab.com",
+        "www.gitlab.com",
+        "gitee.com",
+        "www.gitee.com",
+        "medium.com",
+        "www.medium.com",
+        "dev.to",
+        "juejin.cn",
+        "www.cnblogs.com",
+        "segmentfault.com",
+    }
+    for url in declared_urls:
+        lowered = url.rstrip("/.,，。；;").lower()
+        declared_urls_normalized.add(lowered)
+        parsed_url = urlparse(lowered)
+        host = (parsed_url.hostname or "").lower()
+        path_parts = [part for part in parsed_url.path.split("/") if part]
+        # A personal/custom domain is itself a declared identity. Shared code
+        # hosts are not: github.com/alice must never authorize github.com/bob.
+        if host and host not in generic_hosts:
+            declared_identifiers.add(host)
+        if path_parts:
+            declared_identifiers.add(path_parts[0])
+        if len(path_parts) >= 2:
+            declared_identifiers.add("/".join(path_parts[:2]))
+    declared_identifiers.update(
+        match.lower()
+        for match in re.findall(
+            r"(?<!\w)@([A-Za-z0-9](?:[A-Za-z0-9-]{1,38}))",
+            resume_text or "",
+        )
+    )
+    if not declared_urls_normalized and not declared_identifiers:
+        return "candidate_identifier_not_declared"
+    serialized_args = json.dumps(
+        tool_args, ensure_ascii=False, sort_keys=True, default=str
+    ).lower()
+    full_url_match = any(url in serialized_args for url in declared_urls_normalized)
+    identifier_match = any(
+        re.search(
+            rf"(?<![a-z0-9-]){re.escape(identifier)}(?![a-z0-9-])",
+            serialized_args,
+        )
+        for identifier in declared_identifiers
+        if len(identifier) >= 3
+    )
+    if not full_url_match and not identifier_match:
+        return "tool_input_not_bound_to_declared_identifier"
+    return None
+
+
+def validate_trace_contract(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    workflow_run_id: str,
+    conversation_id: str,
+    revision: int,
+) -> List[str]:
+    """Return trace contract violations; an empty list is a passing trace."""
+
+    violations: List[str] = []
+    seen_event_ids: Set[str] = set()
+    for index, event in enumerate(events):
+        prefix = f"event[{index}]"
+        event_id = str(event.get("eventId") or "")
+        if not event_id:
+            violations.append(f"{prefix}.eventId missing")
+        elif event_id in seen_event_ids:
+            violations.append(f"{prefix}.eventId duplicate")
+        else:
+            seen_event_ids.add(event_id)
+        expected_identity = {
+            "workflowRunId": workflow_run_id,
+            "conversationId": conversation_id,
+            "revision": revision,
+        }
+        for key, expected in expected_identity.items():
+            if event.get(key) != expected:
+                violations.append(f"{prefix}.{key} mismatch")
+        if event.get("kind") == "tool":
+            calls = event.get("toolCalls")
+            if not isinstance(calls, list) or not calls:
+                violations.append(f"{prefix}.toolCalls missing")
+                continue
+            for call_index, call in enumerate(calls):
+                if not isinstance(call, Mapping):
+                    violations.append(f"{prefix}.toolCalls[{call_index}] invalid")
+                    continue
+                for key in ("toolCallId", "name", "status", "inputHash"):
+                    if not call.get(key):
+                        violations.append(f"{prefix}.toolCalls[{call_index}].{key} missing")
+    for index, event in enumerate(events):
+        parent_id = str(event.get("parentEventId") or "")
+        if parent_id and parent_id not in seen_event_ids:
+            violations.append(f"event[{index}].parentEventId missing target")
+    return violations
+
+
+def parse_json_object(raw: Optional[str]) -> Dict[str, Any]:
     if not raw:
         return {}
     try:
@@ -30,7 +692,7 @@ def build_harness_plan(
     intent_result: str,
     resume_text: str,
     job_category: str = "",
-    harness_context: Dict[str, Any] | None = None,
+    harness_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     intent = parse_json_object(intent_result)
     context = harness_context or {}
@@ -180,7 +842,7 @@ def build_harness_plan(
         "evidenceGaps": evidence_gaps,
         "interviewFocus": interview_focus,
         "complexity": complexity,
-        "path": "deep_pdf" if complexity in {"medium", "deep"} else "sparse_fast_lane",
+        "path": "deep_pdf" if complexity in {"medium", "deep"} else "sparse_focused_route",
         "routingRationale": build_routing_rationale(
             candidate_type,
             experience_level,
@@ -193,14 +855,22 @@ def build_harness_plan(
         "memoryHitCount": len(memory_hits),
         "knowledgeHitCount": len(knowledge_hits),
     }
-    # LLM-call accounting: intent + resume_parse + jd_match + report always run (4);
-    # tech/project/risk are optional. evidence_fusion is deterministic (no LLM).
+    # This is a plan-time lower bound, never an observed cost metric.  A normal
+    # run has intent + parse + JD (3), one generation per selected evaluator,
+    # and two parallel report generations. Tool loops may add rounds up to the
+    # explicit upper bound; actual calls/tokens come only from generation trace
+    # events. Sparse resumes still use real model evaluation; routing may skip
+    # irrelevant specialist nodes but never substitutes heuristic scores.
     optional_selected = [a for a in enabled_agents if a in {"tech_eval", "project_eval", "risk_eval"}]
-    full_pipeline_calls = 7
-    estimated_calls = 4 + len(optional_selected)
+    full_pipeline_calls = 8
+    estimated_calls = 5 + len(optional_selected)
+    estimated_upper_bound = (3 + len(optional_selected)) * 4 + 2
     route["estimatedLlmCalls"] = estimated_calls
+    route["estimatedLlmCallsLowerBound"] = estimated_calls
+    route["estimatedLlmCallsUpperBound"] = estimated_upper_bound
     route["fullPipelineLlmCalls"] = full_pipeline_calls
     route["llmCallsSavedVsFull"] = max(0, full_pipeline_calls - estimated_calls)
+    route["llmCallEstimateBasis"] = "plan_lower_bound_not_observed; use generation trace events for actual calls"
     return {
         "version": "agent-harness-v1",
         "route": route,
@@ -209,7 +879,7 @@ def build_harness_plan(
         "knowledgeInfluence": knowledge_influence,
         "contextManagement": derive_context_management(complexity, enabled_agents, knowledge_hits),
         "runtimeBudgets": derive_runtime_budgets(enabled_agents, complexity, memory_context, knowledge_hits),
-        "reportMode": "deterministic_sparse" if resume_len < 600 else "llm_detailed",
+        "reportMode": "llm_detailed",
         "queryPlans": query_plans,
         "governance": {
             "maxDuplicateToolArgs": 0,
@@ -380,6 +1050,12 @@ def derive_runtime_budgets(
         "evidence_fusion": "EvidenceFusionAgent",
         "report": "ReportAgent",
     }
+    fixed_tools_by_agent: Dict[str, List[str]] = {
+        "ResumeParseAgent": ["resume_structure_extract"],
+        "JdMatchAgent": ["milvus_jd_search", "jd_requirements_extract"],
+        "RiskAgent": ["timeline_validator"],
+        "ReportAgent": ["execute_skill"],
+    }
     for route_id in enabled_agents:
         agent = agent_map.get(route_id)
         if not agent:
@@ -387,6 +1063,10 @@ def derive_runtime_budgets(
         budget = dict(DEFAULT_AGENT_TOOL_BUDGETS.get(agent, {"maxToolCalls": 0, "maxRetrievalQueries": 0}))
         if complexity == "deep" and route_id in {"project_eval", "risk_eval"}:
             budget["maxRetrievalQueries"] = max(int(budget.get("maxRetrievalQueries", 0)), 4)
+        fixed_tools = fixed_tools_by_agent.get(agent, [])
+        budget["scope"] = "adaptive_agent_loop_only"
+        budget["preexecutedTools"] = list(fixed_tools)
+        budget["maxTotalToolCalls"] = int(budget.get("maxToolCalls", 0)) + len(fixed_tools)
         if route_id == "report":
             budget["contextSources"] = ["resume_text", "jd_result", "agent_results"]
             if knowledge_hits:
@@ -403,8 +1083,8 @@ def build_routing_rationale(
     resume_len: int,
     required_skills: List[str],
     routing_hints: List[str],
-    memory_hits: List[Any] | None = None,
-    knowledge_hits: List[Any] | None = None,
+    memory_hits: Optional[List[Any]] = None,
+    knowledge_hits: Optional[List[Any]] = None,
 ) -> List[str]:
     rationale = [
         f"candidateType={candidate_type}",
@@ -418,7 +1098,7 @@ def build_routing_rationale(
     if resume_len > 4500:
         rationale.append("long_pdf_context_pack_required")
     if resume_len < 600:
-        rationale.append("sparse_resume_fast_lane")
+        rationale.append("sparse_resume_focused_route_no_heuristic_scoring")
     if memory_hits:
         rationale.append(f"agent_memory_hits={len(memory_hits)}")
     if knowledge_hits:
@@ -443,7 +1123,7 @@ def build_queries(intent: Dict[str, Any], resume_text: str, focus: str, defaults
 
 def build_harness_reflection(
     harness_plan: Dict[str, Any],
-    tool_health: Dict[str, Any] | None,
+    tool_health: Optional[Dict[str, Any]],
     coverage_checklist: str,
     tech_result: str,
     project_result: str,

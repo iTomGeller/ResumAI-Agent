@@ -1,20 +1,37 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS build
+
+WORKDIR /app
+
+COPY workflow/requirements.txt ./requirements.txt
+COPY workflow/requirements.lock ./requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
+    && pip install --no-cache-dir pytest==8.3.5
+
+COPY workflow/app ./app
+COPY workflow/tests ./tests
+COPY workflow/harness ./harness
+COPY workflow/run_agent_harness.py ./run_agent_harness.py
+COPY workflow/mcp-servers.json ./mcp-servers.json
+COPY backend/src/main/resources/skills ./skills
+
+RUN python -m compileall -q app \
+    && pytest -q tests \
+    && python run_agent_harness.py \
+    && touch /tmp/runtime-tests-passed
+
+FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-# Public MCP servers (Model Context Protocol): tolerant install so a transient
-# failure never breaks the image build; runtime helpers degrade gracefully if absent.
-RUN pip install --no-cache-dir mcp-server-fetch mcp-server-time || echo "public MCP optional install skipped"
-
-COPY app ./app
-COPY mcp-servers.json ./mcp-servers.json
+COPY --from=build /usr/local /usr/local
+COPY --from=build /app /app
+COPY --from=build /tmp/runtime-tests-passed /app/.runtime-tests-passed
 
 ENV PYTHONUNBUFFERED=1
+ENV SKILLS_PATH=/app/skills
 EXPOSE 8090
 
 HEALTHCHECK --interval=20s --timeout=5s --retries=5 \
