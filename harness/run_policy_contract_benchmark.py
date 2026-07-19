@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""Sandbox Replay Benchmark: compare PolicyBundles on identical inputs/tools.
+"""Policy CONTRACT benchmark — deterministic, offline, no LLM, no Docker.
 
-Runs deterministic sandbox tools (same code as the Docker worker) under each
-policy configuration, scores with evaluate_policy_output, and elects a
-Champion by total reward. Never fabricates metrics.
+Scope (and only this scope):
+  * policy configuration validity,
+  * the reward formula,
+  * sandbox tool contracts (same code as the Docker worker),
+  * output schema rules,
+  * security/prompt-injection refusal rules,
+  * deterministic failure-injection regressions.
+
+This is NOT an agent quality benchmark: it never runs the Coordinator, the
+RunExecutor or DeepSeek, its answers are synthesized from tool outputs, and
+its numbers must never be presented as real agent E2E quality or used to
+elect a Champion policy. For that, use harness/run_agent_e2e_benchmark.py.
 
 Usage (on ECS):
   cd /opt/resumai-src
-  python3 harness/run_policy_benchmark.py --out reports/benchmark
+  python3 harness/run_policy_contract_benchmark.py --out reports/benchmark/contract
 """
 from __future__ import annotations
 
@@ -119,7 +128,10 @@ def build_answer(case: Dict[str, Any], parse: Dict[str, Any], timeline: Dict[str
     """
     meta = case.get("metadata") or {}
     if meta.get("injectFabricatedAnswer") and not policy["evidenceVerification"]["enabled"]:
-        # low_cost may emit unsupported claims — used to measure Unsupported Claim Rate.
+        # FAILURE INJECTION path (contract regression only): verifies that the
+        # evaluator penalizes fabricated numbers when verification is off.
+        # Cases carrying injectFabricatedAnswer are reported separately as
+        # dataset=FAILURE_INJECTION and excluded from policy aggregates.
         return str(meta["injectFabricatedAnswer"])
 
     parts: List[str] = [f"针对问题：{case['userQuestion']}"]
@@ -210,17 +222,20 @@ def run_case(case: Dict[str, Any], policy_id: str) -> CaseResult:
             "jdText": case.get("jd") or "",
         })
         tool_calls += 1
-        claims = list(case.get("mustFind") or [])[:10]
+        # Contract check of locate/verify tools: claims are derived from the
+        # deterministic parse output (skills actually present in the resume),
+        # never from the evaluator-only mustFind labels.
+        derived_claims = [str(s) for s in (parse.get("skills") or [])][:10]
         if policy["evidenceVerification"]["enabled"]:
             evidence = run_tool("locate_evidence", {
                 "resumeText": case.get("resume") or "",
-                "claims": claims or ["Java"],
+                "claims": derived_claims or ["java"],
             })
             tool_calls += 1
             verify = run_tool("verify_report_evidence", {
                 "resumeText": case.get("resume") or "",
                 "jdText": case.get("jd") or "",
-                "claims": [{"text": c, "source": "mustFind"} for c in claims],
+                "claims": [{"text": c, "source": "parsed_skill"} for c in derived_claims],
             })
             tool_calls += 1
         else:
@@ -265,9 +280,12 @@ def run_case(case: Dict[str, Any], policy_id: str) -> CaseResult:
                             or (1.0 - support_ratio))
         jd_coverage = float(coverage.get("coverage") or 0.0)
         eval_score = float(eval_out.get("score") or 0.0)
-        llm_calls = max(1, len(policy.get("agentOrder") or []))
+        # Contract-only nominal cost model (labelled as such): this benchmark
+        # makes zero LLM calls, so no real token cost exists here by design.
+        nominal_llm_calls = max(1, len(policy.get("agentOrder") or []))
         latency_ms = int((time.perf_counter() - started) * 1000)
-        cost = llm_calls * 0.02 + tool_calls * 0.005 + float(policy.get("costWeight") or 0)
+        nominal_cost = (nominal_llm_calls * 0.02 + tool_calls * 0.005
+                        + float(policy.get("costWeight") or 0))
         failure = 0.0 if eval_out.get("success") else 1.0
 
         # Reward: quality minus cost/latency penalties (component-wise).
@@ -281,7 +299,7 @@ def run_case(case: Dict[str, Any], policy_id: str) -> CaseResult:
             "timelineRecall": recall,
             "parsingSuccess": parse_ok,
             "evalScore": eval_score,
-            "llmCallCost": -cost,
+            "llmCallCost": -nominal_cost,
             "latencyPenalty": -min(0.2, latency_ms / 60_000),
             "failurePenalty": -failure,
         }
@@ -306,9 +324,9 @@ def run_case(case: Dict[str, Any], policy_id: str) -> CaseResult:
             "unsupportedClaimRate": round(unsupported, 4),
             "jdCoverage": round(jd_coverage, 4),
             "recommendationAccuracy": round(eval_score, 4),
-            "averageLlmCalls": llm_calls,
+            "nominalLlmCalls": nominal_llm_calls,
             "averageToolCalls": tool_calls,
-            "averageCost": round(cost, 4),
+            "nominalCost": round(nominal_cost, 4),
             "averageLatencyMs": latency_ms,
             "runFailureRate": failure,
             "sandboxTimeoutRate": sandbox_timeout,
@@ -318,7 +336,12 @@ def run_case(case: Dict[str, Any], policy_id: str) -> CaseResult:
             "answerPreview": answer[:400],
             "agentOrder": policy.get("agentOrder"),
         }
-        return CaseResult(case["caseId"], case["dataset"], policy_id, "SUCCEEDED",
+        dataset = case["dataset"]
+        injection_active = bool((case.get("metadata") or {}).get("injectFabricatedAnswer")) \
+            and not policy["evidenceVerification"]["enabled"]
+        if injection_active:
+            dataset = "FAILURE_INJECTION"
+        return CaseResult(case["caseId"], dataset, policy_id, "SUCCEEDED",
                           metrics, latency_ms)
     except Exception as exc:  # noqa: BLE001
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -327,8 +350,18 @@ def run_case(case: Dict[str, Any], policy_id: str) -> CaseResult:
 
 
 def aggregate(results: List[CaseResult]) -> Dict[str, Any]:
+    """Per-policy aggregates over contract cases only.
+
+    FAILURE_INJECTION rows are reported separately and never mixed into a
+    policy's quality aggregate. No champion is elected here — that is the
+    exclusive job of the real agent E2E benchmark.
+    """
     by_policy: Dict[str, List[CaseResult]] = {}
+    injection_rows: List[CaseResult] = []
     for result in results:
+        if result.dataset == "FAILURE_INJECTION":
+            injection_rows.append(result)
+            continue
         by_policy.setdefault(result.policy_id, []).append(result)
 
     summary: Dict[str, Any] = {}
@@ -350,9 +383,9 @@ def aggregate(results: List[CaseResult]) -> Dict[str, Any]:
             "unsupportedClaimRate": avg("unsupportedClaimRate"),
             "jdCoverage": avg("jdCoverage"),
             "recommendationAccuracy": avg("recommendationAccuracy"),
-            "averageLlmCalls": avg("averageLlmCalls"),
+            "nominalLlmCalls": avg("nominalLlmCalls"),
             "averageToolCalls": avg("averageToolCalls"),
-            "averageCost": avg("averageCost"),
+            "nominalCost": avg("nominalCost"),
             "averageLatencyMs": avg("averageLatencyMs"),
             "p95LatencyMs": p95,
             "runFailureRate": avg("runFailureRate"),
@@ -360,8 +393,15 @@ def aggregate(results: List[CaseResult]) -> Dict[str, Any]:
             "sandboxOomRate": avg("sandboxOomRate"),
             "totalReward": avg("totalReward"),
         }
-    champion = max(summary.items(), key=lambda kv: kv[1]["totalReward"])[0] if summary else None
-    return {"policies": summary, "championPolicy": champion}
+    injection_summary = {
+        "cases": len(injection_rows),
+        "fabricationPenalized": sum(
+            1 for r in injection_rows
+            if float((r.metrics or {}).get("rewardComponents", {})
+                     .get("violationPenalty", 0)) > 0
+            or float((r.metrics or {}).get("totalReward", 0)) < 0.3),
+    }
+    return {"policies": summary, "failureInjection": injection_summary}
 
 
 def write_reports(out_dir: Path, benchmark_id: str, results: List[CaseResult],
@@ -392,8 +432,8 @@ def write_reports(out_dir: Path, benchmark_id: str, results: List[CaseResult],
         "caseId", "dataset", "policyId", "status", "durationMs", "totalReward",
         "parsingSuccessRate", "timelinePrecision", "timelineRecall",
         "evidenceSupportRatio", "unsupportedClaimRate", "jdCoverage",
-        "recommendationAccuracy", "averageLlmCalls", "averageToolCalls",
-        "averageCost", "runFailureRate",
+        "recommendationAccuracy", "nominalLlmCalls", "averageToolCalls",
+        "nominalCost", "runFailureRate",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -414,37 +454,45 @@ def write_reports(out_dir: Path, benchmark_id: str, results: List[CaseResult],
                 "unsupportedClaimRate": m.get("unsupportedClaimRate"),
                 "jdCoverage": m.get("jdCoverage"),
                 "recommendationAccuracy": m.get("recommendationAccuracy"),
-                "averageLlmCalls": m.get("averageLlmCalls"),
+                "nominalLlmCalls": m.get("nominalLlmCalls"),
                 "averageToolCalls": m.get("averageToolCalls"),
-                "averageCost": m.get("averageCost"),
+                "nominalCost": m.get("nominalCost"),
                 "runFailureRate": m.get("runFailureRate"),
             })
 
     lines = [
-        "# Sandbox Replay Benchmark Report",
+        "# Policy Contract Benchmark Report（非 Agent 质量基准）",
         "",
         f"- Benchmark ID: `{benchmark_id}`",
-        f"- Champion Policy: **{summary.get('championPolicy')}**",
+        "- 类型：**Contract Benchmark**（工具契约 / 评分公式 / 安全规则 / 故障注入回归）",
+        "- 本报告不运行 Coordinator/RunExecutor/DeepSeek，不创建 Docker Worker，",
+        "  数字不代表真实 Agent 质量，**不用于选择 Champion Policy**。",
+        "- 真实质量基准见 `run_agent_e2e_benchmark.py` 的输出。",
         "",
-        "## Policy Summary",
+        "## Per-Policy Contract Results",
         "",
-        "| Policy | Reward | Evidence | Unsupported | JD Coverage | P95 Latency | Fail Rate |",
+        "| Policy | Reward(合约) | Evidence | Unsupported | JD Coverage | P95 Latency | Fail Rate |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for policy_id, stats in summary.get("policies", {}).items():
-        mark = " ← champion" if policy_id == summary.get("championPolicy") else ""
         lines.append(
-            f"| {policy_id}{mark} | {stats['totalReward']} | {stats['evidenceSupportRatio']} | "
+            f"| {policy_id} | {stats['totalReward']} | {stats['evidenceSupportRatio']} | "
             f"{stats['unsupportedClaimRate']} | {stats['jdCoverage']} | "
             f"{stats['p95LatencyMs']}ms | {stats['runFailureRate']} |"
         )
+    injection = summary.get("failureInjection", {})
     lines.extend([
+        "",
+        "## Failure Injection",
+        "",
+        f"- 注入用例数: {injection.get('cases', 0)}，"
+        f"编造被评估器惩罚: {injection.get('fabricationPenalized', 0)}",
         "",
         "## Notes",
         "",
-        "- 所有指标来自真实 Sandbox 工具回放与 `evaluate_policy_output` 评估器。",
-        "- Expected Answer 从未注入 Agent/Tool Context。",
-        "- 策略学习描述为：基于反馈的 Agent 外层策略学习（epsilon-greedy），非 PPO/GRPO。",
+        "- 指标来自确定性 Sandbox 工具（与 Docker Worker 同源代码）与 `evaluate_policy_output` 评估器。",
+        "- mustFind/mustNotClaim 仅进入评估器；工具核验使用解析产物派生的 claims。",
+        "- llmCalls/cost 为名义值（本基准零 LLM 调用），仅用于奖励公式回归。",
         "",
     ])
     (out_dir / "BENCHMARK_REPORT.md").write_text("\n".join(lines), encoding="utf-8")
@@ -453,7 +501,7 @@ def write_reports(out_dir: Path, benchmark_id: str, results: List[CaseResult],
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cases", default=str(ROOT / "testdata" / "benchmark"))
-    parser.add_argument("--out", default=str(ROOT / "reports" / "benchmark"))
+    parser.add_argument("--out", default=str(ROOT / "reports" / "benchmark" / "contract"))
     parser.add_argument("--policies", default=",".join(POLICIES.keys()))
     args = parser.parse_args()
 
@@ -462,7 +510,7 @@ def main() -> int:
         print("No benchmark cases found", file=sys.stderr)
         return 2
     policy_ids = [p.strip() for p in args.policies.split(",") if p.strip()]
-    benchmark_id = f"bench-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    benchmark_id = f"contract-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     results: List[CaseResult] = []
     for policy_id in policy_ids:
         if policy_id not in POLICIES:
@@ -479,10 +527,11 @@ def main() -> int:
     write_reports(out_dir, benchmark_id, results, summary)
     print(json.dumps({
         "benchmarkId": benchmark_id,
-        "championPolicy": summary.get("championPolicy"),
+        "kind": "CONTRACT",
         "out": str(out_dir),
         "caseCount": len(cases),
         "resultCount": len(results),
+        "failureInjection": summary.get("failureInjection"),
     }, ensure_ascii=False, indent=2))
     return 0
 
