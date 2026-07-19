@@ -44,6 +44,15 @@ grep -q '^SANDBOX_MEM_LIMIT=' .env || echo 'SANDBOX_MEM_LIMIT=384m' >> .env
 grep -q '^SANDBOX_CPU=' .env || echo 'SANDBOX_CPU=0.5' >> .env
 grep -q '^SANDBOX_TTL_SECONDS=' .env || echo 'SANDBOX_TTL_SECONDS=240' >> .env
 
+# Pin the sandbox worker image to this exact commit (never latest).
+GIT_SHA="$(git rev-parse --short HEAD)"
+if grep -q '^SANDBOX_WORKER_TAG=' .env; then
+  sed -i "s/^SANDBOX_WORKER_TAG=.*/SANDBOX_WORKER_TAG=${GIT_SHA}/" .env
+else
+  echo "SANDBOX_WORKER_TAG=${GIT_SHA}" >> .env
+fi
+log "sandbox worker image tag: resumai-sandbox-worker:${GIT_SHA}"
+
 mkdir -p "$BACKUP_DIR"
 cp -a .env "$BACKUP_DIR/env.backup"
 cp -a docker-compose.prod.yml "$BACKUP_DIR/"
@@ -70,7 +79,13 @@ log "resume_task rows before deploy: $BEFORE_TASKS"
 
 log "compose config validation"
 $COMPOSE config >/tmp/resumai-compose.validated.yml
-grep -E 'resumai-mysql-data|resumai-redis-data|resumai-workflow-postgres-data' /tmp/resumai-compose.validated.yml
+grep -E 'resumai-mysql-data|resumai-redis-data' /tmp/resumai-compose.validated.yml
+# The legacy graph runtime is gone — fail the deploy if it sneaks back.
+LEGACY_PATTERN='workflow/'run
+if grep -q "${LEGACY_PATTERN}s" /tmp/resumai-compose.validated.yml; then
+  echo "legacy workflow runtime detected in compose config" >&2
+  exit 1
+fi
 
 log "Java compile + package"
 cd "$SRC_DIR/backend"
@@ -132,8 +147,15 @@ $COMPOSE --profile build build resumai-sandbox-worker-image
 $COMPOSE build resumai-sandbox-manager ai-resume-workflow ai-resume-backend ai-resume-frontend
 
 log "bring up stack (volumes preserved)"
-$COMPOSE up -d mysql redis neo4j minio etcd milvus ai-resume-workflow-postgres prometheus grafana
+$COMPOSE up -d mysql redis neo4j minio etcd milvus prometheus grafana
 $COMPOSE up -d resumai-sandbox-manager ai-resume-workflow ai-resume-backend ai-resume-frontend
+# The legacy workflow-postgres container is no longer part of the compose
+# project. Stop it if still running from an older deployment; its volume
+# resumai-workflow-postgres-data is intentionally left untouched on disk.
+if docker ps --format '{{.Names}}' | grep -q '^ai-resume-workflow-postgres$'; then
+  log "stopping legacy checkpoint postgres (volume preserved)"
+  docker stop ai-resume-workflow-postgres || true
+fi
 
 log "wait health"
 for i in $(seq 1 60); do

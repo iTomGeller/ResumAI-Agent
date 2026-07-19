@@ -65,20 +65,8 @@ services:
       SANDBOX_MANAGER_URL: http://resumai-sandbox-manager:8070
       SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
-      LANGGRAPH_CHECKPOINT_DB_URI: postgresql://workflow:${WORKFLOW_POSTGRES_PASSWORD:?WORKFLOW_POSTGRES_PASSWORD must be set}@ai-resume-workflow-postgres:5432/langgraph_checkpoints
-      EXA_API_KEY: ${EXA_API_KEY:-}
-      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
-      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
     expose:
       - "8090"
-    depends_on:
-      ai-resume-workflow-postgres:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8090/ready || exit 1"]
       interval: 20s
@@ -88,25 +76,10 @@ services:
     networks:
       - resumai-net
 
-  ai-resume-workflow-postgres:
-    image: postgres:16-alpine
-    container_name: ai-resume-workflow-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: workflow
-      POSTGRES_PASSWORD: ${WORKFLOW_POSTGRES_PASSWORD:?WORKFLOW_POSTGRES_PASSWORD must be set}
-      POSTGRES_DB: langgraph_checkpoints
-    expose:
-      - "5432"
-    volumes:
-      - workflow-postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U workflow -d langgraph_checkpoints"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    networks:
-      - resumai-net
+  # The legacy LangGraph checkpoint PostgreSQL was removed with the graph
+  # runtime: pause/resume snapshots now live in MySQL (agent_run.execution_
+  # snapshot) via the Java control plane. The old volume
+  # resumai-workflow-postgres-data is intentionally left on disk untouched.
 
   ai-resume-agent-harness:
     build:
@@ -127,7 +100,8 @@ services:
     environment:
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       JAVA_BACKEND_URL: http://ai-resume-backend:8080
-      SANDBOX_WORKER_IMAGE: resumai-sandbox-worker:latest
+      # Pinned per deployment to the exact git commit — never a floating latest.
+      SANDBOX_WORKER_IMAGE: resumai-sandbox-worker:${SANDBOX_WORKER_TAG:?SANDBOX_WORKER_TAG must be set to the git sha}
       SANDBOX_MAX_CONCURRENT: ${SANDBOX_MAX_CONCURRENT:-2}
       SANDBOX_MEM_LIMIT: ${SANDBOX_MEM_LIMIT:-384m}
       SANDBOX_CPU: ${SANDBOX_CPU:-0.5}
@@ -152,7 +126,7 @@ services:
     build:
       context: .
       dockerfile: sandbox/worker/Dockerfile
-    image: resumai-sandbox-worker:latest
+    image: resumai-sandbox-worker:${SANDBOX_WORKER_TAG:?SANDBOX_WORKER_TAG must be set to the git sha}
     profiles: ["build"]
     command: ["python", "-c", "print('worker image ok')"]
     restart: "no"
@@ -400,5 +374,6 @@ volumes:
     name: resumai-prometheus-data
   grafana-data:
     name: resumai-grafana-data
-  workflow-postgres-data:
-    name: resumai-workflow-postgres-data
+  # resumai-workflow-postgres-data still exists on the host from the legacy
+  # LangGraph checkpoint store. It is no longer mounted by any service and is
+  # deliberately not deleted (no volume is ever pruned by deployment).

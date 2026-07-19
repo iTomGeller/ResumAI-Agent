@@ -12,11 +12,11 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
 
 COPY workflow/app ./app
 COPY workflow/tests ./tests
-COPY workflow/harness ./harness
 COPY workflow/run_agent_harness.py ./run_agent_harness.py
-COPY workflow/mcp-servers.json ./mcp-servers.json
 COPY backend/src/main/resources/skills ./skills
 
+# Build gate: compile, unit tests and the deterministic runtime contract gate
+# must all pass before an image can exist.
 RUN python -m compileall -q app \
     && pytest -q tests \
     && python run_agent_harness.py \
@@ -26,7 +26,8 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN sed -i 's@deb.debian.org@mirrors.cloud.aliyuncs.com@g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
+    && apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /usr/local /usr/local
