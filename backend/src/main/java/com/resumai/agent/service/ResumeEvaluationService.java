@@ -2430,7 +2430,7 @@ public class ResumeEvaluationService {
                     : "请对这份简历进行完整评估，输出技术、项目、风险、证据与录用建议。";
             runQueueService.enqueueTaskRun(
                     runId, conversationId, task.uploadedBy, task.traceId,
-                    task.revisionNo != null ? task.revisionNo : 1,
+                    Math.max(1, task.revisionNo),
                     runTypeForTask(task), userMessage, task.traceId, 0);
             runSchedulerService.kick();
             task.summary = "已进入统一 Agent 运行队列，正在异步评估。";
@@ -2477,7 +2477,7 @@ public class ResumeEvaluationService {
             session.setJobDescription(task.jobDescription);
             session.setJobCategory(task.jobCategory);
             session.setActiveTraceId(task.traceId);
-            session.setActiveRevision(task.revisionNo != null ? task.revisionNo : 1);
+            session.setActiveRevision(Math.max(1, task.revisionNo));
             session.setCreateTime(LocalDateTime.now());
             session.setUpdateTime(LocalDateTime.now());
             session.setDeleted(0);
