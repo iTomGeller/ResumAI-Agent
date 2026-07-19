@@ -1,0 +1,248 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+WORKFLOW_ROOT = Path(__file__).resolve().parents[1]
+if str(WORKFLOW_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKFLOW_ROOT))
+
+from app.runtime.coordinator import Coordinator, TASK_PIPELINES
+from app.runtime.agents import default_agent_registry
+from app.runtime.events import NullEmitter
+from app.runtime.executor import RunExecutor
+from app.runtime.memory import NullMemoryClient
+from app.runtime.models import AgentRunRequest, BudgetExceeded, PolicyBundle
+from app.runtime.sandbox import LocalSandboxFallback
+
+RESUME = """张三
+工作经历
+2022.07-2024.06 A公司 Java后端工程师
+2024.03-2025.01 B公司 高级工程师
+项目经历
+项目：订单中台
+- 基于Kafka实现异步解耦，峰值处理 5000 QPS
+技能
+Java Spring Boot MySQL Redis Kafka
+"""
+
+JD = """1. 熟悉 Java 与 Spring Boot 开发经验
+2. 掌握 Redis 缓存经验
+3. 熟悉 Kubernetes 优先
+"""
+
+
+class FakeLlm:
+    """Deterministic stand-in that satisfies the ResilientLlmClient contract."""
+
+    def __init__(self, budget=None, delay: float = 0.0, fail_agents=()):
+        self.calls = []
+        self.delay = delay
+        self.fail_agents = set(fail_agents)
+
+    async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
+                   temperature=0.2):
+        self.calls.append({"agent": agent_id, "purpose": purpose})
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if agent_id in self.fail_agents:
+            from app.runtime.llm import LlmError
+            raise LlmError("SERVER_ERROR", f"injected failure for {agent_id}", False)
+        if agent_id == "CoordinatorAgent":
+            return json.dumps({"plan": [], "reason": "keep rule plan"})
+        output = {
+            "thought": f"{agent_id} 分析",
+            "toolCalls": [],
+            "output": {
+                "summary": f"{agent_id} 完成",
+                "claims": [{"section": "technical_findings",
+                            "value": [{"text": f"{agent_id} 结论", "evidence": "第6行"}]}],
+                "evidence": [{"text": f"{agent_id} 证据", "sourceLine": 6,
+                              "source": "resume", "verified": None}],
+                "confidence": 0.8,
+            },
+            "done": True,
+        }
+        if agent_id == "ReportAgent":
+            output["output"]["answer"] = "## 评估结论\n候选人 Kafka 证据充分，存在时间线重叠风险。"
+        return json.dumps(output, ensure_ascii=False)
+
+
+def make_request(run_type="tech_match", message="这个候选人的技术栈匹配怎么样？",
+                 policy_config=None):
+    return AgentRunRequest(
+        runId="run-t1", conversationId="conv-t1", userId="u1", traceId="tr-1",
+        runType=run_type, userMessage=message, resumeText=RESUME,
+        jobDescription=JD, policyId="balanced", policyConfig=policy_config or {})
+
+
+def make_executor(request, llm=None):
+    emitter = NullEmitter(request.runId, request.conversationId, request.traceId)
+    executor = RunExecutor(
+        request, emitter,
+        memory=NullMemoryClient(),
+        sandbox=LocalSandboxFallback(),
+        llm=llm or FakeLlm())
+    return executor, emitter
+
+
+def run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def test_tech_match_pipeline_produces_grounded_answer():
+    request = make_request()
+    executor, emitter = make_executor(request)
+    result = run(executor.execute())
+    assert result["status"] == "SUCCEEDED"
+    assert "Kafka" in result["answer"]
+    agents_used = result["metrics"]["agentsUsed"]
+    assert "TechAgent" in agents_used and "ReportAgent" in agents_used
+    assert "EvidenceAgent" in agents_used
+    event_types = {e["eventType"] for e in emitter.events}
+    assert {"agent.selected", "agent.started", "agent.completed"} <= event_types
+    assert result["metrics"]["jdCoverage"] is not None, "TechAgent 预置 JD 覆盖率工具"
+    assert result["promptVersions"], "prompt 版本必须写入轨迹"
+    assert result["skillVersions"], "skill 版本必须写入轨迹"
+
+
+def test_coordinator_rule_pipelines_cover_business_scenarios():
+    for run_type, expected_head in [
+        ("full_evaluation", "JDAnalysisAgent"),
+        ("timeline_check", "RiskAgent"),
+        ("project_rewrite", "ProjectAgent"),
+        ("interview_questions", "RiskAgent"),
+    ]:
+        policy = PolicyBundle.from_config("balanced", {})
+        coordinator = Coordinator(default_agent_registry, policy, None)
+        plan = coordinator.base_plan(run_type, has_resume_facts=False, needs_parse=False)
+        assert plan[0] == expected_head, f"{run_type} -> {plan}"
+    rewrite_plan = TASK_PIPELINES["project_rewrite"]
+    assert rewrite_plan == ["ProjectAgent", "ResumeOptimizeAgent"]
+
+
+def test_policy_low_cost_disables_evidence_agent():
+    config = {"agentOrder": ["TechAgent", "ReportAgent"],
+              "evidenceVerification": {"enabled": False},
+              "maxAgentCount": 4}
+    request = make_request(policy_config=config)
+    executor, _ = make_executor(request)
+    result = run(executor.execute())
+    assert result["status"] == "SUCCEEDED"
+    assert "EvidenceAgent" not in result["metrics"]["agentsUsed"]
+
+
+def test_run_cancellation_propagates():
+    request = make_request(run_type="full_evaluation")
+    executor, _ = make_executor(request, llm=FakeLlm(delay=0.4))
+
+    async def scenario():
+        task = asyncio.create_task(executor.execute())
+        await asyncio.sleep(0.15)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    run(scenario())
+
+
+def test_run_timeout_returns_timed_out_with_degraded_answer():
+    config = {"timeoutPolicy": {"runTimeoutSeconds": 1}}
+    request = make_request(run_type="full_evaluation", policy_config=config)
+    executor, _ = make_executor(request, llm=FakeLlm(delay=0.8))
+    result = run(executor.execute())
+    assert result["status"] == "TIMED_OUT"
+    assert result["errorCode"] == "RUN_TIMEOUT"
+    assert "降级" in result["answer"]
+
+
+def test_agent_failure_degrades_not_hangs():
+    request = make_request(run_type="tech_match")
+    executor, emitter = make_executor(
+        request, llm=FakeLlm(fail_agents={"TechAgent"}))
+    result = run(executor.execute())
+    # TechAgent 失败后 Coordinator 重规划并降级，Run 仍能给出答案
+    assert result["status"] in ("SUCCEEDED", "FAILED")
+    assert result["status"] == "SUCCEEDED", "one agent failure must not sink the run"
+    assert any(e["eventType"] == "agent.failed" for e in emitter.events)
+    assert any("TechAgent" in r for r in result["metrics"]["degradedReasons"])
+
+
+def test_tool_whitelist_enforced_per_agent():
+    request = make_request(run_type="quick_answer", message="随便聊聊")
+
+    class NaughtyLlm(FakeLlm):
+        async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
+                       temperature=0.2):
+            if agent_id == "ReportAgent" and not self.calls:
+                self.calls.append({"agent": agent_id})
+                return json.dumps({
+                    "thought": "尝试越权",
+                    "toolCalls": [{"tool": "external_profile_lookup", "arguments": {}}],
+                    "output": None, "done": False})
+            return await super().chat(messages, agent_id=agent_id, purpose=purpose)
+
+    executor, emitter = make_executor(request, llm=NaughtyLlm())
+    result = run(executor.execute())
+    assert result["status"] == "SUCCEEDED"
+    rejected = [e for e in emitter.events
+                if e["eventType"] == "tool.started"
+                and e.get("toolName") == "external_profile_lookup"]
+    assert not rejected, "ReportAgent 无权调用外网工具，必须被拒绝"
+
+
+def test_evidence_agent_marks_unsupported_claims():
+    request = make_request(run_type="full_evaluation")
+
+    class OverclaimLlm(FakeLlm):
+        async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
+                       temperature=0.2):
+            if agent_id == "TechAgent":
+                return json.dumps({
+                    "thought": "评估",
+                    "toolCalls": [],
+                    "output": {
+                        "summary": "夸大结论",
+                        "claims": [{"section": "technical_findings",
+                                    "value": [{"text": "可用性达到 99.999%",
+                                               "evidence": ""}]}],
+                        "evidence": [], "confidence": 0.9},
+                    "done": True}, ensure_ascii=False)
+            return await super().chat(messages, agent_id=agent_id, purpose=purpose)
+
+    executor, _ = make_executor(request, llm=OverclaimLlm())
+    result = run(executor.execute())
+    conflicts = result["sharedState"]["conflicts"]
+    assert any(c.get("type") == "unsupported_claim" and "99.999" in str(c.get("claim"))
+               for c in conflicts), "编造数字必须被证据核验拦下"
+    assert result["metrics"]["evidenceSupportRatio"] is not None
+
+
+def test_llm_budget_exceeded_degrades():
+    config = {"maxLlmCalls": 1}
+    request = make_request(run_type="full_evaluation", policy_config=config)
+
+    class CountingLlm(FakeLlm):
+        def __init__(self):
+            super().__init__()
+            self.count = 0
+
+        async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
+                       temperature=0.2):
+            self.count += 1
+            if self.count > 1:
+                raise BudgetExceeded("maxLlmCalls", "limit=1")
+            return await super().chat(messages, agent_id=agent_id, purpose=purpose)
+
+    executor, _ = make_executor(request, llm=CountingLlm())
+    result = run(executor.execute())
+    assert result["errorCode"] == "BUDGET_EXCEEDED"
+    assert result["answer"], "预算耗尽也要基于已有结果降级回答"

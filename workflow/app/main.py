@@ -32,10 +32,12 @@ from app.run_control import (
     TERMINAL_STATUSES,
     default_run_registry,
 )
+from app.runtime.service import agent_run_registry, router as agent_runtime_router
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="ResumAI LangGraph Workflow", version="1.1.0")
+app = FastAPI(title="ResumAI LangGraph Workflow", version="1.2.0")
+app.include_router(agent_runtime_router)
 
 
 @app.middleware("http")
@@ -58,7 +60,12 @@ async def require_internal_token(request: Request, call_next):
 async def health() -> dict:
     snapshots = await default_run_registry.list_snapshots()
     active = sum(1 for item in snapshots.values() if item.status not in TERMINAL_STATUSES)
-    return {"status": "UP", "service": "ai-resume-workflow", "activeRuns": active}
+    return {
+        "status": "UP",
+        "service": "ai-resume-workflow",
+        "activeRuns": active,
+        "activeAgentRuns": await agent_run_registry.active_count(),
+    }
 
 
 @app.get("/ready")
@@ -370,4 +377,5 @@ async def shutdown() -> None:
                 await default_run_registry.cancel(run_id)
             except (RunNotFoundError, InvalidRunTransition):
                 pass
+    await agent_run_registry.cancel_all()
     await close_checkpointer()
