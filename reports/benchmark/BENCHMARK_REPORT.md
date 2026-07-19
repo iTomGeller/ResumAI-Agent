@@ -1,6 +1,6 @@
 # Sandbox Replay Benchmark Report
 
-- Benchmark ID: `bench-20260719-105438-62d14dc0`
+- Benchmark ID: `bench-20260719-142845-2a636a72`
 - Champion Policy: **strict_evidence**
 
 ## Policy Summary
