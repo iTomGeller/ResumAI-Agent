@@ -7,6 +7,9 @@ public enum QueueStatus {
     QUEUED,
     RETRYING,
     RUNNING,
+    PAUSED,
+    RESUMING,
+    SUPERSEDED,
     SUCCESS,
     FAILED,
     CANCELLED

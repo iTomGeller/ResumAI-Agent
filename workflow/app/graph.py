@@ -6,9 +6,11 @@ import logging
 import re
 import time
 import ast
+from collections.abc import Mapping
 from typing import Annotated, Any, Dict, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command
 
 from app.agents import (
     FUSION_PROMPT,
@@ -17,35 +19,42 @@ from app.agents import (
     PARSE_PROMPT,
     PROJECT_PROMPT,
     REPORT_CORE_PROMPT,
+    REPORT_EVAL_DEGRADED_MARKER,
     REPORT_EVAL_PROMPT,
     REPORT_PROMPT,
     RISK_PROMPT,
     TECH_PROMPT,
     emit_tool_event_once,
     generate_report_eval,
+    run_agent_node,
     run_llm_node,
 )
-from app.agent_harness import build_harness_plan, build_harness_reflection
+from app.agent_harness import (
+    NODE_OUTPUT_FIELDS,
+    build_harness_plan,
+    build_harness_reflection,
+    materialize_revision_state,
+    select_phase4_nodes,
+    terminal_status_for_degradation,
+)
 from app.checkpoint import get_checkpointer
 from app.events import emit_event, emit_result, make_event_id, now_iso
 from app.langfuse_tracing import end_trace, end_span, flush, start_agent_span, start_trace
 from app.models import TraceEvent, WorkflowResultPayload, WorkflowState
+from app.run_control import safe_control_boundary
 from app.tools import (
     execute_skill,
-    extract_primary_url,
-    github_enrichment,
     jd_requirements_extract,
     knowledge_search,
     mcp_current_time,
-    mcp_fetch_url,
     memory_search,
     milvus_jd_search,
-    milvus_resume_batch_search,
     resume_structure_extract,
     timeline_validator,
 )
 
 logger = logging.getLogger(__name__)
+GRAPH_TOOL_TIMEOUT_SECONDS = 30.0
 
 
 def _merge_completed_nodes(left: list | None, right: list | None) -> list:
@@ -59,10 +68,19 @@ def _merge_completed_nodes(left: list | None, right: list | None) -> list:
 class GraphState(TypedDict, total=False):
     traceId: str
     workflowRunId: str
+    conversationId: str
+    revision: int
+    baseTraceId: str
+    baseWorkflowRunId: str
     resumeText: str
     jobCategory: str
     jobDescription: str
     executionMode: str
+    evaluationBrief: dict
+    affectedNodes: list
+    invalidatedNodes: list
+    revisionPlan: dict
+    reusedNodes: list
     intentResult: str
     parseResult: str
     jdResult: str
@@ -80,6 +98,7 @@ class GraphState(TypedDict, total=False):
     strengths: list
     risks: list
     interviewQuestions: list
+    degradedReasons: list
     completedNodes: Annotated[list, _merge_completed_nodes]
     failedNode: str
     toolHealth: dict
@@ -89,12 +108,30 @@ def _to_workflow_state(state: GraphState) -> WorkflowState:
     return WorkflowState(**{k: state.get(k) for k in WorkflowState.model_fields})
 
 
+def _evaluation_brief_text(state: GraphState) -> str:
+    brief = state.get("evaluationBrief") or {}
+    if not brief:
+        return ""
+    return "\n用户当前评估要求（优先遵守）：" + json.dumps(brief, ensure_ascii=False)
+
+
+def _merge_agent_tool_health(state: GraphState, workflow_state: WorkflowState) -> None:
+    if not workflow_state.toolHealth:
+        return
+    merged = dict(state.get("toolHealth") or {})
+    merged.update(workflow_state.toolHealth)
+    state["toolHealth"] = merged
+
+
 async def _emit_node_start(state: GraphState, node_id: str, agent_name: str, phase: int) -> None:
     event_id = make_event_id(state["traceId"], node_id, 1, "node", 0)
     await emit_event(
         TraceEvent(
             eventId=event_id,
             traceId=state["traceId"],
+            workflowRunId=state.get("workflowRunId"),
+            conversationId=state.get("conversationId"),
+            revision=state.get("revision"),
             nodeId=node_id,
             agentName=agent_name,
             phase=phase,
@@ -124,6 +161,9 @@ async def _emit_node_end(
         TraceEvent(
             eventId=event_id,
             traceId=state["traceId"],
+            workflowRunId=state.get("workflowRunId"),
+            conversationId=state.get("conversationId"),
+            revision=state.get("revision"),
             nodeId=node_id,
             agentName=agent_name,
             phase=phase,
@@ -142,6 +182,60 @@ async def _emit_node_end(
     )
 
 
+async def _reuse_node_if_planned(
+    state: GraphState,
+    node_id: str,
+    agent_name: str,
+    phase: int,
+) -> Optional[Dict[str, Any]]:
+    """Return checkpointed node outputs and emit an auditable REUSED event."""
+
+    plan = state.get("revisionPlan") or {}
+    reused_nodes = set(plan.get("reused_nodes") or plan.get("reusedNodes") or [])
+    if node_id not in reused_nodes:
+        return None
+    fields = NODE_OUTPUT_FIELDS.get(node_id, ())
+    missing = [field for field in fields if field not in state or state.get(field) is None]
+    if missing:
+        # The planner is fail-closed, so reaching this branch means state was
+        # mutated after planning.  Do not silently mix revisions.
+        raise RuntimeError(
+            f"revision reuse contract broken for {node_id}; missing {','.join(missing)}"
+        )
+    event_id = make_event_id(state["traceId"], node_id, 1, "reuse", 0)
+    await emit_event(
+        TraceEvent(
+            eventId=event_id,
+            traceId=state["traceId"],
+            workflowRunId=state.get("workflowRunId"),
+            conversationId=state.get("conversationId"),
+            revision=state.get("revision"),
+            nodeId=node_id,
+            agentName=agent_name,
+            phase=phase,
+            attempt=1,
+            kind="reuse",
+            roundIndex=0,
+            status="REUSED",
+            startedAt=now_iso(),
+            endedAt=now_iso(),
+            durationMs=0,
+            callKind="checkpoint_reuse",
+            callName=node_id,
+            roundRole="node_reuse",
+            outputPreview=(
+                f"reused from workflowRunId={state.get('baseWorkflowRunId')} "
+                f"traceId={state.get('baseTraceId')}"
+            ),
+            reuseSourceWorkflowRunId=state.get("baseWorkflowRunId"),
+            reuseSourceTraceId=state.get("baseTraceId"),
+        )
+    )
+    result = {field: state.get(field) for field in fields}
+    result["completedNodes"] = [node_id]
+    return result
+
+
 async def _run_node(
     state: GraphState,
     node_id: str,
@@ -157,7 +251,15 @@ async def _run_node(
     if state.get("toolHealth"):
         ws.toolHealth = dict(state.get("toolHealth", {}))
     try:
-        result = await run_llm_node(node_id, agent_name, phase, system_prompt, user_content, ws, max_tokens=max_tokens)
+        result = await run_agent_node(
+            node_id,
+            agent_name,
+            phase,
+            system_prompt,
+            user_content,
+            ws,
+            max_tokens=max_tokens,
+        )
         if ws.toolHealth:
             merged_health = dict(state.get("toolHealth") or {})
             merged_health.update(ws.toolHealth)
@@ -204,7 +306,7 @@ async def _run_tool_with_span(
     start_ms = time.time()
     started_at = now_iso()
     try:
-        result_str = await coro
+        result_str = await asyncio.wait_for(coro, timeout=GRAPH_TOOL_TIMEOUT_SECONDS)
         status = "SUCCESS"
         if tool_result_has_error(result_str):
             status = "FAILED"
@@ -232,7 +334,28 @@ async def _run_tool_with_span(
     )
     if ws.toolHealth:
         merged_health = dict(state.get("toolHealth") or {})
-        merged_health.update(ws.toolHealth)
+        for name, incoming_raw in ws.toolHealth.items():
+            if not isinstance(incoming_raw, dict):
+                merged_health[name] = incoming_raw
+                continue
+            incoming = dict(incoming_raw)
+            existing = merged_health.get(name) if isinstance(merged_health.get(name), dict) else {}
+            last_status = str(incoming.get("lastStatus") or incoming.get("status") or "")
+            success_count = int(existing.get("successCount") or 0) + (
+                1 if last_status == "SUCCESS" else 0
+            )
+            failure_count = int(existing.get("failureCount") or 0) + (
+                1 if last_status == "FAILED" else 0
+            )
+            incoming.update(
+                {
+                    "status": "SUCCESS" if success_count else last_status,
+                    "lastStatus": last_status,
+                    "successCount": success_count,
+                    "failureCount": failure_count,
+                }
+            )
+            merged_health[name] = incoming
         state["toolHealth"] = merged_health
     return result_str
 
@@ -240,7 +363,17 @@ async def _run_tool_with_span(
 def tool_result_has_error(result: str) -> bool:
     try:
         data = json.loads(result)
-        return isinstance(data, dict) and bool(data.get("error"))
+        if not isinstance(data, dict):
+            return False
+        status = str(data.get("status") or "").strip().upper()
+        return bool(
+            data.get("error")
+            or status in {"FAILED", "ERROR", "UNAVAILABLE", "TIMEOUT"}
+            or data.get("ok") is False
+            or data.get("success") is False
+            or data.get("available") is False
+            or data.get("skipped") is True
+        )
     except json.JSONDecodeError:
         return False
 
@@ -253,155 +386,6 @@ def _json_obj(raw: str | None) -> Dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
-
-
-def _fast_lane_resume(resume_text: str) -> bool:
-    text = (resume_text or "").strip()
-    return len(text) < 600
-
-
-def _harness_eval_lane(state: GraphState) -> bool:
-    return _fast_lane_resume(state.get("resumeText", ""))
-
-
-def _deterministic_tech_result(state: GraphState) -> str:
-    resume_text = state.get("resumeText", "")
-    intent = _json_obj(state.get("intentResult", ""))
-    parse = _json_obj(state.get("parseResult", ""))
-    skills = parse.get("skills") or parse.get("skillKeywords") or intent.get("requiredSkills") or []
-    if not isinstance(skills, list):
-        skills = [str(skills)]
-    projects = parse.get("projects") if isinstance(parse.get("projects"), list) else []
-    score = 45 if len(resume_text) < 120 else 62
-    score += min(len(skills), 8) * 2
-    score += min(len(projects), 5) * 3
-    if re.search(r"Agent|RAG|LangGraph|Milvus|K8s|Kafka|高并发|性能|可观测", resume_text, re.I):
-        score += 8
-    score = max(35, min(score, 88))
-    result = {
-        "dimensions": [
-            {
-                "name": "技术栈覆盖",
-                "score": score,
-                "evidenceSource": "resume_text_only",
-                "evidenceQuotes": skills[:5],
-            },
-            {
-                "name": "工程深度",
-                "score": max(35, score - (18 if len(projects) < 2 else 8)),
-                "evidenceSource": "resume_text_only",
-                "evidenceQuotes": [str(p)[:160] for p in projects[:3]] or ["简历缺少可验证项目细节"],
-            },
-        ],
-        "overallTechScore": score,
-        "highlights": [f"出现技能关键词：{'、'.join(map(str, skills[:8]))}"] if skills else [],
-        "weaknesses": ["需要面试验证技术深度、个人贡献边界、线上指标和排障细节"],
-        "evidenceSource": "resume_text_only",
-        "toolHealth": {"harnessEvaluator": True, "reason": "context_pack_skip_repeated_llm"},
-    }
-    return json.dumps(result, ensure_ascii=False)
-
-
-def _deterministic_project_result(state: GraphState, rag_raw: str = "") -> str:
-    resume_text = state.get("resumeText", "")
-    parse = _json_obj(state.get("parseResult", ""))
-    projects = parse.get("projects") if isinstance(parse.get("projects"), list) else []
-    score = 50 + min(len(projects), 6) * 5
-    if re.search(r"重构|架构|中台|平台|性能|高并发|上线|监控|Agent|RAG", resume_text, re.I):
-        score += 10
-    score = max(40, min(score, 88))
-    result = {
-        "projects": projects[:6],
-        "overallProjectScore": score,
-        "depthHighlights": [str(p)[:180] for p in projects[:5]] or ["简历未提取到明确项目条目"],
-        "concerns": ["项目真实性、个人贡献比例、量化业务结果需要面试继续核验"],
-        "evidenceSource": "resume_text_and_rag",
-        "toolHealth": {"harnessEvaluator": True, "ragDigest": _compact_text(rag_raw, 500)},
-    }
-    return json.dumps(result, ensure_ascii=False)
-
-
-def _deterministic_risk_result(state: GraphState, timeline_raw: str = "", rag_raw: str = "") -> str:
-    resume_text = state.get("resumeText", "")
-    risks: list[str] = []
-    if len(resume_text) < 600:
-        risks.append("简历信息较少，项目真实性和职责边界无法充分验证")
-    if not re.search(r"\d+%|\d+倍|QPS|TPS|ms|分钟|小时|成本|收入|DAU|转化", resume_text, re.I):
-        risks.append("缺少量化结果指标，需面试核验业务价值")
-    if re.search(r"熟悉|了解|参与", resume_text) and not re.search(r"负责|主导|Owner|独立", resume_text, re.I):
-        risks.append("部分表述可能偏参与型，需要确认个人主导程度")
-    result = {
-        "riskLevel": "MEDIUM" if risks else "LOW",
-        "risks": risks or ["未发现明显硬性风险，但仍需核验项目细节和贡献边界"],
-        "overallAssessment": "Harness 基于时间线、量化指标、职责动词和 RAG 证据进行风险初筛。",
-        "evidenceSource": "resume_text_and_checks",
-        "toolHealth": {"harnessEvaluator": True, "timeline": _compact_text(timeline_raw, 300), "ragDigest": _compact_text(rag_raw, 300)},
-    }
-    return json.dumps(result, ensure_ascii=False)
-
-
-def _deterministic_report(state: GraphState, skill_raw: str, coverage_checklist: str, harness_reflection: Dict[str, Any]) -> str:
-    resume_text = state.get("resumeText", "")
-    tech = _json_obj(state.get("techResult", ""))
-    project = _json_obj(state.get("projectResult", ""))
-    risk = _json_obj(state.get("riskResult", ""))
-    jd = _json_obj(state.get("jdResult", ""))
-    harness_plan = state.get("harnessPlan") or {}
-    harness_context = state.get("harnessContext") or {}
-    tech_score = int(tech.get("overallTechScore") or 45)
-    project_score = int(project.get("overallProjectScore") or max(35, tech_score - 5))
-    risk_level = str(risk.get("riskLevel") or "MEDIUM")
-    score = max(0, min(100, round(tech_score * 0.45 + project_score * 0.25 + 30 * 0.30)))
-    if len(resume_text) < 120:
-        score = min(score, 45)
-    rec = "NOT_RECOMMEND" if score < 60 else "NEED_MANUAL_REVIEW" if score < 75 else "RECOMMEND"
-    skills = []
-    for key in ("highlights", "weaknesses"):
-        value = tech.get(key)
-        if isinstance(value, list):
-            skills.extend(map(str, value[:3]))
-    gaps = jd.get("gaps") if isinstance(jd.get("gaps"), list) else []
-    risks = risk.get("risks") if isinstance(risk.get("risks"), list) else []
-    risk_lines = list(map(str, risks[:3])) or ["简历内容过短，无法验证项目真实性、职责边界和产出指标。"]
-    if gaps:
-        risk_lines.append("JD 差距：" + "；".join(map(str, gaps[:2])))
-    route = harness_plan.get("route") or {}
-    knowledge = (harness_context.get("knowledge") or {}) if isinstance(harness_context, dict) else {}
-    projects = project.get("projects") if isinstance(project.get("projects"), list) else []
-    project_lines = [str(p)[:220] for p in projects[:5]]
-    strengths = skills[:4] or project_lines[:3] or ["简历具备一定岗位相关经验，但需要结合面试进一步确认深度。"]
-    questions = [
-        "请候选人选择一个最核心项目，说明个人职责、系统架构、技术难点和最终指标。",
-        "针对简历中的技能关键词逐项追问实际使用场景、排障案例和边界理解。",
-        "核验 GitHub/项目链接是否为本人贡献，并要求现场解释关键代码或设计取舍。",
-        "如果目标岗位要求后端/Agent/RAG 能力，追问是否做过线上部署、监控、性能优化和故障恢复。",
-        "围绕 JD 缺口追问最近一次真实业务场景下的取舍、失败复盘和量化产出。",
-        "请解释一个项目从需求、设计、上线到监控告警的完整闭环，确认是否具备端到端 owner 能力。",
-    ]
-    return "\n".join([
-        f"## 综合评分：{score}/100",
-        f"## 推荐决策：{rec}",
-        "## 证据来源说明",
-        f"- 完整简历原文是主证据，resumeTextLength={len(resume_text)}；embedding RAG、JD 匹配、知识库 HarnessContext 只作为定位和补充，不替代原文。",
-        f"- 知识库命中 {knowledge.get('hitCount', 0)} 个 chunk，注入目标：{', '.join(knowledge.get('injectedInto', []) or []) or '无'}；Skill 可用性检查已执行，摘要：{_report_safe_text(skill_raw, 160)}",
-        f"- Harness 反思：{_compact_text(json.dumps(harness_reflection, ensure_ascii=False), 180)}",
-        "## 简历覆盖核对",
-        f"- {coverage_checklist}",
-        "## Agent-Harness 执行说明",
-        f"- Route：candidateType={route.get('candidateType')}，experienceLevel={route.get('experienceLevel')}，path={route.get('path')}，targetRole={route.get('targetRole')}。",
-        f"- ContextPolicy：{_compact_text(json.dumps(harness_plan.get('contextPolicy', {}), ensure_ascii=False), 260)}",
-        f"- KnowledgePolicy：{_compact_text(json.dumps(harness_plan.get('knowledgePolicy', {}), ensure_ascii=False), 260)}",
-        f"- Guardrails/Eval：{_compact_text(json.dumps({'guardrails': harness_plan.get('guardrails', {}), 'evalPolicy': harness_plan.get('evalPolicy', {})}, ensure_ascii=False), 320)}",
-        "## 核心优势",
-        *[f"- {item}" for item in strengths],
-        *[f"- 项目证据：{item}" for item in project_lines[:3]],
-        "## 关键风险",
-        *[f"- {item}" for item in risk_lines[:4]],
-        "## 面试追问",
-        *[f"- {item}" for item in questions],
-        "## 综合结论",
-        f"- 本次结论由 Harness synthesis 生成：先由 Intent/JD/Knowledge 建立控制面，再由 Tech/Project/Risk evaluator 产出结构化证据，最后合成为 HR 可读报告。推荐结论为 {rec}，分数为 {score}/100；面试应优先核验项目真实性、技术深度、指标结果和 JD 缺口。",
-    ])
 
 
 async def _emit_deterministic_plan_round(
@@ -425,6 +409,9 @@ async def _emit_deterministic_plan_round(
         TraceEvent(
             eventId=event_id,
             traceId=state["traceId"],
+            workflowRunId=state.get("workflowRunId"),
+            conversationId=state.get("conversationId"),
+            revision=state.get("revision"),
             nodeId=node_id,
             agentName=agent_name,
             phase=phase,
@@ -468,6 +455,9 @@ async def _emit_deterministic_final_round(
         TraceEvent(
             eventId=event_id,
             traceId=state["traceId"],
+            workflowRunId=state.get("workflowRunId"),
+            conversationId=state.get("conversationId"),
+            revision=state.get("revision"),
             nodeId=node_id,
             agentName=agent_name,
             phase=phase,
@@ -648,8 +638,9 @@ def build_knowledge_queries(state: GraphState) -> list[str]:
     required = [str(item) for item in _json_list(intent.get("requiredSkills"))[:6]]
     hints = [str(item) for item in _json_list(intent.get("routingHints"))[:6]]
     target_role = str(route.get("targetRole") or state.get("jobCategory") or "候选人")
+    focus = _compact_text(json.dumps(state.get("evaluationBrief") or {}, ensure_ascii=False), 180)
     queries = [
-        f"面试 Rubric {target_role} {' '.join(skills[:5] or required[:5])}",
+        f"面试 Rubric {target_role} {' '.join(skills[:5] or required[:5])} {focus}",
         f"项目真实性 贡献边界 {' '.join(projects[:2])}",
         f"风险验证 JD缺口 {' '.join(gaps[:3] or hints[:3])}",
         f"历史策略 {' '.join(procedural_actions[:2])}",
@@ -720,7 +711,12 @@ def _resume_coverage_checklist(resume_text: str, parse_result: str = "") -> str:
 
 
 async def intent_node(state: GraphState) -> Dict[str, Any]:
-    result = await _run_node(state, "intent", "IntentAgent", 1, INTENT_PROMPT, state.get("resumeText", ""), max_tokens=640)
+    await safe_control_boundary(state)
+    reused = await _reuse_node_if_planned(state, "intent", "IntentAgent", 1)
+    if reused is not None:
+        return reused
+    intent_input = state.get("resumeText", "") + _evaluation_brief_text(state)
+    result = await _run_node(state, "intent", "IntentAgent", 1, INTENT_PROMPT, intent_input, max_tokens=640)
     resume_text = state.get("resumeText", "")
     context_query = " ".join([
         _compact_text(resume_text, 800),
@@ -761,6 +757,10 @@ async def intent_node(state: GraphState) -> Dict[str, Any]:
 
 
 async def resume_parse_node(state: GraphState) -> Dict[str, Any]:
+    await safe_control_boundary(state)
+    reused = await _reuse_node_if_planned(state, "resume_parse", "ResumeParseAgent", 2)
+    if reused is not None:
+        return reused
     await _emit_node_start(state, "resume_parse", "ResumeParseAgent", 2)
     start_ms = time.time()
     trace_id = state["traceId"]
@@ -776,9 +776,15 @@ async def resume_parse_node(state: GraphState) -> Dict[str, Any]:
     )
     try:
         resume_text = state.get("resumeText", "")
+        supplemental_context = (
+            _evaluation_brief_text(state)
+            if "resume_parse" in (state.get("invalidatedNodes") or state.get("affectedNodes") or [])
+            else ""
+        )
+        parse_input = resume_text + supplemental_context
         ws = _to_workflow_state(state)
         plan_user = (
-            f"完整简历原文：{resume_text}\n"
+            f"完整简历原文与用户补充事实：{parse_input}\n"
             "请制定简历结构化抽取计划。输出一句话说明需要先抽取哪些结构化字段。"
         )
         plan_event_id = await _emit_deterministic_plan_round(
@@ -797,20 +803,22 @@ async def resume_parse_node(state: GraphState) -> Dict[str, Any]:
             2,
             1,
             "resume_structure_extract",
-            {"resumeText": resume_text},
-            resume_structure_extract(resume_text),
+            {"resumeText": parse_input},
+            resume_structure_extract(parse_input),
             agent_span_id,
             plan_event_id,
         )
         user = (
-            f"完整简历原文：{resume_text}\n"
+            f"完整简历原文与用户补充事实：{parse_input}\n"
             f"结构化抽取结果：{raw}\n"
             "请输出严格 JSON：{\"name\":\"\",\"summary\":\"\",\"skills\":[],\"projects\":[],\"education\":[],\"timelineEntries\":[],\"textLength\":0}"
         )
-        result = await run_llm_node(
+        result = await run_agent_node(
             "resume_parse", "ResumeParseAgent", 2, PARSE_PROMPT, user, ws,
-            agent_span_id=agent_span_id, round_index=2, max_tokens=900,
+            agent_span_id=agent_span_id, round_offset=1, max_tokens=900,
+            preexecuted_tool_names={"resume_structure_extract"},
         )
+        _merge_agent_tool_health(state, ws)
         end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
                  duration_ms=int((time.time() - start_ms) * 1000))
         flush()
@@ -827,6 +835,10 @@ async def resume_parse_node(state: GraphState) -> Dict[str, Any]:
 
 
 async def jd_match_node(state: GraphState) -> Dict[str, Any]:
+    await safe_control_boundary(state)
+    reused = await _reuse_node_if_planned(state, "jd_match", "JdMatchAgent", 3)
+    if reused is not None:
+        return reused
     await _emit_node_start(state, "jd_match", "JdMatchAgent", 3)
     start_ms = time.time()
     trace_id = state["traceId"]
@@ -837,17 +849,24 @@ async def jd_match_node(state: GraphState) -> Dict[str, Any]:
         input_data={
             "resumeText": state.get("resumeText", ""),
             "parseResult": state.get("parseResult", ""),
+            "jobDescription": state.get("jobDescription", ""),
         },
         started_at=now_iso(),
     )
     try:
         resume_text = state.get("resumeText", "")
+        explicit_jd = (state.get("jobDescription") or "").strip()
         ws = _to_workflow_state(state)
         plan_user = (
             f"完整简历原文：{resume_text}\n"
             f"意图识别：{state.get('intentResult', '')}\n"
             f"简历解析：{state.get('parseResult', '')}\n"
-            "请制定岗位匹配证据收集计划。必须包含：检索岗位库、提取JD要求、再由LLM综合匹配。"
+            f"用户指定JD：{explicit_jd or '未提供，将检索岗位库'}\n"
+            + (
+                "请以用户指定 JD 为主证据，先提取其要求；岗位库只允许作为可选基准补充。"
+                if explicit_jd
+                else "请检索岗位库、提取 JD 要求，再综合匹配。"
+            )
         )
         plan_event_id = await _emit_deterministic_plan_round(
             state,
@@ -855,14 +874,28 @@ async def jd_match_node(state: GraphState) -> Dict[str, Any]:
             "JdMatchAgent",
             3,
             1,
-            "系统将检索岗位库并抽取 JD 要求，然后由 LLM 结合 IntentAgent 输出形成岗位匹配结论。",
+            (
+                "系统将用户指定 JD 作为主证据并抽取要求；岗位库仅作可选补充，然后由 LLM 形成匹配结论。"
+                if explicit_jd
+                else "系统将检索岗位库并抽取 JD 要求，然后由 LLM 结合 IntentAgent 输出形成岗位匹配结论。"
+            ),
             plan_user,
         )
-        jd_raw = await _run_tool_with_span(
-            state, "jd_match", "JdMatchAgent", 3, 1,
-            "milvus_jd_search", {"resumeText": resume_text, "topK": 3},
-            milvus_jd_search(resume_text, 3), agent_span_id, plan_event_id,
-        )
+        if explicit_jd:
+            jd_raw = json.dumps(
+                {
+                    "source": "user_supplied_job_description",
+                    "jobCategory": state.get("jobCategory"),
+                    "jobDescription": explicit_jd,
+                },
+                ensure_ascii=False,
+            )
+        else:
+            jd_raw = await _run_tool_with_span(
+                state, "jd_match", "JdMatchAgent", 3, 1,
+                "milvus_jd_search", {"resumeText": resume_text, "topK": 3},
+                milvus_jd_search(resume_text, 3), agent_span_id, plan_event_id,
+            )
         req_raw = await _run_tool_with_span(
             state, "jd_match", "JdMatchAgent", 3, 1,
             "jd_requirements_extract", {"jdMatchJson": jd_raw},
@@ -872,14 +905,21 @@ async def jd_match_node(state: GraphState) -> Dict[str, Any]:
             f"完整简历原文：{resume_text}\n"
             f"意图识别：{state.get('intentResult', '')}\n"
             f"简历解析：{state.get('parseResult', '')}\n"
+            f"用户指定JD：{explicit_jd or '未提供'}\n"
             f"JD检索结果：{jd_raw}\n"
             f"JD要求抽取：{req_raw}\n"
             "请输出严格 JSON：{\"matchedJd\":\"\",\"matchScore\":0,\"requirements\":[],\"preferredSkills\":[],\"gaps\":[]}"
         )
-        result = await run_llm_node(
+        result = await run_agent_node(
             "jd_match", "JdMatchAgent", 3, JD_MATCH_PROMPT, user, ws,
-            agent_span_id=agent_span_id, round_index=2, max_tokens=900,
+            agent_span_id=agent_span_id, round_offset=1, max_tokens=900,
+            preexecuted_tool_names=(
+                {"jd_requirements_extract"}
+                if explicit_jd
+                else {"milvus_jd_search", "jd_requirements_extract"}
+            ),
         )
+        _merge_agent_tool_health(state, ws)
         end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
                  duration_ms=int((time.time() - start_ms) * 1000))
         flush()
@@ -896,6 +936,12 @@ async def jd_match_node(state: GraphState) -> Dict[str, Any]:
 
 
 async def knowledge_context_node(state: GraphState) -> Dict[str, Any]:
+    await safe_control_boundary(state)
+    reused = await _reuse_node_if_planned(
+        state, "knowledge_context", "KnowledgeRetrievalAgent", 4
+    )
+    if reused is not None:
+        return reused
     await _emit_node_start(state, "knowledge_context", "KnowledgeRetrievalAgent", 4)
     start_ms = time.time()
     trace_id = state["traceId"]
@@ -921,23 +967,32 @@ async def knowledge_context_node(state: GraphState) -> Dict[str, Any]:
             4,
             1,
             plan_text,
-            f"AgentHarness：{json.dumps(harness_plan, ensure_ascii=False)}\nIntent：{state.get('intentResult', '')}\nJD：{state.get('jdResult', '')}",
+            f"AgentHarness：{json.dumps(harness_plan, ensure_ascii=False)}\n"
+            f"Intent：{state.get('intentResult', '')}\nJD：{state.get('jdResult', '')}"
+            f"{_evaluation_brief_text(state)}",
         )
-        results: list[dict[str, Any]] = []
-        for idx, query in enumerate(queries[:3], start=1):
-            raw = await _run_tool_with_span(
-                state,
-                "knowledge_context",
-                "KnowledgeRetrievalAgent",
-                4,
-                1,
-                "knowledge_search",
-                {"query": query, "topK": 4},
-                knowledge_search(query, 4),
-                agent_span_id,
-                plan_event_id,
-            )
-            results.append({"query": query, "result": _json_obj(raw)})
+        selected_queries = queries[:3]
+        raw_results = await asyncio.gather(
+            *[
+                _run_tool_with_span(
+                    state,
+                    "knowledge_context",
+                    "KnowledgeRetrievalAgent",
+                    4,
+                    1,
+                    "knowledge_search",
+                    {"query": query, "topK": 4},
+                    knowledge_search(query, 4),
+                    agent_span_id,
+                    plan_event_id,
+                )
+                for query in selected_queries
+            ]
+        )
+        results = [
+            {"query": query, "result": _json_obj(raw)}
+            for query, raw in zip(selected_queries, raw_results)
+        ]
         # Dedup chunks across the multiple knowledge queries: the same chunk surfacing for
         # several queries must not be counted/injected multiple times.
         chunks: list[Any] = []
@@ -956,18 +1011,14 @@ async def knowledge_context_node(state: GraphState) -> Dict[str, Any]:
                 seen_chunk_ids.add(key)
                 chunks.append(chunk)
 
-        # Public MCP enrichment: TWO real Model Context Protocol servers run concurrently
-        # (mcp-server-time for evaluation-date grounding + mcp-server-fetch for the candidate's
-        # external page). Parallel so they add ~0 critical-path latency; both guarded + traced.
-        external_web: dict[str, Any] = {}
+        # Evaluation-date grounding is deterministic and safe to invoke directly.
+        # Candidate URL enrichment is left to the registry-managed Exa/Firecrawl/GitHub
+        # tools; the local fetch MCP is intentionally disabled because redirects can
+        # otherwise turn a resume-provided URL into an ECS-side SSRF primitive.
         evaluation_time: dict[str, Any] = {}
-        primary_url = extract_primary_url(state.get("resumeText", ""))
 
         async def _time_coro() -> str:
             return json.dumps(await mcp_current_time("Asia/Shanghai"), ensure_ascii=False)
-
-        async def _fetch_coro() -> str:
-            return json.dumps(await mcp_fetch_url(primary_url), ensure_ascii=False)
 
         mcp_tasks = [
             _run_tool_with_span(
@@ -976,22 +1027,13 @@ async def knowledge_context_node(state: GraphState) -> Dict[str, Any]:
                 _time_coro(), agent_span_id, plan_event_id,
             )
         ]
-        if primary_url:
-            mcp_tasks.append(
-                _run_tool_with_span(
-                    state, "knowledge_context", "KnowledgeRetrievalAgent", 4, 1,
-                    "mcp_fetch[public:mcp-server-fetch]", {"url": primary_url},
-                    _fetch_coro(), agent_span_id, plan_event_id,
-                )
-            )
         mcp_results = await asyncio.gather(*mcp_tasks)
         evaluation_time = _json_obj(mcp_results[0])
-        if primary_url and len(mcp_results) > 1:
-            external_web = _json_obj(mcp_results[1])
 
         existing_context = state.get("harnessContext") or {}
         harness_context = {
             **existing_context,
+            "evaluationBrief": state.get("evaluationBrief") or {},
             "knowledge": {
                 "queries": queries,
                 "hitCount": len(chunks),
@@ -999,9 +1041,17 @@ async def knowledge_context_node(state: GraphState) -> Dict[str, Any]:
                 "injectedInto": ["TechEvalAgent", "ProjectEvalAgent", "RiskAgent", "EvidenceFusionAgent", "ReportAgent"],
                 "knowledgeAsEvidence": "rubric_only_not_candidate_fact",
             },
-            "externalWeb": external_web,
+            "externalWeb": {
+                "status": "agent_tool_managed",
+                "policy": "candidate_declared_identifier_and_source_url_required",
+            },
             "evaluationTime": evaluation_time,
-            "publicMcpServers": ["mcp-server-time", "mcp-server-fetch"],
+            "publicMcpCatalog": [
+                {"server": "mcp-server-time", "availability": "SUCCESS" if evaluation_time.get("ok") else "UNAVAILABLE"},
+                {"server": "exa", "availability": "DISCOVER_AT_AGENT_RUNTIME"},
+                {"server": "firecrawl", "availability": "DISCOVER_AT_AGENT_RUNTIME"},
+                {"server": "github", "availability": "DISCOVER_AT_AGENT_RUNTIME_REQUIRES_TOKEN"},
+            ],
         }
         updated_harness_plan = build_harness_plan(
             state.get("intentResult", ""),
@@ -1039,6 +1089,10 @@ async def knowledge_context_node(state: GraphState) -> Dict[str, Any]:
 
 
 async def tech_eval_node(state: GraphState) -> Dict[str, Any]:
+    await safe_control_boundary(state)
+    reused = await _reuse_node_if_planned(state, "tech_eval", "TechEvalAgent", 4)
+    if reused is not None:
+        return reused
     await _emit_node_start(state, "tech_eval", "TechEvalAgent", 4)
     start_ms = time.time()
     trace_id = state["traceId"]
@@ -1061,11 +1115,11 @@ async def tech_eval_node(state: GraphState) -> Dict[str, Any]:
             f"intentResult={state.get('intentResult', '')}\n"
             f"parseResult={state.get('parseResult', '')}\n"
             f"jdResult={state.get('jdResult', '')}"
+            f"{_evaluation_brief_text(state)}"
         )
         defaults = ["Java Spring Boot Kafka K8s 项目经验", "支付中台 重构 后端 架构", "高并发 稳定性 性能优化"]
         queries = _queries_from_intent(state, defaults, "技术深度")
-        fast_lane = _fast_lane_resume(resume_text)
-        plan_event_id = await _emit_deterministic_plan_round(
+        await _emit_deterministic_plan_round(
             state,
             "tech_eval",
             "TechEvalAgent",
@@ -1075,75 +1129,28 @@ async def tech_eval_node(state: GraphState) -> Dict[str, Any]:
                 "queries": queries,
                 "focus": "技术深度、工程经验、JD requiredSkills",
                 "harness": state.get("harnessPlan", {}).get("governance", {}),
-                "toolBudget": state.get("harnessPlan", {}).get("toolBudgets", {}).get("TechEvalAgent", {}),
+                "toolBudget": state.get("harnessPlan", {}).get("runtimeBudgets", {}).get("TechEvalAgent", {}),
             }, ensure_ascii=False),
             plan_user,
-            has_tool_calls=not fast_lane,
+            has_tool_calls=True,
         )
-
-        if fast_lane:
-            result = _deterministic_tech_result(state)
-            await _emit_deterministic_final_round(
-                state,
-                "tech_eval",
-                "TechEvalAgent",
-                4,
-                2,
-                result,
-                "Agent-Harness fast-lane: sparse resume, skip expensive TechEval LLM and use resume_text_only evidence.",
-            )
-            end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
-                     duration_ms=int((time.time() - start_ms) * 1000))
-            flush()
-            duration = int((time.time() - start_ms) * 1000)
-            await _emit_node_end(state, "tech_eval", "TechEvalAgent", 4, "SUCCESS", duration)
-            return {"techResult": result, "completedNodes": ["tech_eval"]}
-
-        rag_raw = await _run_tool_with_span(
-            state, "tech_eval", "TechEvalAgent", 4, 1,
-            "milvus_resume_batch_search", {"queries": queries, "topK": 3, "resumeText": resume_text},
-            milvus_resume_batch_search(queries, 3, resume_text), agent_span_id, plan_event_id,
-        )
-        if re.search(r"github\.com|gitlab\.com|gitee\.com|https?://", resume_text or "", re.I):
-            profile_raw = await _run_tool_with_span(
-                state, "tech_eval", "TechEvalAgent", 4, 1,
-                "github_enrichment", {"resumeText": resume_text},
-                github_enrichment(resume_text), agent_span_id, plan_event_id,
-            )
-        else:
-            profile_raw = '{"skipped": true, "reason": "no external profile url in resume"}'
-        if _harness_eval_lane(state):
-            result = _deterministic_tech_result(state)
-            await _emit_deterministic_final_round(
-                state,
-                "tech_eval",
-                "TechEvalAgent",
-                4,
-                2,
-                result,
-                f"Agent-Harness evaluator: context_pack + RAG evidence, skip repeated TechEval LLM.\nRAG={_compact_text(rag_raw, 800)}\nProfile={_compact_text(profile_raw, 400)}",
-            )
-            end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
-                     duration_ms=int((time.time() - start_ms) * 1000))
-            flush()
-            duration = int((time.time() - start_ms) * 1000)
-            await _emit_node_end(state, "tech_eval", "TechEvalAgent", 4, "SUCCESS", duration)
-            return {"techResult": result, "completedNodes": ["tech_eval"]}
         user = (
             f"简历证据上下文：{_compact_text(resume_text, 4200)}\n"
             f"意图识别：{state.get('intentResult', '')}\n"
             f"解析结果：{state.get('parseResult', '')}\n"
             f"JD结果：{state.get('jdResult', '')}\n"
             f"HarnessContext/知识库注入：{_compact_text(json.dumps(state.get('harnessContext', {}), ensure_ascii=False), 1800)}\n"
-            f"RAG证据：{_compact_text(rag_raw, 1800)}\n"
-            f"外部画像：{profile_raw}\n"
+            f"动态检索计划（仅在证据缺口存在时选择工具）：{json.dumps(queries, ensure_ascii=False)}\n"
+            "公网证据只能查询简历明确声明的账号/URL；若工具失败或无来源，必须按 unavailable 处理。\n"
             f"工具健康：{json.dumps(state.get('toolHealth', {}), ensure_ascii=False)}\n"
+            f"当前评估重点：{json.dumps(state.get('evaluationBrief') or {}, ensure_ascii=False)}\n"
             "请基于完整简历为主证据输出技术评估 JSON。"
         )
-        result = await run_llm_node(
+        result = await run_agent_node(
             "tech_eval", "TechEvalAgent", 4, TECH_PROMPT, user, ws,
-            agent_span_id=agent_span_id, round_index=2, max_tokens=900,
+            agent_span_id=agent_span_id, round_offset=1, max_tokens=900,
         )
+        _merge_agent_tool_health(state, ws)
         end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
                  duration_ms=int((time.time() - start_ms) * 1000))
         flush()
@@ -1160,6 +1167,10 @@ async def tech_eval_node(state: GraphState) -> Dict[str, Any]:
 
 
 async def project_eval_node(state: GraphState) -> Dict[str, Any]:
+    await safe_control_boundary(state)
+    reused = await _reuse_node_if_planned(state, "project_eval", "ProjectEvalAgent", 4)
+    if reused is not None:
+        return reused
     await _emit_node_start(state, "project_eval", "ProjectEvalAgent", 4)
     start_ms = time.time()
     trace_id = state["traceId"]
@@ -1182,10 +1193,11 @@ async def project_eval_node(state: GraphState) -> Dict[str, Any]:
             f"intentResult={state.get('intentResult', '')}\n"
             f"parseResult={state.get('parseResult', '')}\n"
             f"jdResult={state.get('jdResult', '')}"
+            f"{_evaluation_brief_text(state)}"
         )
         defaults = ["项目经历 架构 重构 中台", "核心业务 项目 贡献 复杂度", "项目 真实性 验证"]
         queries = _queries_from_intent(state, defaults, "项目真实性与复杂度")
-        plan_event_id = await _emit_deterministic_plan_round(
+        await _emit_deterministic_plan_round(
             state,
             "project_eval",
             "ProjectEvalAgent",
@@ -1195,47 +1207,28 @@ async def project_eval_node(state: GraphState) -> Dict[str, Any]:
                 "queries": queries,
                 "focus": "项目复杂度、贡献边界、真实性",
                 "harness": state.get("harnessPlan", {}).get("governance", {}),
-                "toolBudget": state.get("harnessPlan", {}).get("toolBudgets", {}).get("ProjectEvalAgent", {}),
+                "toolBudget": state.get("harnessPlan", {}).get("runtimeBudgets", {}).get("ProjectEvalAgent", {}),
             }, ensure_ascii=False),
             plan_user,
         )
 
-        rag_raw = await _run_tool_with_span(
-            state, "project_eval", "ProjectEvalAgent", 4, 1,
-            "milvus_resume_batch_search", {"queries": queries, "topK": 3, "resumeText": resume_text},
-            milvus_resume_batch_search(queries, 3, resume_text), agent_span_id, plan_event_id,
-        )
-        if _harness_eval_lane(state):
-            result = _deterministic_project_result(state, rag_raw)
-            await _emit_deterministic_final_round(
-                state,
-                "project_eval",
-                "ProjectEvalAgent",
-                4,
-                2,
-                result,
-                f"Agent-Harness evaluator: project depth from parseResult + RAG evidence.\nRAG={_compact_text(rag_raw, 800)}",
-            )
-            end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
-                     duration_ms=int((time.time() - start_ms) * 1000))
-            flush()
-            duration = int((time.time() - start_ms) * 1000)
-            await _emit_node_end(state, "project_eval", "ProjectEvalAgent", 4, "SUCCESS", duration)
-            return {"projectResult": result, "completedNodes": ["project_eval"]}
         user = (
             f"简历证据上下文：{_compact_text(resume_text, 4200)}\n"
             f"意图识别：{state.get('intentResult', '')}\n"
             f"解析结果：{state.get('parseResult', '')}\n"
             f"JD结果：{state.get('jdResult', '')}\n"
             f"HarnessContext/知识库注入：{_compact_text(json.dumps(state.get('harnessContext', {}), ensure_ascii=False), 1800)}\n"
-            f"RAG证据：{_compact_text(rag_raw, 1800)}\n"
+            f"动态检索计划（仅在证据缺口存在时选择工具）：{json.dumps(queries, ensure_ascii=False)}\n"
+            "公网证据只能查询简历明确声明的账号/URL；失败或无来源时不得写入项目事实。\n"
             f"工具健康：{json.dumps(state.get('toolHealth', {}), ensure_ascii=False)}\n"
+            f"当前评估重点：{json.dumps(state.get('evaluationBrief') or {}, ensure_ascii=False)}\n"
             "请基于完整简历为主证据输出项目评估 JSON。"
         )
-        result = await run_llm_node(
+        result = await run_agent_node(
             "project_eval", "ProjectEvalAgent", 4, PROJECT_PROMPT, user, ws,
-            agent_span_id=agent_span_id, round_index=2, max_tokens=900,
+            agent_span_id=agent_span_id, round_offset=1, max_tokens=900,
         )
+        _merge_agent_tool_health(state, ws)
         end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
                  duration_ms=int((time.time() - start_ms) * 1000))
         flush()
@@ -1253,6 +1246,10 @@ async def project_eval_node(state: GraphState) -> Dict[str, Any]:
 
 async def risk_eval_node(state: GraphState) -> Dict[str, Any]:
     from datetime import date
+    await safe_control_boundary(state)
+    reused = await _reuse_node_if_planned(state, "risk_eval", "RiskAgent", 4)
+    if reused is not None:
+        return reused
     await _emit_node_start(state, "risk_eval", "RiskAgent", 4)
     start_ms = time.time()
     trace_id = state["traceId"]
@@ -1271,7 +1268,10 @@ async def risk_eval_node(state: GraphState) -> Dict[str, Any]:
     try:
         ws = _to_workflow_state(state)
         resume_text = state.get("resumeText", "")
-        plan_user = f"resumeText={resume_text}\nintentResult={state.get('intentResult', '')}\nparseResult={state.get('parseResult', '')}"
+        plan_user = (
+            f"resumeText={resume_text}\nintentResult={state.get('intentResult', '')}\n"
+            f"parseResult={state.get('parseResult', '')}{_evaluation_brief_text(state)}"
+        )
         defaults = ["跳槽 空白期 时间线", "技能夸大 简历真实性", "在职 实习 时间冲突"]
         queries = _queries_from_intent(state, defaults, "风险验证")
         plan_event_id = await _emit_deterministic_plan_round(
@@ -1284,7 +1284,7 @@ async def risk_eval_node(state: GraphState) -> Dict[str, Any]:
                 "queries": queries,
                 "focus": "时间线、真实性、技能夸大、JD 缺口",
                 "harness": state.get("harnessPlan", {}).get("governance", {}),
-                "toolBudget": state.get("harnessPlan", {}).get("toolBudgets", {}).get("RiskAgent", {}),
+                "toolBudget": state.get("harnessPlan", {}).get("runtimeBudgets", {}).get("RiskAgent", {}),
             }, ensure_ascii=False),
             plan_user,
         )
@@ -1294,28 +1294,6 @@ async def risk_eval_node(state: GraphState) -> Dict[str, Any]:
             "timeline_validator", {"resumeText": resume_text},
             timeline_validator(resume_text), agent_span_id, plan_event_id,
         )
-        rag_raw = await _run_tool_with_span(
-            state, "risk_eval", "RiskAgent", 4, 1,
-            "milvus_resume_batch_search", {"queries": queries, "topK": 3, "resumeText": resume_text},
-            milvus_resume_batch_search(queries, 3, resume_text), agent_span_id, plan_event_id,
-        )
-        if _harness_eval_lane(state):
-            result = _deterministic_risk_result(state, timeline_raw, rag_raw)
-            await _emit_deterministic_final_round(
-                state,
-                "risk_eval",
-                "RiskAgent",
-                4,
-                2,
-                result,
-                f"Agent-Harness evaluator: risk from timeline + quantification + RAG evidence.\nTimeline={_compact_text(timeline_raw, 400)}\nRAG={_compact_text(rag_raw, 800)}",
-            )
-            end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
-                     duration_ms=int((time.time() - start_ms) * 1000))
-            flush()
-            duration = int((time.time() - start_ms) * 1000)
-            await _emit_node_end(state, "risk_eval", "RiskAgent", 4, "SUCCESS", duration)
-            return {"riskResult": result, "completedNodes": ["risk_eval"]}
         user = (
             f"当前日期：{current_date}\n"
             f"简历证据上下文：{_compact_text(resume_text, 4200)}\n"
@@ -1324,14 +1302,17 @@ async def risk_eval_node(state: GraphState) -> Dict[str, Any]:
             f"JD匹配：{state.get('jdResult', '')}\n"
             f"HarnessContext/知识库注入：{_compact_text(json.dumps(state.get('harnessContext', {}), ensure_ascii=False), 1800)}\n"
             f"时间线校验：{timeline_raw}\n"
-            f"RAG证据：{_compact_text(rag_raw, 1800)}\n"
+            f"动态检索计划（时间线工具已执行，其余工具按证据缺口选择）：{json.dumps(queries, ensure_ascii=False)}\n"
             f"工具健康：{json.dumps(state.get('toolHealth', {}), ensure_ascii=False)}\n"
+            f"当前评估重点：{json.dumps(state.get('evaluationBrief') or {}, ensure_ascii=False)}\n"
             "请基于完整简历为主证据输出风险评估 JSON。"
         )
-        result = await run_llm_node(
+        result = await run_agent_node(
             "risk_eval", "RiskAgent", 4, RISK_PROMPT, user, ws,
-            agent_span_id=agent_span_id, round_index=2, max_tokens=800,
+            agent_span_id=agent_span_id, round_offset=1, max_tokens=800,
+            preexecuted_tool_names={"timeline_validator"},
         )
+        _merge_agent_tool_health(state, ws)
         end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
                  duration_ms=int((time.time() - start_ms) * 1000))
         flush()
@@ -1348,6 +1329,12 @@ async def risk_eval_node(state: GraphState) -> Dict[str, Any]:
 
 
 async def evidence_fusion_node(state: GraphState) -> Dict[str, Any]:
+    await safe_control_boundary(state)
+    reused = await _reuse_node_if_planned(
+        state, "evidence_fusion", "EvidenceFusionAgent", 5
+    )
+    if reused is not None:
+        return reused
     enabled = set(((state.get("harnessPlan") or {}).get("route") or {}).get("enabledAgents") or [])
     required_results = []
     if "tech_eval" in enabled:
@@ -1373,6 +1360,7 @@ async def evidence_fusion_node(state: GraphState) -> Dict[str, Any]:
         )
         user = (
             f"意图识别：{state.get('intentResult', '')}\n"
+            f"当前评估重点：{json.dumps(state.get('evaluationBrief') or {}, ensure_ascii=False)}\n"
             f"AgentHarness：{json.dumps(state.get('harnessPlan', {}), ensure_ascii=False)}\n"
             f"HarnessContext：{json.dumps(state.get('harnessContext', {}), ensure_ascii=False)}\n"
             f"JD匹配：{state.get('jdResult', '')}\n"
@@ -1382,21 +1370,53 @@ async def evidence_fusion_node(state: GraphState) -> Dict[str, Any]:
             f"工具健康：{json.dumps(state.get('toolHealth', {}), ensure_ascii=False)}\n"
             f"HarnessReflection：{json.dumps(harness_reflection, ensure_ascii=False)}"
         )
+        source_payloads = {
+            "intent": _json_obj(state.get("intentResult", "")),
+            "jd": _json_obj(state.get("jdResult", "")),
+            "tech": _json_obj(state.get("techResult", "")),
+            "project": _json_obj(state.get("projectResult", "")),
+            "risk": _json_obj(state.get("riskResult", "")),
+        }
+        evidence_chain = [
+            {
+                "source": source_name,
+                "payload": payload,
+                "declaredEvidenceSource": payload.get("evidenceSource"),
+            }
+            for source_name, payload in source_payloads.items()
+            if payload
+        ]
+        finding_fields = {
+            "jd": ("gaps",),
+            "tech": ("highlights", "weaknesses"),
+            "project": ("depthHighlights", "concerns"),
+            "risk": ("risks",),
+        }
+        findings: list[dict[str, str]] = []
+        seen_findings: set[str] = set()
+        for source_name, fields in finding_fields.items():
+            payload = source_payloads.get(source_name) or {}
+            for field_name in fields:
+                values = payload.get(field_name)
+                if not isinstance(values, list):
+                    continue
+                for value in values:
+                    text = str(value).strip()
+                    key = text.lower()
+                    if text and key not in seen_findings:
+                        seen_findings.add(key)
+                        findings.append(
+                            {"source": source_name, "field": field_name, "finding": text}
+                        )
         result = json.dumps(
             {
-                "evidenceChain": [
-                    {"source": "intent", "claim": state.get("intentResult", ""), "evidenceSource": "llm_intent"},
-                    {"source": "jd", "claim": state.get("jdResult", ""), "evidenceSource": "jd_match"},
-                    {"source": "tech", "claim": state.get("techResult", ""), "evidenceSource": "resume_text_and_rag"},
-                    {"source": "project", "claim": state.get("projectResult", ""), "evidenceSource": "resume_text_and_rag"},
-                    {"source": "risk", "claim": state.get("riskResult", ""), "evidenceSource": "resume_text_and_checks"},
-                ],
-                "confidence": 0.78,
-                "keyFindings": [
-                    "完整简历原文始终作为主证据。",
-                    "RAG/外部画像只用于定位和补充，不替代原文。",
-                    "最终报告必须覆盖 resumeCoverageChecklist。",
-                ],
+                "evidenceChain": evidence_chain,
+                # No labelled calibration set is available in this static
+                # runtime, so a numeric confidence would be invented.
+                "confidence": None,
+                "confidenceStatus": "NOT_CALIBRATED",
+                "confidenceReason": "No labelled calibration set was supplied for this run.",
+                "keyFindings": findings[:20],
                 "toolHealth": state.get("toolHealth", {}),
                 "harnessReflection": harness_reflection,
             },
@@ -1799,6 +1819,7 @@ def build_report_context_pack(state: GraphState, coverage_checklist: str, skill_
     return {
         "resumeDigest": coverage_checklist,
         "resumeExcerpt": _compact_text(state.get("resumeText", ""), 3200),
+        "evaluationBrief": state.get("evaluationBrief") or {},
         "intent": _json_obj(state.get("intentResult", "")),
         "jd": _compact_text(state.get("jdResult", ""), 1200),
         "tech": _compact_text(state.get("techResult", ""), 1600),
@@ -1921,6 +1942,10 @@ def _sync_report_recommendation(report: str, rec: str) -> str:
 
 
 async def report_node(state: GraphState) -> Dict[str, Any]:
+    await safe_control_boundary(state)
+    reused = await _reuse_node_if_planned(state, "report", "ReportAgent", 6)
+    if reused is not None:
+        return reused
     resume_text = state.get("resumeText", "")
     await _emit_node_start(state, "report", "ReportAgent", 6)
     start_ms = time.time()
@@ -1942,6 +1967,22 @@ async def report_node(state: GraphState) -> Dict[str, Any]:
         state.get("riskResult", ""),
     )
     try:
+        report_plan_event_id = await _emit_deterministic_plan_round(
+            state,
+            "report",
+            "ReportAgent",
+            6,
+            1,
+            "Load the evidence-synthesis Skill, compact verified upstream evidence, then render the report without introducing new candidate facts.",
+            json.dumps(
+                {
+                    "resumeTextLength": len(resume_text),
+                    "completedNodes": state.get("completedNodes", []),
+                    "toolHealth": state.get("toolHealth", {}),
+                },
+                ensure_ascii=False,
+            ),
+        )
         skill_raw = await _run_tool_with_span(
             state,
             "report",
@@ -1952,50 +1993,18 @@ async def report_node(state: GraphState) -> Dict[str, Any]:
             {"skillName": "evidence_synthesis", "task": "Use this skill to structure the final HR evidence report."},
             execute_skill("evidence_synthesis", "Use this skill to structure the final HR evidence report."),
             agent_span_id,
-            make_event_id(trace_id, "report", 1, "generation", 1),
+            report_plan_event_id,
         )
-        if _fast_lane_resume(resume_text):
-            result = _deterministic_report(state, skill_raw, coverage_checklist, harness_reflection)
-            await _emit_deterministic_final_round(
-                state,
-                "report",
-                "ReportAgent",
-                6,
-                2,
-                result,
-                "Agent-Harness synthesis: build complete HR report from structured evidence, HarnessContext and evidence_synthesis skill without repeated long-context report LLM.",
-            )
-            end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
-                     duration_ms=int((time.time() - start_ms) * 1000))
-            flush()
-            await _emit_node_end(state, "report", "ReportAgent", 6, "SUCCESS", int((time.time() - start_ms) * 1000))
-            score, rec = _parse_score_and_recommendation(result)
-            result = _sync_report_recommendation(result, rec)
-            sections = extract_report_sections(
-                report=result,
-                tech_result=state.get("techResult", ""),
-                project_result=state.get("projectResult", ""),
-                risk_result=state.get("riskResult", ""),
-            )
-            return {
-                "finalReport": result,
-                "overallScore": score,
-                "recommendation": rec,
-                "strengths": sections["strengths"],
-                "risks": sections["risks"],
-                "interviewQuestions": sections["interviewQuestions"],
-                "completedNodes": ["report"],
-            }
         skill_result = _json_obj(skill_raw)
         report_pack = build_report_context_pack(state, coverage_checklist, skill_result)
         specific_questions = report_pack.get("specificQuestions") or []
-        core_keys = ("resumeDigest", "resumeExcerpt", "intent", "jd", "tech", "project", "risk", "runtimeSummary", "skillResult")
-        eval_keys = ("resumeDigest", "resumeExcerpt", "tech", "project", "risk", "fusion", "jd", "skillResult")
+        core_keys = ("resumeDigest", "resumeExcerpt", "evaluationBrief", "intent", "jd", "tech", "project", "risk", "runtimeSummary", "skillResult")
+        eval_keys = ("resumeDigest", "resumeExcerpt", "evaluationBrief", "tech", "project", "risk", "fusion", "jd", "skillResult")
         core_user = json.dumps({k: report_pack[k] for k in core_keys if k in report_pack}, ensure_ascii=False)
         eval_user = json.dumps({k: report_pack[k] for k in eval_keys if k in report_pack}, ensure_ascii=False)
 
-        # Latency: output tokens dominate, so generate the two narrative halves concurrently and
-        # render 面试追问 deterministically (no LLM). 1 long 37s call -> 2 parallel ~16s calls.
+        # Generate independent narrative halves concurrently; render the already
+        # evidence-grounded interview questions without another model call.
         core_task = run_llm_node(
             "report",
             "ReportAgent",
@@ -2007,14 +2016,24 @@ async def report_node(state: GraphState) -> Dict[str, Any]:
             round_index=2,
             max_tokens=1300,
         )
-        eval_task = generate_report_eval(eval_user, max_tokens=1600)
+        eval_task = generate_report_eval(
+            eval_user,
+            max_tokens=1600,
+            state=_to_workflow_state(state),
+            agent_span_id=agent_span_id,
+        )
         core_result, eval_result = await asyncio.gather(core_task, eval_task)
+        degraded_reasons: list[str] = []
+        if REPORT_EVAL_DEGRADED_MARKER in eval_result:
+            degraded_reasons.append("report_eval_generation_failed")
+            eval_result = eval_result.replace(REPORT_EVAL_DEGRADED_MARKER, "").lstrip()
         questions_md = render_specific_questions_md(specific_questions)
         result = _assemble_report(core_result, eval_result, questions_md)
-        end_span(agent_span_id, output_data=result, ended_at=now_iso(), status="SUCCESS",
+        report_status = "DEGRADED" if degraded_reasons else "SUCCESS"
+        end_span(agent_span_id, output_data=result, ended_at=now_iso(), status=report_status,
                  duration_ms=int((time.time() - start_ms) * 1000))
         flush()
-        await _emit_node_end(state, "report", "ReportAgent", 6, "SUCCESS", int((time.time() - start_ms) * 1000))
+        await _emit_node_end(state, "report", "ReportAgent", 6, report_status, int((time.time() - start_ms) * 1000))
         score, rec = _parse_score_and_recommendation(result)
         result = _sync_report_recommendation(result, rec)
         sections = extract_report_sections(
@@ -2030,6 +2049,7 @@ async def report_node(state: GraphState) -> Dict[str, Any]:
             "strengths": sections["strengths"],
             "risks": sections["risks"],
             "interviewQuestions": sections["interviewQuestions"],
+            "degradedReasons": degraded_reasons,
             "completedNodes": ["report"],
         }
     except Exception as exc:
@@ -2041,16 +2061,11 @@ async def report_node(state: GraphState) -> Dict[str, Any]:
 
 
 def route_phase4(state: GraphState) -> list[str]:
-    route = ((state.get("harnessPlan") or {}).get("route") or {})
-    enabled = set(route.get("selectedAgents") or route.get("enabledAgents") or [])
-    routes: list[str] = []
-    if "tech_eval" in enabled:
-        routes.append("tech_eval")
-    if "project_eval" in enabled:
-        routes.append("project_eval")
-    if "risk_eval" in enabled:
-        routes.append("risk_eval")
-    return routes or ["evidence_fusion"]
+    return select_phase4_nodes(
+        state.get("harnessPlan") or {},
+        state.get("revisionPlan") or {},
+        revision=int(state.get("revision") or 1),
+    )
 
 
 def build_graph() -> Any:
@@ -2089,15 +2104,120 @@ async def compile_graph() -> Any:
     return builder.compile()
 
 
-async def run_workflow(initial: WorkflowState) -> WorkflowResultPayload:
-    start_ms = time.time()
-    start_trace(
-        initial.traceId,
-        input_text=initial.resumeText,
-        metadata={"workflowRunId": initial.workflowRunId, "resumeTextLength": len(initial.resumeText or "")},
+async def _load_base_checkpoint_state(
+    graph: Any,
+    initial: WorkflowState,
+    checkpointer: Any,
+) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    if not initial.baseWorkflowRunId:
+        return None, "base_workflow_run_not_provided"
+    if not initial.baseTraceId:
+        base_snapshot = await default_run_registry.get(initial.baseWorkflowRunId)
+        if base_snapshot is not None:
+            initial.baseTraceId = base_snapshot.trace_id
+    if not initial.baseTraceId:
+        return None, "base_trace_not_provided"
+    if checkpointer is None:
+        return None, "checkpointer_unavailable"
+    base_config = {
+        "configurable": {
+            "thread_id": f"{initial.baseTraceId}:{initial.baseWorkflowRunId}",
+            "checkpoint_ns": initial.baseWorkflowRunId,
+        }
+    }
+    try:
+        snapshot = await graph.aget_state(base_config)
+    except Exception as exc:
+        logger.warning(
+            "failed to read base checkpoint run=%s trace=%s: %s",
+            initial.baseWorkflowRunId,
+            initial.baseTraceId,
+            exc,
+        )
+        return None, f"base_checkpoint_read_failed:{type(exc).__name__}"
+    values = getattr(snapshot, "values", None)
+    if not isinstance(values, Mapping) or not values:
+        return None, "base_checkpoint_empty"
+    return dict(values), None
+
+
+async def _prepare_revision_state(
+    graph: Any,
+    initial: WorkflowState,
+    checkpointer: Any,
+) -> GraphState:
+    current_state = initial.model_dump()
+    base_state: Optional[Dict[str, Any]] = None
+    fallback_reason: Optional[str] = None
+    if initial.baseWorkflowRunId or initial.baseTraceId:
+        base_state, fallback_reason = await _load_base_checkpoint_state(
+            graph, initial, checkpointer
+        )
+    affected = initial.affectedNodes or initial.invalidatedNodes
+    state, plan = materialize_revision_state(current_state, affected, base_state)
+    plan_payload = plan.to_dict()
+    plan_payload.update(
+        {
+            "baseCheckpointLoaded": base_state is not None,
+            "baseWorkflowRunId": initial.baseWorkflowRunId,
+            "baseTraceId": initial.baseTraceId,
+            "fallbackReason": fallback_reason,
+        }
     )
-    graph = await compile_graph()
-    state: GraphState = initial.model_dump()
+    state["baseTraceId"] = initial.baseTraceId
+    state["revisionPlan"] = plan_payload
+    state["reusedNodes"] = list(plan.reused_nodes)
+    await emit_event(
+        TraceEvent(
+            eventId=make_event_id(initial.traceId, "revision_plan", 1, "harness", 0),
+            traceId=initial.traceId,
+            workflowRunId=initial.workflowRunId,
+            conversationId=initial.conversationId,
+            revision=initial.revision,
+            nodeId="revision_plan",
+            agentName="AgentHarness",
+            phase=0,
+            attempt=1,
+            kind="harness",
+            roundIndex=0,
+            status="SUCCESS" if not plan.unknown_nodes else "WARNING",
+            startedAt=now_iso(),
+            endedAt=now_iso(),
+            durationMs=0,
+            callKind="revision_plan",
+            callName="plan_revision_execution",
+            roundRole="revision_plan",
+            outputPreview=json.dumps(plan_payload, ensure_ascii=False)[:2000],
+            reuseSourceWorkflowRunId=initial.baseWorkflowRunId,
+            reuseSourceTraceId=initial.baseTraceId,
+        )
+    )
+    return state
+
+
+async def run_workflow(initial: WorkflowState, *, resume: bool = False) -> WorkflowResultPayload:
+    start_ms = time.time()
+    if not resume:
+        start_trace(
+            initial.traceId,
+            input_text=initial.resumeText,
+            metadata={
+                "workflowRunId": initial.workflowRunId,
+                "conversationId": initial.conversationId,
+                "revision": initial.revision,
+                "resumeTextLength": len(initial.resumeText or ""),
+            },
+        )
+    checkpointer = await get_checkpointer()
+    if resume and checkpointer is None:
+        raise RuntimeError("cannot resume workflow without a LangGraph checkpointer")
+    builder = build_graph()
+    graph = builder.compile(checkpointer=checkpointer) if checkpointer else builder.compile()
+    state: GraphState = (
+        initial.model_dump()
+        if resume
+        else await _prepare_revision_state(graph, initial, checkpointer)
+    )
     config = {
         "configurable": {
             "thread_id": f"{initial.traceId}:{initial.workflowRunId}",
@@ -2105,8 +2225,25 @@ async def run_workflow(initial: WorkflowState) -> WorkflowResultPayload:
         }
     }
     try:
-        final_state = await graph.ainvoke(state, config=config)
+        invoke_input: Any = (
+            Command(resume={"action": "RESUME", "workflowRunId": initial.workflowRunId})
+            if resume
+            else state
+        )
+        final_state = await graph.ainvoke(invoke_input, config=config)
         duration = int((time.time() - start_ms) * 1000)
+        interrupted = bool(isinstance(final_state, dict) and final_state.get("__interrupt__"))
+        if interrupted:
+            flush()
+            return WorkflowResultPayload(
+                traceId=initial.traceId,
+                workflowRunId=initial.workflowRunId,
+                conversationId=initial.conversationId,
+                revision=initial.revision,
+                status="PAUSED",
+                summary="Workflow paused at a safe LangGraph checkpoint boundary",
+                durationMs=duration,
+            )
         final_report = (final_state.get("finalReport") or "").strip()
         if not final_report:
             duration = int((time.time() - start_ms) * 1000)
@@ -2123,6 +2260,8 @@ async def run_workflow(initial: WorkflowState) -> WorkflowResultPayload:
             return WorkflowResultPayload(
                 traceId=initial.traceId,
                 workflowRunId=initial.workflowRunId,
+                conversationId=initial.conversationId,
+                revision=initial.revision,
                 status="FAILED",
                 summary="ReportAgent 未生成最终报告",
                 durationMs=duration,
@@ -2130,19 +2269,24 @@ async def run_workflow(initial: WorkflowState) -> WorkflowResultPayload:
                 errorMessage="empty finalReport from ReportAgent",
             )
         duration = int((time.time() - start_ms) * 1000)
+        degraded_reasons = final_state.get("degradedReasons") or []
+        terminal_status = terminal_status_for_degradation(degraded_reasons)
         end_trace(
             initial.traceId,
             output_data=final_report,
             metadata={
                 "workflowRunId": initial.workflowRunId,
                 "durationMs": duration,
-                "status": "SUCCESS",
+                "status": terminal_status,
+                "degradedReasons": degraded_reasons,
             },
         )
         return WorkflowResultPayload(
             traceId=initial.traceId,
             workflowRunId=initial.workflowRunId,
-            status="SUCCESS",
+            conversationId=initial.conversationId,
+            revision=initial.revision,
+            status=terminal_status,
             summary=final_report,
             overallScore=final_state.get("overallScore", 0),
             recommendation=final_state.get("recommendation", "NEED_MANUAL_REVIEW"),
@@ -2150,8 +2294,29 @@ async def run_workflow(initial: WorkflowState) -> WorkflowResultPayload:
             risks=final_state.get("risks", []),
             interviewQuestions=final_state.get("interviewQuestions", []),
             durationMs=duration,
-            tokenCost=max(duration // 100, 1),
+            # Usage is emitted per generation from provider metadata.  Do not
+            # fabricate token counts from wall-clock duration when a provider
+            # omits usage.
+            tokenCost=0,
+            errorMessage=(
+                "degraded:" + ",".join(map(str, degraded_reasons))
+                if degraded_reasons
+                else None
+            ),
         )
+    except asyncio.CancelledError:
+        end_trace(
+            initial.traceId,
+            output_data="Workflow cancelled by user",
+            metadata={
+                "workflowRunId": initial.workflowRunId,
+                "conversationId": initial.conversationId,
+                "revision": initial.revision,
+                "status": "CANCELLED",
+            },
+        )
+        flush()
+        raise
     except Exception as exc:
         logger.exception("workflow failed trace=%s", initial.traceId)
         duration = int((time.time() - start_ms) * 1000)
@@ -2173,6 +2338,8 @@ async def run_workflow(initial: WorkflowState) -> WorkflowResultPayload:
         return WorkflowResultPayload(
             traceId=initial.traceId,
             workflowRunId=initial.workflowRunId,
+            conversationId=initial.conversationId,
+            revision=initial.revision,
             status="FAILED",
             summary=summary,
             durationMs=duration,

@@ -85,6 +85,43 @@ public class ResumeTask {
     @TableField("trace_id")
     private String traceId;
 
+    /** 持续对话 ID；同一会话可包含多个不可变评估 revision。 */
+    @TableField("conversation_id")
+    private String conversationId;
+
+    /** 会话内的评估版本号，从 1 开始递增。 */
+    @TableField("revision_no")
+    private Integer revisionNo;
+
+    /** Python runtime 的运行 ID，用于拒绝迟到或串线回调。 */
+    @TableField("workflow_run_id")
+    private String workflowRunId;
+
+    @TableField("base_workflow_run_id")
+    private String baseWorkflowRunId;
+
+    @TableField("supersedes_trace_id")
+    private String supersedesTraceId;
+
+    @TableField("superseded_by_trace_id")
+    private String supersededByTraceId;
+
+    /** 进程恢复和 revision 重建所需的不可变输入快照。 */
+    @TableField("resume_text")
+    private String resumeText;
+
+    @TableField("job_description")
+    private String jobDescription;
+
+    @TableField("evaluation_brief")
+    private String evaluationBrief;
+
+    @TableField("invalidated_nodes")
+    private String invalidatedNodes;
+
+    @TableField("rag_options")
+    private String ragOptions;
+
     /** 候选人姓名。 */
     @TableField("candidate_name")
     private String candidateName;

@@ -214,47 +214,6 @@ def main() -> None:
             )
             print("[langfuse] started langfuse stack")
 
-        mysql_root = env.get("MYSQL_ROOT_PASSWORD", "ResumaiRoot!2026")
-        mysql_db = env.get("MYSQL_DATABASE", "resumai_agent")
-        env_text = run(ssh, f"grep -E '^MYSQL_(ROOT_PASSWORD|DATABASE)=' {deploy_dir}/.env || true", timeout=30)
-        for line in env_text.splitlines():
-            if line.startswith("MYSQL_ROOT_PASSWORD="):
-                mysql_root = line.split("=", 1)[1].strip()
-            elif line.startswith("MYSQL_DATABASE="):
-                mysql_db = line.split("=", 1)[1].strip()
-
-        local_migration_v4 = root / "backend/src/main/resources/db/migration-v4.sql"
-        if local_migration_v4.exists():
-            remote_v4 = f"{deploy_dir}/backend/src/main/resources/db/migration-v4.sql"
-            run(
-                ssh,
-                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} < {remote_v4}",
-                timeout=120,
-            )
-            print("[migration] applied migration-v4.sql")
-            run(ssh, "docker restart ai-resume-backend", timeout=120)
-            print("[migration] restarted ai-resume-backend after migration-v4")
-
-        local_migration_v5 = root / "backend/src/main/resources/db/migration-v5-langgraph-workflow.sql"
-        if local_migration_v5.exists():
-            remote_v5 = f"{deploy_dir}/backend/src/main/resources/db/migration-v5-langgraph-workflow.sql"
-            run(
-                ssh,
-                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} < {remote_v5}",
-                timeout=120,
-            )
-            print("[migration] applied migration-v5-langgraph-workflow.sql")
-
-        local_migration_v6 = root / "backend/src/main/resources/db/migration-v6-trace-contract.sql"
-        if local_migration_v6.exists():
-            remote_v6 = f"{deploy_dir}/backend/src/main/resources/db/migration-v6-trace-contract.sql"
-            run(
-                ssh,
-                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} < {remote_v6}",
-                timeout=120,
-            )
-            print("[migration] applied migration-v6-trace-contract.sql")
-
         workflow_health = run(
             ssh,
             "docker exec ai-resume-workflow curl -fsS http://127.0.0.1:8090/health",

@@ -11,7 +11,6 @@ import dev.langchain4j.service.AiServices;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -36,11 +35,9 @@ public class ResumeEvaluationOrchestrator {
     private final JdRagService jdRagService;
     private final ExternalProfileService externalProfileService;
     private final SkillProvider skillProvider;
+    private final McpToolRegistry mcpToolRegistry;
     private final ObjectMapper objectMapper;
     private final AgentTraceCapture traceCapture;
-
-    @Value("${app.mcp.builtin-url:http://127.0.0.1:8080/mcp}")
-    private String mcpServerUrl;
 
     private IntentAgent intentAgent;
     private ResumeParseAgent resumeParseAgent;
@@ -58,6 +55,7 @@ public class ResumeEvaluationOrchestrator {
                                          JdRagService jdRagService,
                                          ExternalProfileService externalProfileService,
                                          SkillProvider skillProvider,
+                                         McpToolRegistry mcpToolRegistry,
                                          ObjectMapper objectMapper,
                                          AgentTraceCapture traceCapture) {
         this.chatModel = chatModel;
@@ -65,6 +63,7 @@ public class ResumeEvaluationOrchestrator {
         this.jdRagService = jdRagService;
         this.externalProfileService = externalProfileService;
         this.skillProvider = skillProvider;
+        this.mcpToolRegistry = mcpToolRegistry;
         this.objectMapper = objectMapper;
         this.traceCapture = traceCapture;
     }
@@ -72,13 +71,12 @@ public class ResumeEvaluationOrchestrator {
     @PostConstruct
     public void init() {
         SkillTools skillTools = new SkillTools(skillProvider);
-        McpTools mcpTools = new McpTools(mcpServerUrl, objectMapper);
         ResumeParseTools parseTools = new ResumeParseTools(objectMapper);
         JdMatchTools jdMatchTools = new JdMatchTools(jdRagService, objectMapper);
         TechEvalTools techEvalTools = new TechEvalTools(resumeRagService, externalProfileService, objectMapper);
         ProjectEvalTools projectEvalTools = new ProjectEvalTools(resumeRagService, objectMapper);
         RiskTools riskTools = new RiskTools(resumeRagService, objectMapper);
-        EvidenceFusionTools evidenceFusionTools = new EvidenceFusionTools(resumeRagService, objectMapper);
+        EvidenceFusionTools evidenceFusionTools = new EvidenceFusionTools(objectMapper);
 
         intentAgent = AiServices.builder(IntentAgent.class)
                 .chatModel(chatModel)
@@ -97,7 +95,8 @@ public class ResumeEvaluationOrchestrator {
 
         techEvalAgent = AiServices.builder(TechEvalAgent.class)
                 .chatModel(chatModel)
-                .tools(techEvalTools, mcpTools, skillTools)
+                .tools(techEvalTools, skillTools)
+                .toolProvider(mcpToolRegistry.asToolProvider())
                 .build();
 
         projectEvalAgent = AiServices.builder(ProjectEvalAgent.class)
@@ -120,7 +119,7 @@ public class ResumeEvaluationOrchestrator {
                 .tools(skillTools)
                 .build();
 
-        log.info("8-Agent orchestrator initialized: AiServices + MCP + Skills (6-Phase DAG)");
+        log.info("8-Agent orchestrator initialized: AiServices + live MCP ToolProvider + Skills (6-Phase DAG)");
     }
 
     public EvaluationResult evaluate(String resumeText, String traceId) {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Inspect GitHub Portfolio"
+  short_description: "Inspect public GitHub work with verified tool results"
+  default_prompt: "Use $inspect-github-portfolio to assess the linked GitHub work against this target role."

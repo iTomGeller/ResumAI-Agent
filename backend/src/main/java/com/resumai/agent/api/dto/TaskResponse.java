@@ -29,6 +29,14 @@ public record TaskResponse(
         String aiRecommendation,
         String decisionRationale,
         String riskSummary,
-        TaskQueueFields queue
+        TaskQueueFields queue,
+        String conversationId,
+        Integer revisionNo,
+        String workflowRunId,
+        String baseWorkflowRunId,
+        String supersedesTraceId,
+        String supersededByTraceId,
+        String evaluationBrief,
+        List<String> invalidatedNodes
 ) {
 }

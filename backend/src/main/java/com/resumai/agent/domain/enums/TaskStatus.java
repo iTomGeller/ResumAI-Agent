@@ -20,6 +20,18 @@ public enum TaskStatus {
      */
     RUNNING,
 
+    /** 当前节点结束后写 checkpoint 并暂停。 */
+    PAUSING,
+
+    /** 已写入 checkpoint，等待用户继续。 */
+    PAUSED,
+
+    /** 正在从持久化 checkpoint 恢复。 */
+    RESUMING,
+
+    /** 已被同一会话中的新 revision 替代。 */
+    SUPERSEDED,
+
     /**
      * 任务全部成功完成。
      */

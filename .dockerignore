@@ -1,0 +1,17 @@
+.git
+.github
+.idea
+.vscode
+.env
+**/.env
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/node_modules
+**/dist
+**/target
+reports
+testdata
+uploads
+*.iml

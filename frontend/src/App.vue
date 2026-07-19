@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import ConversationPanel from './components/conversation/ConversationPanel.vue';
 import { splitTextPages, usePagination } from './composables/usePagination';
 import { buildQuery, useServerPagination, type PageResult } from './composables/useServerPagination';
+import type { ConversationTurnResponse, TaskControlResponse } from './composables/useConversation';
 import {
   applyBusinessControls,
   applyPreset,
@@ -66,6 +68,13 @@ interface TaskResponse {
   aiRecommendation?: string;
   decisionRationale?: string;
   riskSummary?: string;
+  conversationId?: string;
+  revisionNo?: number;
+  workflowRunId?: string;
+  supersedesTraceId?: string;
+  supersededByTraceId?: string;
+  evaluationBrief?: string;
+  invalidatedNodes?: string[];
 }
 
 interface TraceEvent {
@@ -270,7 +279,7 @@ const traces = ref<TraceEvent[]>([]);
 const metrics = ref<Metrics | null>(null);
 const graphNodes = ref<GraphNode[]>([]);
 const graphEdges = ref<GraphEdge[]>([]);
-const graphSource = ref<'NEO4J' | 'SIMULATED' | string>('SIMULATED');
+const graphSource = ref<'NEO4J' | 'UNAVAILABLE'>('UNAVAILABLE');
 const feedbacks = ref<FeedbackResponse[]>([]);
 const activeTraceId = ref('');
 const agentExecutionTree = ref<any>(null);
@@ -478,7 +487,7 @@ const langfuseTraceUrl = computed(() => {
   return '';
 });
 const selectedJob = computed(() => jobs.value.find((j) => j.id === selectedJobId.value) ?? jobs.value[0]);
-const runningTasks = computed(() => tasks.value.filter((t) => resolveQueueStatus(t) === 'RUNNING'));
+const runningTasks = computed(() => tasks.value.filter((t) => ['RUNNING', 'RESUMING'].includes(resolveQueueStatus(t))));
 const completedTasks = computed(() => tasks.value.filter((t) => t.status === 'SUCCESS'));
 const queuedTasksCount = computed(() => taskQueueStatus.value?.queued ?? tasks.value.filter((t) => resolveQueueStatus(t) === 'QUEUED').length);
 
@@ -579,33 +588,31 @@ const canStartEvaluation = computed(() => (queuedFiles.value.length > 0 || paste
 const matchedSkills = computed(() => graphNodes.value.filter(n => n.type === 'skill' && n.score >= 60));
 const missingSkills = computed(() => graphNodes.value.filter(n => n.type === 'risk' || (n.type === 'skill' && n.score < 60)));
 const matchRate = computed(() => {
-  if (activeTask.value?.jdMatchScore) {
-    return Math.round((activeTask.value.jdMatchScore || 0) * 100);
+  if (activeTask.value?.jdMatchScore != null) {
+    return Math.round(activeTask.value.jdMatchScore * 100);
   }
   const total = matchedSkills.value.length + missingSkills.value.length;
-  if (!total) return activeTask.value?.overallScore || 0;
+  if (!total) return 0;
   return Math.round((matchedSkills.value.length / total) * 100);
 });
 const skillMatchPercent = computed(() => {
   const top = activeTask.value?.topJdMatches?.[0];
   if (top?.skillMatchScore != null) return Math.round(top.skillMatchScore * 100);
   const skills = graphNodes.value.filter(n => n.type === 'skill');
-  if (!skills.length) return activeTask.value?.overallScore || 0;
+  if (!skills.length) return null;
   return Math.round(skills.reduce((s, n) => s + Math.min(100, n.score), 0) / skills.length);
 });
 const expMatchPercent = computed(() => {
   const top = activeTask.value?.topJdMatches?.[0];
   if (top?.experienceMatchScore != null) return Math.round(top.experienceMatchScore * 100);
   const jobs = graphNodes.value.filter(n => n.type === 'job' || n.type === 'project');
-  if (!jobs.length) return Math.max(0, (activeTask.value?.overallScore || 70) - 5);
+  if (!jobs.length) return null;
   return Math.round(jobs.reduce((s, n) => s + Math.min(100, n.score), 0) / jobs.length);
 });
 const eduMatchPercent = computed(() => {
   const edu = graphNodes.value.filter(n => n.type === 'education');
-  if (edu.length) {
-    return Math.round(edu.reduce((s, n) => s + Math.min(100, n.score), 0) / edu.length);
-  }
-  return Math.max(0, (activeTask.value?.overallScore || 70) + 5);
+  if (!edu.length) return null;
+  return Math.round(edu.reduce((s, n) => s + Math.min(100, n.score), 0) / edu.length);
 });
 
 const recommendationLabel = computed(() => {
@@ -999,7 +1006,7 @@ function candidateSortParam(): string {
 }
 
 function resolveQueueStatus(task: TaskResponse): string {
-  if (task.status === 'SUCCESS' || task.status === 'FAILED' || task.status === 'CANCELLED') {
+  if (['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'CANCELLED', 'PAUSING', 'PAUSED', 'RESUMING', 'SUPERSEDED'].includes(task.status)) {
     return task.status;
   }
   return task.queue?.queueStatus || task.status || '';
@@ -1008,7 +1015,8 @@ function resolveQueueStatus(task: TaskResponse): string {
 function isTaskActive(task?: TaskResponse | null): boolean {
   if (!task) return false;
   const qs = resolveQueueStatus(task);
-  return qs === 'RUNNING' || qs === 'QUEUED' || qs === 'RETRYING' || task.status === 'RUNNING';
+  return ['RUNNING', 'QUEUED', 'RETRYING', 'PAUSING', 'RESUMING'].includes(qs)
+    || ['RUNNING', 'PAUSING', 'RESUMING'].includes(task.status);
 }
 
 async function loadTaskQueueStatus() {
@@ -1177,12 +1185,26 @@ async function loadTraces(traceId: string) {
 }
 
 async function loadGraph(traceId: string) {
-  const r = await fetch(`/api/graphs/${traceId}`);
-  if (r.ok) {
-    const g = (await r.json()) as { nodes: GraphNode[]; edges: GraphEdge[]; source?: string };
-    graphNodes.value = g.nodes;
-    graphEdges.value = g.edges;
-    graphSource.value = g.source || 'SIMULATED';
+  if (traceId === activeTraceId.value) {
+    graphNodes.value = [];
+    graphEdges.value = [];
+    graphSource.value = 'UNAVAILABLE';
+  }
+
+  try {
+    const r = await fetch(`/api/graphs/${traceId}`);
+    if (!r.ok || traceId !== activeTraceId.value) return;
+
+    const g = (await r.json()) as { nodes?: GraphNode[]; edges?: GraphEdge[]; source?: string };
+    const source = g.source === 'NEO4J' ? 'NEO4J' : 'UNAVAILABLE';
+    graphSource.value = source;
+    graphNodes.value = source === 'NEO4J' && Array.isArray(g.nodes) ? g.nodes : [];
+    graphEdges.value = source === 'NEO4J' && Array.isArray(g.edges) ? g.edges : [];
+  } catch {
+    if (traceId !== activeTraceId.value) return;
+    graphNodes.value = [];
+    graphEdges.value = [];
+    graphSource.value = 'UNAVAILABLE';
   }
 }
 
@@ -1224,6 +1246,58 @@ async function openTaskDetail(traceId: string, tab: DetailTab = 'report') {
 
 function openCandidate(traceId: string, tab: DetailTab = 'report') {
   void openTaskDetail(traceId, tab);
+}
+
+function replaceTaskStatus(traceId: string, status: string) {
+  const update = (task: TaskResponse): TaskResponse => task.traceId === traceId
+    ? { ...task, status, queue: { ...(task.queue || {}), queueStatus: status } }
+    : task;
+  tasks.value = tasks.value.map(update);
+  candidateListItems.value = candidateListItems.value.map(update);
+}
+
+function stopPolling(traceId: string) {
+  const timer = pollTimers.get(traceId);
+  if (timer) window.clearTimeout(timer);
+  pollTimers.delete(traceId);
+}
+
+async function handleConversationRevisionCreated(response: ConversationTurnResponse) {
+  if (response.action !== 'REVISION_CREATED' || !response.activeTraceId) return;
+  if (response.supersededTraceId) {
+    replaceTaskStatus(response.supersededTraceId, 'SUPERSEDED');
+    stopPolling(response.supersededTraceId);
+  }
+  if (response.activeTraceId !== activeTraceId.value) {
+    await openTaskDetail(response.activeTraceId, detailTab.value);
+  }
+  void loadCandidateList();
+}
+
+async function handleConversationControlTurn(response: ConversationTurnResponse) {
+  if (!['PAUSE', 'RESUME', 'CANCEL'].includes(response.action)) return;
+  const traceId = response.activeTraceId || activeTraceId.value;
+  if (!traceId) return;
+  const refreshed = await refreshTaskDetail(traceId);
+  if (isTaskActive(refreshed)) startPolling(traceId);
+  else stopPolling(traceId);
+  void loadCandidateList();
+}
+
+function handleConversationRevisionSelect(traceId: string) {
+  if (!traceId || traceId === activeTraceId.value) return;
+  void openTaskDetail(traceId, detailTab.value);
+}
+
+function handleConversationStatusChange(response: TaskControlResponse) {
+  replaceTaskStatus(response.traceId, response.status);
+  if (['RUNNING', 'QUEUED', 'RETRYING', 'PAUSING', 'RESUMING'].includes(response.status)) {
+    startPolling(response.traceId);
+  } else {
+    stopPolling(response.traceId);
+    void refreshTaskDetail(response.traceId);
+  }
+  void loadCandidateList();
 }
 
 function resetPdfPreviewState() {
@@ -1500,6 +1574,11 @@ const STATUS_CN: Record<string, string> = {
   FAILED: '失败',
   RUNNING: '运行中',
   WARNING: '警告',
+  PAUSING: '安全暂停中',
+  RESUMING: '从 checkpoint 恢复中',
+  PAUSED: '已暂停',
+  CANCELLED: '已取消',
+  SUPERSEDED: '已被替代',
 };
 
 function agentDisplayName(name?: string): string {
@@ -2144,7 +2223,7 @@ function updateTaskStageFromTrace(step: TraceEvent) {
 }
 
 async function refreshRunningStages() {
-  const running = tasks.value.filter((t) => t.status === 'RUNNING');
+  const running = tasks.value.filter((t) => ['RUNNING', 'RESUMING'].includes(t.status));
   await Promise.all(running.map(async (task) => {
     try {
       const r = await fetch(`/api/traces/${task.traceId}`);
@@ -2160,6 +2239,7 @@ async function refreshRunningStages() {
 
 function taskStatusLabel(task: TaskResponse): string {
   const qs = resolveQueueStatus(task);
+  if (qs === 'PAUSING' || qs === 'PAUSED' || qs === 'RESUMING' || qs === 'SUPERSEDED' || qs === 'CANCELLED') return statusText(qs);
   if (qs === 'QUEUED') return '排队中';
   if (qs === 'RETRYING') return '待重试';
   if (task.status === 'RUNNING' || qs === 'RUNNING') {
@@ -2420,9 +2500,14 @@ function deleteJob() {
 
 function statusText(status?: string) {
   if (status === 'SUCCESS') return '已完成';
+  if (status === 'PARTIAL_SUCCESS') return '部分完成';
   if (status === 'RUNNING') return '评估中';
   if (status === 'QUEUED') return '排队中';
   if (status === 'RETRYING') return '待重试';
+  if (status === 'PAUSING') return '安全暂停中';
+  if (status === 'RESUMING') return '从 checkpoint 恢复中';
+  if (status === 'PAUSED') return '已暂停';
+  if (status === 'SUPERSEDED') return '已被新版本替代';
   if (status === 'FAILED') return '失败';
   if (status === 'CANCELLED') return '已取消';
   return '等待中';
@@ -2430,9 +2515,9 @@ function statusText(status?: string) {
 
 function statusClass(status?: string) {
   if (status === 'SUCCESS') return 'badge-success';
-  if (status === 'RUNNING') return 'badge-warning';
-  if (status === 'QUEUED' || status === 'RETRYING') return 'badge-neutral';
-  if (status === 'FAILED') return 'badge-danger';
+  if (status === 'RUNNING' || status === 'PAUSING' || status === 'RESUMING') return 'badge-warning';
+  if (status === 'QUEUED' || status === 'RETRYING' || status === 'PAUSED' || status === 'SUPERSEDED') return 'badge-neutral';
+  if (status === 'FAILED' || status === 'CANCELLED') return 'badge-danger';
   return 'badge-neutral';
 }
 
@@ -2951,6 +3036,8 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
         </div>
 
+        <div class="candidate-detail-workspace">
+          <div class="candidate-detail-main">
         <div class="tab-bar">
           <button :class="{ active: detailTab === 'resume' }" @click="detailTab = 'resume'">简历原文</button>
           <button :class="{ active: detailTab === 'report' }" @click="detailTab = 'report'">评估报告</button>
@@ -3334,6 +3421,10 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
         <!-- Graph Tab → JD Match Analysis -->
         <div v-if="detailTab === 'graph'">
+          <div v-if="graphSource === 'UNAVAILABLE'" class="empty-state" style="margin-bottom:var(--space-lg)">
+            <p>未生成真实图谱</p>
+            <p v-if="jdMatchCards.length" class="text-muted text-sm">下方仅展示评估接口返回的真实 JD 匹配结果</p>
+          </div>
           <div v-if="jdMatchCards.length" class="card" style="padding:var(--space-xl)">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-xl)">
               <h3 style="font-size:15px;font-weight:600">JD Top3 智能匹配</h3>
@@ -3386,7 +3477,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               </div>
             </div>
           </div>
-          <div v-else-if="graphNodes.length" class="card" style="padding:var(--space-xl)">
+          <div v-else-if="graphSource === 'NEO4J' && graphNodes.length" class="card" style="padding:var(--space-xl)">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-xl)">
               <h3 style="font-size:15px;font-weight:600">JD 匹配分析</h3>
               <span class="badge badge-success" v-if="matchRate >= 70">匹配度高</span>
@@ -3406,15 +3497,15 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             </div>
 
             <div style="display:flex;flex-direction:column;gap:var(--space-lg);margin-bottom:var(--space-2xl)">
-              <div>
+              <div v-if="skillMatchPercent != null">
                 <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>技能匹配</span><span class="text-muted">{{ skillMatchPercent }}%</span></div>
                 <div style="height:8px;background:var(--color-border-light);border-radius:4px;overflow:hidden"><div :style="{ width: skillMatchPercent + '%', height: '100%', background: skillMatchPercent >= 70 ? 'var(--color-success)' : skillMatchPercent >= 50 ? 'var(--color-warning)' : 'var(--color-danger)', borderRadius: '4px' }"></div></div>
               </div>
-              <div>
+              <div v-if="expMatchPercent != null">
                 <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>经验匹配</span><span class="text-muted">{{ expMatchPercent }}%</span></div>
                 <div style="height:8px;background:var(--color-border-light);border-radius:4px;overflow:hidden"><div :style="{ width: expMatchPercent + '%', height: '100%', background: expMatchPercent >= 70 ? 'var(--color-success)' : expMatchPercent >= 50 ? 'var(--color-warning)' : 'var(--color-danger)', borderRadius: '4px' }"></div></div>
               </div>
-              <div>
+              <div v-if="eduMatchPercent != null">
                 <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>教育背景</span><span class="text-muted">{{ eduMatchPercent }}%</span></div>
                 <div style="height:8px;background:var(--color-border-light);border-radius:4px;overflow:hidden"><div :style="{ width: eduMatchPercent + '%', height: '100%', background: eduMatchPercent >= 70 ? 'var(--color-success)' : eduMatchPercent >= 50 ? 'var(--color-warning)' : 'var(--color-danger)', borderRadius: '4px' }"></div></div>
               </div>
@@ -3451,7 +3542,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               </div>
             </div>
           </div>
-          <div class="empty-state" v-else><p>匹配分析将在评估完成后生成</p></div>
+          <div v-else-if="graphSource !== 'UNAVAILABLE'" class="empty-state"><p>未生成真实图谱</p></div>
         </div>
 
         <!-- Feedback Tab -->
@@ -3474,6 +3565,18 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <button class="btn btn-ghost btn-sm" :disabled="!taskFeedbackPagination.canNext" @click="taskFeedbackPagination.goNext()">下一页</button>
             </div>
           </div>
+        </div>
+          </div>
+          <ConversationPanel
+            :conversation-id="activeTask.conversationId || activeTask.traceId"
+            :trace-id="activeTask.traceId"
+            :revision-no="activeTask.revisionNo"
+            :task-status="activeTask.status || resolveQueueStatus(activeTask)"
+            @revision-created="handleConversationRevisionCreated"
+            @control-turn="handleConversationControlTurn"
+            @select-revision="handleConversationRevisionSelect"
+            @status-change="handleConversationStatusChange"
+          />
         </div>
       </section>
 

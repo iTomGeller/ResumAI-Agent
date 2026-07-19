@@ -1,7 +1,7 @@
 """End-to-end stress harness for the ResumAI Agent system deployed on Aliyun ECS.
 
-Uploads every resume in testdata/stress_resumes/manifest.json to the live backend
-(http://8.138.10.189) via curl.exe, polls each task to completion, then pulls the
+Uploads every resume in testdata/stress_resumes/manifest.json to a caller-selected backend,
+polls each task to completion, then pulls the
 agent-execution trace and parses all metrics required by the stress report.
 
 Design goals:
@@ -12,7 +12,7 @@ Design goals:
     record so analysis never has to guess. No fabricated numbers.
 
 Usage:
-    python harness/run_stress.py                 # run all 100
+    python harness/run_stress.py --base-url http://127.0.0.1:8080
     python harness/run_stress.py --limit 2       # probe first 2 (validation)
     python harness/run_stress.py --ids id1 id2   # run specific manifest ids
 """
@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -38,11 +41,12 @@ OUTDIR = ROOT / "reports" / "stress_e2e"
 CHECKPOINT = OUTDIR / "checkpoint.json"
 RAW_RESULTS = OUTDIR / "raw_results.json"
 
-BASE = "http://8.138.10.189"
+BASE = ""
+AUTH_TOKEN = ""
 POLL_INTERVAL_S = 5
 TASK_TIMEOUT_S = 180
 UPLOAD_RETRIES = 3
-TERMINAL = {"SUCCESS", "FAILED"}
+TERMINAL = {"SUCCESS", "PARTIAL_SUCCESS", "FAILED", "CANCELLED", "SUPERSEDED"}
 
 _print_lock = threading.Lock()
 _ckpt_lock = threading.Lock()
@@ -55,7 +59,10 @@ def log(msg: str) -> None:
 
 
 def http_json(url: str, timeout: int = 60) -> dict:
-    req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+    headers = {"Accept": "application/json"}
+    if AUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -65,14 +72,19 @@ def mime_for(file_type: str) -> str:
 
 
 def upload_resume(abs_path: Path, file_type: str) -> dict:
-    """Upload one resume via curl.exe (subprocess, no shell -> no escaping issues)."""
+    """Upload one resume via platform curl (subprocess, no shell)."""
+    curl = shutil.which("curl.exe") or shutil.which("curl")
+    if not curl:
+        raise RuntimeError("curl executable not found")
     form_file = f"file=@{abs_path};type={mime_for(file_type)}"
     cmd = [
-        "curl.exe", "-s", "-S", "--max-time", "60",
+        curl, "-s", "-S", "--max-time", "60",
         "-F", form_file,
         "-F", "executionMode=DAG_CONCURRENT",
         f"{BASE}/api/tasks/upload-auto",
     ]
+    if AUTH_TOKEN:
+        cmd[1:1] = ["-H", f"Authorization: Bearer {AUTH_TOKEN}"]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise RuntimeError(f"curl rc={proc.returncode} stderr={proc.stderr.strip()[:200]}")
@@ -135,6 +147,9 @@ def parse_metrics(detail: dict, tree: dict) -> dict:
     node_durations: dict[str, int] = {}
     node_names: dict[str, str] = {}
     tool_calls: list[dict] = []
+    observed_llm_calls = 0
+    observed_input_tokens = 0
+    observed_output_tokens = 0
     for agent in tree.get("executionTree", []) or []:
         node_id = agent.get("nodeId") or agent.get("name") or "unknown"
         try:
@@ -145,6 +160,12 @@ def parse_metrics(detail: dict, tree: dict) -> dict:
         node_durations[node_id] = max(node_durations.get(node_id, 0), dur)
         node_names[node_id] = agent.get("name") or node_id
         for rnd in agent.get("rounds", []) or []:
+            model_name = str(rnd.get("modelName") or "")
+            if rnd.get("callKind") == "llm" or (model_name and not model_name.startswith("deterministic")):
+                observed_llm_calls += 1
+                usage = rnd.get("tokenUsage") if isinstance(rnd.get("tokenUsage"), dict) else {}
+                observed_input_tokens += int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+                observed_output_tokens += int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
             for tc in rnd.get("toolCalls", []) or []:
                 name = tc.get("name")
                 if not name:
@@ -158,9 +179,18 @@ def parse_metrics(detail: dict, tree: dict) -> dict:
                     "durationMs": tdur,
                     "status": tc.get("status"),
                     "nodeId": node_id,
+                    "origin": tc.get("origin") or tc.get("toolOrigin"),
+                    "family": tc.get("family") or tc.get("toolFamily") or tc.get("category"),
+                    "server": tc.get("server"),
                 })
 
-    mcp_calls = [t for t in tool_calls if t["name"] == "mcp_fetch[public:mcp-server-fetch]"]
+    # Prefer the runtime's tool provenance over brittle tool-name matching. The
+    # name fallback keeps older traces analyzable, but new public providers can
+    # be added without teaching this harness each provider-specific name.
+    mcp_calls = [
+        t for t in tool_calls
+        if t.get("origin") == "mcp" or "[public:" in str(t.get("name") or "")
+    ]
     gh_calls = [t for t in tool_calls if t["name"] == "github_enrichment"]
 
     # ---- harness plan / dynamic routing ----
@@ -195,6 +225,9 @@ def parse_metrics(detail: dict, tree: dict) -> dict:
         "estimatedLlmCalls": route.get("estimatedLlmCalls"),
         "fullPipelineLlmCalls": route.get("fullPipelineLlmCalls"),
         "llmCallsSavedVsFull": route.get("llmCallsSavedVsFull"),
+        "observedLlmCalls": observed_llm_calls,
+        "observedInputTokens": observed_input_tokens,
+        "observedOutputTokens": observed_output_tokens,
         "memoryHitCount": route.get("memoryHitCount"),
         "knowledgeHitCount": route.get("knowledgeHitCount"),
         # task-level
@@ -226,6 +259,7 @@ def run_one(rec: dict) -> dict:
         "textLength": rec.get("textLength"),
         "expectedSkills": rec.get("expectedSkills"),
         "traceId": None,
+        "baseUrl": BASE,
         "status": "FAILED",
         "failReason": None,
         "uploadMs": None,
@@ -354,12 +388,34 @@ def save_checkpoint(state: dict) -> None:
 
 
 def main() -> None:
+    global BASE, AUTH_TOKEN
     ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--base-url",
+        default=os.environ.get("RESUMAI_BASE_URL", ""),
+        help="Backend origin; or set RESUMAI_BASE_URL",
+    )
+    ap.add_argument(
+        "--allow-insecure-http",
+        action="store_true",
+        help="Allow plain HTTP for a non-loopback target",
+    )
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0, help="run only first N manifest entries")
     ap.add_argument("--ids", nargs="*", default=None, help="run only these manifest ids")
     ap.add_argument("--retry-failed", action="store_true", help="re-run non-SUCCESS checkpoint entries")
     args = ap.parse_args()
+
+    BASE = str(args.base_url or "").rstrip("/")
+    if not BASE:
+        ap.error("--base-url or RESUMAI_BASE_URL is required")
+    parsed_base = urlparse(BASE)
+    if parsed_base.scheme not in {"http", "https"} or not parsed_base.hostname:
+        ap.error("base URL must be an absolute http(s) origin")
+    is_loopback = parsed_base.hostname in {"localhost", "127.0.0.1", "::1"}
+    if parsed_base.scheme == "http" and not is_loopback and not args.allow_insecure_http:
+        ap.error("refusing non-loopback plain HTTP; use HTTPS or explicitly pass --allow-insecure-http")
+    AUTH_TOKEN = os.environ.get("RESUMAI_API_TOKEN", "").strip()
 
     OUTDIR.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -372,15 +428,18 @@ def main() -> None:
     todo = []
     for rec in manifest:
         prev = state.get(rec["id"])
-        if prev and prev.get("status") == "SUCCESS":
+        if prev and prev.get("status") == "SUCCESS" and prev.get("baseUrl") == BASE:
             continue
-        if prev and not args.retry_failed and prev.get("status") == "FAILED" \
+        if prev and prev.get("baseUrl") == BASE and not args.retry_failed and prev.get("status") == "FAILED" \
                 and not str(prev.get("failReason", "")).startswith("client_timeout"):
             # keep definitive backend failures unless explicitly retrying
             continue
         todo.append(rec)
 
-    done_ok = sum(1 for v in state.values() if v.get("status") == "SUCCESS")
+    done_ok = sum(
+        1 for v in state.values()
+        if v.get("status") == "SUCCESS" and v.get("baseUrl") == BASE
+    )
     log(f"manifest={len(manifest)} already_ok={done_ok} todo={len(todo)} concurrency={args.concurrency}")
 
     completed = 0
@@ -396,8 +455,14 @@ def main() -> None:
                 state[res["id"]] = res
                 save_checkpoint(state)
             completed += 1
-            ok = sum(1 for v in state.values() if v.get("status") == "SUCCESS")
-            fail = sum(1 for v in state.values() if v.get("status") == "FAILED")
+            ok = sum(
+                1 for v in state.values()
+                if v.get("status") == "SUCCESS" and v.get("baseUrl") == BASE
+            )
+            fail = sum(
+                1 for v in state.values()
+                if v.get("status") == "FAILED" and v.get("baseUrl") == BASE
+            )
             log(f"PROGRESS {completed}/{len(todo)} (cumulative ok={ok} fail={fail})")
 
     # final raw dump (ordered by manifest)

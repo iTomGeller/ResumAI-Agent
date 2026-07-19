@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Set
 
@@ -12,6 +13,7 @@ from app.tool_semantics import TOOL_SEMANTICS, get_tool_semantics
 from app.tools import execute_tool
 
 logger = logging.getLogger(__name__)
+MCP_DISCOVERY_TIMEOUT_SECONDS = 20.0
 
 
 class ResumeSearchArgs(BaseModel):
@@ -76,15 +78,59 @@ TOOL_DESCRIPTIONS: Dict[str, str] = {
     "execute_skill": "加载 Skill 指令，由当前 Agent 在后续 LLM round 中应用",
 }
 
+SKILL_TOOLS = {"list_skills", "execute_skill"}
+RESUME_EVIDENCE_TOOLS = {
+    "milvus_resume_search",
+    "milvus_resume_batch_search",
+    "mcp_resume_evidence_search",
+}
+PUBLIC_PROFILE_TOOLS = {
+    # Official/hosted MCP tool names.  Discovery still has to return the exact
+    # tool and attach its source policy before it becomes callable.
+    "mcp_external_profile_search",
+    "web_search_exa",
+    "web_fetch_exa",
+    "firecrawl_search",
+    "firecrawl_scrape",
+    "search_users",
+    "search_repositories",
+    "get_file_contents",
+    "list_commits",
+}
+MCP_DISCOVERED_TOOL_NAMES = {
+    "mcp_resume_evidence_search",
+    "mcp_external_profile_search",
+    "get_current_time",
+    "convert_time",
+    *PUBLIC_PROFILE_TOOLS,
+}
+
 AGENT_TOOL_WHITELISTS: Dict[str, Set[str]] = {
-    "IntentAgent": set(),
-    "ResumeParseAgent": set(),
-    "JdMatchAgent": set(),
-    "TechEvalAgent": set(),
-    "ProjectEvalAgent": set(),
-    "RiskAgent": set(),
-    "EvidenceFusionAgent": set(),
-    "ReportAgent": set(),
+    "IntentAgent": set(SKILL_TOOLS),
+    "ResumeParseAgent": {"resume_structure_extract", *SKILL_TOOLS},
+    "JdMatchAgent": {
+        "milvus_jd_search",
+        "jd_requirements_extract",
+        *SKILL_TOOLS,
+    },
+    "TechEvalAgent": {
+        *RESUME_EVIDENCE_TOOLS,
+        *PUBLIC_PROFILE_TOOLS,
+        *SKILL_TOOLS,
+    },
+    "ProjectEvalAgent": {
+        *RESUME_EVIDENCE_TOOLS,
+        *PUBLIC_PROFILE_TOOLS,
+        *SKILL_TOOLS,
+    },
+    "RiskAgent": {
+        "timeline_validator",
+        "get_current_time",
+        *RESUME_EVIDENCE_TOOLS,
+        *SKILL_TOOLS,
+    },
+    "EvidenceFusionAgent": {"evidence_merge", *SKILL_TOOLS},
+    "ReportAgent": set(SKILL_TOOLS),
 }
 
 
@@ -114,24 +160,29 @@ async def build_tools_for_agent(agent_name: str, context: Dict[str, Any]) -> Lis
         tools.append(tool)
 
     for name in sorted(whitelist):
-        if name.startswith("mcp_") or name in ("list_skills", "execute_skill"):
+        if name in MCP_DISCOVERED_TOOL_NAMES or name in SKILL_TOOLS:
             continue
         add_tool(_make_tool(name, context))
 
     mcp_tools: List[StructuredTool] = []
-    try:
-        mcp_tools = await get_mcp_tools()
-        for mcp_tool in mcp_tools:
-            if mcp_tool.name in whitelist:
-                add_tool(mcp_tool)
-    except Exception as exc:
-        logger.warning("MCP tools unavailable: %s", exc)
+    requested_mcp = whitelist & MCP_DISCOVERED_TOOL_NAMES
+    if requested_mcp:
+        try:
+            mcp_tools = await asyncio.wait_for(
+                get_mcp_tools(),
+                timeout=MCP_DISCOVERY_TIMEOUT_SECONDS,
+            )
+            for mcp_tool in mcp_tools:
+                if mcp_tool.name in requested_mcp:
+                    add_tool(mcp_tool)
+        except Exception as exc:
+            logger.warning("MCP tools unavailable: %s", exc)
 
-    missing_mcp = {name for name in whitelist if name.startswith("mcp_")} - {t.name for t in mcp_tools}
+    missing_mcp = requested_mcp - {t.name for t in mcp_tools}
     if missing_mcp:
         logger.warning("MCP whitelist tools unavailable via protocol: %s", sorted(missing_mcp))
 
-    for skill_tool in get_skill_tools(whitelist):
+    for skill_tool in get_skill_tools(agent_name, whitelist):
         add_tool(skill_tool)
     return tools
 

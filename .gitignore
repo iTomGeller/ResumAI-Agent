@@ -50,5 +50,8 @@ docker-compose.override.yml
 
 # Deploy scripts with credentials
 scripts/deploy_fresh.py
+!scripts/deploy_fresh.py
 scripts/pull_and_up.py
 scripts/_*.py
+
+.ecs-scratch/

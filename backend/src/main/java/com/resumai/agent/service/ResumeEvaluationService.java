@@ -1,8 +1,10 @@
 package com.resumai.agent.service;
 
 import com.resumai.agent.api.dto.TaskResponse;
+import com.resumai.agent.api.ApiConflictException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.resumai.agent.ai.DeepSeekClient;
@@ -10,7 +12,6 @@ import com.resumai.agent.ai.ResumeEvaluationOrchestrator;
 import com.resumai.agent.ai.AgentTraceCapture;
 import com.resumai.agent.ai.agents.EvaluationResult;
 import com.resumai.agent.api.dto.CreateTaskRequest;
-import com.resumai.agent.api.dto.RecommendationDecision;
 import com.resumai.agent.util.HrContext;
 import com.resumai.agent.util.MarkdownTextUtil;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -33,14 +34,12 @@ import com.resumai.agent.dao.AgentExecutionTraceMapper;
 import com.resumai.agent.dao.DynamicSkillPromptMapper;
 import com.resumai.agent.dao.HumanFeedbackLogMapper;
 import com.resumai.agent.dao.MetaEvolutionHistoryMapper;
-import com.resumai.agent.dao.RagasEvalMetricsMapper;
 import com.resumai.agent.dao.ResumeTaskMapper;
 import com.resumai.agent.dao.SystemOrchestrationRuleMapper;
 import com.resumai.agent.domain.entity.AgentExecutionTrace;
 import com.resumai.agent.domain.entity.DynamicSkillPrompt;
 import com.resumai.agent.domain.entity.HumanFeedbackLog;
 import com.resumai.agent.domain.entity.MetaEvolutionHistory;
-import com.resumai.agent.domain.entity.RagasEvalMetrics;
 import com.resumai.agent.domain.entity.ResumeTask;
 import com.resumai.agent.domain.enums.EvolutionType;
 import com.resumai.agent.domain.enums.QueueStatus;
@@ -55,7 +54,6 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
-import java.math.BigDecimal;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -85,6 +83,9 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -99,6 +100,12 @@ public class ResumeEvaluationService {
     private static final Logger log = LoggerFactory.getLogger(ResumeEvaluationService.class);
     private static final long MAX_UPLOAD_BYTES = 20L * 1024L * 1024L;
     private static final int MAX_RESUME_TEXT_LENGTH = 20000;
+    private static final Set<String> TERMINAL_TASK_STATUSES = Set.of(
+            "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "CANCELLED", "SUPERSEDED");
+    private static final Set<String> REVISIONABLE_TASK_STATUSES = Set.of(
+            "QUEUED", "RUNNING", "PAUSING", "PAUSED", "RESUMING");
+    private static final Set<String> CALLBACK_ACTIVE_STATUSES = Set.of(
+            "RUNNING", "PAUSING", "RESUMING");
 
     private final AtomicLong taskId = new AtomicLong(1000);
     private final AtomicLong feedbackId = new AtomicLong(3000);
@@ -116,7 +123,6 @@ public class ResumeEvaluationService {
     private final AgentExecutionTraceMapper agentExecutionTraceMapper;
     private final HumanFeedbackLogMapper humanFeedbackLogMapper;
     private final MetaEvolutionHistoryMapper metaEvolutionHistoryMapper;
-    private final RagasEvalMetricsMapper ragasEvalMetricsMapper;
     private final SystemOrchestrationRuleMapper ruleMapper;
     private final DynamicSkillPromptMapper skillPromptMapper;
     private final AgentMetrics agentMetrics;
@@ -145,7 +151,6 @@ public class ResumeEvaluationService {
                                 AgentExecutionTraceMapper agentExecutionTraceMapper,
                                 HumanFeedbackLogMapper humanFeedbackLogMapper,
                                 MetaEvolutionHistoryMapper metaEvolutionHistoryMapper,
-                                RagasEvalMetricsMapper ragasEvalMetricsMapper,
                                 SystemOrchestrationRuleMapper ruleMapper,
                                 DynamicSkillPromptMapper skillPromptMapper,
                                 AgentMetrics agentMetrics,
@@ -171,7 +176,6 @@ public class ResumeEvaluationService {
         this.agentExecutionTraceMapper = agentExecutionTraceMapper;
         this.humanFeedbackLogMapper = humanFeedbackLogMapper;
         this.metaEvolutionHistoryMapper = metaEvolutionHistoryMapper;
-        this.ragasEvalMetricsMapper = ragasEvalMetricsMapper;
         this.ruleMapper = ruleMapper;
         this.skillPromptMapper = skillPromptMapper;
         this.agentMetrics = agentMetrics;
@@ -272,8 +276,8 @@ public class ResumeEvaluationService {
                 stringList(payload.get("strengths")),
                 stringList(payload.get("risks")),
                 stringList(payload.get("interviewQuestions")),
-                stringValue(payload.get("jobDescription"), ""),
-                stringValue(payload.get("resumeText"), ""),
+                stringValue(payload.get("jobDescription"), row.getJobDescription()),
+                stringValue(payload.get("resumeText"), row.getResumeText()),
                 stringValue(payload.get("resumeFilePath"), row.getFileUrl()),
                 stringValue(payload.get("resumeFileType"), null),
                 stringValue(payload.get("matchedJdTitle"), null),
@@ -289,6 +293,7 @@ public class ResumeEvaluationService {
             task.topJdMatches = objectMapper.convertValue(topMatches, new TypeReference<>() {});
         }
         applyQueueFieldsFromRow(task, row);
+        applyRevisionFieldsFromRow(task, row);
         return task;
     }
 
@@ -308,6 +313,29 @@ public class ResumeEvaluationService {
         task.workerId = row.getWorkerId();
     }
 
+    private void applyRevisionFieldsFromRow(MutableTask task, ResumeTask row) {
+        if (row == null) {
+            return;
+        }
+        task.conversationId = StringUtils.hasText(row.getConversationId())
+                ? row.getConversationId() : row.getTraceId();
+        task.revisionNo = row.getRevisionNo() != null ? row.getRevisionNo() : 1;
+        task.workflowRunId = StringUtils.hasText(row.getWorkflowRunId())
+                ? row.getWorkflowRunId() : row.getTraceId();
+        task.baseWorkflowRunId = row.getBaseWorkflowRunId();
+        task.supersedesTraceId = row.getSupersedesTraceId();
+        task.supersededByTraceId = row.getSupersededByTraceId();
+        task.evaluationBrief = row.getEvaluationBrief();
+        task.invalidatedNodes = parseJsonStringList(row.getInvalidatedNodes());
+        if (StringUtils.hasText(row.getRagOptions())) {
+            try {
+                task.ragOptions = objectMapper.readValue(row.getRagOptions(), RagOptions.class);
+            } catch (Exception e) {
+                log.debug("[eval] ignored invalid persisted rag options trace={}", row.getTraceId());
+            }
+        }
+    }
+
     /**
      * 创建评估任务并异步执行 Agent 流程。
      *
@@ -324,6 +352,17 @@ public class ResumeEvaluationService {
                                             String resumeObjectKey,
                                             String resumeFileType,
                                             List<JdMatchResult> precomputedJdMatches) {
+        return createTaskInternal(request, traceId, resumeFilePath, resumeObjectKey,
+                resumeFileType, precomputedJdMatches, null);
+    }
+
+    private TaskResponse createTaskInternal(CreateTaskRequest request,
+                                            String traceId,
+                                            String resumeFilePath,
+                                            String resumeObjectKey,
+                                            String resumeFileType,
+                                            List<JdMatchResult> precomputedJdMatches,
+                                            RevisionContext revisionContext) {
         LocalDateTime now = LocalDateTime.now();
         String jobDescription = request.jobDescription();
         String jobCategory = normalizeJobCategory(request.jobCategory());
@@ -381,9 +420,17 @@ public class ResumeEvaluationService {
         task.attemptCount = 0;
         RagOptions ragOptions = request.ragOptions() != null ? request.ragOptions() : ragConfigService.getDefaultOptions();
         task.ragOptions = ragOptions;
+        task.conversationId = revisionContext != null ? revisionContext.conversationId() : traceId;
+        task.revisionNo = revisionContext != null ? revisionContext.revisionNo() : 1;
+        task.workflowRunId = "run-" + UUID.randomUUID();
+        task.baseWorkflowRunId = revisionContext != null ? revisionContext.baseWorkflowRunId() : null;
+        task.supersedesTraceId = revisionContext != null ? revisionContext.supersedesTraceId() : null;
+        task.evaluationBrief = revisionContext != null ? revisionContext.evaluationBrief() : "";
+        task.invalidatedNodes = revisionContext != null && revisionContext.invalidatedNodes() != null
+                ? List.copyOf(revisionContext.invalidatedNodes()) : List.of();
+        persistResumeTask(task, resumeObjectKey);
         tasks.put(traceId, task);
         traces.put(traceId, new ArrayList<>());
-        persistResumeTask(task, resumeObjectKey);
         agentMetrics.recordFunnelEvaluationStarted(task.jobCategory, task.executionMode);
         appendDagTrace(task.traceId, null, "OrchestratorAgent", "TASK_CREATED",
                 "任务创建", "TraceId 已生成，任务已进入 Redis Stream 队列。", "SUCCESS", 18L, 0,
@@ -401,8 +448,171 @@ public class ResumeEvaluationService {
                     "文本长度: " + textLen,
                     null, null, null);
         }
-        taskQueueService.enqueue(traceId, task.id, task.tenantId, task.uploadedBy, task.priority);
+        enqueueAfterCommit(task);
         return toResponse(task);
+    }
+
+    private void enqueueAfterCommit(MutableTask task) {
+        Runnable enqueue = () -> taskQueueService.enqueue(
+                task.traceId, task.id, task.tenantId, task.uploadedBy, task.priority);
+        runAfterCommit(enqueue);
+    }
+
+    private void runAfterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                && TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+            return;
+        }
+        action.run();
+    }
+
+    /**
+     * Create an immutable evaluation revision while retaining the original task
+     * as audit history. Only the affected graph nodes are invalidated.
+     */
+    @Transactional
+    public TaskResponse createRevision(String sourceTraceId,
+                                       String conversationId,
+                                       int revisionNo,
+                                       String requestedJobCategory,
+                                       String requestedJobDescription,
+                                       String evaluationBrief,
+                                       List<String> invalidatedNodes,
+                                       boolean goalChanged) {
+        MutableTask source = ensureMutableTask(sourceTraceId);
+        synchronized (source) {
+            ResumeTask sourceRow = loadResumeTaskRow(sourceTraceId)
+                    .orElseThrow(() -> new ApiConflictException("源评估任务不存在：" + sourceTraceId));
+            String nextTraceId = "trace-" + UUID.randomUUID();
+            LocalDateTime now = LocalDateTime.now();
+            String supersededSummary = "已被会话中的 revision v" + revisionNo + " 替代。";
+
+            UpdateWrapper<ResumeTask> supersede = new UpdateWrapper<>();
+            supersede.eq("trace_id", sourceTraceId)
+                    .in("status", REVISIONABLE_TASK_STATUSES)
+                    .set("status", "SUPERSEDED")
+                    .set("queue_status", QueueStatus.SUPERSEDED.name())
+                    .set("superseded_by_trace_id", nextTraceId)
+                    .set("summary", supersededSummary)
+                    .set("finished_at", now)
+                    .set("update_time", now);
+            if (resumeTaskMapper.update(null, supersede) == 0) {
+                String current = loadResumeTaskRow(sourceTraceId)
+                        .map(ResumeTask::getStatus).orElse("MISSING");
+                throw new ApiConflictException(
+                        "源评估任务状态已变化，无法创建 revision：" + current);
+            }
+
+            String previousStatus = source.status;
+            String previousQueueStatus = source.queueStatus;
+            String previousSupersededBy = source.supersededByTraceId;
+            String previousSummary = source.summary;
+            LocalDateTime previousFinishedAt = source.finishedAt;
+            LocalDateTime previousUpdateTime = source.updateTime;
+            source.status = "SUPERSEDED";
+            source.queueStatus = QueueStatus.SUPERSEDED.name();
+            source.supersededByTraceId = nextTraceId;
+            source.summary = supersededSummary;
+            source.finishedAt = now;
+            source.updateTime = now;
+            updateResumeTask(source);
+
+            try {
+                CreateTaskRequest request = new CreateTaskRequest(
+                        source.fileName,
+                        StringUtils.hasText(requestedJobCategory) ? requestedJobCategory : source.jobCategory,
+                        source.executionMode,
+                        StringUtils.hasText(requestedJobDescription)
+                                ? requestedJobDescription
+                                : goalChanged ? null : source.jobDescription,
+                        source.resumeText,
+                        source.ragOptions
+                );
+                RevisionContext context = new RevisionContext(
+                        StringUtils.hasText(conversationId) ? conversationId : source.conversationId,
+                        revisionNo,
+                        sourceTraceId,
+                        source.workflowRunId,
+                        evaluationBrief,
+                        invalidatedNodes
+                );
+                TaskResponse created = createTaskInternal(
+                        request,
+                        nextTraceId,
+                        source.resumeFilePath,
+                        sourceRow.getResumeObjectKey(),
+                        source.resumeFileType,
+                        source.topJdMatches,
+                        context
+                );
+                if (TransactionSynchronizationManager.isActualTransactionActive()
+                        && TransactionSynchronizationManager.isSynchronizationActive()) {
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            if (status == TransactionSynchronization.STATUS_ROLLED_BACK) {
+                                restoreRevisionMirror(
+                                        source, nextTraceId, previousStatus, previousQueueStatus,
+                                        previousSupersededBy, previousSummary, previousFinishedAt,
+                                        previousUpdateTime);
+                            }
+                        }
+                    });
+                }
+                runAfterCommit(() -> {
+                    try {
+                        workflowClient.controlWorkflow(
+                                source.workflowRunId, "CANCEL", source.traceId,
+                                source.conversationId, source.revisionNo);
+                    } catch (Exception e) {
+                        log.info("[eval] superseded run cancellation deferred trace={} run={}: {}",
+                                sourceTraceId, source.workflowRunId, e.getMessage());
+                    }
+                });
+                return created;
+            } catch (RuntimeException e) {
+                // The surrounding transaction rolls the database CAS back. Keep
+                // the process-local mirror aligned as well.
+                restoreRevisionMirror(
+                        source, nextTraceId, previousStatus, previousQueueStatus,
+                        previousSupersededBy, previousSummary, previousFinishedAt,
+                        previousUpdateTime);
+                throw e;
+            }
+        }
+    }
+
+    private void restoreRevisionMirror(MutableTask source,
+                                       String nextTraceId,
+                                       String previousStatus,
+                                       String previousQueueStatus,
+                                       String previousSupersededBy,
+                                       String previousSummary,
+                                       LocalDateTime previousFinishedAt,
+                                       LocalDateTime previousUpdateTime) {
+        synchronized (source) {
+            source.status = previousStatus;
+            source.queueStatus = previousQueueStatus;
+            source.supersededByTraceId = previousSupersededBy;
+            source.summary = previousSummary;
+            source.finishedAt = previousFinishedAt;
+            source.updateTime = previousUpdateTime;
+            tasks.remove(nextTraceId);
+            traces.remove(nextTraceId);
+            traceSequences.remove(nextTraceId);
+            traceRoundCounters.remove(nextTraceId);
+            if (Set.of("RUNNING", "PAUSING", "RESUMING").contains(previousStatus)) {
+                runtimeStateService.cacheRunningTask(toResponse(source));
+            } else {
+                runtimeStateService.evictRunningTask(source.traceId);
+            }
+        }
     }
 
     /**
@@ -410,13 +620,114 @@ public class ResumeEvaluationService {
      */
     public void runQueuedEvaluation(String traceId) {
         MutableTask task = ensureMutableTask(traceId);
-        task.status = "RUNNING";
-        task.queueStatus = QueueStatus.RUNNING.name();
-        task.startedAt = LocalDateTime.now();
-        task.summary = "Agent 正在启动评估流程。";
+        synchronized (task) {
+            ResumeTask persisted = loadResumeTaskRow(traceId).orElse(null);
+            if (persisted == null
+                    || !"RUNNING".equals(persisted.getStatus())
+                    || !QueueStatus.RUNNING.name().equals(persisted.getQueueStatus())) {
+                log.info("[eval] skip stale queue claim trace={} status={} queueStatus={}", traceId,
+                        persisted != null ? persisted.getStatus() : "MISSING",
+                        persisted != null ? persisted.getQueueStatus() : "MISSING");
+                return;
+            }
+            task.status = "RUNNING";
+            task.queueStatus = QueueStatus.RUNNING.name();
+            task.startedAt = persisted.getStartedAt() != null ? persisted.getStartedAt() : LocalDateTime.now();
+            task.summary = "Agent 正在启动评估流程。";
+            task.updateTime = LocalDateTime.now();
+            runtimeStateService.cacheRunningTask(toResponse(task));
+            // Holding the per-task monitor closes the local cancel/start gap:
+            // cancellation either wins before this point or waits until the
+            // workflow has been registered and can then cancel the real run.
+            executeTask(task);
+        }
+    }
+
+    public TaskResponse updateControlState(String traceId, String status, String queueStatus, String summary) {
+        MutableTask task = ensureMutableTask(traceId);
+        synchronized (task) {
+        String previousStatus = task.status;
+        task.status = status;
+        task.queueStatus = queueStatus;
+        task.summary = summary;
         task.updateTime = LocalDateTime.now();
-        runtimeStateService.cacheRunningTask(toResponse(task));
-        executeTask(task);
+        if (Set.of("CANCELLED", "SUPERSEDED").contains(status)) {
+            task.finishedAt = task.updateTime;
+        }
+        if ("RUNNING".equals(status) && task.startedAt == null) {
+            task.startedAt = task.updateTime;
+        }
+        if ("RUNNING".equals(status)) {
+            task.finishedAt = null;
+            runtimeStateService.cacheRunningTask(toResponse(task));
+            if ("PAUSED".equals(previousStatus)) {
+                agentMetrics.agentTaskStarted();
+            }
+        }
+        if ("RESUMING".equals(status)) {
+            task.finishedAt = null;
+            runtimeStateService.cacheRunningTask(toResponse(task));
+            if ("PAUSED".equals(previousStatus)) {
+                agentMetrics.agentTaskStarted();
+            }
+        }
+        if ("PAUSED".equals(status) && "RESUMING".equals(previousStatus)) {
+            runtimeStateService.evictRunningTask(task.traceId);
+            agentMetrics.agentTaskFinished();
+        }
+        if (Set.of("CANCELLED", "SUPERSEDED").contains(status)
+                && Set.of("RUNNING", "PAUSING").contains(previousStatus)) {
+            runtimeStateService.evictRunningTask(task.traceId);
+            agentMetrics.agentTaskFinished();
+        }
+        updateResumeTask(task);
+        return toResponse(task);
+        }
+    }
+
+    public boolean compareAndSetControlState(String traceId,
+                                             Set<String> expectedStatuses,
+                                             String status,
+                                             String queueStatus,
+                                             String summary) {
+        if (expectedStatuses == null || expectedStatuses.isEmpty()) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        MutableTask task = ensureMutableTask(traceId);
+        synchronized (task) {
+            String previousStatus = task.status;
+            boolean terminal = TERMINAL_TASK_STATUSES.contains(status);
+            UpdateWrapper<ResumeTask> update = new UpdateWrapper<>();
+            update.eq("trace_id", traceId)
+                    .in("status", expectedStatuses)
+                    .set("status", status)
+                    .set("queue_status", queueStatus)
+                    .set("summary", summary)
+                    .set("finished_at", terminal ? now : null)
+                    .set("update_time", now);
+            if (resumeTaskMapper.update(null, update) == 0) {
+                return false;
+            }
+            task.status = status;
+            task.queueStatus = queueStatus;
+            task.summary = summary;
+            task.finishedAt = terminal ? now : null;
+            task.updateTime = now;
+            if (Set.of("RUNNING", "RESUMING", "PAUSING").contains(status)) {
+                if (task.startedAt == null) {
+                    task.startedAt = now;
+                }
+                runtimeStateService.cacheRunningTask(toResponse(task));
+            } else {
+                runtimeStateService.evictRunningTask(task.traceId);
+            }
+            if (("PAUSED".equals(status) || terminal)
+                    && Set.of("RUNNING", "PAUSING", "RESUMING").contains(previousStatus)) {
+                agentMetrics.agentTaskFinished();
+            }
+        }
+        return true;
     }
 
     public Optional<ResumeTask> loadResumeTaskRow(String traceId) {
@@ -425,6 +736,23 @@ public class ResumeEvaluationService {
         }
         ResumeTask row = resumeTaskMapper.selectOne(new QueryWrapper<ResumeTask>().eq("trace_id", traceId).last("limit 1"));
         return Optional.ofNullable(row);
+    }
+
+    public boolean acceptsWorkflowCallback(String traceId, String workflowRunId,
+                                           String conversationId, Integer revision) {
+        ResumeTask row = loadResumeTaskRow(traceId).orElse(null);
+        if (row == null || "SUPERSEDED".equals(row.getStatus()) || "CANCELLED".equals(row.getStatus())) {
+            return false;
+        }
+        if (StringUtils.hasText(row.getWorkflowRunId())
+                && !Objects.equals(row.getWorkflowRunId(), workflowRunId)) {
+            return false;
+        }
+        if (StringUtils.hasText(row.getConversationId())
+                && !Objects.equals(row.getConversationId(), conversationId)) {
+            return false;
+        }
+        return revision == null || row.getRevisionNo() == null || Objects.equals(row.getRevisionNo(), revision);
     }
 
     private MutableTask ensureMutableTask(String traceId) {
@@ -457,11 +785,12 @@ public class ResumeEvaluationService {
                 row.getCreateTime() != null ? row.getCreateTime() : now,
                 row.getUpdateTime() != null ? row.getUpdateTime() : now,
                 new ArrayList<>(), new ArrayList<>(), new ArrayList<>(),
-                "", "", row.getFileUrl(), null,
+                row.getJobDescription(), row.getResumeText(), row.getFileUrl(), null,
                 row.getMatchedJdTitle(), row.getJdMatchScore(), null,
                 null, null, null
         );
         applyQueueFieldsFromRow(task, row);
+        applyRevisionFieldsFromRow(task, row);
         tasks.put(traceId, task);
         traces.putIfAbsent(traceId, new ArrayList<>());
         return task;
@@ -596,6 +925,17 @@ public class ResumeEvaluationService {
             ResumeTask entity = new ResumeTask();
             entity.setId(task.id);
             entity.setTraceId(task.traceId);
+            entity.setConversationId(task.conversationId);
+            entity.setRevisionNo(task.revisionNo);
+            entity.setWorkflowRunId(task.workflowRunId);
+            entity.setBaseWorkflowRunId(task.baseWorkflowRunId);
+            entity.setSupersedesTraceId(task.supersedesTraceId);
+            entity.setSupersededByTraceId(task.supersededByTraceId);
+            entity.setResumeText(task.resumeText);
+            entity.setJobDescription(task.jobDescription);
+            entity.setEvaluationBrief(task.evaluationBrief);
+            entity.setInvalidatedNodes(toJson(task.invalidatedNodes));
+            entity.setRagOptions(toJson(task.ragOptions));
             entity.setFileUrl(StringUtils.hasText(task.resumeFilePath) ? task.resumeFilePath : task.fileName);
             entity.setResumeObjectKey(resumeObjectKey);
             entity.setJobCategory(task.jobCategory);
@@ -614,7 +954,8 @@ public class ResumeEvaluationService {
             entity.setUpdateTime(task.updateTime);
             resumeTaskMapper.insert(entity);
         } catch (DataAccessException e) {
-            log.warn("[eval] persist resume_task failed (trace={}): {}", task.traceId, e.getMessage());
+            log.error("[eval] persist resume_task failed (trace={}): {}", task.traceId, e.getMessage());
+            throw new IllegalStateException("评估任务持久化失败，未入队：" + task.traceId, e);
         }
     }
 
@@ -634,6 +975,17 @@ public class ResumeEvaluationService {
             ResumeTask entity = new ResumeTask();
             entity.setId(task.id);
             entity.setStatus(task.status);
+            entity.setConversationId(task.conversationId);
+            entity.setRevisionNo(task.revisionNo);
+            entity.setWorkflowRunId(task.workflowRunId);
+            entity.setBaseWorkflowRunId(task.baseWorkflowRunId);
+            entity.setSupersedesTraceId(task.supersedesTraceId);
+            entity.setSupersededByTraceId(task.supersededByTraceId);
+            entity.setResumeText(task.resumeText);
+            entity.setJobDescription(task.jobDescription);
+            entity.setEvaluationBrief(task.evaluationBrief);
+            entity.setInvalidatedNodes(toJson(task.invalidatedNodes));
+            entity.setRagOptions(toJson(task.ragOptions));
             entity.setEndTime(task.updateTime);
             entity.setUpdateTime(task.updateTime);
             entity.setQueueStatus(task.queueStatus);
@@ -651,7 +1003,8 @@ public class ResumeEvaluationService {
                 runtimeStateService.evictRunningTask(task.traceId);
             }
         } catch (DataAccessException e) {
-            log.warn("[eval] update resume_task failed (trace={}): {}", task.traceId, e.getMessage());
+            log.error("[eval] update resume_task failed (trace={}): {}", task.traceId, e.getMessage());
+            throw new IllegalStateException("评估任务状态持久化失败：" + task.traceId, e);
         }
     }
 
@@ -744,6 +1097,18 @@ public class ResumeEvaluationService {
      * 删除任务及其关联数据。
      */
     public void deleteTask(String traceId) {
+        loadResumeTaskRow(traceId).ifPresent(row -> {
+            String status = row.getStatus();
+            if (!Set.of("SUCCESS", "PARTIAL_SUCCESS", "FAILED", "CANCELLED", "SUPERSEDED").contains(status)) {
+                try {
+                    workflowClient.controlWorkflow(
+                            StringUtils.hasText(row.getWorkflowRunId()) ? row.getWorkflowRunId() : traceId,
+                            "CANCEL", row.getTraceId(), row.getConversationId(), row.getRevisionNo());
+                } catch (Exception e) {
+                    log.info("[eval] delete cancellation deferred trace={}: {}", traceId, e.getMessage());
+                }
+            }
+        });
         tasks.remove(traceId);
         traces.remove(traceId);
         traceSequences.remove(traceId);
@@ -1217,61 +1582,185 @@ public class ResumeEvaluationService {
         sseTraceHub.publish(event);
     }
 
-    public void applyWorkflowResult(WorkflowResultRequest request) {
-        MutableTask task = ensureMutableTask(request.traceId());
-        long start = task.startedAt != null
-                ? Duration.between(task.startedAt, LocalDateTime.now()).toMillis()
-                : request.durationMs() != null ? request.durationMs() : 0L;
-
-        if ("SUCCESS".equals(request.status())) {
-            task.status = "SUCCESS";
-            task.queueStatus = QueueStatus.SUCCESS.name();
-            String fullReport = StringUtils.hasText(request.summary())
-                    ? request.summary()
-                    : buildWorkflowSummaryFallback(request.strengths(), request.risks(), request.interviewQuestions());
-            task.finalReport = fullReport;
-            task.overallScore = request.overallScore() != null ? request.overallScore() : 0;
-            task.recommendation = normalizeRecommendation(request.recommendation(), task.overallScore);
-            task.aiRecommendation = request.recommendation();
-            task.summary = buildListSummary(fullReport, task.overallScore, task.recommendation);
-            task.strengths = new ArrayList<>(MarkdownTextUtil.filterGenericPlaceholders(request.strengths()));
-            task.risks = new ArrayList<>(MarkdownTextUtil.filterGenericPlaceholders(request.risks()));
-            task.interviewQuestions = new ArrayList<>(MarkdownTextUtil.filterGenericPlaceholders(request.interviewQuestions()));
-            if (task.strengths.isEmpty() || task.risks.isEmpty() || task.interviewQuestions.isEmpty()) {
-                MarkdownTextUtil.ReportSections sections = MarkdownTextUtil.extractReportSections(fullReport);
-                if (task.strengths.isEmpty() && !sections.strengths().isEmpty()) {
-                    task.strengths = new ArrayList<>(sections.strengths());
-                }
-                if (task.risks.isEmpty() && !sections.risks().isEmpty()) {
-                    task.risks = new ArrayList<>(sections.risks());
-                }
-                if (task.interviewQuestions.isEmpty() && !sections.questions().isEmpty()) {
-                    task.interviewQuestions = new ArrayList<>(sections.questions());
-                }
-            }
-            task.riskSummary = buildRiskSummary(task.risks);
-            task.decisionRationale = task.recommendation.equals(request.recommendation())
-                    ? "LangGraph DAG: Intent→Parse→JdMatch→(TechEval+ProjectEval+Risk)→EvidenceFusion→Report"
-                    : "系统兜底：综合评分低于推荐阈值，已从 AI 原始建议降级为人工复核/不推荐";
-            task.durationMs = request.durationMs() != null ? request.durationMs() : start;
-            task.tokenCost = request.tokenCost() != null ? request.tokenCost() : 0;
-            agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "SUCCESS", task.recommendation);
-            agentMetrics.recordFunnelScoreDistribution(task.jobCategory, task.overallScore);
-            agentMetrics.recordFunnelRecommendation(task.recommendation);
-            agentMetrics.recordFunnelTimeToScreen(task.jobCategory, task.durationMs);
-            persistFullTaskResult(task);
-        } else {
-            task.status = "FAILED";
-            task.queueStatus = QueueStatus.FAILED.name();
-            task.summary = request.errorMessage() != null ? request.errorMessage() : "Workflow failed";
-            task.durationMs = request.durationMs() != null ? request.durationMs() : start;
-            agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "FAILED", "NONE");
+    @Transactional
+    public boolean applyWorkflowResult(WorkflowResultRequest request) {
+        MutableTask task;
+        try {
+            task = ensureMutableTask(request.traceId());
+        } catch (IllegalArgumentException unknownTrace) {
+            log.warn("[workflow] ignored result for unknown trace={}", request.traceId());
+            return false;
         }
-        task.finishedAt = LocalDateTime.now();
-        task.updateTime = LocalDateTime.now();
-        updateResumeTask(task);
-        runtimeStateService.evictRunningTask(task.traceId);
-        agentMetrics.agentTaskFinished();
+        synchronized (task) {
+            ResumeTask persisted = loadResumeTaskRow(request.traceId()).orElse(null);
+            if (persisted == null || !workflowIdentityMatches(persisted, request)) {
+                return false;
+            }
+
+            boolean completionPayload = "SUCCESS".equals(request.status())
+                    || "PARTIAL_SUCCESS".equals(request.status());
+            boolean validCompletion = StringUtils.hasText(request.summary())
+                    && request.overallScore() != null
+                    && request.overallScore() >= 0
+                    && request.overallScore() <= 100
+                    && StringUtils.hasText(request.recommendation());
+            String targetStatus = workflowResultTargetStatus(request.status(), validCompletion);
+            String currentStatus = persisted.getStatus();
+
+            // Same-state retries are acknowledged as idempotent no-ops. More
+            // importantly, no callback can move a terminal task backwards.
+            if (Objects.equals(currentStatus, targetStatus)) {
+                log.info("[workflow] ignored duplicate result trace={} run={} status={}",
+                        request.traceId(), request.workflowRunId(), targetStatus);
+                return false;
+            }
+            if (!isWorkflowResultTransitionAllowed(currentStatus, targetStatus)) {
+                log.info("[workflow] ignored non-monotonic result trace={} run={} current={} target={}",
+                        request.traceId(), request.workflowRunId(), currentStatus, targetStatus);
+                return false;
+            }
+
+            LocalDateTime now = LocalDateTime.now();
+            String targetQueueStatus = workflowQueueStatus(targetStatus);
+            UpdateWrapper<ResumeTask> claim = new UpdateWrapper<>();
+            claim.eq("trace_id", request.traceId())
+                    .eq("status", currentStatus)
+                    .set("status", targetStatus)
+                    .set("queue_status", targetQueueStatus)
+                    .set("finished_at", "PAUSED".equals(targetStatus) ? null : now)
+                    .set("update_time", now);
+            if (resumeTaskMapper.update(null, claim) == 0) {
+                log.info("[workflow] lost callback CAS trace={} run={} expected={} target={}",
+                        request.traceId(), request.workflowRunId(), currentStatus, targetStatus);
+                return false;
+            }
+
+            long elapsed = task.startedAt != null
+                    ? Duration.between(task.startedAt, now).toMillis()
+                    : request.durationMs() != null ? request.durationMs() : 0L;
+            if (completionPayload && !validCompletion) {
+                task.status = "FAILED";
+                task.queueStatus = QueueStatus.FAILED.name();
+                task.summary = "Workflow " + request.status()
+                        + " 结果违反输出契约：缺少报告、评分或推荐结论。";
+                task.durationMs = request.durationMs() != null ? request.durationMs() : elapsed;
+                agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "FAILED", "NONE");
+            } else if (Set.of("SUCCESS", "PARTIAL_SUCCESS").contains(targetStatus)) {
+                task.status = targetStatus;
+                task.queueStatus = QueueStatus.SUCCESS.name();
+                String fullReport = request.summary();
+                task.finalReport = fullReport;
+                task.overallScore = request.overallScore() != null ? request.overallScore() : 0;
+                task.recommendation = normalizeRecommendation(request.recommendation(), task.overallScore);
+                task.aiRecommendation = request.recommendation();
+                task.summary = buildListSummary(fullReport, task.overallScore, task.recommendation);
+                task.strengths = new ArrayList<>(MarkdownTextUtil.filterGenericPlaceholders(request.strengths()));
+                task.risks = new ArrayList<>(MarkdownTextUtil.filterGenericPlaceholders(request.risks()));
+                task.interviewQuestions = new ArrayList<>(MarkdownTextUtil.filterGenericPlaceholders(request.interviewQuestions()));
+                if (task.strengths.isEmpty() || task.risks.isEmpty() || task.interviewQuestions.isEmpty()) {
+                    MarkdownTextUtil.ReportSections sections = MarkdownTextUtil.extractReportSections(fullReport);
+                    if (task.strengths.isEmpty() && !sections.strengths().isEmpty()) {
+                        task.strengths = new ArrayList<>(sections.strengths());
+                    }
+                    if (task.risks.isEmpty() && !sections.risks().isEmpty()) {
+                        task.risks = new ArrayList<>(sections.risks());
+                    }
+                    if (task.interviewQuestions.isEmpty() && !sections.questions().isEmpty()) {
+                        task.interviewQuestions = new ArrayList<>(sections.questions());
+                    }
+                }
+                task.riskSummary = buildRiskSummary(task.risks);
+                task.decisionRationale = task.recommendation.equals(request.recommendation())
+                        ? "LangGraph DAG: Intent→Parse→JdMatch→(TechEval+ProjectEval+Risk)→EvidenceFusion→Report"
+                        : "系统兜底：综合评分低于推荐阈值，已从 AI 原始建议降级为人工复核/不推荐";
+                task.durationMs = request.durationMs() != null ? request.durationMs() : elapsed;
+                task.tokenCost = request.tokenCost() != null ? request.tokenCost() : 0;
+                agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, targetStatus, task.recommendation);
+                agentMetrics.recordFunnelScoreDistribution(task.jobCategory, task.overallScore);
+                agentMetrics.recordFunnelRecommendation(task.recommendation);
+                agentMetrics.recordFunnelTimeToScreen(task.jobCategory, task.durationMs);
+                persistFullTaskResult(task);
+            } else if ("CANCELLED".equals(targetStatus)) {
+                task.status = "CANCELLED";
+                task.queueStatus = QueueStatus.CANCELLED.name();
+                task.summary = "评估已取消。";
+                task.durationMs = request.durationMs() != null ? request.durationMs() : elapsed;
+            } else if ("PAUSED".equals(targetStatus)) {
+                task.status = "PAUSED";
+                task.queueStatus = QueueStatus.PAUSED.name();
+                task.summary = "已保存 checkpoint，可从当前 revision 继续。";
+                task.durationMs = request.durationMs() != null ? request.durationMs() : elapsed;
+            } else {
+                task.status = "FAILED";
+                task.queueStatus = QueueStatus.FAILED.name();
+                task.summary = request.errorMessage() != null ? request.errorMessage() : "Workflow failed";
+                task.durationMs = request.durationMs() != null ? request.durationMs() : elapsed;
+                agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "FAILED", "NONE");
+            }
+            task.finishedAt = "PAUSED".equals(task.status) ? null : now;
+            task.updateTime = now;
+            updateResumeTask(task);
+            runtimeStateService.evictRunningTask(task.traceId);
+            agentMetrics.agentTaskFinished();
+            return Set.of("SUCCESS", "PARTIAL_SUCCESS").contains(task.status);
+        }
+    }
+
+    static boolean isWorkflowResultTransitionAllowed(String currentStatus, String targetStatus) {
+        if (!StringUtils.hasText(currentStatus) || !StringUtils.hasText(targetStatus)
+                || TERMINAL_TASK_STATUSES.contains(currentStatus)) {
+            return false;
+        }
+        return switch (targetStatus) {
+            case "PAUSED" -> "PAUSING".equals(currentStatus);
+            case "CANCELLED" -> Set.of("QUEUED", "RUNNING", "PAUSING", "PAUSED", "RESUMING")
+                    .contains(currentStatus);
+            case "SUCCESS", "PARTIAL_SUCCESS", "FAILED" -> CALLBACK_ACTIVE_STATUSES.contains(currentStatus);
+            default -> false;
+        };
+    }
+
+    private String workflowResultTargetStatus(String requestedStatus, boolean validCompletion) {
+        if ("SUCCESS".equals(requestedStatus) || "PARTIAL_SUCCESS".equals(requestedStatus)) {
+            return validCompletion ? requestedStatus : "FAILED";
+        }
+        if ("PAUSED".equals(requestedStatus)
+                || "CANCELLED".equals(requestedStatus)
+                || "FAILED".equals(requestedStatus)) {
+            return requestedStatus;
+        }
+        return "FAILED";
+    }
+
+    private String workflowQueueStatus(String targetStatus) {
+        return switch (targetStatus) {
+            case "SUCCESS", "PARTIAL_SUCCESS" -> QueueStatus.SUCCESS.name();
+            case "PAUSED" -> QueueStatus.PAUSED.name();
+            case "CANCELLED" -> QueueStatus.CANCELLED.name();
+            default -> QueueStatus.FAILED.name();
+        };
+    }
+
+    private boolean workflowIdentityMatches(ResumeTask persisted, WorkflowResultRequest request) {
+        if (StringUtils.hasText(persisted.getWorkflowRunId())
+                && !Objects.equals(persisted.getWorkflowRunId(), request.workflowRunId())) {
+            log.warn("[workflow] ignored mismatched run result trace={} expectedRun={} actualRun={}",
+                    request.traceId(), persisted.getWorkflowRunId(), request.workflowRunId());
+            return false;
+        }
+        if (StringUtils.hasText(persisted.getConversationId())
+                && !Objects.equals(persisted.getConversationId(), request.conversationId())) {
+            log.warn("[workflow] ignored mismatched conversation trace={} expected={} actual={}",
+                    request.traceId(), persisted.getConversationId(), request.conversationId());
+            return false;
+        }
+        if (request.revision() != null && persisted.getRevisionNo() != null
+                && !Objects.equals(persisted.getRevisionNo(), request.revision())) {
+            log.warn("[workflow] ignored mismatched revision trace={} expected={} actual={}",
+                    request.traceId(), persisted.getRevisionNo(), request.revision());
+            return false;
+        }
+        return true;
     }
 
     private List<Map<String, Object>> buildRoundsFromTraces(List<AgentExecutionTrace> agentTraces) {
@@ -1482,7 +1971,11 @@ public class ResumeEvaluationService {
                             ? "/api/tasks/" + row.getTraceId() + "/file" : null,
                     null, row.getMatchedJdTitle(), row.getJdMatchScore(), List.of(),
                     null, null, null,
-                    buildQueueFields(row)));
+                    buildQueueFields(row),
+                    StringUtils.hasText(row.getConversationId()) ? row.getConversationId() : row.getTraceId(),
+                    row.getRevisionNo() != null ? row.getRevisionNo() : 1,
+                    row.getWorkflowRunId(), row.getBaseWorkflowRunId(), row.getSupersedesTraceId(), row.getSupersededByTraceId(),
+                    row.getEvaluationBrief(), parseJsonStringList(row.getInvalidatedNodes())));
         } catch (Exception e) {
             log.warn("[eval] load task from db failed (trace={}): {}", traceId, e.getMessage());
             return Optional.empty();
@@ -2034,7 +2527,9 @@ public class ResumeEvaluationService {
         agentMetrics.recordFunnelFeedbackSubmitted(request.ratingScore() == null ? 0 : request.ratingScore());
         agentMetrics.recordFunnelFeedbackAgreement(computeFeedbackAgreement(request));
         agentMetrics.recordFunnelFeedbackLatency(System.currentTimeMillis() - feedbackStart);
-        appendTrace(request.traceId(), null, "HumanFeedbackAgent", "RLHF_FEEDBACK", "人工反馈已记录", "评分 " + request.ratingScore() + "，进入 Meta-Agent 反思数据池。", "SUCCESS", 11L, 0);
+        appendTrace(request.traceId(), null, "HumanFeedback", "HUMAN_FEEDBACK", "人工反馈已记录",
+                "评分 " + request.ratingScore() + "，已持久化用于离线审计；系统不会据此自动在线训练。",
+                "SUCCESS", System.currentTimeMillis() - feedbackStart, 0);
         return response;
     }
 
@@ -2081,17 +2576,25 @@ public class ResumeEvaluationService {
         int success = (int) snapshot.stream().filter(task -> "SUCCESS".equals(task.status)).count();
         int failed = (int) snapshot.stream().filter(task -> "FAILED".equals(task.status)).count();
         double avgDuration = snapshot.stream().mapToLong(task -> task.durationMs).average().orElse(0D);
-        double avgScore = snapshot.stream().mapToInt(task -> task.overallScore).average().orElse(0D);
+        double avgScore = snapshot.stream()
+                .filter(task -> "SUCCESS".equals(task.status) && task.overallScore != null)
+                .mapToInt(task -> task.overallScore)
+                .average().orElse(0D);
         int totalToken = snapshot.stream().mapToInt(task -> task.tokenCost).sum();
         Map<String, Long> modeDuration = new LinkedHashMap<>();
         modeDuration.put("SERIAL", averageByMode(snapshot, "SERIAL"));
         modeDuration.put("DAG_CONCURRENT", averageByMode(snapshot, "DAG_CONCURRENT"));
+        Map<String, Long> durationSum = new LinkedHashMap<>();
+        Map<String, Long> durationCount = new LinkedHashMap<>();
+        traces.values().stream().flatMap(List::stream)
+                .filter(event -> StringUtils.hasText(event.agentRole()) && event.durationMs() != null)
+                .forEach(event -> {
+                    durationSum.merge(event.agentRole(), event.durationMs(), Long::sum);
+                    durationCount.merge(event.agentRole(), 1L, Long::sum);
+                });
         Map<String, Long> agentDuration = new LinkedHashMap<>();
-        agentDuration.put("ResumeParserAgent", 320L);
-        agentDuration.put("TechAgent", 1180L);
-        agentDuration.put("ProjectAgent", 860L);
-        agentDuration.put("RiskAgent", 430L);
-        agentDuration.put("RagasJudgeAgent", 510L);
+        durationSum.forEach((agent, duration) ->
+                agentDuration.put(agent, duration / Math.max(1L, durationCount.getOrDefault(agent, 1L))));
         return new DashboardMetricsResponse(total, running, success, failed, avgDuration, avgScore, totalToken, modeDuration, agentDuration);
     }
 
@@ -2106,24 +2609,10 @@ public class ResumeEvaluationService {
         if (neo4jGraph != null) {
             return neo4jGraph;
         }
-        MutableTask task = tasks.get(traceId);
-        String candidate = task == null ? "候选人" : task.fileName;
-        List<GraphResponse.GraphNode> nodes = List.of(
-                new GraphResponse.GraphNode("candidate", candidate, "candidate", 86),
-                new GraphResponse.GraphNode("java", "Java 21", "skill", 91),
-                new GraphResponse.GraphNode("spring", "Spring Boot 3", "skill", 88),
-                new GraphResponse.GraphNode("agent", "Agent 编排", "project", 84),
-                new GraphResponse.GraphNode("job", task == null ? "目标岗位" : task.jobCategory, "job", 82),
-                new GraphResponse.GraphNode("risk", "待面试验证", "risk", 42)
-        );
-        List<GraphResponse.GraphEdge> edges = List.of(
-                new GraphResponse.GraphEdge("candidate", "java", "掌握", 0.91),
-                new GraphResponse.GraphEdge("candidate", "spring", "项目使用", 0.88),
-                new GraphResponse.GraphEdge("candidate", "agent", "经历关联", 0.84),
-                new GraphResponse.GraphEdge("agent", "job", "岗位匹配", 0.82),
-                new GraphResponse.GraphEdge("candidate", "risk", "需要追问", 0.42)
-        );
-        return new GraphResponse(nodes, edges, "SIMULATED");
+        // An unavailable graph is not evidence. Returning an empty, explicit
+        // state prevents the UI or report layer from presenting demo nodes as
+        // facts about a real candidate.
+        return new GraphResponse(List.of(), List.of(), "UNAVAILABLE");
     }
 
     private Span startLfSpan(String name, Span parent, String type, String input) {
@@ -2154,10 +2643,17 @@ public class ResumeEvaluationService {
         try {
             workflowClient.startWorkflow(
                     task.traceId,
+                    task.workflowRunId,
+                    task.conversationId,
+                    task.revisionNo,
                     task.resumeText,
                     task.jobCategory,
                     task.jobDescription,
-                    task.executionMode);
+                    task.executionMode,
+                    task.evaluationBrief,
+                    task.supersedesTraceId,
+                    task.baseWorkflowRunId,
+                    task.invalidatedNodes);
             task.summary = "LangGraph workflow 已启动，正在异步评估。";
             task.updateTime = LocalDateTime.now();
             updateResumeTask(task);
@@ -2194,30 +2690,20 @@ public class ResumeEvaluationService {
             String aiSummary = evalResult.finalReport();
             task.summary = aiSummary;
             task.overallScore = evalResult.overallScore();
-            if (task.overallScore == 0) {
-                task.overallScore = scoreByContent(task);
+            if (task.overallScore == null || task.overallScore <= 0) {
+                throw new IllegalStateException("Agent DAG 未返回可验证的综合评分");
             }
             task.strengths = evalResult.strengths();
-            if (task.strengths.isEmpty()) {
-                task.strengths = List.of("技术栈与岗位存在较高匹配度", "项目表达具备可追问的工程线索");
-            }
             task.risks = evalResult.risks();
-            if (task.risks.isEmpty()) {
-                task.risks = List.of("关键项目贡献仍建议面试官追问验证", "部分技能深度需现场考察");
-            }
             task.riskSummary = task.risks.isEmpty() ? "需人工复核" : task.risks.get(0);
             task.recommendation = evalResult.recommendation();
             task.aiRecommendation = evalResult.recommendation();
             task.decisionRationale = "8-Agent DAG: Intent→Parse→JdMatch→(TechEval+ProjectEval+Risk)→EvidenceFusion→Report";
             task.interviewQuestions = evalResult.interviewQuestions();
-            if (task.interviewQuestions.isEmpty()) {
-                task.interviewQuestions = List.of(
-                        "请详细说明最近一个项目的架构取舍。",
-                        "你在团队中承担的是主导、核心开发还是协作角色？",
-                        "请举例说明一次线上问题定位和复盘过程。");
-            }
             task.durationMs = System.currentTimeMillis() - start;
-            task.tokenCost = (int) (evalResult.durationMs() / 100);
+            // The legacy Java orchestrator does not expose provider token usage.
+            // Keep this unknown instead of deriving a fake token count from latency.
+            task.tokenCost = 0;
             task.status = "SUCCESS";
             task.updateTime = LocalDateTime.now();
 
@@ -2247,30 +2733,6 @@ public class ResumeEvaluationService {
             rootSpan.end();
             agentMetrics.agentTaskFinished();
             updateResumeTask(task);
-        }
-    }
-
-    private void persistRagasMetrics(MutableTask task) {
-        try {
-            RagasEvalMetrics entity = new RagasEvalMetrics();
-            entity.setTraceId(task.traceId);
-            entity.setSpanId("ragas-" + UUID.randomUUID());
-            entity.setContextPrecision(new BigDecimal("0.880"));
-            entity.setContextRecall(new BigDecimal("0.860"));
-            entity.setFaithfulness(new BigDecimal("0.870"));
-            entity.setAnswerRelevancy(new BigDecimal("0.900"));
-            entity.setOverallScore(new BigDecimal("0.875"));
-            entity.setPassed(1);
-            entity.setJudgeReason("质量阈值通过：faithfulness>=0.85 且 answerRelevancy>=0.85");
-            entity.setCreateTime(LocalDateTime.now());
-            entity.setUpdateTime(LocalDateTime.now());
-            ragasEvalMetricsMapper.insert(entity);
-            agentMetrics.recordRagFaithfulness(0.87);
-            agentMetrics.recordRagAnswerRelevancy(0.90);
-            agentMetrics.recordRagContextPrecision(0.88);
-            agentMetrics.recordRagOverallQuality(0.875);
-        } catch (DataAccessException e) {
-            log.warn("[eval] persist ragas_eval_metrics failed (trace={}): {}", task.traceId, e.getMessage());
         }
     }
 
@@ -2609,7 +3071,10 @@ public class ResumeEvaluationService {
                 task.overallScore, task.recommendation, task.summary, task.durationMs, task.tokenCost,
                 task.createTime, task.updateTime, task.strengths, task.risks, task.interviewQuestions, task.resumeText,
                 resumeFileUrl, task.resumeFileType, task.matchedJdTitle, task.jdMatchScore, task.topJdMatches,
-                task.aiRecommendation, task.decisionRationale, task.riskSummary, buildQueueFields(task));
+                task.aiRecommendation, task.decisionRationale, task.riskSummary, buildQueueFields(task),
+                task.conversationId, task.revisionNo, task.workflowRunId, task.baseWorkflowRunId, task.supersedesTraceId,
+                task.supersededByTraceId, task.evaluationBrief,
+                task.invalidatedNodes != null ? task.invalidatedNodes : List.of());
     }
 
     private String normalizeExecutionMode(String executionMode) {
@@ -2618,14 +3083,6 @@ public class ResumeEvaluationService {
 
     private String normalizeJobCategory(String jobCategory) {
         return StringUtils.hasText(jobCategory) ? jobCategory.trim().toUpperCase() : "TECH";
-    }
-
-    private int scoreByContent(MutableTask task) {
-        int base = "DAG_CONCURRENT".equals(task.executionMode) ? 86 : 82;
-        if (StringUtils.hasText(task.resumeText) && task.resumeText.length() > 120) {
-            base += 4;
-        }
-        return Math.min(base, 95);
     }
 
     private int parseLlmScore(String text) {
@@ -2638,46 +3095,6 @@ public class ResumeEvaluationService {
             if (max == 100) return (int) Math.round(score);
         }
         return 0;
-    }
-
-    private RecommendationDecision parseRecommendationDecision(String text, int score, double jdMatchScore, List<String> risks) {
-        String aiRecommendation = "NEED_MANUAL_REVIEW";
-        if (!StringUtils.hasText(text)) {
-            String fallback = score >= 85 ? "STRONG_RECOMMEND" : score >= 75 ? "RECOMMEND" : "NEED_MANUAL_REVIEW";
-            return new RecommendationDecision(fallback, fallback, "模型未返回推荐结论，按综合评分规则降级");
-        }
-        if (text.contains("强烈推荐")) {
-            aiRecommendation = "STRONG_RECOMMEND";
-        } else if (text.contains("推荐面试") && !text.contains("待定")) {
-            aiRecommendation = "RECOMMEND";
-        } else if (text.contains("建议面试")) {
-            aiRecommendation = "RECOMMEND";
-        }
-
-        String recommendation = aiRecommendation;
-        List<String> downgradeReasons = new ArrayList<>();
-        if (text.contains("严重不符") || risks.stream().anyMatch(r -> r.contains("经验年限"))) {
-            downgradeReasons.add("经验年限与岗位要求不符");
-        }
-        if (jdMatchScore > 0 && jdMatchScore < 0.5) {
-            downgradeReasons.add(String.format("JD 匹配度偏低（%.0f%%）", jdMatchScore * 100));
-        }
-        if (text.contains("硬风险") || text.contains("待定") || text.contains("复核")) {
-            downgradeReasons.add("存在需人工复核的硬风险信号");
-        }
-
-        if (!downgradeReasons.isEmpty()) {
-            if ("STRONG_RECOMMEND".equals(recommendation)) {
-                recommendation = "RECOMMEND";
-            } else if ("RECOMMEND".equals(recommendation)) {
-                recommendation = "NEED_MANUAL_REVIEW";
-            }
-        }
-
-        String rationale = downgradeReasons.isEmpty()
-                ? "系统决策与 AI 建议一致"
-                : String.join("；", downgradeReasons);
-        return new RecommendationDecision(recommendation, aiRecommendation, rationale);
     }
 
     private void persistOrchestratorEvents(String traceId) {
@@ -2749,6 +3166,14 @@ public class ResumeEvaluationService {
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("fileName", task.fileName);
+            payload.put("conversationId", task.conversationId);
+            payload.put("revisionNo", task.revisionNo);
+            payload.put("workflowRunId", task.workflowRunId);
+            payload.put("baseWorkflowRunId", task.baseWorkflowRunId);
+            payload.put("supersedesTraceId", task.supersedesTraceId);
+            payload.put("supersededByTraceId", task.supersededByTraceId);
+            payload.put("evaluationBrief", task.evaluationBrief);
+            payload.put("invalidatedNodes", task.invalidatedNodes);
             payload.put("jobCategory", task.jobCategory);
             payload.put("executionMode", task.executionMode);
             payload.put("status", task.status);
@@ -2826,6 +3251,29 @@ public class ResumeEvaluationService {
             return list.stream().map(String::valueOf).toList();
         }
         return new ArrayList<>();
+    }
+
+    private List<String> parseJsonStringList(String value) {
+        if (!StringUtils.hasText(value)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(value, new TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private String toJson(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            log.debug("[eval] could not serialize task metadata: {}", e.getMessage());
+            return null;
+        }
     }
 
     private Long averageByMode(List<MutableTask> snapshot, String mode) {
@@ -2936,6 +3384,14 @@ public class ResumeEvaluationService {
         private int attemptCount;
         private LocalDateTime nextRetryAt;
         private String workerId;
+        private String conversationId;
+        private int revisionNo = 1;
+        private String workflowRunId;
+        private String baseWorkflowRunId;
+        private String supersedesTraceId;
+        private String supersededByTraceId;
+        private String evaluationBrief;
+        private List<String> invalidatedNodes = List.of();
 
         private MutableTask(Long id, String traceId, String fileName, String jobCategory, String executionMode, String status,
                             Integer overallScore, String recommendation, String summary, Long durationMs, Integer tokenCost,
@@ -2971,6 +3427,16 @@ public class ResumeEvaluationService {
             this.decisionRationale = decisionRationale;
             this.riskSummary = riskSummary;
         }
+    }
+
+    private record RevisionContext(
+            String conversationId,
+            int revisionNo,
+            String supersedesTraceId,
+            String baseWorkflowRunId,
+            String evaluationBrief,
+            List<String> invalidatedNodes
+    ) {
     }
 
     private List<String> formatToolCall(String name, String input, String output, long durationMs, String status) {

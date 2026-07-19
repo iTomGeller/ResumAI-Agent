@@ -1,0 +1,4 @@
+interface:
+  display_name: "Explain Evaluation Decision"
+  short_description: "Explain report decisions and evidence-driven revisions"
+  default_prompt: "Use $explain-evaluation-decision to explain this report and identify what new evidence would change it."

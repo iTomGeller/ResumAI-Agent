@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Evaluation Revision"
+  short_description: "Plan minimal reruns after resume or JD changes"
+  default_prompt: "Use $plan-evaluation-revision to compute which evaluation nodes must rerun after this change."

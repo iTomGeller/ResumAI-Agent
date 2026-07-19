@@ -1,0 +1,4 @@
+interface:
+  display_name: "Generate Interview Probes"
+  short_description: "Generate evidence-linked interview follow-up questions"
+  default_prompt: "Use $generate-interview-probes to create evidence-linked follow-up questions for this candidate."

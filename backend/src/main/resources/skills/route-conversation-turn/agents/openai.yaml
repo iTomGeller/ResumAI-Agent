@@ -1,0 +1,4 @@
+interface:
+  display_name: "Route Conversation Turn"
+  short_description: "Route goal changes and controls in resume conversations"
+  default_prompt: "Use $route-conversation-turn to route this message against the active resume-evaluation goal."

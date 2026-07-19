@@ -1,19 +1,162 @@
 {
+  "evidencePolicy": {
+    "mode": "source-backed-only",
+    "subjectBinding": "candidate-declared-identifiers-only",
+    "emptyOrFailedResult": "unavailable",
+    "requireSourceUrlForCandidateFacts": true,
+    "allowSyntheticFallback": false
+  },
   "mcpServers": {
     "resume-tools": {
+      "enabled": true,
+      "default": true,
       "transport": "stdio",
       "command": "python",
-      "args": ["-m", "app.mcp_servers.resume_tools"]
+      "args": ["-m", "app.mcp_servers.resume_tools"],
+      "description": "Internal deterministic resume tools; not an external evidence source"
     },
-    "fetch": {
-      "transport": "stdio",
-      "command": "python",
-      "args": ["-m", "mcp_server_fetch"]
+    "exa": {
+      "enabled": true,
+      "default": true,
+      "transport": "streamable_http",
+      "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
+      "headersFromEnv": {
+        "x-api-key": "EXA_API_KEY"
+      },
+      "description": "Official Exa hosted MCP; keyless free tier, optional EXA_API_KEY for higher limits",
+      "evidence": {
+        "provider": "exa",
+        "kind": "public-web",
+        "subjectBinding": "unverified",
+        "requiresSourceUrl": true,
+        "allowedUse": "discovery-and-corroboration"
+      }
+    },
+    "firecrawl": {
+      "enabled": true,
+      "default": true,
+      "transport": "streamable_http",
+      "url": "https://mcp.firecrawl.dev/v2/mcp",
+      "headersFromEnv": {
+        "x-firecrawl-api-key": "FIRECRAWL_API_KEY"
+      },
+      "description": "Official Firecrawl hosted MCP; keyless search/scrape are rate limited",
+      "evidence": {
+        "provider": "firecrawl",
+        "kind": "public-web",
+        "subjectBinding": "unverified",
+        "requiresSourceUrl": true,
+        "allowedUse": "page-retrieval-and-corroboration"
+      }
     },
     "time": {
+      "enabled": true,
+      "default": true,
       "transport": "stdio",
       "command": "python",
-      "args": ["-m", "mcp_server_time"]
+      "args": ["-m", "mcp_server_time"],
+      "description": "Official MCP reference time server; deterministic IANA timezone data",
+      "evidence": {
+        "provider": "mcp-time",
+        "kind": "deterministic-time",
+        "subjectBinding": "not-applicable",
+        "requiresSourceUrl": false,
+        "allowedUse": "timestamp-and-timezone-only"
+      }
+    },
+    "github": {
+      "enabled": "auto",
+      "default": false,
+      "requiredEnv": ["GITHUB_TOKEN"],
+      "transport": "streamable_http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "X-MCP-Toolsets": "repos,users",
+        "X-MCP-Readonly": "true"
+      },
+      "headersFromEnv": {
+        "Authorization": {
+          "env": "GITHUB_TOKEN",
+          "prefix": "Bearer "
+        }
+      },
+      "description": "GitHub official remote MCP in read-only mode; enabled when GITHUB_TOKEN is set",
+      "evidence": {
+        "provider": "github",
+        "kind": "public-code-host",
+        "subjectBinding": "candidate-declared-handle-or-url-only",
+        "requiresSourceUrl": true,
+        "allowedUse": "repository-and-contribution-corroboration"
+      }
+    },
+    "tavily": {
+      "enabled": false,
+      "default": false,
+      "transport": "streamable_http",
+      "url": "https://mcp.tavily.com/mcp",
+      "headersFromEnv": {
+        "Authorization": {
+          "env": "TAVILY_API_KEY",
+          "prefix": "Bearer "
+        }
+      },
+      "description": "Official Tavily remote MCP; optional alternative search/extract provider",
+      "evidence": {
+        "provider": "tavily",
+        "kind": "public-web",
+        "subjectBinding": "unverified",
+        "requiresSourceUrl": true,
+        "allowedUse": "discovery-and-corroboration"
+      }
+    },
+    "brave-search": {
+      "enabled": false,
+      "default": false,
+      "requiredEnv": ["BRAVE_API_KEY"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
+      "envFromHost": ["BRAVE_API_KEY"],
+      "runtimeRequirement": "Node.js 22+",
+      "description": "Official Brave Search MCP; enabled when BRAVE_API_KEY and npx are available",
+      "evidence": {
+        "provider": "brave-search",
+        "kind": "public-web-search",
+        "subjectBinding": "unverified",
+        "requiresSourceUrl": true,
+        "allowedUse": "discovery-and-cross-checking"
+      }
+    },
+    "arxiv": {
+      "enabled": false,
+      "default": false,
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["arxiv-mcp-server"],
+      "runtimeRequirement": "uv with arxiv-mcp-server",
+      "description": "Maintainer-published arXiv MCP; optional technical-paper evidence",
+      "evidence": {
+        "provider": "arxiv",
+        "kind": "technical-paper",
+        "subjectBinding": "candidate-declared-paper-id-or-profile-only",
+        "requiresSourceUrl": true,
+        "allowedUse": "technical-context-and-publication-corroboration"
+      }
+    },
+    "fetch": {
+      "enabled": false,
+      "default": false,
+      "transport": "stdio",
+      "command": "python",
+      "args": ["-m", "mcp_server_fetch"],
+      "description": "Official MCP reference fetch server; disabled by default because it can reach internal addresses",
+      "evidence": {
+        "provider": "mcp-fetch",
+        "kind": "direct-url-content",
+        "subjectBinding": "candidate-declared-url-only",
+        "requiresSourceUrl": true,
+        "allowedUse": "explicit-url-retrieval"
+      }
     }
   }
 }

@@ -104,7 +104,7 @@ public class ResumeGraphService {
                 Record rec = result.next();
                 if (!candidateAdded) {
                     String candidateName = rec.get("c").asNode().get("name").asString();
-                    nodes.add(new GraphResponse.GraphNode("candidate", candidateName, "candidate", 86));
+                    nodes.add(new GraphResponse.GraphNode("candidate", candidateName, "candidate", null));
                     candidateAdded = true;
                 }
                 org.neo4j.driver.types.Node targetNode = rec.get("n").asNode();
@@ -120,11 +120,12 @@ public class ResumeGraphService {
                         : targetNode.get("name").asString();
                 List<String> nlabels = rec.get("nlabels").asList(v -> v.asString());
                 String type = nlabels.isEmpty() ? "skill" : nlabels.get(0).toLowerCase();
-                int score = targetNode.containsKey("score") ? targetNode.get("score").asInt() : 80;
+                Integer score = targetNode.containsKey("score") && !targetNode.get("score").isNull()
+                        ? targetNode.get("score").asInt() : null;
                 nodes.add(new GraphResponse.GraphNode(nodeId, label, type, score));
 
                 String relType = rec.get("rel").asString();
-                double conf = rec.get("conf").isNull() ? 0.8 : rec.get("conf").asDouble();
+                Double conf = rec.get("conf").isNull() ? null : rec.get("conf").asDouble();
                 edges.add(new GraphResponse.GraphEdge("candidate", nodeId, relType, conf));
             }
             agentMetrics.recordToolCall("neo4j_query", "ResumeGraphAgent", "SUCCESS",
@@ -174,11 +175,11 @@ public class ResumeGraphService {
         return "请从以下简历中提取结构化实体，目标岗位为「" + jobCategory + "」。\n"
                 + "返回严格 JSON（不要加任何说明），格式：\n"
                 + "{\n"
-                + "  \"skills\": [{\"name\": \"xxx\", \"score\": 85}],\n"
-                + "  \"projects\": [{\"name\": \"xxx\", \"score\": 80}],\n"
-                + "  \"risks\": [{\"name\": \"xxx\", \"score\": 40}],\n"
+                + "  \"skills\": [{\"name\": \"xxx\", \"score\": 0, \"evidence\": \"简历原文证据\"}],\n"
+                + "  \"projects\": [{\"name\": \"xxx\", \"score\": 0, \"evidence\": \"简历原文证据\"}],\n"
+                + "  \"risks\": [{\"name\": \"xxx\", \"score\": 0, \"evidence\": \"简历原文证据\"}],\n"
                 + "  \"candidate_name\": \"姓名\"\n"
-                + "}\n\n"
+                + "}\nscore 必须是基于对应 evidence 的 0-100 整数；无法从原文支持的实体不要输出。\n\n"
                 + "简历内容：\n" + (resumeText.length() > 3000 ? resumeText.substring(0, 3000) : resumeText);
     }
 
@@ -190,8 +191,8 @@ public class ResumeGraphService {
         List<Map<String, Object>> risks = (List<Map<String, Object>>) entities.getOrDefault("risks", List.of());
         String stableJobId = StringUtils.hasText(jobId) ? jobId : "job-" + jobCategory;
         String stableJobLabel = StringUtils.hasText(jobTitle) ? jobTitle : jobCategory;
-        int nodesWritten = 1 + skills.size() + projects.size() + risks.size() + 1;
-        int relationshipsWritten = skills.size() + projects.size() + risks.size() + 1;
+        int nodesWritten = 2; // candidate + explicitly targeted job
+        int relationshipsWritten = 1;
 
         try (Session session = driver.session()) {
             session.run(
@@ -201,7 +202,8 @@ public class ResumeGraphService {
 
             for (Map<String, Object> skill : skills) {
                 String name = (String) skill.get("name");
-                int score = ((Number) skill.getOrDefault("score", 80)).intValue();
+                Integer score = evidenceScore(skill);
+                if (!StringUtils.hasText(name) || score == null) continue;
                 String id = traceId + "_skill_" + name.hashCode();
                 session.run(
                         "MERGE (s:Skill {id: $id}) SET s.name = $name, s.score = $score, s.traceId = $traceId " +
@@ -209,11 +211,14 @@ public class ResumeGraphService {
                         "MERGE (c)-[:POSSESSES {confidence: $conf}]->(s)",
                         Values.parameters("id", id, "name", name, "score", score, "traceId", traceId, "conf", score / 100.0)
                 );
+                nodesWritten++;
+                relationshipsWritten++;
             }
 
             for (Map<String, Object> project : projects) {
                 String name = (String) project.get("name");
-                int score = ((Number) project.getOrDefault("score", 80)).intValue();
+                Integer score = evidenceScore(project);
+                if (!StringUtils.hasText(name) || score == null) continue;
                 String id = traceId + "_proj_" + name.hashCode();
                 session.run(
                         "MERGE (p:Project {id: $id}) SET p.name = $name, p.score = $score, p.traceId = $traceId " +
@@ -221,11 +226,14 @@ public class ResumeGraphService {
                         "MERGE (c)-[:WORKED_ON {confidence: $conf}]->(p)",
                         Values.parameters("id", id, "name", name, "score", score, "traceId", traceId, "conf", score / 100.0)
                 );
+                nodesWritten++;
+                relationshipsWritten++;
             }
 
             for (Map<String, Object> risk : risks) {
                 String name = (String) risk.get("name");
-                int score = ((Number) risk.getOrDefault("score", 40)).intValue();
+                Integer score = evidenceScore(risk);
+                if (!StringUtils.hasText(name) || score == null) continue;
                 String id = traceId + "_risk_" + name.hashCode();
                 session.run(
                         "MERGE (r:Risk {id: $id}) SET r.name = $name, r.score = $score, r.traceId = $traceId " +
@@ -233,18 +241,29 @@ public class ResumeGraphService {
                         "MERGE (c)-[:HAS_RISK {confidence: $conf}]->(r)",
                         Values.parameters("id", id, "name", name, "score", score, "traceId", traceId, "conf", score / 100.0)
                 );
+                nodesWritten++;
+                relationshipsWritten++;
             }
 
             session.run(
                     "MERGE (j:Job {id: $jobId}) SET j.name = $jobName, j.label = $jobLabel, j.traceId = $traceId " +
                     "WITH j MATCH (c:Candidate {traceId: $traceId}) " +
-                    "MERGE (c)-[:TARGETS {confidence: 0.85}]->(j)",
+                    "MERGE (c)-[:TARGETS {source: 'user_input'}]->(j)",
                     Values.parameters("jobId", stableJobId, "jobName", stableJobLabel, "jobLabel", stableJobLabel, "traceId", traceId)
             );
         }
 
         agentMetrics.recordNeo4jNodesWritten("populateGraph", nodesWritten);
         agentMetrics.recordNeo4jRelationshipsWritten("populateGraph", relationshipsWritten);
+    }
+
+    private Integer evidenceScore(Map<String, Object> entity) {
+        Object raw = entity.get("score");
+        if (!(raw instanceof Number number)) {
+            return null;
+        }
+        int score = number.intValue();
+        return score >= 0 && score <= 100 ? score : null;
     }
 
     /**

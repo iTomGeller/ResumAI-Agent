@@ -8,60 +8,10 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from app.agent_harness import validate_timeline_text
 from app.config import settings
 
 logger = logging.getLogger(__name__)
-
-_URL_PATTERN = re.compile(r"https?://[^\s,;）)\"'，；]+", re.I)
-
-
-def extract_primary_url(text: str) -> str:
-    """First external URL in the resume (GitHub/blog/portfolio) for public-MCP enrichment."""
-    if not text:
-        return ""
-    for match in _URL_PATTERN.findall(text):
-        url = match.rstrip(".)，。")
-        if "github.com" in url.lower() or re.search(r"blog|medium|dev\.to|juejin|cnblogs|segmentfault|gitee|gitlab", url, re.I):
-            return url
-    first = _URL_PATTERN.search(text)
-    return first.group(0).rstrip(".)，。") if first else ""
-
-
-async def mcp_fetch_url(url: str, max_chars: int = 1200, timeout_s: float = 8.0) -> Dict[str, Any]:
-    """Fetch a public web page via the official public MCP server `mcp-server-fetch`.
-
-    Real public MCP integration (Model Context Protocol). Fully guarded: any failure or timeout
-    returns an empty/error result so the workflow never blocks on external content.
-    """
-    if not url:
-        return {"ok": False, "reason": "no_url", "server": "mcp-server-fetch"}
-    try:
-        async def _do() -> Dict[str, Any]:
-            from langchain_mcp_adapters.client import MultiServerMCPClient
-
-            client = MultiServerMCPClient({
-                "fetch": {"transport": "stdio", "command": "python", "args": ["-m", "mcp_server_fetch"]}
-            })
-            tools = await client.get_tools()
-            fetch_tool = next((t for t in tools if getattr(t, "name", "") == "fetch"), None)
-            if fetch_tool is None:
-                return {"ok": False, "reason": "fetch_tool_unavailable", "server": "mcp-server-fetch"}
-            raw = await fetch_tool.ainvoke({"url": url, "max_length": max_chars})
-            content = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
-            return {
-                "ok": True,
-                "server": "mcp-server-fetch",
-                "protocol": "MCP/stdio",
-                "url": url,
-                "contentPreview": content[:max_chars],
-            }
-
-        return await asyncio.wait_for(_do(), timeout=timeout_s)
-    except asyncio.TimeoutError:
-        return {"ok": False, "reason": "timeout", "server": "mcp-server-fetch", "url": url}
-    except Exception as exc:  # noqa: BLE001 - external MCP must never break the pipeline
-        return {"ok": False, "reason": str(exc)[:160], "server": "mcp-server-fetch", "url": url}
-
 
 async def mcp_current_time(timezone: str = "Asia/Shanghai", timeout_s: float = 6.0) -> Dict[str, Any]:
     """Authoritative evaluation reference time via the official public MCP server `mcp-server-time`.
@@ -242,16 +192,42 @@ async def jd_requirements_extract(jd_match_json: str) -> str:
 
 
 async def timeline_validator(resume_text: str) -> str:
-    return json.dumps({"status": "OK", "note": "timeline validation delegated to Java RAG pipeline"}, ensure_ascii=False)
+    return json.dumps(validate_timeline_text(resume_text), ensure_ascii=False)
 
 
 async def evidence_merge(tech: str, project: str, risk: str) -> str:
-    return json.dumps({
-        "techSummary": tech[:300] if tech else "",
-        "projectSummary": project[:300] if project else "",
-        "riskSummary": risk[:300] if risk else "",
-        "merged": True,
-    }, ensure_ascii=False)
+    payloads: Dict[str, Any] = {}
+    missing_sources: List[str] = []
+    invalid_sources: List[str] = []
+    declared_evidence_sources: Dict[str, Any] = {}
+    for source_name, raw in (("tech", tech), ("project", project), ("risk", risk)):
+        if not raw or not raw.strip():
+            missing_sources.append(source_name)
+            continue
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            invalid_sources.append(source_name)
+            continue
+        if not isinstance(parsed, (dict, list)):
+            invalid_sources.append(source_name)
+            continue
+        payloads[source_name] = parsed
+        if isinstance(parsed, dict):
+            declared_evidence_sources[source_name] = parsed.get("evidenceSource")
+    complete = not missing_sources and not invalid_sources
+    return json.dumps(
+        {
+            "status": "COMPLETE" if complete else "PARTIAL",
+            "merged": complete,
+            "sourcePayloads": payloads,
+            "declaredEvidenceSources": declared_evidence_sources,
+            "missingSources": missing_sources,
+            "invalidSources": invalid_sources,
+            "note": "Deterministic structural merge only; no score, confidence, or candidate fact is generated.",
+        },
+        ensure_ascii=False,
+    )
 
 
 async def github_enrichment(resume_text: str) -> str:

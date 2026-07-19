@@ -1,0 +1,4 @@
+interface:
+  display_name: "Normalize Job Description"
+  short_description: "Extract cited requirements from job descriptions"
+  default_prompt: "Use $normalize-job-description to extract cited required and preferred criteria from this JD."

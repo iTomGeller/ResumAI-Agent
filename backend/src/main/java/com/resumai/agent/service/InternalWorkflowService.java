@@ -59,6 +59,12 @@ public class InternalWorkflowService {
         if (!StringUtils.hasText(request.eventId())) {
             throw new IllegalArgumentException("eventId required");
         }
+        if (!resumeEvaluationService.acceptsWorkflowCallback(
+                request.traceId(), request.workflowRunId(), request.conversationId(), request.revision())) {
+            log.info("ignored stale workflow event trace={} run={} revision={} event={}",
+                    request.traceId(), request.workflowRunId(), request.revision(), request.eventId());
+            return;
+        }
         AgentExecutionTrace existing = agentExecutionTraceMapper.selectOne(
                 new LambdaQueryWrapper<AgentExecutionTrace>()
                         .eq(AgentExecutionTrace::getEventId, request.eventId())
@@ -133,8 +139,16 @@ public class InternalWorkflowService {
     }
 
     public void applyWorkflowResult(WorkflowResultRequest request) {
-        resumeEvaluationService.applyWorkflowResult(request);
-        agentMemoryService.recordWorkflowResult(request);
+        if (!resumeEvaluationService.acceptsWorkflowCallback(
+                request.traceId(), request.workflowRunId(), request.conversationId(), request.revision())) {
+            log.info("ignored stale workflow result trace={} run={} revision={}",
+                    request.traceId(), request.workflowRunId(), request.revision());
+            return;
+        }
+        boolean completedSuccessfully = resumeEvaluationService.applyWorkflowResult(request);
+        if (completedSuccessfully && "SUCCESS".equals(request.status())) {
+            agentMemoryService.recordWorkflowResult(request);
+        }
     }
 
     private String mapEventKindToToolCall(String kind) {
@@ -214,6 +228,9 @@ public class InternalWorkflowService {
         payload.put("toolFamily", request.toolFamily());
         payload.put("substeps", request.substeps());
         payload.put("retrieval", request.retrieval());
+        payload.put("workflowRunId", request.workflowRunId());
+        payload.put("conversationId", request.conversationId());
+        payload.put("revision", request.revision());
         return objectMapper.writeValueAsString(payload);
     }
 

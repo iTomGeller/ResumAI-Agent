@@ -1,4 +1,8 @@
-"""Start ResumAI stack on Aliyun ECS with mirror-aware pull retries."""
+"""Start ResumAI on ECS with mirror-aware pulls and fresh schema init.
+
+The current schema is loaded by MySQL's entrypoint into the versioned named
+volume.  Existing/legacy volumes are never copied, migrated, or deleted.
+"""
 from __future__ import annotations
 
 import sys
@@ -28,8 +32,8 @@ CORE_SERVICES = (
     "ai-resume-backend ai-resume-frontend prometheus grafana"
 )
 
-EXTERNAL_VOLUMES = [
-    "resumai-mysql-data",
+NAMED_VOLUMES = [
+    "resumai-mysql-data-conversation-v1",
     "resumai-redis-data",
     "resumai-minio-data",
     "resumai-etcd-data",
@@ -40,6 +44,9 @@ EXTERNAL_VOLUMES = [
     "resumai-neo4j-data",
     "resumai-neo4j-logs",
     "resumai-neo4j-plugins",
+    "resumai-workflow-postgres-data",
+    "resumai-prometheus-data",
+    "resumai-grafana-data",
 ]
 
 
@@ -116,7 +123,7 @@ def main() -> None:
         for image in PUBLIC_IMAGES:
             pull_with_retry(ssh, image)
 
-        for volume in EXTERNAL_VOLUMES:
+        for volume in NAMED_VOLUMES:
             must(ssh, f"docker volume inspect {volume} >/dev/null 2>&1 || docker volume create {volume}", timeout=30)
 
         must(ssh, f"cd {DEPLOY_DIR} && docker compose -f docker-compose.prod.yml config >/dev/null", timeout=120)
@@ -125,17 +132,6 @@ def main() -> None:
             f"cd {DEPLOY_DIR} && docker compose -f docker-compose.prod.yml up -d --no-build {CORE_SERVICES} 2>&1",
             timeout=1800,
         )
-
-        mysql_root = env.get("MYSQL_ROOT_PASSWORD", "ResumaiRoot!2026")
-        mysql_db = env.get("MYSQL_DATABASE", "resumai_agent")
-        time.sleep(25)
-        for migration in ("migration-v5-langgraph-workflow.sql", "migration-v6-trace-contract.sql"):
-            run(
-                ssh,
-                f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' {mysql_db} "
-                f"< {DEPLOY_DIR}/backend/src/main/resources/db/{migration}",
-                timeout=120,
-            )
 
         for attempt in range(1, 60):
             code, out = run(ssh, "curl -fsS http://127.0.0.1/api/health", timeout=20)

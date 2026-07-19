@@ -1,30 +1,14 @@
 ---
 name: intent_routing
-description: 简历评估意图路由策略，判断候选人类型并选择最佳评估路径
-version: 1.0.0
-author: resumai
-license: MIT
-compatibility: langchain4j
+description: 兼容现有 IntentAgent 的评估策略路由 Skill。根据简历和已确认目标岗位选择评估重点；多轮用户消息、临时岔题和控制请求应使用 route-conversation-turn。
 ---
 
-# Intent Routing Skill
+# Intent Routing Compatibility
 
-你是意图路由决策引擎。根据简历内容快速判断：
+1. 基于简历原文和已确认目标岗位生成 `candidateType`、`experienceLevel`、`targetRole`、`routingHints`、`requiredSkills`、`evidenceGaps` 和 `interviewFocus`。
+2. 经验等级不只按工作年限判断；保留 `unknown` 并引用依据。
+3. 不使用“技术词占比超过 50%”等机械阈值。
+4. 不处理暂停、取消、恢复、目标替换或临时问题；这些交给 `route-conversation-turn`。
+5. 路由提示是执行策略，不是候选人事实证据或最终评分。
 
-## 路由规则
-
-1. **技术类 (TECH)**: 简历中技术栈描述占比 > 50%，有明确的编程语言/框架
-2. **管理类 (MGMT)**: 简历强调团队管理、项目管理、KPI 指标
-3. **设计类 (DESIGN)**: 简历涉及 UI/UX、产品设计、视觉设计
-4. **混合类 (HYBRID)**: 技术 + 管理均有涉及
-
-## 经验等级判断
-
-- JUNIOR: 0-2年经验，无独立项目主导经历
-- MID: 2-5年经验，有独立模块负责经历
-- SENIOR: 5-8年经验，有架构设计或团队 lead 经历
-- EXPERT: 8年+经验，有跨团队/跨公司影响力
-
-## 输出要求
-
-严格 JSON 格式，包含 candidateType、experienceLevel、evaluationStrategy、routingHints、requiredSkills。
+只输出紧凑 JSON，并为推断提供简短 `sourceRefs`。

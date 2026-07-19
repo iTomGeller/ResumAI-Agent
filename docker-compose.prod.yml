@@ -21,13 +21,12 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-resumai}
       SPRING_PROFILES_ACTIVE: prod
-      LANGFUSE_OTEL_ENDPOINT: http://langfuse-web:3000/api/public/otel/v1/traces
-      LANGFUSE_PUBLIC_KEY: lf_pk_resumai
-      LANGFUSE_SECRET_KEY: lf_sk_resumai
-      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-http://8.138.10.189:3001}
+      LANGFUSE_OTEL_ENDPOINT: ${LANGFUSE_OTEL_ENDPOINT:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-}
       WORKFLOW_BASE_URL: http://ai-resume-workflow:8090
-      WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:-change-me}
-      RESUMAI_WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:-change-me}
+      WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       WORKFLOW_MODE: python
     expose:
       - "8080"
@@ -40,7 +39,7 @@ services:
       redis:
         condition: service_started
       ai-resume-workflow:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/api/health || exit 1"]
       interval: 20s
@@ -52,7 +51,8 @@ services:
 
   ai-resume-workflow:
     build:
-      context: ./workflow
+      context: .
+      dockerfile: workflow/Dockerfile
     container_name: ai-resume-workflow
     restart: unless-stopped
     env_file:
@@ -62,18 +62,23 @@ services:
       DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       JAVA_BACKEND_URL: http://ai-resume-backend:8080
-      WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:-change-me}
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-lf_pk_resumai}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-lf_sk_resumai}
-      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
-      LANGGRAPH_CHECKPOINT_DB_URI: postgresql://workflow:${WORKFLOW_POSTGRES_PASSWORD:-workflow}@ai-resume-workflow-postgres:5432/langgraph_checkpoints
+      WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+      LANGGRAPH_CHECKPOINT_DB_URI: postgresql://workflow:${WORKFLOW_POSTGRES_PASSWORD:?WORKFLOW_POSTGRES_PASSWORD must be set}@ai-resume-workflow-postgres:5432/langgraph_checkpoints
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
     expose:
       - "8090"
     depends_on:
       ai-resume-workflow-postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8090/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8090/ready || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 10
@@ -87,7 +92,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: workflow
-      POSTGRES_PASSWORD: ${WORKFLOW_POSTGRES_PASSWORD:-workflow}
+      POSTGRES_PASSWORD: ${WORKFLOW_POSTGRES_PASSWORD:?WORKFLOW_POSTGRES_PASSWORD must be set}
       POSTGRES_DB: langgraph_checkpoints
     expose:
       - "5432"
@@ -98,6 +103,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    networks:
+      - resumai-net
+
+  ai-resume-agent-harness:
+    build:
+      context: .
+      dockerfile: workflow/Dockerfile
+    profiles: ["harness"]
+    command: ["python", "run_agent_harness.py"]
+    restart: "no"
     networks:
       - resumai-net
 
@@ -316,35 +331,28 @@ networks:
 
 volumes:
   mysql-data:
-    name: resumai-mysql-data
-    external: true
+    # Conversation/runtime schema is initialized from the current schema.sql
+    # on this versioned volume. Treat the suffix as immutable: for a future
+    # incompatible schema, bump it instead of copying/deleting an older volume.
+    name: resumai-mysql-data-conversation-v1
   redis-data:
     name: resumai-redis-data
-    external: true
   neo4j-data:
     name: resumai-neo4j-data
-    external: true
   neo4j-logs:
     name: resumai-neo4j-logs
-    external: true
   neo4j-plugins:
     name: resumai-neo4j-plugins
-    external: true
   minio-data:
     name: resumai-minio-data
-    external: true
   etcd-data:
     name: resumai-etcd-data
-    external: true
   milvus-data:
     name: resumai-milvus-data
-    external: true
   uploads-data:
     name: resumai-uploads-data
-    external: true
   backend-logs:
     name: resumai-backend-logs
-    external: true
   prometheus-data:
     name: resumai-prometheus-data
   grafana-data:

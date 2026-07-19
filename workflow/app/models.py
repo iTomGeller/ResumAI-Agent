@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -11,12 +12,73 @@ class WorkflowRunRequest(BaseModel):
     jobCategory: Optional[str] = None
     jobDescription: Optional[str] = None
     executionMode: Optional[str] = None
+    conversationId: Optional[str] = None
+    workflowRunId: Optional[str] = None
+    revision: int = Field(default=1, ge=1)
+    baseTraceId: Optional[str] = None
+    baseWorkflowRunId: Optional[str] = None
+    evaluationBrief: Dict[str, Any] = Field(default_factory=dict)
+    affectedNodes: List[str] = Field(default_factory=list)
+    invalidatedNodes: List[str] = Field(default_factory=list)
 
 
 class WorkflowRunAccepted(BaseModel):
     workflowRunId: str
     traceId: str
     status: str
+    conversationId: Optional[str] = None
+    revision: int = 1
+
+
+class RunControlAction(str, Enum):
+    PAUSE = "PAUSE"
+    RESUME = "RESUME"
+    CANCEL = "CANCEL"
+
+
+class RunControlRequest(BaseModel):
+    action: RunControlAction
+    traceId: Optional[str] = None
+    conversationId: Optional[str] = None
+    revision: int = Field(default=1, ge=1)
+
+
+class RunControlResponse(BaseModel):
+    workflowRunId: str
+    traceId: str
+    conversationId: str
+    revision: int
+    status: str
+    checkpointed: bool = False
+
+
+class ConversationTurnRequest(BaseModel):
+    conversationId: Optional[str] = None
+    workflowRunId: Optional[str] = None
+    traceId: Optional[str] = None
+    revision: int = Field(default=1, ge=1)
+    message: Optional[str] = None
+    content: Optional[str] = None
+    runStatus: str = "RUNNING"
+    context: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationTurnResponse(BaseModel):
+    intent: str
+    confidence: float
+    affectsEvaluation: bool
+    answerThenResume: bool
+    affectedNodes: List[str] = Field(default_factory=list)
+    assistantReply: str
+    assistantMessage: Optional[str] = None
+    controlAction: Optional[str] = None
+    evaluationPatch: Dict[str, Any] = Field(default_factory=dict)
+    requiresConfirmation: bool = False
+    reason: str = ""
+    conversationId: Optional[str] = None
+    workflowRunId: Optional[str] = None
+    traceId: Optional[str] = None
+    revision: int = 1
 
 
 class WorkflowState(BaseModel):
@@ -26,6 +88,15 @@ class WorkflowState(BaseModel):
     jobDescription: Optional[str] = None
     executionMode: Optional[str] = None
     workflowRunId: str = ""
+    conversationId: str = ""
+    revision: int = 1
+    baseTraceId: Optional[str] = None
+    baseWorkflowRunId: Optional[str] = None
+    evaluationBrief: Dict[str, Any] = Field(default_factory=dict)
+    affectedNodes: List[str] = Field(default_factory=list)
+    invalidatedNodes: List[str] = Field(default_factory=list)
+    revisionPlan: Dict[str, Any] = Field(default_factory=dict)
+    reusedNodes: List[str] = Field(default_factory=list)
     intentResult: Optional[str] = None
     parseResult: Optional[str] = None
     jdResult: Optional[str] = None
@@ -35,11 +106,13 @@ class WorkflowState(BaseModel):
     fusionResult: Optional[str] = None
     finalReport: Optional[str] = None
     harnessContext: Dict[str, Any] = Field(default_factory=dict)
+    harnessPlan: Dict[str, Any] = Field(default_factory=dict)
     overallScore: int = 0
     recommendation: Optional[str] = None
     strengths: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
     interviewQuestions: List[str] = Field(default_factory=list)
+    degradedReasons: List[str] = Field(default_factory=list)
     completedNodes: List[str] = Field(default_factory=list)
     failedNode: Optional[str] = None
     toolHealth: Dict[str, Any] = Field(default_factory=dict)
@@ -101,12 +174,19 @@ class TraceEvent(BaseModel):
     toolFamily: Optional[str] = None
     substeps: List[Dict[str, Any]] = Field(default_factory=list)
     retrieval: Optional[Dict[str, Any]] = None
+    workflowRunId: Optional[str] = None
+    conversationId: Optional[str] = None
+    revision: Optional[int] = None
+    reuseSourceWorkflowRunId: Optional[str] = None
+    reuseSourceTraceId: Optional[str] = None
 
 
 class WorkflowResultPayload(BaseModel):
     traceId: str
     workflowRunId: str
     status: str
+    conversationId: Optional[str] = None
+    revision: int = 1
     summary: Optional[str] = None
     overallScore: int = 0
     recommendation: Optional[str] = None

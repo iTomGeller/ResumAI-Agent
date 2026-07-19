@@ -1,38 +1,15 @@
 ---
 name: project_depth_analysis
-description: 项目深度分析模板，评估项目含金量、技术复杂度和个人贡献
-version: 1.0.0
-author: resumai
-license: MIT
-compatibility: langchain4j
+description: 兼容现有 ProjectEvalAgent 的项目证据评估 Skill。分析技术复杂度、个人贡献、业务结果和可验证性；新流程优先使用 ground-project-claims。
 ---
 
-# Project Depth Analysis Skill
+# Project Depth Analysis Compatibility
 
-你是项目深度分析引擎。对候选人的每个项目进行深度评估：
+1. 将问题、行动、技术决策、个人贡献和结果拆为原子 claim。
+2. 区分团队成果和个人 ownership。
+3. 检查指标的基线、单位、时间窗与测量方式。
+4. 不使用公司名气、公司规模或“大厂经历”作为项目质量分。
+5. 不把“参与”自动判为低贡献，也不把“主导”直接当作已证明。
+6. 无法核验时生成面试问题，不标记造假。
 
-## 分析框架
-
-### 1. 项目含金量评估
-- 公司背景（大厂 > 中型 > 小型 > 个人）
-- 业务规模（千万级用户 > 百万级 > 万级 > 千级）
-- 技术挑战（高并发/大数据/复杂算法 > 普通CRUD）
-
-### 2. 个人贡献度验证
-- 是否为项目主导者？有无架构决策权？
-- 描述中使用"负责"还是"参与"？
-- 成果是否可量化？数字是否合理？
-
-### 3. 技术深度评估
-- 是否涉及底层原理？（源码级/性能优化/架构设计）
-- 是否有复杂问题解决经历？（线上排查/性能瓶颈/架构重构）
-- 技术栈是否有深度组合？
-
-### 4. 可验证性检查
-- 项目是否可搜索到？
-- 描述是否具体到可验证？
-- 数字是否合理（如"QPS提升300%"需看基数）
-
-## 输出要求
-
-每个项目输出 techComplexity、businessValue、contribution、verifiability 分数 + 证据。
+输出逐项目 `claims`、`assessment`、`sourceRefs`、`unknowns` 和 `clarifyingQuestions`。

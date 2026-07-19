@@ -1,0 +1,4 @@
+interface:
+  display_name: "Calibrate Evidence Confidence"
+  short_description: "Calibrate claim confidence across verified sources"
+  default_prompt: "Use $calibrate-evidence-confidence to classify each resume claim by evidence status."
