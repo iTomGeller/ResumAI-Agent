@@ -156,10 +156,13 @@ def _run_container(request: InvokeRequest, payload: str, timeout: int) -> Dict[s
         )
         _active[request.sandboxId] = container.id
         _report(request, "RUNNING", container.id, None, None, None, None, expire_at)
-        container.start()
+        # Attach before start so the payload cannot race the tool's read().
+        # The worker parses the complete JSON document without waiting for
+        # EOF, because the daemon never forwards EOF to detached containers.
         socket = container.attach_socket(params={"stdin": 1, "stream": 1})
+        container.start()
         socket._sock.sendall(payload.encode("utf-8"))
-        socket._sock.shutdown(1)  # close stdin so the tool reads EOF
+        socket._sock.shutdown(1)
         socket.close()
 
         wait_result = container.wait(timeout=timeout)
