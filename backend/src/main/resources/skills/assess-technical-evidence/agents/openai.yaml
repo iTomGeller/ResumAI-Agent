@@ -1,0 +1,4 @@
+interface:
+  display_name: "Assess Technical Evidence"
+  short_description: "Assess job-specific technical claims and evidence"
+  default_prompt: "Use $assess-technical-evidence to evaluate the technical claims against this JD."

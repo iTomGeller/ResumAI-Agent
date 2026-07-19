@@ -37,7 +37,10 @@ public record WorkflowTraceEventRequest(
         String toolOrigin,
         String toolFamily,
         List<Map<String, Object>> substeps,
-        Map<String, Object> retrieval
+        Map<String, Object> retrieval,
+        String workflowRunId,
+        String conversationId,
+        Integer revision
 ) {
     public record WorkflowToolCallRecord(
             String toolCallId,

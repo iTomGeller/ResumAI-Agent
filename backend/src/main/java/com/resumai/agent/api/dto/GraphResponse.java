@@ -12,7 +12,7 @@ public record GraphResponse(
 ) {
 
     public GraphResponse(List<GraphNode> nodes, List<GraphEdge> edges) {
-        this(nodes, edges, "SIMULATED");
+        this(nodes, edges, "UNAVAILABLE");
     }
 
     /**

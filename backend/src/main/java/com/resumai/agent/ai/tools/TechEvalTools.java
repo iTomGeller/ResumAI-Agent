@@ -32,14 +32,21 @@ public class TechEvalTools {
         }
     }
 
-    @Tool("根据简历内容抓取候选人GitHub、博客等公开技术资料，补充外部证据")
+    @Tool("仅根据简历中候选人声明的 GitHub/博客 URL 获取带来源边界的真实公开证据；失败返回 unavailable，禁止按姓名猜测或生成替代数据")
     public String github_enrichment(
-            @P("候选人简历文本，从中提取GitHub/博客链接") String resumeText) {
+            @P("候选人简历文本；只允许使用其中明确声明的 GitHub/博客 URL") String resumeText) {
         try {
-            String result = externalProfileService.enrich(resumeText);
-            return result.isEmpty() ? "{\"profiles\": [], \"note\": \"未发现公开技术资料链接\"}" : result;
+            return externalProfileService.enrich(resumeText);
         } catch (Exception e) {
-            return "{\"error\": \"GitHub enrichment failed: " + e.getMessage() + "\"}";
+            try {
+                return objectMapper.writeValueAsString(java.util.Map.of(
+                        "status", "unavailable",
+                        "reason", "external_evidence_failed",
+                        "syntheticFallback", false
+                ));
+            } catch (Exception ignored) {
+                return "{\"status\":\"unavailable\",\"reason\":\"external_evidence_failed\",\"syntheticFallback\":false}";
+            }
         }
     }
 }

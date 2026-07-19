@@ -1,3 +1,99 @@
 {
-  "mcpServers": {}
+  "evidencePolicy": {
+    "mode": "source-backed-only",
+    "subjectBinding": "candidate-declared-identifiers-only",
+    "emptyOrFailedResult": "unavailable",
+    "requireSourceUrlForCandidateFacts": true,
+    "allowSyntheticFallback": false
+  },
+  "mcpServers": {
+    "exa": {
+      "enabled": true,
+      "default": true,
+      "transport": "streamable-http",
+      "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
+      "description": "Official Exa hosted MCP; keyless free tier",
+      "evidence": {
+        "provider": "exa",
+        "kind": "public-web",
+        "subjectBinding": "unverified",
+        "requiresSourceUrl": true
+      }
+    },
+    "firecrawl": {
+      "enabled": true,
+      "default": true,
+      "transport": "streamable-http",
+      "url": "https://mcp.firecrawl.dev/v2/mcp",
+      "description": "Official Firecrawl hosted MCP; keyless search/scrape are rate limited",
+      "evidence": {
+        "provider": "firecrawl",
+        "kind": "public-web",
+        "subjectBinding": "unverified",
+        "requiresSourceUrl": true
+      }
+    }
+  },
+  "optionalMcpServers": {
+    "github": {
+      "enabled": false,
+      "default": false,
+      "requiredEnv": ["GITHUB_TOKEN"],
+      "transport": "streamable-http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_TOKEN}",
+        "X-MCP-Toolsets": "repos,users",
+        "X-MCP-Readonly": "true"
+      },
+      "description": "GitHub official remote MCP; move to mcpServers only after resolving GITHUB_TOKEN"
+    },
+    "tavily": {
+      "enabled": false,
+      "default": false,
+      "transport": "streamable-http",
+      "url": "https://mcp.tavily.com/mcp",
+      "optionalEnv": ["TAVILY_API_KEY"],
+      "headers": {
+        "Authorization": "Bearer ${TAVILY_API_KEY}"
+      },
+      "description": "Official Tavily search/extract MCP; optional alternative provider"
+    },
+    "brave-search": {
+      "enabled": false,
+      "default": false,
+      "requiredEnv": ["BRAVE_API_KEY"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      },
+      "description": "Official Brave Search MCP; requires Node.js 22+ and BRAVE_API_KEY"
+    },
+    "time": {
+      "enabled": false,
+      "default": false,
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-time"],
+      "description": "Official MCP reference time server"
+    },
+    "arxiv": {
+      "enabled": false,
+      "default": false,
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["arxiv-mcp-server"],
+      "description": "Maintainer-published arXiv MCP for technical-paper evidence"
+    },
+    "fetch": {
+      "enabled": false,
+      "default": false,
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "description": "Official MCP reference fetch server; disabled because it can reach internal addresses"
+    }
+  }
 }

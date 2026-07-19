@@ -5,6 +5,7 @@ import java.util.List;
 public record WorkflowResultRequest(
         String traceId,
         String workflowRunId,
+        String conversationId,
         String status,
         String summary,
         Integer overallScore,
@@ -15,5 +16,6 @@ public record WorkflowResultRequest(
         Long durationMs,
         Integer tokenCost,
         String failedNode,
-        String errorMessage
+        String errorMessage,
+        Integer revision
 ) {}

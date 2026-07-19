@@ -125,6 +125,5 @@ langfuse:
 app:
   mcp:
     config-path: ${MCP_CONFIG_PATH:mcp-servers.json}
-    builtin-url: ${MCP_BUILTIN_URL:http://127.0.0.1:8080/mcp}
   skills:
     path: ${SKILLS_PATH:/app/skills}

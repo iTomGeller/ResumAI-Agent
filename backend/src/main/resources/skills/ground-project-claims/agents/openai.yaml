@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ground Project Claims"
+  short_description: "Ground and rewrite project claims without invention"
+  default_prompt: "Use $ground-project-claims to assess and rewrite these project bullets using only confirmed facts."

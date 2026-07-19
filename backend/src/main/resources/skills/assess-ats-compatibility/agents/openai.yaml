@@ -1,0 +1,4 @@
+interface:
+  display_name: "Assess ATS Compatibility"
+  short_description: "Check explainable resume coverage and ATS parsing"
+  default_prompt: "Use $assess-ats-compatibility to check this resume against the target JD without predicting a vendor ATS."

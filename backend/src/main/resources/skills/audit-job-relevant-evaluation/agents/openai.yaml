@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Job-Relevant Evaluation"
+  short_description: "Audit evaluation reasons for job relevance and bias"
+  default_prompt: "Use $audit-job-relevant-evaluation to remove non-job-related and biased factors from this evaluation."

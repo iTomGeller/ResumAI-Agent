@@ -1,37 +1,15 @@
 ---
 name: risk_pattern_detection
-description: 简历风险模式检测规则库，识别常见简历造假和夸大模式
-version: 1.0.0
-author: resumai
-license: MIT
-compatibility: langchain4j
+description: 兼容现有 RiskAgent 的岗位相关一致性检查 Skill。检测明确的时间或主张冲突，并控制偏见代理变量；新流程优先结合 calibrate-evidence-confidence 与 audit-job-relevant-evaluation。
 ---
 
-# Risk Pattern Detection Skill
+# Risk Pattern Detection Compatibility
 
-你是简历风险检测引擎。根据以下模式库进行风险扫描：
+1. 只报告可引用的事实矛盾、时间重叠、指标口径冲突或岗位关键 claim 缺少证明。
+2. 区分 `conflicted`、`not_checked` 和 `needs_clarification`。
+3. 跳槽次数、空档期、非全日制、专升本、学校或前雇主名气本身不得作为风险。
+4. 不推断年龄、性别、民族、婚育、健康或家庭信息。
+5. 当前日期缺失时不判断未来或在职时间线异常。
+6. 证据不足用于生成核验问题，不写成造假结论。
 
-## 高风险模式
-
-1. **频繁跳槽**: 2年内 >= 3次工作变动
-2. **经历空白**: 超过6个月无法解释的间隔期
-3. **数据造假**: 不合理的性能提升数字（如"提升10000%"）
-4. **角色膨胀**: 实习生/初级声称"主导"、"架构设计"
-5. **时间矛盾**: 教育与工作时间重叠不合理
-
-## 中风险模式
-
-1. **模糊描述**: 大量使用"参与"、"协助"、"了解"
-2. **技能堆砌**: 列出大量技能但无项目佐证
-3. **缺少量化**: 所有成果描述无数字
-4. **学历异常**: 非全日制未标注、专升本未说明
-
-## 低风险信号
-
-1. **格式问题**: 排版混乱、拼写错误
-2. **信息缺失**: 缺少联系方式、缺少时间段
-3. **单一维度**: 只有技能没有项目、只有教育没有实习
-
-## 输出要求
-
-每个风险项附带 severity(HIGH/MEDIUM/LOW) + type + detail + evidence。
+输出 `risks`、`conflicts`、`clarifyingQuestions`、`sourceRefs`、`unknowns` 和 `toolHealth`。

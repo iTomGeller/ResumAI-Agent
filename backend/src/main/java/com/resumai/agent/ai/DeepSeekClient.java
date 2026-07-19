@@ -72,14 +72,12 @@ public class DeepSeekClient {
 
     public LlmCallResult evaluateResume(String prompt, String agent, String purpose, String traceId, String spanId) {
         if (!StringUtils.hasText(properties.getApiKey())) {
-            String fallback = "DeepSeek API Key 未配置，当前返回本地评估：候选人具备基础岗位匹配度，建议补充真实简历文本后进行 AI 深度评估。";
-            LlmInvocation saved = llmInvocationService.saveInvocation(
+            String error = "DeepSeek API Key 未配置；拒绝生成无模型依据的候选人评估。";
+            llmInvocationService.saveInvocation(
                     traceId, spanId, MODEL_NAME, agent, purpose, 0L,
-                    prompt, fallback, estimateTokens(prompt), estimateTokens(fallback),
-                    "fallback", null, null);
-            return new LlmCallResult(fallback, saved.getId(), false,
-                    prompt == null ? 0 : prompt.length(), fallback.length(),
-                    estimateTokens(prompt), estimateTokens(fallback), "fallback");
+                    prompt, null, estimateTokens(prompt), 0,
+                    "error", "MODEL_CREDENTIAL_MISSING", error);
+            throw new IllegalStateException(error);
         }
 
         Span llmSpan = tracer.spanBuilder("deepseek-chat")

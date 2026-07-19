@@ -1,0 +1,4 @@
+interface:
+  display_name: "Compare Target Roles"
+  short_description: "Compare target roles with evidence and preferences"
+  default_prompt: "Use $compare-target-roles to compare these job descriptions against the resume and stated preferences."

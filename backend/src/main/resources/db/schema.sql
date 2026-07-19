@@ -9,12 +9,23 @@ CREATE TABLE IF NOT EXISTS `resume_task` (
   `id`             BIGINT       NOT NULL PRIMARY KEY COMMENT '任务主键',
   `file_url`       VARCHAR(512) NULL     COMMENT '简历文件地址',
   `resume_object_key` VARCHAR(512) NULL  COMMENT '简历对象存储 key',
+  `resume_text`    MEDIUMTEXT   NULL     COMMENT '不可变简历输入快照',
   `job_id`         VARCHAR(64)  NULL     COMMENT '岗位唯一标识',
   `job_category`   VARCHAR(64)  NULL     COMMENT '岗位类别',
+  `job_description` MEDIUMTEXT  NULL     COMMENT '不可变 JD 输入快照',
+  `evaluation_brief` MEDIUMTEXT NULL     COMMENT '本 revision 的评估重点/补充上下文',
+  `invalidated_nodes` JSON      NULL     COMMENT '需要重跑的 LangGraph 节点',
+  `rag_options`    JSON         NULL     COMMENT 'RAG 选项快照',
   `execution_mode` VARCHAR(32)  NULL     COMMENT '执行模式：SERIAL/DAG_CONCURRENT',
   `status`         VARCHAR(32)  NULL     COMMENT '任务状态',
   `queue_status`   VARCHAR(32)  NULL     DEFAULT 'QUEUED' COMMENT '队列状态',
   `trace_id`       VARCHAR(64)  NOT NULL COMMENT '全局链路追踪 ID',
+  `conversation_id` VARCHAR(64) NULL     COMMENT '持续对话 ID',
+  `revision_no`    INT          NOT NULL DEFAULT 1 COMMENT '会话内不可变版本号',
+  `workflow_run_id` VARCHAR(64) NULL     COMMENT 'Python runtime run ID',
+  `base_workflow_run_id` VARCHAR(64) NULL COMMENT '复用 checkpoint 的来源 run ID',
+  `supersedes_trace_id` VARCHAR(64) NULL COMMENT '被当前版本替代的 Trace ID',
+  `superseded_by_trace_id` VARCHAR(64) NULL COMMENT '替代当前版本的 Trace ID',
   `candidate_name` VARCHAR(128) NULL     COMMENT '候选人姓名',
   `uploaded_by`    VARCHAR(128) NULL     COMMENT '上传 HR 标识',
   `tenant_id`      VARCHAR(64)  NULL     DEFAULT 'default' COMMENT '租户标识',
@@ -41,12 +52,43 @@ CREATE TABLE IF NOT EXISTS `resume_task` (
   `update_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `deleted`        TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
   UNIQUE KEY `uk_resume_task_trace_id` (`trace_id`),
+  UNIQUE KEY `uk_resume_task_conversation_revision` (`conversation_id`, `revision_no`),
   KEY `idx_resume_task_status` (`status`),
   KEY `idx_resume_task_job_category` (`job_category`),
   KEY `idx_resume_task_list` (`create_time`, `status`, `recommendation`, `overall_score`),
   KEY `idx_resume_task_queue` (`queue_status`, `priority`, `queued_at`),
   KEY `idx_resume_task_uploaded_by` (`uploaded_by`, `create_time`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '简历评估任务';
+
+-- 1.1 持续对话会话
+CREATE TABLE IF NOT EXISTS `conversation_session` (
+  `id`              VARCHAR(64)  NOT NULL PRIMARY KEY,
+  `active_trace_id` VARCHAR(64)  NOT NULL,
+  `active_revision` INT          NOT NULL DEFAULT 1,
+  `tenant_id`       VARCHAR(64)  NOT NULL DEFAULT 'default',
+  `created_by`      VARCHAR(128) NULL,
+  `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted`         TINYINT      NOT NULL DEFAULT 0,
+  KEY `idx_conversation_active_trace` (`active_trace_id`),
+  KEY `idx_conversation_tenant_time` (`tenant_id`, `update_time`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '简历评估持续对话';
+
+-- 1.2 会话消息（client_message_id 保证重试幂等）
+CREATE TABLE IF NOT EXISTS `conversation_message` (
+  `id`                BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `conversation_id`   VARCHAR(64)   NOT NULL,
+  `client_message_id` VARCHAR(191)  NOT NULL,
+  `role`              VARCHAR(16)   NOT NULL,
+  `intent_type`       VARCHAR(64)   NULL,
+  `content`           MEDIUMTEXT    NOT NULL,
+  `revision_no`       INT           NOT NULL DEFAULT 1,
+  `metadata_json`     JSON          NULL,
+  `create_time`       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `deleted`           TINYINT       NOT NULL DEFAULT 0,
+  UNIQUE KEY `uk_conversation_client_message` (`conversation_id`, `client_message_id`),
+  KEY `idx_conversation_message_order` (`conversation_id`, `id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '简历评估会话消息';
 
 -- 2. Agent 执行链路
 CREATE TABLE IF NOT EXISTS `agent_execution_trace` (
@@ -67,11 +109,29 @@ CREATE TABLE IF NOT EXISTS `agent_execution_trace` (
   `retry_count`     INT          NULL     DEFAULT 0 COMMENT '重试次数',
   `status`          VARCHAR(32)  NULL     COMMENT '执行状态',
   `error_message`   VARCHAR(2000) NULL    COMMENT '异常信息',
+  `event_id`        VARCHAR(191) NULL     COMMENT 'LangGraph 稳定事件 ID',
+  `node_id`         VARCHAR(64)  NULL     COMMENT 'LangGraph 节点 ID',
+  `round_index`     INT          NULL     COMMENT '节点内 LLM round',
+  `attempt`         INT          NOT NULL DEFAULT 1 COMMENT '节点尝试次数',
+  `event_kind`      VARCHAR(32)  NULL     COMMENT 'node/generation/tool/final',
+  `raw_input`       MEDIUMTEXT   NULL     COMMENT '原始消息 JSON',
+  `raw_output`      MEDIUMTEXT   NULL     COMMENT '原始输出 JSON',
+  `parent_event_id` VARCHAR(191) NULL     COMMENT '父事件 ID',
+  `call_kind`       VARCHAR(32)  NULL     COMMENT 'llm/tool/mcp/skill/final/node',
+  `call_name`       VARCHAR(128) NULL     COMMENT '模型、工具或 Skill 名称',
+  `round_role`      VARCHAR(32)  NULL     COMMENT 'decision/tool_result/final/node_start/node_end',
+  `parent_round_id` VARCHAR(128) NULL     COMMENT 'nodeId#roundIndex',
+  `started_at`      DATETIME(3)  NULL     COMMENT '事件开始时间',
+  `ended_at`        DATETIME(3)  NULL     COMMENT '事件结束时间',
   `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `deleted`         TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
   KEY `idx_trace_create_time` (`trace_id`, `create_time`),
-  KEY `idx_agent_role` (`agent_role`)
+  KEY `idx_agent_role` (`agent_role`),
+  UNIQUE KEY `uk_agent_trace_event_id` (`event_id`),
+  KEY `idx_agent_trace_node_round` (`trace_id`, `node_id`, `attempt`, `round_index`, `event_kind`),
+  KEY `idx_agent_trace_parent_event` (`trace_id`, `parent_event_id`),
+  KEY `idx_agent_trace_kind_time` (`trace_id`, `event_kind`, `create_time`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'Agent 执行链路';
 
 -- 3. 动态 Skill Prompt
