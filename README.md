@@ -2,297 +2,187 @@
 
 # ResumAI Agent Platform
 
-**基于多 Agent 编排的智能简历评估系统**
+**支持持续对话、运行控制与可追溯修订的简历评估 Agent**
 
 [![Java 21](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white)](backend/pom.xml)
 [![Spring Boot 3.3](https://img.shields.io/badge/Spring%20Boot-3.3.1-6DB33F?logo=springboot&logoColor=white)](backend/pom.xml)
-[![LangChain4j](https://img.shields.io/badge/LangChain4j-1.13.0-blue?logo=chainlink&logoColor=white)](backend/pom.xml)
+[![LangGraph](https://img.shields.io/badge/Runtime-LangGraph-1C3C3C)](workflow/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)](frontend/package.json)
 [![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](docker-compose.prod.yml)
-[![Prometheus](https://img.shields.io/badge/Monitoring-Prometheus%20%2B%20Grafana-E6522C?logo=prometheus&logoColor=white)](monitoring/)
+[![Agent Harness](https://img.shields.io/badge/Gate-Agent%20Harness-6f42c1)](workflow/run_agent_harness.py)
 
 </div>
 
 ---
 
-## 项目亮点
+## 这套系统解决什么问题
 
-- **多 Agent 协作编排** — Orchestrator 根据岗位类别动态路由，支持 SERIAL / DAG_CONCURRENT 两种执行模式，Agent 间通过结构化委派实现分工
-- **RAG + 知识图谱双通道增强** — Milvus 向量检索提供语义相似证据，Neo4j 构建候选人技能-项目-岗位实体图谱，双通道融合提升评估可解释性
-- **LangChain4j 原生集成** — 基于 LangChain4j 1.13.0 的 `ChatModel` 抽象，统一管理 LLM 调用、Embedding、Token 计量
-- **70+ 自定义 Prometheus 指标** — 覆盖 Agent 执行链路、工具调用、LLM 经济性、业务漏斗、RAG 质量、系统健康 6 大维度
-- **端到端 SSE 实时追踪** — 前端实时展示 Agent 执行 Trace，支持 Span 级别的耗时/Token/状态追踪
-- **HR 反馈闭环 RLHF** — 收集人工反馈驱动 Meta-Agent 反思与动态 Skill 进化
-- **一键 Docker Compose 部署** — 10 个服务（Backend、Frontend、MySQL、Redis、Neo4j、Milvus、MinIO、Prometheus、Grafana、Etcd）统一编排
+传统“上传简历后等待一个分数”的流程无法处理评估中的真实变化：用户会追问原因、临时比较岗位、补充候选人事实、修改 JD，也会暂停或取消任务。本项目将一次评估建模为持续会话中的不可变 revision，并由 Java 控制面和 Python LangGraph runtime 共同执行。
 
----
+- **持续对话**：评估运行时仍可提问、要求解释、比较岗位或生成面试追问；这类 side quest 返回答案后继续原运行，不更换 trace/revision。
+- **意图变化可追踪**：修改 JD、目标岗位、评估重点或候选人事实会创建新 revision，旧 revision 标记为 superseded，只重跑依赖闭包中的节点。
+- **运行可控制**：取消会终止活动任务并阻止迟到回调覆盖结果；暂停在安全节点边界写入 PostgreSQL checkpoint；继续恢复同一 `workflowRunId` 和 revision。
+- **证据不造假**：公开资料只能来自真实 MCP 工具结果；失败、无来源、synthetic/fallback 内容不会升级为候选人证据。DeepSeek 未配置或调用失败时不会生成伪评分。
+- **可执行 runtime gate**：离线 Agent harness 固化 side quest、revision、checkpoint、取消竞争、工具预算、证据来源和迟到结果 fencing 等 14 个 P0/P1 不变量。
 
-## 系统架构
+更细的状态机、边界和面试核验路径见 [Agent Runtime 设计说明](docs/AGENT_RUNTIME.md)。
+
+## 架构
 
 ```mermaid
-flowchart TB
-    subgraph Client ["客户端"]
-        Browser["浏览器<br/>Vue 3 + Tailwind"]
-    end
-
-    subgraph Gateway ["Nginx 网关"]
-        Nginx["反向代理 + 静态资源"]
-    end
-
-    subgraph Backend ["Spring Boot 后端"]
-        direction TB
-        API["REST API Layer"]
-        Orchestrator["OrchestratorAgent<br/>路由决策 & 委派"]
-        Agents["Specialist Agents"]
-        LLM["LangChain4j<br/>ChatModel (DeepSeek)"]
-        Metrics["AgentMetrics<br/>70+ Prometheus 指标"]
-    end
-
-    subgraph Storage ["数据层"]
-        MySQL["MySQL 8.0<br/>业务事实与列表查询"]
-        Redis["Redis 7.2<br/>RUNNING 运行态/SSE 游标"]
-        Milvus["Milvus 2.4<br/>语义向量检索"]
-        Neo4j["Neo4j 5.20<br/>候选人关系图谱"]
-        MinIO["MinIO<br/>简历/大文本对象存储（可选）"]
-    end
-
-    subgraph Observability ["可观测性"]
-        Prometheus["Prometheus<br/>指标采集"]
-        Grafana["Grafana<br/>6 Row / 34 Panel"]
-    end
-
-    Browser -->|HTTP/SSE| Nginx
-    Nginx -->|proxy_pass| API
-    API --> Orchestrator
-    Orchestrator --> Agents
-    Agents --> LLM
-    Agents --> Milvus
-    Agents --> Neo4j
-    API --> MySQL
-    API --> Redis
-    API --> MinIO
-    Backend --> Metrics
-    Metrics --> Prometheus
-    Prometheus --> Grafana
+flowchart LR
+    UI["Vue 3 对话与评估界面"] -->|"REST / SSE"| API["Spring Boot 控制面"]
+    API --> MYSQL["MySQL：会话、revision、任务、Trace"]
+    API --> REDIS["Redis：运行态与队列"]
+    API -->|"内部令牌 + run identity"| WF["FastAPI + LangGraph runtime"]
+    WF --> PG["PostgreSQL checkpoint"]
+    WF --> LLM["DeepSeek"]
+    WF --> SKILLS["Agent-scoped Skills"]
+    WF --> MCP["真实 MCP providers"]
+    WF --> RAG["Milvus / Java internal tools"]
+    API --> NEO4J["Neo4j 真实解释图谱"]
+    WF -->|"带 conversation/run/revision 的事件与结果"| API
+    API --> OBS["Prometheus / Grafana"]
 ```
 
----
+Java 是会话、revision、幂等和可见任务状态的事实源；Python runtime 负责图执行、工具循环、checkpoint 与节点事件。每个回调都携带 `conversationId + workflowRunId + revision + traceId`，只有与当前可写 revision 完全匹配的回调才能落库。
 
-## 前端实现与异步链路（详细说明）
+## LangGraph 执行图
 
-- **[前端技术亮点、大盘 KPI 更新、分页、Markdown/XSS、简历上传异步链路](docs/FRONTEND_TECH_AND_ASYNC_PIPELINE.md)** — 面向答辩 / 复盘的分点说明与代码索引
-
----
-
-## 多 Agent 编排设计
-
-| Agent | 职责 | 核心能力 |
-|-------|------|----------|
-| **OrchestratorAgent** | 入口调度、路由决策、Span 管理 | 根据 `SystemOrchestrationRule` 选择 SERIAL/DAG 模式 |
-| **ResumeParserAgent** | PDF 解析、结构化抽取 | PDFBox 文本提取 → 教育/工作/项目/技能实体识别 |
-| **TechAgent** | 技术栈审计 | `TechStackAuditSkill` — 评估技术深度与岗位匹配度 |
-| **ProjectAgent** | 项目深度分析 | `ProjectDepthSkill` — 评估复杂度、个人贡献、架构决策 |
-| **RiskAgent** | 风险识别 | `RiskDetectionSkill` — 时间线矛盾、技能堆砌、夸大描述 |
-| **RagasJudgeAgent** | RAG 质量评估 | Faithfulness / Answer Relevancy / Context Precision |
-| **FinalReportAgent** | 综合报告生成 | 汇总评分 + 推荐结论 + 面试追问建议 |
-| **HumanFeedbackAgent** | 反馈驱动进化 | HR 反馈 → Meta-Agent 反思 → Skill 动态调优 |
-
-**编排流程：**
-
-```
-Upload → PDF Parse → [Route Decision] → Tech/Project/Risk (并发或串行)
-    → RAG 证据召回 → Neo4j 图谱构建 → LLM 综合评估
-    → 生成报告 → HR 反馈 → RLHF 闭环
+```text
+START ─┬─> intent ───────────┐
+       └─> resume_parse ─────┴─> jd_match -> knowledge_context
+                                      ├─> tech_eval ─────┐
+                                      ├─> project_eval ──┼─> evidence_fusion -> report -> END
+                                      └─> risk_eval ─────┘
 ```
 
----
+首次运行可根据路由裁剪 specialist 节点；revision 重跑时，路由不能裁掉依赖分析已判定为失效的节点。完整且不受影响的上游输出可以复用，未完成、失败或受影响输出不能复用。
 
-## 可观测性体系（70+ 指标 × 6 维度）
+## 对话与中途控制
 
-| 维度 | 覆盖内容 | 示例指标 |
-|------|----------|----------|
-| **Agent Execution** | Span 耗时、委派次数、并发度、Skill 调用 | `resumai.agent.span.duration{agent="TechAgent"}` |
-| **Tool Calls** | PDF/Milvus/Neo4j 工具粒度的延迟与错误 | `resumai.tool.call.duration{tool_name="milvus_ann"}` |
-| **LLM Economics** | Token 输入/输出、单次成本、上下文利用率 | `resumai.llm.cost.per_task` |
-| **Business Funnel** | 上传→解析→评估→推荐全链路转化 | `resumai.funnel.time_to_screen{job_category="TECH"}` |
-| **RAG Quality** | Faithfulness、Relevancy、空结果率 | `resumai.rag.faithfulness` |
-| **System Health** | 连接池、线程池、SSE 订阅、任务缓存 | `resumai.system.executor.active_threads` |
+| 用户输入 | 系统行为 | identity 变化 |
+|---|---|---|
+| “为什么这个项目分低？”、“顺便给我三道面试题” | side quest；先回答，再保持评估运行 | 不变 |
+| “目标改成后端实习”、“用这份新 JD” | 创建不可变 revision，废弃旧可见结果，按依赖闭包重跑 | 新 `traceId`、revision + 1 |
+| “重点看分布式和性能” | 创建 revision，复用不受影响节点 | 新 `traceId`、revision + 1 |
+| “补充：该候选人负责过容量规划” | 创建 revision 并重新核验证据相关结论 | 新 `traceId`、revision + 1 |
+| `PAUSE` | 状态进入 `PAUSING`，在安全节点边界 checkpoint 后成为 `PAUSED` | 不变 |
+| `RESUME` | 状态进入 `RESUMING`，从 checkpoint 恢复 | 不变 |
+| `CANCEL` | 取消活动协程并进入终态；迟到 SUCCESS 会被拒绝 | 不变 |
 
-Grafana 预配置 **6 行 34 面板** Dashboard，开箱即用。
+对话写入使用 `clientMessageId` 幂等；修改性消息带 `expectedRevision` 做乐观并发检查。暂停是节点边界语义，不承诺在外部模型正在生成的某一个 token 上强行冻结。
 
----
+## Skills 与 MCP
 
-## 技术栈
+运行时通过显式 allowlist 将 17 个评估 Skill 分配给对应 Agent，包括意图路由、revision 规划、ATS 检查、技术证据审计、项目主张核验、GitHub 作品检查、置信度校准、岗位比较、面试追问和报告解释。Skill 是版本化指令与工作流，不是伪造的数据源。
 
-### 后端
+`workflow/mcp-servers.json` 声明的 provider：
 
-| 组件 | 版本 | 用途 |
-|------|------|------|
-| Java | 21 | LTS，Virtual Threads 就绪 |
-| Spring Boot | 3.3.1 | Web 框架 + Actuator |
-| LangChain4j | 1.13.0 | LLM 抽象层（ChatModel + EmbeddingModel） |
-| MyBatis-Plus | 3.5.7 | ORM + 代码生成 |
-| Apache PDFBox | 3.0.2 | PDF 文本提取 |
-| Neo4j Java Driver | 5.21.0 | 图数据库交互 |
-| Milvus Java SDK | 2.4.4 | 向量检索 |
-| Redisson | 3.32.0 | 分布式锁 + 缓存 |
-| Micrometer | (Spring Boot managed) | Prometheus 指标 |
+| Provider | 默认状态 | 用途与约束 |
+|---|---|---|
+| Internal resume-tools | 启用 | 通过真实 MCP 协议访问 Java/Milvus 内部检索；不算公开证据源 |
+| Exa | 启用 | 官方 hosted MCP，公开网页发现与取回 |
+| Firecrawl | 启用 | 官方 hosted MCP，页面搜索/抓取；受 provider 限流影响 |
+| Time | 启用 | MCP reference server，只提供确定性时区/时间数据 |
+| GitHub | `GITHUB_TOKEN` 存在时启用 | 官方只读 remote MCP；仅查询简历声明的 handle/repository |
+| Tavily / Brave / arXiv / Fetch | 默认关闭 | 按环境与任务显式启用；Fetch 默认关闭以避免任意 URL 访问 |
 
-### 前端
+公开候选人证据必须绑定简历中声明的 URL、handle、owner 或 repository，并保留 source URL。provider 不可用时结果是 unavailable，不会用博客/GitHub/StackOverflow 模板文本补位。
 
-| 组件 | 用途 |
-|------|------|
-| Vue 3 + Composition API | 响应式 UI |
-| TypeScript | 类型安全 |
-| Tailwind CSS | 原子化样式 |
-| Vite | 构建工具 |
+## Agent harness
 
-### 基础设施
-
-| 服务 | 版本 | 用途 |
-|------|------|------|
-| MySQL | 8.0 | 任务/JD/反馈/Trace/LLM 元数据与列表分页查询 |
-| Redis | 7.2 | RUNNING 任务运行态缓存、SSE 游标（非长期事实库） |
-| Neo4j | 5.20 | 按 traceId 隔离的候选人-技能-项目-风险子图 |
-| Milvus | 2.4.4 | 简历/JD 语义向量检索（不负责业务列表分页） |
-| MinIO | RELEASE.2024-05-10 | 简历原件与 LLM 大文本冷存储（`OBJECT_STORAGE_ENABLED=true` 时启用；默认本地 volume） |
-| Prometheus | 2.53.0 | 指标采集 |
-| Grafana | 11.1.0 | 指标可视化 |
-
----
-
-## 快速开始
-
-### 本地开发
+Harness 不调用模型、MCP、数据库或 Java 服务，专门验证即使外部依赖全部失效也必须成立的 runtime 契约：
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/<your-username>/ResumAI-Agent.git
-cd ResumAI-Agent
+python workflow/run_agent_harness.py --output reports/agent_harness/result.json
+python -m pytest workflow/tests -q
 
-# 2. 配置环境变量
+# 使用与生产 workflow 相同的镜像运行
+docker compose -f docker-compose.prod.yml --profile harness run --rm ai-resume-agent-harness
+```
+
+Docker workflow 镜像在 build 阶段还会执行 `compileall`、runtime tests 和 harness；任一失败都会阻止镜像完成。CI 配置位于 `.github/workflows/agent-harness.yml`。Harness 证明的是控制面不变量和降级边界，不等价于对某个模型输出质量的离线 benchmark。
+
+## 生产部署：fresh versioned volume，不跑 migration
+
+当前会话 runtime 的 MySQL 卷固定为：
+
+```text
+resumai-mysql-data-conversation-v1
+```
+
+该卷第一次挂载时，MySQL entrypoint 只执行当前完整的 `backend/src/main/resources/db/schema.sql`。部署脚本**不会执行 v5/v6/v7 或其他增量 migration，也不会把旧 MySQL volume 复制进新卷**。旧的 `resumai-mysql-data` 及 Compose 历史卷会原样保留，便于人工回滚/核验，但不挂载到本版本。
+
+这意味着本次部署从空业务库启动；volume 后缀是不可变的 schema generation。若初始化中断导致该卷不完整，或未来 schema 不兼容，应改用新的后缀并保留问题卷，不能删除后假装首次部署。若确实要带入历史数据，应单独设计、演练和审计导入方案，而不是把数据迁移偷偷塞进启动脚本。禁止使用 `docker compose down -v` 或 `docker volume rm` 清理旧卷。
+
+```bash
+# 1. 配置生产环境；至少填写 DeepSeek、MySQL/Redis/Neo4j/MinIO、
+#    WORKFLOW_INTERNAL_TOKEN、WORKFLOW_POSTGRES_PASSWORD、Grafana 密码
 cp .env.example .env
-# 编辑 .env，填写 DEEPSEEK_API_KEY 和数据库密码
 
-# 3. 启动基础设施
-docker compose up -d
+# 2. 校验 Compose 展开结果
+docker compose -f docker-compose.prod.yml config >/dev/null
 
-# 4. 启动后端
-cd backend && mvn spring-boot:run
+# 3. 构建并启动。MySQL 新卷会从 schema.sql 初始化
+docker compose -f docker-compose.prod.yml up -d --build
 
-# 5. 启动前端
-cd frontend && npm install && npm run dev
+# 4. 健康与 runtime gate
+curl -fsS http://127.0.0.1/api/health
+docker compose -f docker-compose.prod.yml exec ai-resume-workflow \
+  curl -fsS http://127.0.0.1:8090/ready
+docker compose -f docker-compose.prod.yml --profile harness run --rm ai-resume-agent-harness
 ```
 
-访问 `http://localhost:5173`
+ECS 可用 `python scripts/deploy_aliyun.py` 执行相同流程。脚本在服务器构建 Maven/npm/Python 镜像，不要求本机安装项目运行环境。部署前应确认远端 `.env` 已备份且当前分支正确；脚本不会删除旧 volume。
 
-### 生产部署（Docker Compose 全栈）
-
-```bash
-# 在项目根目录创建 .deploy.local.env（已被 .gitignore 忽略）
-# 填写 ECS 连接信息和所有服务密码
-
-# 一键部署
-pip install paramiko
-python scripts/deploy_aliyun.py
-```
-
-> **安全提示**：所有密码、API Key 通过环境变量注入，仓库内不含任何真实凭据。
-
----
-
-## 数据架构与查询边界
-
-| 查询类型 | 存储归属 | 说明 |
-|----------|----------|------|
-| 列表分页（候选人/JD/反馈/LLM） | **MySQL** | `/api/tasks`、`/api/jds`、`/api/feedback`、`/api/llm-invocations` 均返回 `{ items, total, page, pageSize }` |
-| 任务/评估详情 | **MySQL** + 内存/Redis 运行态 | 已完成任务从 `result_payload` 回源；RUNNING 任务优先内存，Redis 作跨实例缓存 |
-| 语义相似检索 | **Milvus** | JD 自动匹配、简历 RAG 证据召回；JD 更新/删除时同步清理向量 |
-| 关系解释图谱 | **Neo4j** | 按 `traceId` 隔离子图；无 Neo4j 数据时 API 返回 `source: SIMULATED` 模拟图 |
-| 实时 Trace 推送 | **SSE** + MySQL 回源 | SSE 推增量；历史 Trace 从 `agent_execution_trace` 表查询 |
-| 大对象（简历/Prompt 全文） | **本地 volume / MinIO** | 默认本地 `./uploads`；启用 `OBJECT_STORAGE_ENABLED` 后写入 MinIO |
-| 性能与容量趋势 | **Prometheus/Grafana** | 仅指标观测，不承担业务明细查询 |
-
-列表页常用字段（评分、推荐结论、匹配岗位等）已从 JSON 快照列化到 `resume_task` 表，便于 SQL 索引与分页。
-
----
-
-## API 接口
+## 关键 API
 
 | Method | Path | 说明 |
-|--------|------|------|
-| `POST` | `/api/tasks/upload` | 上传 PDF 简历并创建评估任务 |
-| `POST` | `/api/tasks` | 通过 JSON 创建评估任务 |
-| `GET` | `/api/tasks?page=&pageSize=&keyword=&status=` | 候选人列表（服务端分页） |
-| `GET` | `/api/tasks/{traceId}` | 任务详情 |
-| `GET` | `/api/jds?page=&pageSize=&keyword=&category=` | JD 列表摘要（不含 description） |
-| `GET` | `/api/jds/{jdId}` | JD 详情（含 description 全文） |
-| `GET` | `/api/metrics` | Dashboard 性能指标 |
-| `GET` | `/api/traces/{traceId}` | Agent 执行 Trace |
-| `GET` | `/sse/traces/{traceId}` | SSE 实时 Trace 推送 |
-| `POST` | `/api/feedback` | 提交 HR 反馈 |
-| `GET` | `/api/feedback?page=&traceId=&feedbackType=` | 反馈列表（服务端分页） |
-| `GET` | `/api/llm-invocations?page=&traceId=` | LLM 调用列表（服务端分页） |
-| `GET` | `/api/llm-invocations/{id}` | LLM 调用详情（含全文） |
-| `GET` | `/api/graphs/{traceId}` | 知识子图（`source`: `NEO4J` 或 `SIMULATED`） |
-| `GET` | `/api/health` | 健康检查 |
-| `GET` | `/actuator/prometheus` | Prometheus 指标导出 |
+|---|---|---|
+| `POST` | `/api/tasks` | JSON 创建评估任务 |
+| `POST` | `/api/tasks/upload` | 上传简历并指定 JD |
+| `POST` | `/api/tasks/upload-auto` | 上传简历并自动匹配 JD |
+| `GET` | `/api/tasks/{traceId}` | 读取一个不可变 revision 的任务快照 |
+| `GET` | `/api/conversations/{conversationId}` | 会话消息、active revision 与 revision 列表 |
+| `POST` | `/api/conversations/{conversationId}/messages` | 发送幂等对话消息；可触发 side quest/control/revision |
+| `POST` | `/api/tasks/{traceId}/control` | `{"action":"PAUSE|RESUME|CANCEL"}` |
+| `GET` | `/api/traces/{traceId}` | 历史 Agent Trace |
+| `GET` | `/sse/traces/{traceId}` | 增量 Trace SSE |
+| `GET` | `/api/graphs/{traceId}` | 真实 Neo4j 子图；无真实数据返回 `source: UNAVAILABLE` |
+| `GET` | `/api/health` | 对外健康检查 |
 
----
+Python `/workflow/*` 与 `/conversation/turns/resolve` 是 Docker 内部控制面，由 `WORKFLOW_INTERNAL_TOKEN` 保护，不应直接暴露公网。
+
+## 数据边界
+
+| 数据 | 事实源 | 降级语义 |
+|---|---|---|
+| 会话、revision、任务结果、Trace | MySQL | 不用缓存或旧回调覆盖 active revision |
+| 活动任务/队列运行态 | Redis + 进程内状态 | 持久任务仍从 MySQL 回源 |
+| pause/resume checkpoint | PostgreSQL + LangGraph saver | `/ready` 在 saver 不可用时返回 503，拒绝不安全暂停/恢复 |
+| 简历/JD 语义检索 | Milvus | 检索失败显式降级，不生成公开证据 |
+| 解释图谱 | Neo4j | 无真实节点时 `UNAVAILABLE`，不返回 simulated graph |
+| 公开网页/代码证据 | MCP provider 原始结果 | 失败、无来源或主体不匹配时不可用 |
 
 ## 项目结构
 
-```
-ResumAI-Agent/
-├── backend/                         # Spring Boot 后端
-│   ├── src/main/java/.../agent/
-│   │   ├── ai/                      # DeepSeek LLM 客户端 (LangChain4j)
-│   │   ├── api/                     # REST Controller + DTO
-│   │   ├── config/                  # AgentMetrics (70+指标)、Neo4j、Milvus、LangChain4j 配置
-│   │   ├── dao/                     # MyBatis-Plus Mapper
-│   │   ├── domain/                  # 实体、枚举、Agent 定义
-│   │   └── service/                 # 核心评估编排、RAG 服务、Graph 服务
-│   └── pom.xml
-├── frontend/                        # Vue 3 前端
-│   ├── src/App.vue                  # 单页应用主组件
-│   ├── nginx.conf                   # 生产 Nginx 反向代理配置
-│   └── package.json
-├── monitoring/                      # 可观测性配置
-│   ├── prometheus.yml               # Prometheus 采集规则
-│   └── grafana/provisioning/        # Grafana 数据源 + Dashboard (34 panels)
-├── scripts/                         # 部署运维脚本
-│   ├── deploy_aliyun.py             # 一键 ECS 部署
-│   └── compose_deploy.py            # Docker Compose 工具库
-├── docker-compose.yml               # 本地开发编排
-├── docker-compose.prod.yml          # 生产全栈编排 (10 服务)
-└── .env.example                     # 环境变量模板
+```text
+backend/                         Spring Boot 控制面、会话/revision、业务存储与内部工具
+workflow/                        FastAPI + LangGraph runtime、checkpoint、MCP/Skill registry
+workflow/run_agent_harness.py    确定性 runtime gate
+frontend/                        Vue 3 对话、revision 切换、Trace 与运行控制 UI
+monitoring/                      Prometheus / Grafana 配置
+scripts/                         ECS 与 Compose 运维脚本
+docker-compose.prod.yml          生产全栈及 versioned named volumes
 ```
 
----
+## 明确边界
 
-## 核心设计决策
-
-| 决策 | 选型 | 原因 |
-|------|------|------|
-| Agent 编排 | 自研 Orchestrator | 比 LangGraph 更轻量，可控性强，支持 DAG 并发 |
-| LLM 接入 | LangChain4j ChatModel | 统一抽象，便于切换模型（DeepSeek/OpenAI/Qwen） |
-| 向量检索 | Milvus | 高性能 ANN，原生支持大规模向量，云原生架构 |
-| 知识图谱 | Neo4j | 成熟的图查询语言（Cypher），强关系建模 |
-| 指标体系 | Micrometer + Prometheus | Spring 生态原生支持，零侵入式采集 |
-| 前端 | Vue 3 SPA + Tailwind | 快速迭代，组件化，响应式设计 |
-| 部署 | Docker Compose | 适合中小规模，一键编排全栈 |
-
----
-
-## 安全规范
-
-- **`.env`**、**`.deploy.local.env`** 及所有密钥文件已在 `.gitignore` 中忽略
-- 仓库内不含任何真实密码或 IP 地址
-- 生产环境通过环境变量注入凭据
-- Grafana 管理员密码必须通过 `GRAFANA_PASSWORD` 显式设置
-- 部署后建议定期轮换所有服务密码
-
----
+- 公开 MCP 的在线可用性、速率限制和结果覆盖由 provider 决定；系统保证失败不会被包装成成功证据。
+- `PARTIAL_SUCCESS` 表示存在明确降级，不能当作完整成功展示；缺少模型凭据时应失败关闭。
+- Neo4j 是可选增强通道，不是评分缺失时的模拟数据生成器。
+- 当前是单机 Docker Compose 部署形态，适合项目演示与中小规模验证；多副本调度、跨区容灾和密钥托管需在生产化阶段另行建设。
 
 ## License
 
