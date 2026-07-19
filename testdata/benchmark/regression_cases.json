@@ -1,0 +1,38 @@
+[
+  {
+    "caseId": "reg-loop-guard-duplicate-tools",
+    "dataset": "REGRESSION",
+    "userQuestion": "完整评估",
+    "resume": "技能：Java, Spring Boot\n项目：库存系统 - MySQL 事务与缓存一致性",
+    "jd": "Java 后端，熟悉 Spring Boot 与 MySQL",
+    "mustFind": ["Spring Boot", "MySQL"],
+    "mustNotClaim": ["无限循环调用工具成功"],
+    "expectedEvidence": ["库存系统"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "balanced", "regression": "loop_guard"}
+  },
+  {
+    "caseId": "reg-context-compact-keep-goal",
+    "dataset": "REGRESSION",
+    "userQuestion": "不要取消，继续做严格证据核验，重点看项目深度",
+    "resume": "项目：交易引擎\n- 使用 Java 实现撮合核心\n- Redis 保存订单簿快照",
+    "jd": "低延迟交易系统 Java 工程师",
+    "mustFind": ["严格证据", "项目深度", "撮合"],
+    "mustNotClaim": ["已忽略用户最新修改"],
+    "expectedEvidence": ["交易引擎", "Redis"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "strict_evidence", "regression": "context_compaction"}
+  },
+  {
+    "caseId": "reg-cancel-semantics",
+    "dataset": "REGRESSION",
+    "userQuestion": "停止当前分析并改为只做时间线检查",
+    "resume": "工作经历：2020.01-2022.01 A公司；2021.06-2023.01 B公司",
+    "jd": "后端",
+    "mustFind": ["时间线", "重叠"],
+    "mustNotClaim": ["完整评估报告已全部生成"],
+    "expectedEvidence": ["A公司", "B公司"],
+    "expectedRisk": ["overlap"],
+    "metadata": {"jobCategory": "balanced", "regression": "interrupt"}
+  }
+]

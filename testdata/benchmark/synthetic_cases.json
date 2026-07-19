@@ -1,0 +1,38 @@
+[
+  {
+    "caseId": "syn-boundary-short-resume",
+    "dataset": "SYNTHETIC",
+    "userQuestion": "快速评估匹配度",
+    "resume": "陈七 应届生 Java intern 2025",
+    "jd": "要求 3 年 Java Spring Boot 经验",
+    "mustFind": ["应届", "经验不足", "缺口"],
+    "mustNotClaim": ["资深架构师"],
+    "expectedEvidence": ["Java"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "low_cost", "schemaChecked": true}
+  },
+  {
+    "caseId": "syn-mixed-language",
+    "dataset": "SYNTHETIC",
+    "userQuestion": "技术栈匹配",
+    "resume": "Skills: Java, Spring Boot, MySQL\nProject: Payment Gateway - built idempotent APIs",
+    "jd": "熟悉 Java、Spring Boot，有支付或交易系统经验优先",
+    "mustFind": ["Spring Boot", "Payment", "idempotent"],
+    "mustNotClaim": ["Rust 专家"],
+    "expectedEvidence": ["Java", "Payment"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "backend_job", "schemaChecked": true}
+  },
+  {
+    "caseId": "syn-dense-jd",
+    "dataset": "SYNTHETIC",
+    "userQuestion": "JD 缺口分析",
+    "resume": "技能：Python, FastAPI, Redis\n项目：API 网关",
+    "jd": "要求：\n1. 熟悉 Python\n2. 掌握 FastAPI\n3. 有 Redis 经验\n4. 了解 Kubernetes\n5. 熟悉 Prometheus\n6. 有大模型 Agent 经验优先",
+    "mustFind": ["Kubernetes", "Prometheus", "缺口"],
+    "mustNotClaim": ["已完全覆盖全部要求"],
+    "expectedEvidence": ["Python", "Redis"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "agent_job", "schemaChecked": true}
+  }
+]

@@ -1,0 +1,122 @@
+[
+  {
+    "caseId": "gold-java-backend-normal",
+    "dataset": "GOLD",
+    "userQuestion": "请完整评估这份简历是否匹配 Java 后端岗位",
+    "resume": "张三\nJava 后端工程师\n技能：Java, Spring Boot, MySQL, Redis, Kafka, Docker\n工作经历：\n2022.03-2024.06 某互联网公司 后端开发\n- 负责订单服务 Spring Boot 微服务，QPS 提升 40%\n- 设计 Redis 缓存与 Kafka 异步削峰\n项目经历：\n项目：订单中台\n- 使用 MyBatis + MySQL 实现分库分表\n教育：2018-2022 计算机科学 本科",
+    "jd": "Java 后端工程师\n要求：\n- 熟悉 Java 与 Spring Boot\n- 掌握 MySQL、Redis\n- 有 Kafka 或消息队列经验\n- 了解 Docker 与微服务",
+    "mustFind": ["Spring Boot", "Redis", "Kafka", "订单"],
+    "mustNotClaim": ["Kubernetes 生产运维专家", "10年经验", "GPU 训练"],
+    "expectedEvidence": ["Spring Boot", "Redis", "Kafka"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "backend_job", "pages": 1}
+  },
+  {
+    "caseId": "gold-ai-agent-resume",
+    "dataset": "GOLD",
+    "userQuestion": "针对 AI Agent 岗位重新评估",
+    "resume": "李四\nAI Agent 工程师\n技能：Python, LangGraph, LangChain, RAG, Milvus, Redis, FastAPI\n项目：\n项目：对话式简历评估 Agent\n- 实现 Coordinator 动态选择 Agent 与 Shared State\n- 接入 Docker Sandbox 做证据核验与时间线检查\n- 基于 HR 反馈做 epsilon-greedy Policy 选择\n工作经历：2023.01-2025.12 AI 平台组",
+    "jd": "AI Agent 工程师\n要求：\n- 熟悉 LangGraph/LangChain 或同类 Agent 框架\n- 有 RAG 与向量库经验\n- 能设计多 Agent 协作与工具调用\n- 了解评测与策略反馈闭环",
+    "mustFind": ["LangGraph", "RAG", "Sandbox", "Policy"],
+    "mustNotClaim": ["PPO 训练大模型", "自研 GPU 集群"],
+    "expectedEvidence": ["LangGraph", "RAG", "Milvus"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "agent_job"}
+  },
+  {
+    "caseId": "gold-timeline-conflict",
+    "dataset": "GOLD",
+    "userQuestion": "请做履历时间线检查与风险分析",
+    "resume": "王五\n技能：Java, Spring\n工作经历：\n2021.01-2023.12 公司A 后端\n2022.06-2024.06 公司B 后端\n项目：同名系统 2020.01-2019.01",
+    "jd": "后端工程师，要求工作经历真实可核验",
+    "mustFind": ["overlap", "时间", "冲突"],
+    "mustNotClaim": ["时间线完全正常", "无任何风险"],
+    "expectedEvidence": ["公司A", "公司B"],
+    "expectedRisk": ["overlap", "inverted_range"],
+    "metadata": {"jobCategory": "backend_job", "expectTimelineRisk": true}
+  },
+  {
+    "caseId": "gold-reasonable-overlap",
+    "dataset": "GOLD",
+    "userQuestion": "检查时间线是否有风险",
+    "resume": "赵六\n工作经历：\n2022.01-2023.06 公司A 全职\n2023.03-2023.05 开源社区兼职贡献（晚间）\n2023.07-2025.01 公司B 全职",
+    "jd": "后端工程师",
+    "mustFind": ["兼职", "重叠"],
+    "mustNotClaim": ["严重造假", "伪造学历"],
+    "expectedEvidence": ["公司A", "公司B"],
+    "expectedRisk": ["overlap"],
+    "metadata": {"jobCategory": "backend_job", "overlapSeverity": "low"}
+  },
+  {
+    "caseId": "gold-skill-with-project-evidence",
+    "dataset": "GOLD",
+    "userQuestion": "技术栈匹配与证据核验",
+    "resume": "技能：Java, Spring Boot, Redis\n项目：缓存网关\n- 基于 Spring Boot 实现 Redis 多级缓存，命中率 92%",
+    "jd": "要求熟悉 Spring Boot 与 Redis",
+    "mustFind": ["Spring Boot", "Redis", "命中率"],
+    "mustNotClaim": ["Kafka 专家"],
+    "expectedEvidence": ["Spring Boot", "Redis"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "backend_job"}
+  },
+  {
+    "caseId": "gold-skill-only-in-skills-section",
+    "dataset": "GOLD",
+    "userQuestion": "核验技能是否有项目证据",
+    "resume": "技能：Kubernetes, Istio, Flink\n项目：内部 CMS\n- 使用 Vue 做管理后台页面",
+    "jd": "要求 Kubernetes 与 Flink 实战经验",
+    "mustFind": ["技能栏", "缺少项目证据", "Kubernetes"],
+    "mustNotClaim": ["Kubernetes 生产实战丰富"],
+    "expectedEvidence": ["Vue"],
+    "expectedRisk": ["unsupported_skill"],
+    "metadata": {"jobCategory": "backend_job"}
+  },
+  {
+    "caseId": "gold-metric-without-evidence",
+    "dataset": "GOLD",
+    "userQuestion": "检查项目描述中的指标是否有依据",
+    "resume": "项目：推荐系统\n- 将 CTR 提升到 35%\n- 日活增长 300 万",
+    "jd": "算法工程岗位",
+    "mustFind": ["指标", "证据", "CTR"],
+    "mustNotClaim": ["已核实日活 300 万属实"],
+    "expectedEvidence": ["CTR"],
+    "expectedRisk": ["unsupported_metric"],
+    "metadata": {"jobCategory": "agent_job"}
+  },
+  {
+    "caseId": "gold-fabricated-report-numbers",
+    "dataset": "GOLD",
+    "userQuestion": "完整评估并严格证据核验",
+    "resume": "技能：Java\n项目：支付系统\n- 完成核心链路开发",
+    "jd": "Java 后端，要求高并发经验",
+    "mustFind": ["Java", "支付"],
+    "mustNotClaim": ["QPS 百万", "可用性 99.999%"],
+    "expectedEvidence": ["支付系统"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "strict_evidence", "injectFabricatedAnswer": "该候选人将支付系统做到 QPS 百万，可用性 99.999%"}
+  },
+  {
+    "caseId": "gold-jd-missing-skills",
+    "dataset": "GOLD",
+    "userQuestion": "做 JD 缺口分析",
+    "resume": "技能：Java, MySQL\n项目：CRUD 后台",
+    "jd": "要求：熟悉 Java、Kafka、Kubernetes、分布式事务、可观测性",
+    "mustFind": ["Kafka", "Kubernetes", "缺口"],
+    "mustNotClaim": ["完全匹配 JD"],
+    "expectedEvidence": ["Java", "MySQL"],
+    "expectedRisk": [],
+    "metadata": {"jobCategory": "backend_job"}
+  },
+  {
+    "caseId": "gold-empty-resume",
+    "dataset": "GOLD",
+    "userQuestion": "完整评估",
+    "resume": "",
+    "jd": "Java 后端",
+    "mustFind": ["空", "无法解析", "失败"],
+    "mustNotClaim": ["强烈推荐录用"],
+    "expectedEvidence": [],
+    "expectedRisk": ["parse_failed"],
+    "metadata": {"jobCategory": "balanced", "expectParseFailure": true}
+  }
+]
