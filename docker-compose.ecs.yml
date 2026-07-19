@@ -1,0 +1,14 @@
+# ECS build overrides: backend/frontend images are assembled from artifacts
+# built on the ECS host (mvn package / npm run build), avoiding Docker Hub
+# base-image pulls that are unreliable from this region. Apply with:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.ecs.yml ...
+services:
+  ai-resume-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.ecs
+
+  ai-resume-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.ecs

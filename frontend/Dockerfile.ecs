@@ -1,0 +1,17 @@
+# ECS-optimized frontend image: consumes a host-built dist/ (npm run build is
+# executed on the ECS host per deployment policy) and installs nginx from the
+# Aliyun internal apt mirror instead of pulling an nginx base image.
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
+
+RUN sed -i 's@deb.debian.org@mirrors.cloud.aliyuncs.com@g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
+    && apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends nginx curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/nginx/sites-enabled/default
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY dist /usr/share/nginx/html
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

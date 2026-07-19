@@ -2,6 +2,9 @@ FROM python:3.12-slim AS build
 
 WORKDIR /app
 
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+
 COPY workflow/requirements.txt ./requirements.txt
 COPY workflow/requirements.lock ./requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock \

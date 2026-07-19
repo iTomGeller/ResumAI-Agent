@@ -55,3 +55,4 @@ scripts/pull_and_up.py
 scripts/_*.py
 
 .ecs-scratch/
+backend/.jre-cache/

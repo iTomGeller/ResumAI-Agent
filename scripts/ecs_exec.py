@@ -72,8 +72,17 @@ def connect() -> paramiko.SSHClient:
         kwargs["password"] = password
         kwargs["look_for_keys"] = False
         kwargs["allow_agent"] = False
-    ssh.connect(**kwargs)
-    return ssh
+    last_error = None
+    for attempt in range(4):
+        try:
+            ssh.connect(**kwargs)
+            return ssh
+        except Exception as exc:  # transient banner/transport errors
+            last_error = exc
+            time.sleep(2 + attempt * 3)
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    raise SystemExit("SSH connect failed after retries: %s" % last_error)
 
 
 def exec_stream(ssh: paramiko.SSHClient, command: str, timeout: int) -> int:
