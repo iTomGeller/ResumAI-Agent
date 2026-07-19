@@ -1,63 +1,77 @@
-# 测试报告（ECS 真实执行，2026-07-19）
+# 测试报告（ECS 真实执行，2026-07-19 收敛式重构）
 
-执行环境：阿里云 ECS 4C16G（Ubuntu, Docker 29.1.3, Compose 2.40.3），项目目录 `/opt/resumai-src`，Compose project `resumai`。
+执行环境：阿里云 ECS 4C16G（Ubuntu, Docker 29.1.3），项目目录 `/opt/resumai-src`，
+Compose project `resumai`，模型 deepseek-chat。
+
+## 架构验收（旧 Runtime 删除）
+
+- 带内部 Token 请求旧接口：`POST /workflow/runs`=404、`POST /execute`=404、
+  `GET /workflow/runs/{id}`=404、`POST /workflow/runs/{id}/control`=404。
+- 全仓库 grep：`/workflow/runs`、`app.graph`、`default_run_registry`、
+  `run_workflow` 零残留（CI 含防回流门禁）。
+- 旧 checkpoint PostgreSQL 容器已停用；卷 `resumai-workflow-postgres-data`
+  保留在磁盘未删除。V7 迁移已应用（pause/resume 快照 + resume_task 桥接）。
+- Sandbox Worker 镜像按 Git SHA 固定（部署时写入 `SANDBOX_WORKER_TAG`），
+  运行中 Manager 环境变量已验证非 latest。
 
 ## 单元 / 集成测试
 
-- Java 后端（JDK21，ECS 上 `mvn test`）：8 个测试类 23 用例全部通过
-  （McpToolRegistry 2、DbMigrationRunner 3、BuiltinMcpServer 3、ConversationIntentClassifier 5、
-  ExternalProfileService 2、MemoryRedaction 2、RunTypeClassifier 2、MarkdownTextUtil 4）。
-- Python Workflow：pytest 作为 workflow 镜像构建门禁在 ECS Docker build 内执行通过
-  （runtime core / executor / loop guard / sandbox tools / conversation / run control / tool registry / mcp registry / policy benchmark）。
+- Java（ECS, JDK21）：8 类 23 用例全部通过。
+- Python：56 用例通过（含并行分组、pause/resume 快照往返且已完成 Agent 不
+  重跑、toolCallId 配对压缩、PARTIAL_SUCCESS 语义、契约基准无 champion）。
+- 契约门禁 `run_agent_harness.py`：18 项全 PASS（构建期强制执行）。
 
-## 端到端（真实 LLM + Sandbox）
+## 功能验收（真实 LLM + Sandbox）
 
-- 完整评估 run `run-c1440039`：SUCCEEDED，policy=deep_analysis，
-  6 个 Agent（ResumeParser→JDAnalysis→Tech→Project→Risk→Evidence），
-  18 次 LLM 调用、4 次 Sandbox 工具调用（0 失败），耗时 166s，回答含证据行引用。
-- SSE：`/sse/runs/{runId}` 断线重连按 `Last-Event-ID` 回放 run_event（验证含 run.queued/run.started/llm.*/tool.*/sandbox.*/run.completed）。
+- 完整评估：SUCCEEDED，7 个 Agent 全执行（含 ReportAgent），LLM 8 次、
+  工具 4 次、token 12190+7980、时延 46.2s、degraded 空。
+- 每 Agent 真实耗时（ms）：Parser 5240 / JD 2174 / Tech 11844 ∥ Project 11811 ∥
+  Risk 11783（并行组）/ Evidence 8756 / Report 15958。
+- PAUSE：RUNNING → PAUSING → PAUSED，快照落库（executedAgents=[ResumeParserAgent]）；
+  RESUME 后完成，快照内已完成 Agent 精确执行 1 次（不重跑）。
+- INTERRUPT：运行中打断 → CANCELLED，取消传播到 Python task。
+- resume_task 桥接：上传任务经 /agent/runs 执行，agent_run.source_task_trace_id
+  关联，任务状态/摘要回写（35 秒完成；一次验收轮询窗口过短导致的误报已复核）。
 
-## 并发与队列
+## 性能优化前后（同一完整评估用例，真实数据）
 
-- 不同 Conversation 并行：conv-A 与 conv-B 同时进入 WAITING_LLM。通过。
-- 同一 Conversation 串行：第二条消息 queuePosition=1 排队。通过。
-- COLLECT：运行中补充消息 RUN_QUEUED 合并等待（run-9e201bc6）。通过。
-- INTERRUPT：运行中停止 → run-3b86e687 状态 CANCELLED，取消原因“用户在对话中要求停止”，Python runtime task 取消。通过。
+| 指标 | 优化前 | 优化后 |
+|---|---:|---:|
+| LLM 调用 | 18 次（预算耗尽降级） | 8 次 |
+| 总时延 | 139.7s | 46.2s |
+| 结果状态 | PARTIAL_SUCCESS（budget:maxLlmCalls） | SUCCEEDED |
+| ReportAgent | 未能执行 | 正常收尾 |
 
-## 超时 / 失败 / 恢复
+手段：Specialist 并行、简单请求纯规则路由、终端 Agent 接受原始 markdown、
+失败的终端 Agent 不再重排、预置工具产物复用（parsedResume/jdCoverage）。
 
-- LLM 客户端：重试上限 2、指数退避（AgentRuntimeClient 401 场景验证不盲目重试 4xx）。
-- Sandbox 工具超时路径：修复前 4 次 TIMED_OUT 有完整 tool.failed / sandbox_execution 记录，Agent 降级输出而非挂起。
-- 服务重启恢复：restart 后 WAITING_LLM 孤儿 run 被启动恢复扫描标记 FAILED，无永久卡死。
+## 真实 Agent E2E Quality Benchmark（e2e-20260719-170639-b0e9a87d）
 
-## Sandbox 安全
+3 个 Gold 用例 × 3 策略 × 3 次重复 = 27 次真实 /agent/runs，全部 SUCCEEDED；
+指标全部来自 runtime metrics（真实 LLM 次数、真实 token、按官方单价计的成本）。
 
-- worker 容器：`printenv | grep -cE 'PASSWORD|API_KEY|TOKEN|SECRET'` = 0，uid=65534，
-  network=none、read-only rootfs、cap-drop ALL、no-new-privileges、tmpfs 配额。通过。
-- 生产链路 sandbox_execution：11 SUCCEEDED（修复后全部成功，parse_resume 299ms）。
+| Policy | Reward | Success | LLM | Tokens(P/C) | Cost(CNY) | Avg | P95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| balanced | 0.3725 | 100% | 6.44 | 10734/6809 | 0.0759 | 37.6s | 49.3s |
+| strict_evidence | 0.3529 | 100% | 6.56 | 10559/5971 | 0.0689 | 35.4s | 50.5s |
+| **low_cost（Champion）** | **0.4629** | 100% | 3.67 | 4431/2911 | 0.0322 | 22.4s | 33.7s |
 
-## Memory / Policy Learning
+Champion 已写回 `policy_bundle.is_champion`。评估标签只进评估器；固定策略
+以 FORCED 模式记录（27 条 FORCED selection，与 EXPLOIT/EXPLORE 分离）。
 
-- memory_entry 按 scope 隔离：FAILURE(GLOBAL) 6、EPISODIC(CONVERSATION) 11、HR_FEEDBACK 2、CONVERSATION 3。
-- HR 反馈 → reward=0.8895 → policy_statistics(deep_analysis, full_evaluation) 更新。
-- policy_selection 记录 EXPLOIT/EXPLORE 与 epsilon。
+Contract Benchmark（19 用例 × 7 策略）独立输出于 `reports/benchmark/contract/`，
+仅验证工具契约/公式/安全规则/故障注入，不产生质量结论。
 
-## Benchmark（ECS Sandbox Replay，bench-20260719-142845-2a636a72）
+## 可靠性与持久化
 
-19 用例 × 7 策略 = 133 结果，全部 SUCCEEDED，Champion = **strict_evidence**（总 Reward 0.353）。
-详见 `reports/benchmark/`（JSON/CSV/Markdown）。
+- 重启（backend+workflow+sandbox-manager）：conversation 39→39、agent_run
+  44→44、resume_task 205→205；重启后无 RUNNING/STARTING 残留。
+- Memory 生命周期：CONVERSATION 33、EPISODIC 44、WORKING(RUN) 20、
+  FAILURE(GLOBAL) 6、HR_FEEDBACK 2 —— 每类均有真实写入且 scope 隔离。
+- 原有 named volumes 全程复用；部署前 mysqldump 备份；行数前后校验内置。
 
-## Volume 持久化
+## 本轮发现并修复
 
-- 重启前后：conversation_session 7→7、agent_run 11→11、resume_task 203→203。
-- resumai-mysql-data / resumai-redis-data 等原 named volume 全程未改名未替换；
-  部署前 mysqldump 备份于 `/root/resumai-backups/<stamp>/`。
-
-## 部署期间发现并修复的缺陷
-
-1. `application.yml` 缩进错误使 `workflow/task-queue/agent-run/policy/memory` 挂在 `langfuse` 前缀下，
-   导致内部 token 绑定失效（发出 change-me，HTTP 401）。已修复。
-2. Docker 不向 detached 容器转发 attach 流 EOF，sandbox worker 阻塞 stdin 读满 90s 超时。
-   worker 改为增量解析完整 JSON 文档。已修复（299ms 成功）。
-3. `requirements.lock` 含无平台标记的 pywin32，Linux 构建失败。已加 `sys_platform == "win32"`。
-4. `.dockerignore` 排除了 ECS 构建所需的 `target/jar` 与 `dist/`。已改为白名单。
+1. `MutableTask.revisionNo` 原始类型判空编译错误（桥接代码）。
+2. ReportAgent 长报告溢出 JSON 包装反复失败烧尽预算：改为接受原始 markdown
+   （报告即交付物），且失败的终端 Agent 不再重排。
