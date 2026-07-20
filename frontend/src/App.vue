@@ -1524,6 +1524,16 @@ function toggleToolDetail(key: string) {
 }
 
 const AGENT_NAME_CN: Record<string, string> = {
+  // 统一 Agent Runtime
+  CoordinatorAgent: '协调规划',
+  ResumeParserAgent: '简历解析',
+  JDAnalysisAgent: 'JD 分析',
+  TechAgent: '技术能力评估',
+  ProjectAgent: '项目经历评估',
+  EvidenceAgent: '证据核验',
+  ResumeOptimizeAgent: '简历优化',
+  InterviewQuestionAgent: '面试追问',
+  // 兼容历史 trace 的旧命名
   IntentAgent: '意图识别',
   ResumeParseAgent: '简历结构化解析',
   JdMatchAgent: 'JD 匹配',
@@ -1536,6 +1546,14 @@ const AGENT_NAME_CN: Record<string, string> = {
 };
 
 const AGENT_PURPOSE_CN: Record<string, string> = {
+  CoordinatorAgent: '根据问题类型、上下文与历史失败动态规划 Agent 流水线。',
+  ResumeParserAgent: '用确定性工具把简历拆成技能、经历、项目和教育结构。',
+  JDAnalysisAgent: '提取并归一化岗位要求，计算覆盖与缺口。',
+  TechAgent: '评估技术栈深度、工程经验和可验证证据。',
+  ProjectAgent: '评估项目复杂度、职责边界和业务结果。',
+  EvidenceAgent: '逐条核验结论证据，标记无支撑的声明与冲突。',
+  ResumeOptimizeAgent: '在事实不变的前提下改写项目与经历描述。',
+  InterviewQuestionAgent: '针对风险与证据缺口生成验证型面试追问。',
   IntentAgent: '判断候选人类型、经验级别和后续评估策略。',
   ResumeParseAgent: '把简历文本拆成技能、经历、项目和教育等结构化信息。',
   JdMatchAgent: '从岗位库里找最匹配的 JD，并提取匹配依据和差距。',
@@ -1544,7 +1562,7 @@ const AGENT_PURPOSE_CN: Record<string, string> = {
   ProjectEvalAgent: '评估项目复杂度、职责边界和业务结果。',
   RiskAgent: '识别时间线、简历真实性和能力表述风险。',
   EvidenceFusionAgent: '汇总技术、项目、风险和 JD 证据，形成统一判断。',
-  ReportAgent: '把前面所有证据整理成 HR 能直接看的评估报告。',
+  ReportAgent: '汇总证据与冲突，生成可追溯的最终评估报告。',
 };
 
 const TOOL_NAME_CN: Record<string, string> = {
@@ -1757,8 +1775,16 @@ function toMillis(value?: string): number | undefined {
   return Number.isFinite(ms) ? ms : undefined;
 }
 
+function dynamicPhaseTitle(agents: any[]): string {
+  const names = agents.map((a) => agentDisplayName(a.name));
+  if (names.length > 1) return `${names.join(' ∥ ')}（并行）`;
+  return names[0] || '';
+}
+
 function groupByPhase(tree: any[]): PhaseGroup[] {
   const phaseMap = new Map<number, PhaseGroup>();
+  // 旧 trace（固定 6 Phase DAG）的标题；统一 Runtime 的分组标题
+  // 由组内 Agent 动态生成（见下方 dynamicPhaseTitle 回填）。
   const phaseTitles: Record<number, string> = {
     1: '意图路由',
     2: '简历解析',
@@ -1794,6 +1820,17 @@ function groupByPhase(tree: any[]): PhaseGroup[] {
     }
     if (agent.status === 'FAILED') group.status = 'FAILED';
     else if (agent.status === 'RUNNING' && group.status !== 'FAILED') group.status = 'RUNNING';
+  }
+
+  // 统一 Runtime 的 Agent（Coordinator 动态规划产出）用组内成员生成标题，
+  // 让并行分组一目了然，而不是套旧的固定 DAG 文案。
+  const unifiedNames = new Set(['ResumeParserAgent', 'JDAnalysisAgent', 'TechAgent',
+    'ProjectAgent', 'RiskAgent', 'EvidenceAgent', 'ReportAgent',
+    'ResumeOptimizeAgent', 'InterviewQuestionAgent']);
+  for (const group of phaseMap.values()) {
+    if (group.agents.some((a: any) => unifiedNames.has(a.name))) {
+      group.title = dynamicPhaseTitle(group.agents);
+    }
   }
 
   return Array.from(phaseMap.values()).sort((a, b) => a.phase - b.phase);
@@ -2198,6 +2235,11 @@ function subscribeTrace(traceId: string) {
     loadGraph(traceId);
     if (activeTraceId.value === traceId) {
       loadAgentExecution(traceId);
+      loadTraces(traceId);
+      // 终态事件立刻刷新详情，按钮/状态徽章无需等下一轮轮询
+      if (/^run\.(completed|failed|cancelled|timed_out)$/.test(step.eventType || '')) {
+        refreshTaskDetail(traceId);
+      }
     }
   });
 }
@@ -3267,7 +3309,8 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <div class="card" style="padding:var(--space-xl);margin-bottom:var(--space-lg)">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-lg)">
               <h3 style="margin:0">Multi-Agent 执行链路</h3>
-              <span class="badge badge-info">{{ agentExecutionTree.framework || 'LangGraph + DeepSeek + Embedding RAG' }}</span>
+              <span class="badge badge-info">{{ agentExecutionTree.framework || 'Unified Agent Runtime + DeepSeek' }}</span>
+              <span v-if="agentExecutionTree.planReason" class="text-muted text-xs" style="margin-left:8px">规划依据：{{ agentExecutionTree.planReason }}</span>
             </div>
             <div v-if="agentExecutionTree && agentExecutionTree.executionTree && agentExecutionTree.executionTree.length" class="agent-tree">
               <!-- Phase Groups -->
@@ -3404,7 +3447,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             </div>
             <div v-else class="empty-state" style="padding:var(--space-xl);text-align:center;color:var(--text-secondary)">
               <p>暂无执行记录</p>
-              <p style="font-size:0.85rem">评估完成后将展示完整的 8-Agent 执行链路（6 Phase DAG）</p>
+              <p style="font-size:0.85rem">运行开始后，Coordinator 规划的 Agent 流水线（含并行分组）会在这里实时展开</p>
             </div>
           </div>
           <!-- Langfuse External Link -->

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.dao.RunEventMapper;
 import com.resumai.agent.domain.entity.RunEvent;
+import com.resumai.agent.service.SseTraceHub;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -13,7 +14,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
@@ -31,16 +34,22 @@ public class RunEventService {
     private final RunEventMapper runEventMapper;
     private final RedissonClient redisson;
     private final ObjectMapper objectMapper;
+    private final SseTraceHub sseTraceHub;
+    private final RunTraceBridgeService traceBridge;
 
     private final Map<String, List<SseEmitter>> runEmitters = new ConcurrentHashMap<>();
     private final Map<String, List<SseEmitter>> conversationEmitters = new ConcurrentHashMap<>();
 
     public RunEventService(RunEventMapper runEventMapper,
                            RedissonClient redisson,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           SseTraceHub sseTraceHub,
+                           @Lazy RunTraceBridgeService traceBridge) {
         this.runEventMapper = runEventMapper;
         this.redisson = redisson;
         this.objectMapper = objectMapper;
+        this.sseTraceHub = sseTraceHub;
+        this.traceBridge = traceBridge;
     }
 
     public RunEvent publish(String runId, String conversationId, String traceId,
@@ -62,7 +71,21 @@ public class RunEventService {
             log.warn("run event persist failed run={} type={}: {}", runId, eventType, e.getMessage());
         }
         fanOut(event);
+        relayToTraceView(event);
         return event;
+    }
+
+    /** Mirror run events onto the legacy /sse/traces feed (task detail page). */
+    private void relayToTraceView(RunEvent event) {
+        if (!StringUtils.hasText(event.getTraceId())) {
+            return;
+        }
+        try {
+            sseTraceHub.publish(traceBridge.toTraceEvent(event.getTraceId(), event));
+        } catch (Exception e) {
+            log.debug("trace relay skipped run={} type={}: {}",
+                    event.getRunId(), event.getEventType(), e.getMessage());
+        }
     }
 
     private int nextSeq(String runId) {

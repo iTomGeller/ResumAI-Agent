@@ -11,6 +11,7 @@ import com.resumai.agent.api.dto.TaskResponse;
 import com.resumai.agent.api.dto.UpsertJdRequest;
 import com.resumai.agent.service.JdRagService;
 import com.resumai.agent.service.ResumeEvaluationService;
+import com.resumai.agent.service.run.RunTraceBridgeService;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -39,10 +40,14 @@ public class TaskController {
 
     private final ResumeEvaluationService evaluationService;
     private final JdRagService jdRagService;
+    private final RunTraceBridgeService traceBridge;
 
-    public TaskController(ResumeEvaluationService evaluationService, JdRagService jdRagService) {
+    public TaskController(ResumeEvaluationService evaluationService,
+                          JdRagService jdRagService,
+                          RunTraceBridgeService traceBridge) {
         this.evaluationService = evaluationService;
         this.jdRagService = jdRagService;
+        this.traceBridge = traceBridge;
     }
 
     @PostMapping("/tasks")
@@ -181,6 +186,11 @@ public class TaskController {
 
     @GetMapping("/tasks/{traceId}/agent-execution")
     public Map<String, Object> getAgentExecution(@PathVariable String traceId) {
-        return evaluationService.getAgentExecutionTree(traceId);
+        Map<String, Object> legacy = evaluationService.getAgentExecutionTree(traceId);
+        Object tree = legacy.get("executionTree");
+        if (tree instanceof java.util.List<?> list && !list.isEmpty()) {
+            return legacy;
+        }
+        return traceBridge.executionTreeForTrace(traceId);
     }
 }

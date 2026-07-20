@@ -28,6 +28,10 @@ class AgentRunRequest(BaseModel):
     resumeSnapshot: Optional[Dict[str, Any]] = None
     # Present when this run mirrors a legacy resume_task evaluation.
     sourceTaskTraceId: Optional[str] = None
+    # True only for policy replay / benchmark runs: deterministic tools then
+    # execute inside isolated Docker workers. Normal user requests run the
+    # same tool code in-process (they are pure functions — no container tax).
+    isolatedSandbox: bool = False
 
 
 class CancelRequest(BaseModel):
@@ -82,6 +86,11 @@ class PolicyBundle(BaseModel):
         "RiskAgent", "EvidenceAgent", "ReportAgent"])
     maxAgentCount: int = 6
     maxLlmCalls: int = 12
+    # Cost budget axis (CNY, real token pricing); 0 disables the cap.
+    maxCostCny: float = 1.0
+    # Hard cumulative token ceiling (prompt + completion) enforced before
+    # every LLM call; 0 disables the cap.
+    maxTotalTokens: int = 120000
     maxIterationsPerAgent: int = 2
     jobFocus: Optional[str] = None
     skillOverrides: Dict[str, str] = Field(default_factory=dict)
@@ -102,6 +111,28 @@ class PolicyBundle(BaseModel):
         return cls.model_validate(data)
 
 
+class ToolCallRequest(BaseModel):
+    """One tool invocation the agent asks the harness to execute."""
+
+    tool: str = ""
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentDecision(BaseModel):
+    """Schema of every per-iteration agent reply.
+
+    Validation is the third JSON guarantee layer (after API json_object mode
+    and truncation/empty-content checks in the client): a reply that parses
+    as JSON but violates this schema is repaired with the exact violation
+    fed back to the model.
+    """
+
+    thought: str = ""
+    toolCalls: List[ToolCallRequest] = Field(default_factory=list)
+    output: Optional[Dict[str, Any]] = None
+    done: bool = False
+
+
 class AgentOutput(BaseModel):
     """Structured contribution one agent writes to the shared blackboard."""
 
@@ -118,13 +149,23 @@ class AgentOutput(BaseModel):
 
 
 class RunBudget(BaseModel):
-    """Mutable consumption counters checked by the executor and loop guard."""
+    """Mutable consumption counters checked by the executor and loop guard.
+
+    Budget axes: steps (agents/iterations), tool calls, tokens, wall clock
+    and real cost (CNY) — checked before every LLM/tool step, never only at
+    the end of the run.
+    """
 
     llm_calls: int = 0
     tool_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cost_cny: float = 0.0
     started_at: float = Field(default_factory=time.monotonic)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
     def elapsed_seconds(self) -> float:
         return time.monotonic() - self.started_at
@@ -134,13 +175,15 @@ class RunBudget(BaseModel):
         self.tool_calls = int(counters.get("toolCalls", 0))
         self.prompt_tokens = int(counters.get("promptTokens", 0))
         self.completion_tokens = int(counters.get("completionTokens", 0))
+        self.cost_cny = float(counters.get("costCny", 0.0))
 
-    def snapshot(self) -> Dict[str, int]:
+    def snapshot(self) -> Dict[str, Any]:
         return {
             "llmCalls": self.llm_calls,
             "toolCalls": self.tool_calls,
             "promptTokens": self.prompt_tokens,
             "completionTokens": self.completion_tokens,
+            "costCny": round(self.cost_cny, 6),
         }
 
 

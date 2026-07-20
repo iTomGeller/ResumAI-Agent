@@ -104,9 +104,14 @@ class SandboxClient:
 
 
 class LocalSandboxFallback:
-    """In-process implementations used ONLY by unit tests and the offline
-    harness (never in production, where isolation matters). Keeps runtime
-    logic testable without a Docker daemon."""
+    """In-process execution of the deterministic resume tools.
+
+    This is the DEFAULT path for normal user requests: the tools are pure
+    stdlib functions with no side effects, so a per-call Docker container
+    adds seconds of latency without any security benefit. The isolated
+    Docker worker (SandboxClient) is reserved for policy replay / benchmark
+    environments where hard isolation and resource metering are the point.
+    """
 
     def __init__(self) -> None:
         from app.runtime import sandbox_tools_local

@@ -15,6 +15,7 @@ from app.runtime.llm import LlmError, ResilientLlmClient, extract_json_object
 from app.runtime.loop_guard import LoopGuard
 from app.runtime.memory import MemoryClient
 from app.runtime.models import (
+    AgentDecision,
     AgentOutput,
     AgentRunRequest,
     BudgetExceeded,
@@ -74,9 +75,19 @@ class RunExecutor:
         self.pause_event = pause_event
         self.memory = memory or MemoryClient(request.runId, request.conversationId,
                                              request.userId)
-        self.sandbox = sandbox or SandboxClient(
-            emitter, request.runId, request.conversationId,
-            timeout_seconds=self.policy.timeoutPolicy.sandboxTimeoutSeconds)
+        # Deterministic resume tools are pure functions. Normal user requests
+        # run them in-process (no per-call Docker cost); the isolated Docker
+        # worker path is reserved for policy replay / benchmark environments
+        # (request.isolatedSandbox) where hard isolation is the point.
+        if sandbox is not None:
+            self.sandbox = sandbox
+        elif request.isolatedSandbox:
+            self.sandbox = SandboxClient(
+                emitter, request.runId, request.conversationId,
+                timeout_seconds=self.policy.timeoutPolicy.sandboxTimeoutSeconds)
+        else:
+            from app.runtime.sandbox import LocalSandboxFallback
+            self.sandbox = LocalSandboxFallback()
         run_context = {
             "resumeText": request.resumeText or "",
             "jobDescription": request.jobDescription or "",
@@ -88,7 +99,9 @@ class RunExecutor:
             run_context=run_context)
         self.llm = llm or ResilientLlmClient(
             emitter, self.budget, self.policy.maxLlmCalls,
-            self.policy.timeoutPolicy.llmTimeoutSeconds)
+            self.policy.timeoutPolicy.llmTimeoutSeconds,
+            max_cost_cny=self.policy.maxCostCny,
+            max_total_tokens=self.policy.maxTotalTokens)
         self.context = ContextManager(self.policy.contextBudget, emitter,
                                       request.runId, request.conversationId)
         self.guard = LoopGuard()
@@ -493,8 +506,8 @@ class RunExecutor:
                                       purpose=definition.output_type,
                                       max_tokens=3600 if is_terminal else 2048)
             agent_llm_calls += 1
-            decision = extract_json_object(raw)
-            if not decision and is_terminal and raw.strip():
+            decision, schema_error = self._parse_decision(raw)
+            if decision is None and is_terminal and raw.strip():
                 # Long reports frequently overflow the JSON envelope. The
                 # report IS the deliverable — accept the raw markdown instead
                 # of burning repair calls and failing the terminal agent.
@@ -504,16 +517,21 @@ class RunExecutor:
                                        "claims": [], "evidence": [],
                                        "confidence": 0.6},
                             "done": True}
-            if not decision:
+            if decision is None:
+                # Repair with the exact violation fed back, not a generic nag.
                 raw = await self.llm.chat(
                     messages + [{"role": "assistant", "content": raw[:1500]},
                                 {"role": "user",
-                                 "content": "上面的输出不是合法 JSON。请只输出符合 schema 的 JSON。"}],
+                                 "content": ("上面的输出未通过 json schema 校验："
+                                             f"{schema_error[:400]}。"
+                                             "请只输出修正后的 JSON 对象，不要任何其他文本。")}],
                     agent_id=agent_id, purpose="repair", max_tokens=2048)
                 agent_llm_calls += 1
-                decision = extract_json_object(raw)
-                if not decision:
-                    raise LlmError("MALFORMED_OUTPUT", "agent 未能给出合法 JSON", False)
+                decision, schema_error = self._parse_decision(raw)
+                if decision is None:
+                    raise LlmError("MALFORMED_OUTPUT",
+                                   f"agent 两次输出均未通过 schema 校验: {schema_error[:200]}",
+                                   False)
 
             thought = str(decision.get("thought") or "")
             if thought:
@@ -564,6 +582,26 @@ class RunExecutor:
             "toolCalls": agent_tool_calls,
         }
         return output
+
+    @staticmethod
+    def _parse_decision(raw: str) -> Tuple[Optional[Dict[str, Any]], str]:
+        """Layered JSON guarantee, application side: extract the object, then
+        validate against the AgentDecision schema. Returns (decision, error);
+        decision is None when either layer fails, with the exact violation in
+        error so the repair call can quote it back to the model."""
+        candidate = extract_json_object(raw)
+        if not candidate:
+            return None, "输出中找不到可解析的 JSON 对象"
+        try:
+            validated = AgentDecision.model_validate(candidate)
+        except Exception as exc:  # pydantic.ValidationError
+            return None, str(exc)
+        decision = validated.model_dump()
+        # Downstream expects plain dicts for tool calls.
+        decision["toolCalls"] = [
+            {"tool": c["tool"], "arguments": c["arguments"]}
+            for c in decision.get("toolCalls", [])]
+        return decision, ""
 
     def _build_output(self, definition: AgentDefinition,
                       raw_output: Optional[Dict[str, Any]],

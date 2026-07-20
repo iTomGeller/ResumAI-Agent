@@ -147,6 +147,14 @@ async function requestControl(action: ConversationControlAction) {
   const response = await controlTask(props.traceId, action);
   if (response) emit('statusChange', response);
 }
+
+function friendlyError(raw: string): string {
+  if (/不支持\s*PAUSE/.test(raw)) return '任务已经结束，无需暂停；可以直接继续追问或重新分析。';
+  if (/不支持\s*RESUME/.test(raw)) return '任务不在暂停状态，无需恢复。';
+  if (/不支持\s*CANCEL|任务已取消/.test(raw)) return '任务已经结束，无需取消。';
+  if (/并发操作/.test(raw)) return '状态刚被其他操作更新，已自动刷新，请重试。';
+  return raw;
+}
 </script>
 
 <template>
@@ -165,16 +173,19 @@ async function requestControl(action: ConversationControlAction) {
       <span v-if="!isViewedCurrent" class="conversation-view-warning">正在查看历史 revision</span>
     </div>
 
-    <div class="conversation-controls" aria-label="任务控制">
-      <button type="button" :disabled="!canPause || !!controlling" @click="requestControl('PAUSE')">
-        {{ controlling === 'PAUSE' ? '请求中…' : '暂停' }}
+    <div v-if="canPause || canResume || canCancel" class="conversation-controls" aria-label="任务控制">
+      <button v-if="canPause" type="button" :disabled="!!controlling" @click="requestControl('PAUSE')">
+        {{ controlling === 'PAUSE' ? '请求中…' : '⏸ 暂停' }}
       </button>
-      <button type="button" :disabled="!canResume || !!controlling" @click="requestControl('RESUME')">
-        {{ controlling === 'RESUME' ? '恢复中…' : '继续' }}
+      <button v-if="canResume" type="button" :disabled="!!controlling" @click="requestControl('RESUME')">
+        {{ controlling === 'RESUME' ? '恢复中…' : '▶ 继续' }}
       </button>
-      <button type="button" class="is-danger" :disabled="!canCancel || !!controlling" @click="requestControl('CANCEL')">
-        {{ controlling === 'CANCEL' ? '取消中…' : '取消' }}
+      <button v-if="canCancel" type="button" class="is-danger" :disabled="!!controlling" @click="requestControl('CANCEL')">
+        {{ controlling === 'CANCEL' ? '取消中…' : '✕ 取消' }}
       </button>
+    </div>
+    <div v-else-if="isTerminal" class="conversation-controls-done">
+      本轮评估已结束 · 可继续追问，或点下方“重新分析”发起新一轮
     </div>
 
     <div v-if="activeRun" class="run-monitor" :data-active="runActive">
@@ -230,7 +241,7 @@ async function requestControl(action: ConversationControlAction) {
     <div v-if="lastControl" class="conversation-notice" :class="['PAUSING', 'RESUMING'].includes(lastControl.status) ? 'is-warning' : 'is-info'">
       {{ lastControl.message }}
     </div>
-    <div v-if="error" class="conversation-error" role="alert">{{ error }}</div>
+    <div v-if="error" class="conversation-error" role="alert">{{ friendlyError(error) }}</div>
 
     <form class="conversation-composer" @submit.prevent="submitMessage">
       <div v-if="runActive" class="queue-mode-picker">
@@ -325,7 +336,18 @@ async function requestControl(action: ConversationControlAction) {
 .conversation-status[data-status="PAUSING"],
 .conversation-status[data-status="RESUMING"] { background: var(--color-warning-light); color: var(--color-warning); }
 .conversation-status[data-status="PAUSED"] { background: #e0e7ff; color: #4338ca; }
-.conversation-status[data-status="SUCCESS"] { background: var(--color-success-light); color: var(--color-success); }
+.conversation-status[data-status="SUCCESS"],
+.conversation-status[data-status="PARTIAL_SUCCESS"] { background: var(--color-success-light); color: var(--color-success); }
+
+.conversation-controls-done {
+  margin: 0 14px 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
 .conversation-status[data-status="CANCELLED"],
 .conversation-status[data-status="FAILED"] { background: var(--color-danger-light); color: var(--color-danger); }
 .conversation-status[data-status="SUPERSEDED"] { background: #e2e8f0; color: #475569; }

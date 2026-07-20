@@ -56,6 +56,7 @@ public class RunLifecycleService {
     private final MemoryService memoryService;
     private final AgentRunProperties properties;
     private final ObjectMapper objectMapper;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     public RunLifecycleService(AgentRunMapper runMapper,
                                AgentExecutionRecordMapper executionMapper,
@@ -70,7 +71,8 @@ public class RunLifecycleService {
                                AgentRuntimeClient runtimeClient,
                                @Lazy MemoryService memoryService,
                                AgentRunProperties properties,
-                               ObjectMapper objectMapper) {
+                               ObjectMapper objectMapper,
+                               org.springframework.context.ApplicationEventPublisher eventPublisher) {
         this.runMapper = runMapper;
         this.executionMapper = executionMapper;
         this.toolCallMapper = toolCallMapper;
@@ -85,6 +87,7 @@ public class RunLifecycleService {
         this.memoryService = memoryService;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     /** Called by the scheduler once permits are held and status is STARTING. */
@@ -128,6 +131,11 @@ public class RunLifecycleService {
                             "selectionMode", selection.mode(),
                             "runType", category(run)));
             Map<String, Object> payload = buildRuntimePayload(run, session, bundle);
+            if ("FORCED".equals(selection.mode())) {
+                // Benchmark/replay runs execute their deterministic tools in
+                // isolated Docker workers; normal user requests stay in-process.
+                payload.put("isolatedSandbox", true);
+            }
             runtimeClient.startRun(payload);
         } catch (Exception e) {
             log.warn("run start failed run={}: {}", runId, e.getMessage());
@@ -649,10 +657,18 @@ public class RunLifecycleService {
                 }
             }
             resumeTaskMapper.update(null, update);
+            // The task list, dashboard counters and /api/tasks/{id} serve from
+            // the in-memory task cache — refresh it so the UI flips immediately.
+            eventPublisher.publishEvent(new TaskRunSyncedEvent(
+                    run.getSourceTaskTraceId(), taskStatus));
         } catch (Exception e) {
             log.warn("resume_task sync failed run={} task={}: {}",
                     run.getRunId(), run.getSourceTaskTraceId(), e.getMessage());
         }
+    }
+
+    /** Published after a linked resume_task row was mirrored from a run. */
+    public record TaskRunSyncedEvent(String traceId, String status) {
     }
 
     private void clearPermits(String runId) {

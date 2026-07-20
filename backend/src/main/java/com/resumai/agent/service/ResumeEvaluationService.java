@@ -224,6 +224,42 @@ public class ResumeEvaluationService {
         }
     }
 
+    /**
+     * A linked run finished and mirrored its outcome into resume_task (DB).
+     * Refresh the in-memory task cache from the authoritative row so the task
+     * list, dashboard counters and detail view flip without a restart.
+     */
+    @org.springframework.context.event.EventListener
+    public void onTaskRunSynced(RunLifecycleService.TaskRunSyncedEvent event) {
+        try {
+            ResumeTask row = loadResumeTaskRow(event.traceId()).orElse(null);
+            if (row == null) {
+                return;
+            }
+            MutableTask cached = tasks.get(event.traceId());
+            LocalDateTime now = LocalDateTime.now();
+            if (cached != null) {
+                synchronized (cached) {
+                    cached.status = row.getStatus();
+                    cached.queueStatus = row.getQueueStatus();
+                    cached.summary = row.getSummary();
+                    cached.durationMs = row.getDurationMs() != null ? row.getDurationMs() : cached.durationMs;
+                    cached.tokenCost = row.getTokenCost() != null ? row.getTokenCost() : cached.tokenCost;
+                    cached.finishedAt = row.getFinishedAt() != null ? row.getFinishedAt() : now;
+                    cached.updateTime = now;
+                }
+            } else {
+                tasks.remove(event.traceId());
+            }
+            runtimeStateService.evictRunningTask(event.traceId());
+            agentMetrics.agentTaskFinished();
+            agentMetrics.recordFunnelEvaluationCompleted(
+                    row.getJobCategory(), event.status(), "NONE");
+        } catch (Exception e) {
+            log.debug("task cache refresh failed trace={}: {}", event.traceId(), e.getMessage());
+        }
+    }
+
     private void initTaskIdFromDb() {
         try {
             ResumeTask maxRow = resumeTaskMapper.selectOne(
@@ -1310,10 +1346,8 @@ public class ResumeEvaluationService {
             executionTree.add(agentNode);
         }
 
-        if (executionTree.isEmpty()) {
-            executionTree = buildDefaultExecutionTree();
-        }
-
+        // No fabricated placeholder tree: an empty result means the caller
+        // (TaskController) falls back to the unified run-event bridge.
         tree.put("executionTree", executionTree);
         tree.put("harnessPlan", extractHarnessPlan(deduped));
         tree.put("langfuseTraceId", traceId);
@@ -1695,31 +1729,6 @@ public class ResumeEvaluationService {
         if (agentRole.contains("Fusion") || agentRole.contains("Evidence")) return "证据融合";
         if (agentRole.contains("Report")) return "报告生成";
         return agentRole;
-    }
-
-    private List<Map<String, Object>> buildDefaultExecutionTree() {
-        List<Map<String, Object>> tree = new ArrayList<>();
-        String[][] agents = {
-                {"IntentAgent", "意图路由", "1"},
-                {"ResumeParseAgent", "简历结构化解析", "2"},
-                {"JdMatchAgent", "岗位匹配", "3"},
-                {"TechEvalAgent", "技术评估", "4"},
-                {"ProjectEvalAgent", "项目深度评估", "4"},
-                {"RiskAgent", "风险识别", "4"},
-                {"EvidenceFusionAgent", "证据融合", "5"},
-                {"ReportAgent", "报告生成", "6"}
-        };
-        for (String[] a : agents) {
-            Map<String, Object> node = new LinkedHashMap<>();
-            node.put("name", a[0]);
-            node.put("role", a[1]);
-            node.put("phase", Integer.parseInt(a[2]));
-            node.put("status", "SUCCESS");
-            node.put("durationMs", 0);
-            node.put("rounds", List.of());
-            tree.add(node);
-        }
-        return tree;
     }
 
     private Optional<TaskResponse> loadTaskFromDb(String traceId) {
