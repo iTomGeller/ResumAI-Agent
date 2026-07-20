@@ -36,16 +36,21 @@ public class TraceController {
     /**
      * 查询指定 TraceId 的历史事件。
      *
+     * <p>合并两个来源：任务层写入的 legacy 事件（如 TASK_CREATED）与统一
+     * Runtime 的运行事件（经桥接渲染），按时间排序后返回。</p>
+     *
      * @param traceId TraceId
      * @return Trace 事件
      */
     @GetMapping("/api/traces/{traceId}")
     public List<TraceEventResponse> listTraces(@PathVariable String traceId) {
-        List<TraceEventResponse> legacy = evaluationService.listTraces(traceId);
-        if (!legacy.isEmpty()) {
-            return legacy;
-        }
-        return traceBridge.traceEventsForTrace(traceId);
+        List<TraceEventResponse> merged = new java.util.ArrayList<>(
+                evaluationService.listTraces(traceId));
+        merged.addAll(traceBridge.traceEventsForTrace(traceId));
+        merged.sort(java.util.Comparator.comparing(
+                TraceEventResponse::timestamp,
+                java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())));
+        return merged;
     }
 
     /**
