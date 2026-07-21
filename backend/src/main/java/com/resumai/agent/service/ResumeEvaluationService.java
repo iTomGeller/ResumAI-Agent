@@ -7,10 +7,6 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.resumai.agent.ai.DeepSeekClient;
-import com.resumai.agent.ai.ResumeEvaluationOrchestrator;
-import com.resumai.agent.ai.AgentTraceCapture;
-import com.resumai.agent.ai.agents.EvaluationResult;
 import com.resumai.agent.api.dto.CreateTaskRequest;
 import com.resumai.agent.util.HrContext;
 import com.resumai.agent.util.MarkdownTextUtil;
@@ -18,11 +14,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import com.resumai.agent.config.AgentMetrics;
-import com.resumai.agent.config.WorkflowProperties;
 import com.resumai.agent.api.dto.DashboardMetricsResponse;
 import com.resumai.agent.api.dto.FeedbackRequest;
 import com.resumai.agent.api.dto.FeedbackResponse;
-import com.resumai.agent.api.dto.GraphResponse;
 import com.resumai.agent.api.dto.JdMatchResult;
 import com.resumai.agent.api.dto.PageResult;
 import com.resumai.agent.api.dto.TaskListItemResponse;
@@ -52,17 +46,9 @@ import com.resumai.agent.domain.dag.DagStepRegistry;
 import com.resumai.agent.domain.dag.DagStepRegistry.StepDefinition;
 import com.resumai.agent.domain.entity.SystemOrchestrationRule;
 import com.resumai.agent.rag.RagOptions;
-import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.common.AttributeKey;
-import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.context.Context;
-import io.opentelemetry.context.Scope;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -121,9 +107,7 @@ public class ResumeEvaluationService {
     private final Map<String, Map<String, AtomicInteger>> traceRoundCounters = new ConcurrentHashMap<>();
     private final List<FeedbackResponse> feedbacks = new ArrayList<>();
     private final TaskQueueService taskQueueService;
-    private final DeepSeekClient deepSeekClient;
     private final SseTraceHub sseTraceHub;
-    private final ResumeGraphService resumeGraphService;
     private final ResumeRagService resumeRagService;
     private final ResumeTaskMapper resumeTaskMapper;
     private final AgentExecutionTraceMapper agentExecutionTraceMapper;
@@ -140,10 +124,6 @@ public class ResumeEvaluationService {
     private final TaskQueryService taskQueryService;
     private final RuntimeStateService runtimeStateService;
     private final ObjectMapper objectMapper;
-    private final Tracer tracer;
-    private final ResumeEvaluationOrchestrator evaluationOrchestrator;
-    private final AgentTraceCapture agentTraceCapture;
-    private final WorkflowProperties workflowProperties;
     private final RunQueueService runQueueService;
     private final RunSchedulerService runSchedulerService;
     private final RunLifecycleService runLifecycleService;
@@ -152,9 +132,7 @@ public class ResumeEvaluationService {
     @Value("${langfuse.public-url:}")
     private String langfusePublicUrl;
 
-    public ResumeEvaluationService(DeepSeekClient deepSeekClient,
-                                SseTraceHub sseTraceHub,
-                                ResumeGraphService resumeGraphService,
+    public ResumeEvaluationService(SseTraceHub sseTraceHub,
                                 ResumeRagService resumeRagService,
                                 ResumeTaskMapper resumeTaskMapper,
                                 AgentExecutionTraceMapper agentExecutionTraceMapper,
@@ -172,17 +150,11 @@ public class ResumeEvaluationService {
                                 RuntimeStateService runtimeStateService,
                                 TaskQueueService taskQueueService,
                                 ObjectMapper objectMapper,
-                                OpenTelemetry openTelemetry,
-                                ResumeEvaluationOrchestrator evaluationOrchestrator,
-                                AgentTraceCapture agentTraceCapture,
-                                WorkflowProperties workflowProperties,
                                 RunQueueService runQueueService,
                                 @Lazy RunSchedulerService runSchedulerService,
                                 @Lazy RunLifecycleService runLifecycleService,
                                 ConversationSessionMapper conversationSessionMapper) {
-        this.deepSeekClient = deepSeekClient;
         this.sseTraceHub = sseTraceHub;
-        this.resumeGraphService = resumeGraphService;
         this.resumeRagService = resumeRagService;
         this.resumeTaskMapper = resumeTaskMapper;
         this.agentExecutionTraceMapper = agentExecutionTraceMapper;
@@ -200,17 +172,12 @@ public class ResumeEvaluationService {
         this.runtimeStateService = runtimeStateService;
         this.taskQueueService = taskQueueService;
         this.objectMapper = objectMapper;
-        this.tracer = openTelemetry.getTracer("resumai-agent");
-        this.evaluationOrchestrator = evaluationOrchestrator;
-        this.agentTraceCapture = agentTraceCapture;
-        this.workflowProperties = workflowProperties;
         this.runQueueService = runQueueService;
         this.runSchedulerService = runSchedulerService;
         this.runLifecycleService = runLifecycleService;
         this.conversationSessionMapper = conversationSessionMapper;
         agentMetrics.registerSseActiveSubscribersGauge(sseTraceHub::getActiveSubscriberCount);
         agentMetrics.registerTaskCacheSizeGauge(() -> tasks.size());
-        agentMetrics.registerNeo4jConnectionPoolGauge(() -> resumeGraphService.isNeo4jAvailable() ? 1 : 0);
         agentMetrics.registerMilvusConnectionAliveGauge(() -> resumeRagService.isMilvusAvailable() ? 1 : 0);
     }
 
@@ -219,9 +186,6 @@ public class ResumeEvaluationService {
         initTaskIdFromDb();
         restoreTasksFromDb();
         restoreFeedbacksFromDb();
-        if (!workflowProperties.isPythonMode()) {
-            agentTraceCapture.setPersistenceListener(this::persistAgentEventImmediately);
-        }
     }
 
     /**
@@ -236,6 +200,18 @@ public class ResumeEvaluationService {
             if (row == null) {
                 return;
             }
+            // Full rehydrate from the authoritative row: score, recommendation,
+            // structured report and lists all flow into the cache in one shot.
+            if (StringUtils.hasText(row.getResultPayload())) {
+                try {
+                    Map<String, Object> payload = objectMapper.readValue(
+                            row.getResultPayload(), new TypeReference<>() {});
+                    MutableTask hydrated = hydrateTaskFromPayload(row, payload);
+                    tasks.put(event.traceId(), hydrated);
+                } catch (Exception e) {
+                    log.debug("rehydrate failed trace={}: {}", event.traceId(), e.getMessage());
+                }
+            }
             MutableTask cached = tasks.get(event.traceId());
             LocalDateTime now = LocalDateTime.now();
             if (cached != null) {
@@ -243,13 +219,15 @@ public class ResumeEvaluationService {
                     cached.status = row.getStatus();
                     cached.queueStatus = row.getQueueStatus();
                     cached.summary = row.getSummary();
+                    cached.overallScore = row.getOverallScore() != null
+                            ? row.getOverallScore() : cached.overallScore;
+                    cached.recommendation = StringUtils.hasText(row.getRecommendation())
+                            ? row.getRecommendation() : cached.recommendation;
                     cached.durationMs = row.getDurationMs() != null ? row.getDurationMs() : cached.durationMs;
                     cached.tokenCost = row.getTokenCost() != null ? row.getTokenCost() : cached.tokenCost;
                     cached.finishedAt = row.getFinishedAt() != null ? row.getFinishedAt() : now;
                     cached.updateTime = now;
                 }
-            } else {
-                tasks.remove(event.traceId());
             }
             runtimeStateService.evictRunningTask(event.traceId());
             agentMetrics.agentTaskFinished();
@@ -339,6 +317,10 @@ public class ResumeEvaluationService {
                 stringValue(payload.get("riskSummary"), null)
         );
         task.finalReport = stringValue(payload.get("fullReport"), stringValue(payload.get("summary"), ""));
+        Object structured = payload.get("structuredReport");
+        if (structured instanceof Map<?, ?>) {
+            task.structuredReport = objectMapper.convertValue(structured, new TypeReference<>() {});
+        }
         Object topMatches = payload.get("topJdMatches");
         if (topMatches instanceof List<?>) {
             task.topJdMatches = objectMapper.convertValue(topMatches, new TypeReference<>() {});
@@ -844,6 +826,14 @@ public class ResumeEvaluationService {
                                              String jobCategory,
                                              String executionMode,
                                              String jobDescription) {
+        return createTaskFromUpload(file, jobCategory, executionMode, jobDescription, false);
+    }
+
+    public TaskResponse createTaskFromUpload(MultipartFile file,
+                                             String jobCategory,
+                                             String executionMode,
+                                             String jobDescription,
+                                             boolean planMode) {
         String fileName = file == null ? "" : file.getOriginalFilename();
         String normalizedCategory = normalizeJobCategory(jobCategory);
         String fileType = detectFileType(fileName);
@@ -861,7 +851,9 @@ public class ResumeEvaluationService {
                 jobDescription,
                 resumeText
         );
-        return createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(), fileType, null);
+        TaskResponse created = createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(), fileType, null);
+        markPlanMode(traceId, planMode);
+        return created;
     }
 
     /**
@@ -869,6 +861,11 @@ public class ResumeEvaluationService {
      * Returns immediately after file save and text extraction; JD matching runs in background.
      */
     public TaskResponse createTaskFromUploadAutoMatch(MultipartFile file, String executionMode) {
+        return createTaskFromUploadAutoMatch(file, executionMode, false);
+    }
+
+    public TaskResponse createTaskFromUploadAutoMatch(MultipartFile file, String executionMode,
+                                                      boolean planMode) {
         String fileName = file == null ? "" : file.getOriginalFilename();
         String fileType = detectFileType(fileName);
         if (file != null && !file.isEmpty()) {
@@ -885,7 +882,20 @@ public class ResumeEvaluationService {
                 "",
                 resumeText
         );
-        return createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(), fileType, null);
+        TaskResponse created = createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(), fileType, null);
+        markPlanMode(traceId, planMode);
+        return created;
+    }
+
+    /** Plan-approval flag lives on the in-memory task until the run enqueues. */
+    private void markPlanMode(String traceId, boolean planMode) {
+        if (!planMode) {
+            return;
+        }
+        MutableTask task = tasks.get(traceId);
+        if (task != null) {
+            task.planMode = true;
+        }
     }
 
     public Path getResumeFile(String traceId) {
@@ -1272,9 +1282,7 @@ public class ResumeEvaluationService {
 
         Map<String, Object> tree = new LinkedHashMap<>();
         tree.put("traceId", traceId);
-        tree.put("framework", workflowProperties.isPythonMode()
-                ? "LangGraph + DeepSeek + Embedding RAG"
-                : "langchain4j AiServices + MCP + Skills");
+        tree.put("framework", "Unified Agent Runtime + DeepSeek");
         tree.put("architecture", "8-Agent 6-Phase DAG Orchestration");
 
         List<AgentExecutionTrace> deduped = dedupeTracesByEventId(traces);
@@ -1758,7 +1766,8 @@ public class ResumeEvaluationService {
                     StringUtils.hasText(row.getConversationId()) ? row.getConversationId() : row.getTraceId(),
                     row.getRevisionNo() != null ? row.getRevisionNo() : 1,
                     row.getWorkflowRunId(), row.getBaseWorkflowRunId(), row.getSupersedesTraceId(), row.getSupersededByTraceId(),
-                    row.getEvaluationBrief(), parseJsonStringList(row.getInvalidatedNodes())));
+                    row.getEvaluationBrief(), parseJsonStringList(row.getInvalidatedNodes()),
+                    null, Map.of()));
         } catch (Exception e) {
             log.warn("[eval] load task from db failed (trace={}): {}", traceId, e.getMessage());
             return Optional.empty();
@@ -2352,21 +2361,66 @@ public class ResumeEvaluationService {
      *
      * @return 仪表盘指标响应
      */
+    /**
+     * 大盘指标以数据库为准（一条聚合 SQL），不再依赖进程内 Map——
+     * 重启、多实例、缓存未加载的行全部计入，修复“计数永远不变”。
+     */
     public DashboardMetricsResponse metrics() {
-        List<MutableTask> snapshot = List.copyOf(tasks.values());
-        int total = snapshot.size();
-        int running = (int) snapshot.stream().filter(task -> "RUNNING".equals(task.status)).count();
-        int success = (int) snapshot.stream().filter(task -> "SUCCESS".equals(task.status)).count();
-        int failed = (int) snapshot.stream().filter(task -> "FAILED".equals(task.status)).count();
-        double avgDuration = snapshot.stream().mapToLong(task -> task.durationMs).average().orElse(0D);
-        double avgScore = snapshot.stream()
-                .filter(task -> "SUCCESS".equals(task.status) && task.overallScore != null)
-                .mapToInt(task -> task.overallScore)
-                .average().orElse(0D);
-        int totalToken = snapshot.stream().mapToInt(task -> task.tokenCost).sum();
+        int total = 0;
+        int running = 0;
+        int success = 0;
+        int failed = 0;
+        double avgDuration = 0D;
+        double avgScore = 0D;
+        int totalToken = 0;
         Map<String, Long> modeDuration = new LinkedHashMap<>();
-        modeDuration.put("SERIAL", averageByMode(snapshot, "SERIAL"));
-        modeDuration.put("DAG_CONCURRENT", averageByMode(snapshot, "DAG_CONCURRENT"));
+        try {
+            QueryWrapper<ResumeTask> aggregate = new QueryWrapper<>();
+            aggregate.select(
+                    "COUNT(*) AS total",
+                    "COALESCE(SUM(status = 'RUNNING'), 0) AS running",
+                    "COALESCE(SUM(status = 'SUCCESS'), 0) AS success",
+                    "COALESCE(SUM(status = 'FAILED'), 0) AS failed",
+                    "COALESCE(AVG(duration_ms), 0) AS avg_duration",
+                    "COALESCE(AVG(CASE WHEN status = 'SUCCESS' AND overall_score > 0 THEN overall_score END), 0) AS avg_score",
+                    "COALESCE(SUM(token_cost), 0) AS total_token");
+            Map<String, Object> row = resumeTaskMapper.selectMaps(aggregate).stream()
+                    .filter(java.util.Objects::nonNull).findFirst().orElse(Map.of());
+            total = metricInt(row.get("total"));
+            running = metricInt(row.get("running"));
+            success = metricInt(row.get("success"));
+            failed = metricInt(row.get("failed"));
+            avgDuration = metricDouble(row.get("avg_duration"));
+            avgScore = metricDouble(row.get("avg_score"));
+            totalToken = metricInt(row.get("total_token"));
+
+            QueryWrapper<ResumeTask> byMode = new QueryWrapper<>();
+            byMode.select("execution_mode AS mode", "COALESCE(AVG(duration_ms), 0) AS avg_duration")
+                    .isNotNull("execution_mode")
+                    .groupBy("execution_mode");
+            for (Map<String, Object> modeRow : resumeTaskMapper.selectMaps(byMode)) {
+                if (modeRow == null) {
+                    continue;
+                }
+                modeDuration.put(String.valueOf(modeRow.get("mode")),
+                        (long) metricDouble(modeRow.get("avg_duration")));
+            }
+        } catch (Exception e) {
+            log.warn("[eval] metrics db aggregate failed, falling back to cache: {}", e.getMessage());
+            List<MutableTask> snapshot = List.copyOf(tasks.values());
+            total = snapshot.size();
+            running = (int) snapshot.stream().filter(task -> "RUNNING".equals(task.status)).count();
+            success = (int) snapshot.stream().filter(task -> "SUCCESS".equals(task.status)).count();
+            failed = (int) snapshot.stream().filter(task -> "FAILED".equals(task.status)).count();
+            avgDuration = snapshot.stream().mapToLong(task -> task.durationMs).average().orElse(0D);
+            avgScore = snapshot.stream()
+                    .filter(task -> "SUCCESS".equals(task.status) && task.overallScore != null && task.overallScore > 0)
+                    .mapToInt(task -> task.overallScore)
+                    .average().orElse(0D);
+            totalToken = snapshot.stream().mapToInt(task -> task.tokenCost).sum();
+        }
+        modeDuration.putIfAbsent("SERIAL", 0L);
+        modeDuration.putIfAbsent("DAG_CONCURRENT", 0L);
         Map<String, Long> durationSum = new LinkedHashMap<>();
         Map<String, Long> durationCount = new LinkedHashMap<>();
         traces.values().stream().flatMap(List::stream)
@@ -2381,44 +2435,18 @@ public class ResumeEvaluationService {
         return new DashboardMetricsResponse(total, running, success, failed, avgDuration, avgScore, totalToken, modeDuration, agentDuration);
     }
 
-    /**
-     * 查询 GraphRAG 子图。
-     *
-     * @param traceId 全局链路 ID
-     * @return 图谱节点和边
-     */
-    public GraphResponse graph(String traceId) {
-        GraphResponse neo4jGraph = resumeGraphService.querySubgraph(traceId);
-        if (neo4jGraph != null) {
-            return neo4jGraph;
-        }
-        // An unavailable graph is not evidence. Returning an empty, explicit
-        // state prevents the UI or report layer from presenting demo nodes as
-        // facts about a real candidate.
-        return new GraphResponse(List.of(), List.of(), "UNAVAILABLE");
+    private static int metricInt(Object value) {
+        return value instanceof Number n ? n.intValue() : 0;
     }
 
-    private Span startLfSpan(String name, Span parent, String type, String input) {
-        Span span = tracer.spanBuilder(name)
-                .setParent(Context.current().with(parent))
-                .setAttribute("langfuse.observation.type", type)
-                .startSpan();
-        if (input != null) span.setAttribute("langfuse.observation.input", input);
-        return span;
+    private static double metricDouble(Object value) {
+        return value instanceof Number n ? n.doubleValue() : 0D;
     }
 
-    private void endLfSpan(Span span, String output) {
-        if (output != null) span.setAttribute("langfuse.observation.output", output);
-        span.setStatus(StatusCode.OK);
-        span.end();
-    }
+
 
     private void executeTask(MutableTask task) {
-        if (workflowProperties.isPythonMode()) {
-            executeTaskViaAgentRuntime(task);
-            return;
-        }
-        executeTaskViaJavaOrchestrator(task);
+        executeTaskViaAgentRuntime(task);
     }
 
     /**
@@ -2440,7 +2468,7 @@ public class ResumeEvaluationService {
             runQueueService.enqueueTaskRun(
                     runId, conversationId, task.uploadedBy, task.traceId,
                     Math.max(1, task.revisionNo),
-                    runTypeForTask(task), userMessage, task.traceId, 0);
+                    runTypeForTask(task), userMessage, task.traceId, 0, task.planMode);
             runSchedulerService.kick();
             task.summary = "已进入统一 Agent 运行队列，正在异步评估。";
             task.updateTime = LocalDateTime.now();
@@ -2517,86 +2545,7 @@ public class ResumeEvaluationService {
         }
     }
 
-    private void executeTaskViaJavaOrchestrator(MutableTask task) {
-        long start = System.currentTimeMillis();
-        agentMetrics.agentTaskStarted();
 
-        Span rootSpan = tracer.spanBuilder("evaluate-resume")
-                .setAttribute("langfuse.observation.type", "trace")
-                .setAttribute("langfuse.trace.id", task.traceId)
-                .setAttribute("langfuse.user.id", task.uploadedBy != null ? task.uploadedBy : "unknown")
-                .setAttribute("langfuse.session.id", task.traceId)
-                .setAttribute("langfuse.observation.input", task.resumeText != null ? task.resumeText : "")
-                .startSpan();
-        try (Scope ignored = rootSpan.makeCurrent()) {
-            // === 8-Agent DAG Orchestration via AiServices + MCP + Skills ===
-            EvaluationResult evalResult = evaluationOrchestrator.evaluate(
-                    task.resumeText != null ? task.resumeText : "", task.traceId);
-
-            String aiSummary = evalResult.finalReport();
-            task.summary = aiSummary;
-            task.overallScore = evalResult.overallScore();
-            if (task.overallScore == null || task.overallScore <= 0) {
-                throw new IllegalStateException("Agent DAG 未返回可验证的综合评分");
-            }
-            task.strengths = evalResult.strengths();
-            task.risks = evalResult.risks();
-            task.riskSummary = task.risks.isEmpty() ? "需人工复核" : task.risks.get(0);
-            task.recommendation = evalResult.recommendation();
-            task.aiRecommendation = evalResult.recommendation();
-            task.decisionRationale = "8-Agent DAG: Intent→Parse→JdMatch→(TechEval+ProjectEval+Risk)→EvidenceFusion→Report";
-            task.interviewQuestions = evalResult.interviewQuestions();
-            task.durationMs = System.currentTimeMillis() - start;
-            // The legacy Java orchestrator does not expose provider token usage.
-            // Keep this unknown instead of deriving a fake token count from latency.
-            task.tokenCost = 0;
-            task.status = "SUCCESS";
-            task.updateTime = LocalDateTime.now();
-
-            agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "SUCCESS", task.recommendation);
-            agentMetrics.recordFunnelScoreDistribution(task.jobCategory, task.overallScore);
-            agentMetrics.recordFunnelRecommendation(task.recommendation);
-            agentMetrics.recordFunnelTimeToScreen(task.jobCategory, task.durationMs);
-            agentMetrics.recordLlmCostPerTask(estimateTaskCost(task.tokenCost));
-            persistFullTaskResult(task);
-            task.queueStatus = QueueStatus.SUCCESS.name();
-            task.finishedAt = LocalDateTime.now();
-            rootSpan.setAttribute("langfuse.observation.output", trim(aiSummary, 2000));
-            rootSpan.setStatus(StatusCode.OK);
-        } catch (Exception e) {
-            task.status = "FAILED";
-            task.queueStatus = QueueStatus.FAILED.name();
-            task.summary = "任务失败：" + e.getMessage();
-            task.finishedAt = LocalDateTime.now();
-            task.durationMs = System.currentTimeMillis() - start;
-            task.updateTime = LocalDateTime.now();
-            agentMetrics.recordAgentError("ResumeEvalAgent", e.getClass().getSimpleName());
-            agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "FAILED", "NONE");
-            agentMetrics.recordFunnelEvaluationDropped(task.jobCategory, e.getClass().getSimpleName());
-            rootSpan.setStatus(StatusCode.ERROR, e.getMessage());
-            rootSpan.recordException(e);
-        } finally {
-            rootSpan.end();
-            agentMetrics.agentTaskFinished();
-            updateResumeTask(task);
-        }
-    }
-
-    private String runStage(MutableTask task, String previousAgent, String agentRole, String title, String detail,
-                            long durationMs, int tokenCost) {
-        long stageStart = System.currentTimeMillis();
-        if (!previousAgent.equals(agentRole)) {
-            agentMetrics.recordAgentDelegation(previousAgent, agentRole);
-        }
-        task.tokenCost += tokenCost;
-        sleep(Duration.ofMillis(Math.min(durationMs, 500L)));
-        long actualDuration = System.currentTimeMillis() - stageStart;
-        agentMetrics.recordAgentSpan(agentRole, "SUCCESS", previousAgent, actualDuration);
-        agentMetrics.recordAgentDelegationLatency(previousAgent, agentRole, actualDuration);
-        agentMetrics.recordFunnelTimeInStage(agentRole, actualDuration);
-        agentMetrics.recordAgentIterationCount(agentRole, 1);
-        return agentRole;
-    }
 
     private void appendTrace(String traceId, String parentSpanId, String agentRole, String eventType, String title, String detail, String status, Long durationMs, Integer tokenCost) {
         appendDagTrace(traceId, parentSpanId, agentRole, eventType, title, detail, status, durationMs, tokenCost,
@@ -2902,12 +2851,6 @@ public class ResumeEvaluationService {
         return rec;
     }
 
-    private String buildRiskSummary(List<String> risks) {
-        if (risks == null || risks.isEmpty()) {
-            return "未发现明确高风险，但仍建议面试官复核项目真实性。";
-        }
-        return risks.stream().limit(2).collect(Collectors.joining("；"));
-    }
 
     private TaskResponse toResponse(MutableTask task) {
         String resumeFileUrl = StringUtils.hasText(task.resumeFilePath) || StringUtils.hasText(task.resumeFileType)
@@ -2920,7 +2863,9 @@ public class ResumeEvaluationService {
                 task.aiRecommendation, task.decisionRationale, task.riskSummary, buildQueueFields(task),
                 task.conversationId, task.revisionNo, task.workflowRunId, task.baseWorkflowRunId, task.supersedesTraceId,
                 task.supersededByTraceId, task.evaluationBrief,
-                task.invalidatedNodes != null ? task.invalidatedNodes : List.of());
+                task.invalidatedNodes != null ? task.invalidatedNodes : List.of(),
+                task.finalReport,
+                task.structuredReport != null ? task.structuredReport : Map.of());
     }
 
     private String normalizeExecutionMode(String executionMode) {
@@ -2931,131 +2876,11 @@ public class ResumeEvaluationService {
         return StringUtils.hasText(jobCategory) ? jobCategory.trim().toUpperCase() : "TECH";
     }
 
-    private int parseLlmScore(String text) {
-        if (!StringUtils.hasText(text)) return 0;
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("评分.*?(\\d+(\\.\\d+)?)\\s*/\\s*(\\d+)").matcher(text);
-        if (m.find()) {
-            double score = Double.parseDouble(m.group(1));
-            double max = Double.parseDouble(m.group(3));
-            if (max == 10) return (int) Math.round(score * 10);
-            if (max == 100) return (int) Math.round(score);
-        }
-        return 0;
-    }
 
-    private void persistOrchestratorEvents(String traceId) {
-        // Now handled immediately via persistAgentEventImmediately callback
-    }
 
-    private void persistAgentEventImmediately(String traceId, AgentTraceCapture.AgentEvent event) {
-        try {
-            List<AgentTraceCapture.LlmRound> rounds = event.rounds;
-            if (rounds.isEmpty()) {
-                appendDagTrace(traceId, null, event.agentName, "AGENT_EXECUTION",
-                        event.description, event.output != null ? event.output : "",
-                        event.status, event.durationMs, 0,
-                        null, null, "agent_eval", "BOTH",
-                        event.description, null, null,
-                        event.agentName + " / Phase " + event.phase, null, null,
-                        null, event.output, null, null);
-            } else {
-                for (AgentTraceCapture.LlmRound round : rounds) {
-                    List<String> toolCallEntries = new ArrayList<>();
-                    List<String> mcpCallEntries = new ArrayList<>();
-                    for (AgentTraceCapture.ToolCallRecord tc : round.toolCalls) {
-                        String jsonEntry = buildToolCallJson(tc);
-                        if ("mcp".equals(tc.type)) {
-                            mcpCallEntries.add(jsonEntry);
-                        } else {
-                            toolCallEntries.add(jsonEntry);
-                        }
-                    }
-                    String roundTitle = event.agentName + " Round " + round.roundNum;
-                    String eventType = round.toolCalls.isEmpty() ? "LLM_GENERATION" : "LLM_TOOL_CALL";
-                    appendDagTrace(traceId, null, event.agentName, eventType,
-                            roundTitle, round.output != null ? trim(round.output, 500) : "",
-                            event.status, event.durationMs / Math.max(rounds.size(), 1), round.tokens,
-                            null, null, "agent_eval", "BOTH",
-                            event.description, null, null,
-                            event.agentName + " / Phase " + event.phase + " / Round " + round.roundNum,
-                            null, null,
-                            round.input, round.output,
-                            toolCallEntries.isEmpty() ? null : toolCallEntries,
-                            mcpCallEntries.isEmpty() ? null : mcpCallEntries);
-                }
-            }
-        } catch (Exception e) {
-            log.warn("persist agent event immediately failed (trace={}, agent={}): {}", traceId, event.agentName, e.getMessage());
-        }
-    }
 
-    private String buildToolCallJson(AgentTraceCapture.ToolCallRecord tc) {
-        try {
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("name", tc.name);
-            entry.put("type", tc.type);
-            entry.put("arguments", tc.arguments != null ? tc.arguments : "");
-            entry.put("result", tc.result != null ? tc.result : "");
-            entry.put("durationMs", tc.durationMs);
-            return objectMapper.writeValueAsString(entry);
-        } catch (Exception e) {
-            return tc.name + "(" + trim(tc.arguments, 100) + ")→" + trim(tc.result, 100);
-        }
-    }
 
-    private void persistOrchestratorEventsInternal(String traceId) {
-        // Legacy: now handled via persistAgentEventImmediately callback per agent
-    }
 
-    private void persistFullTaskResult(MutableTask task) {
-        persistOrchestratorEventsInternal(task.traceId);
-        try {
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("fileName", task.fileName);
-            payload.put("conversationId", task.conversationId);
-            payload.put("revisionNo", task.revisionNo);
-            payload.put("workflowRunId", task.workflowRunId);
-            payload.put("baseWorkflowRunId", task.baseWorkflowRunId);
-            payload.put("supersedesTraceId", task.supersedesTraceId);
-            payload.put("supersededByTraceId", task.supersededByTraceId);
-            payload.put("evaluationBrief", task.evaluationBrief);
-            payload.put("invalidatedNodes", task.invalidatedNodes);
-            payload.put("jobCategory", task.jobCategory);
-            payload.put("executionMode", task.executionMode);
-            payload.put("status", task.status);
-            payload.put("overallScore", task.overallScore);
-            payload.put("recommendation", task.recommendation);
-            payload.put("aiRecommendation", task.aiRecommendation);
-            payload.put("decisionRationale", task.decisionRationale);
-            payload.put("riskSummary", task.riskSummary);
-            payload.put("summary", task.summary);
-            payload.put("fullReport", StringUtils.hasText(task.finalReport) ? task.finalReport : task.summary);
-            payload.put("durationMs", task.durationMs);
-            payload.put("tokenCost", task.tokenCost);
-            payload.put("strengths", task.strengths);
-            payload.put("risks", task.risks);
-            payload.put("interviewQuestions", task.interviewQuestions);
-            payload.put("jobDescription", task.jobDescription);
-            payload.put("resumeText", task.resumeText);
-            payload.put("resumeFilePath", task.resumeFilePath);
-            payload.put("resumeFileType", task.resumeFileType);
-            payload.put("matchedJdTitle", task.matchedJdTitle);
-            payload.put("jdMatchScore", task.jdMatchScore);
-            payload.put("topJdMatches", task.topJdMatches);
-
-            ResumeTask entity = new ResumeTask();
-            entity.setId(task.id);
-            entity.setStatus(task.status);
-            entity.setEndTime(task.updateTime);
-            entity.setUpdateTime(task.updateTime);
-            applyListColumns(entity, task);
-            entity.setResultPayload(objectMapper.writeValueAsString(payload));
-            resumeTaskMapper.updateById(entity);
-            runtimeStateService.evictRunningTask(task.traceId);
-        } catch (Exception e) {
-            log.warn("[eval] persist full task result failed (trace={}): {}", task.traceId, e.getMessage());
-        }
-    }
 
     private String stringValue(Object value, String fallback) {
         return value == null ? fallback : String.valueOf(value);
@@ -3122,14 +2947,6 @@ public class ResumeEvaluationService {
         }
     }
 
-    private Long averageByMode(List<MutableTask> snapshot, String mode) {
-        return Math.round(snapshot.stream()
-                .filter(task -> mode.equals(task.executionMode))
-                .mapToLong(task -> task.durationMs)
-                .average()
-                .orElse(0D));
-    }
-
     private String trim(String value, int maxLength) {
         if (value == null || value.length() <= maxLength) {
             return value;
@@ -3178,18 +2995,7 @@ public class ResumeEvaluationService {
         return (positiveRecommendation && positiveRating) || (negativeRecommendation && negativeRating);
     }
 
-    private double estimateTaskCost(int totalTokens) {
-        return totalTokens * 0.0015 / 1000D;
-    }
 
-    private void sleep(Duration duration) {
-        try {
-            Thread.sleep(duration.toMillis());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Agent 执行被中断", e);
-        }
-    }
 
     private static final class MutableTask {
         private final Long id;
@@ -3219,6 +3025,7 @@ public class ResumeEvaluationService {
         private String decisionRationale;
         private String riskSummary;
         private String finalReport;
+        private Map<String, Object> structuredReport = Map.of();
         private RagOptions ragOptions;
         private String uploadedBy;
         private String tenantId;
@@ -3237,6 +3044,7 @@ public class ResumeEvaluationService {
         private String supersedesTraceId;
         private String supersededByTraceId;
         private String evaluationBrief;
+        private boolean planMode;
         private List<String> invalidatedNodes = List.of();
 
         private MutableTask(Long id, String traceId, String fileName, String jobCategory, String executionMode, String status,

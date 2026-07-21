@@ -27,7 +27,6 @@
         <guava.version>33.2.1-jre</guava.version>
         <pdfbox.version>3.0.2</pdfbox.version>
         <milvus.version>2.4.4</milvus.version>
-        <neo4j.version>5.21.0</neo4j.version>
         <opentelemetry.version>1.39.0</opentelemetry.version>
     </properties>
 
@@ -98,21 +97,11 @@
             <artifactId>langchain4j-milvus</artifactId>
             <version>${langchain4j.milvus.version}</version>
         </dependency>
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-mcp</artifactId>
-            <version>${langchain4j.milvus.version}</version>
-        </dependency>
 
         <dependency>
             <groupId>io.milvus</groupId>
             <artifactId>milvus-sdk-java</artifactId>
             <version>${milvus.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.neo4j.driver</groupId>
-            <artifactId>neo4j-java-driver</artifactId>
-            <version>${neo4j.version}</version>
         </dependency>
 
         <dependency>
