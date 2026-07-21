@@ -37,12 +37,27 @@ if [[ ! -f .env ]]; then
   fi
 fi
 
-# Ensure sandbox flags exist without printing secrets
+# Ensure sandbox flags exist without printing secrets.
+# Semantics since the replay-only cutover: user requests always run their
+# deterministic tools in-process (isolatedSandbox=false on the run), so
+# SANDBOX_ENABLED=true only keeps the Docker isolation path available for
+# benchmark / policy-evolution runs — it no longer sits on the request path.
 grep -q '^SANDBOX_ENABLED=' .env || echo 'SANDBOX_ENABLED=true' >> .env
 grep -q '^SANDBOX_MAX_CONCURRENT=' .env || echo 'SANDBOX_MAX_CONCURRENT=2' >> .env
 grep -q '^SANDBOX_MEM_LIMIT=' .env || echo 'SANDBOX_MEM_LIMIT=384m' >> .env
 grep -q '^SANDBOX_CPU=' .env || echo 'SANDBOX_CPU=0.5' >> .env
 grep -q '^SANDBOX_TTL_SECONDS=' .env || echo 'SANDBOX_TTL_SECONDS=240' >> .env
+
+# Real LLM embeddings (OpenRouter). The key itself must already be present in
+# the deploy env source (.deploy.local.env -> .env); we only wire defaults.
+if grep -q '^OPENROUTER_API_KEY=..*' .env; then
+  grep -q '^EMBEDDING_PROVIDER=' .env || echo 'EMBEDDING_PROVIDER=openrouter' >> .env
+  grep -q '^EMBEDDING_MODEL=' .env || echo 'EMBEDDING_MODEL=openai/text-embedding-3-small' >> .env
+  log "embedding provider: openrouter ($(grep '^EMBEDDING_MODEL=' .env | cut -d= -f2))"
+else
+  log "OPENROUTER_API_KEY absent -> embedding stays local MiniLM"
+fi
+grep -q '^CACHE_ENABLED=' .env || echo 'CACHE_ENABLED=true' >> .env
 
 # Pin the sandbox worker image to this exact commit (never latest).
 GIT_SHA="$(git rev-parse --short HEAD)"
@@ -146,9 +161,14 @@ cd "$SRC_DIR"
 $COMPOSE --profile build build resumai-sandbox-worker-image
 $COMPOSE build resumai-sandbox-manager ai-resume-workflow ai-resume-backend ai-resume-frontend
 
-log "bring up stack (volumes preserved)"
-$COMPOSE up -d mysql redis neo4j minio etcd milvus prometheus grafana
+log "bring up stack (volumes preserved; neo4j now optional under profile graph)"
+$COMPOSE up -d mysql redis minio etcd milvus prometheus grafana
 $COMPOSE up -d resumai-sandbox-manager ai-resume-workflow ai-resume-backend ai-resume-frontend
+# Knowledge graph removed: stop a leftover neo4j container (volume untouched).
+if docker ps --format '{{.Names}}' | grep -q '^resumai-neo4j$'; then
+  log "stopping legacy neo4j container (volume preserved)"
+  docker stop resumai-neo4j || true
+fi
 # The legacy workflow-postgres container is no longer part of the compose
 # project. Stop it if still running from an older deployment; its volume
 # resumai-workflow-postgres-data is intentionally left untouched on disk.
@@ -186,6 +206,17 @@ log "schema tables"
 docker exec resumai-mysql mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" \
   -e "SHOW TABLES LIKE 'agent_run'; SHOW TABLES LIKE 'policy_bundle'; SHOW TABLES LIKE 'schema_migration'; SELECT version FROM schema_migration ORDER BY version;" \
   2>/dev/null | tail -40 || true
+
+log "post-deploy: knowledge base seed + vector reindex (idempotent)"
+python3 "$SRC_DIR/scripts/seed_knowledge_base.py" --base http://127.0.0.1 || \
+  log "WARN: knowledge seed failed (retry manually)"
+curl -fsS -X POST http://127.0.0.1/api/rag/knowledge-base/reindex || \
+  log "WARN: kb reindex endpoint unavailable (vector store may be lexical-only)"
+
+log "install nightly policy-evolution cron (idempotent)"
+CRON_LINE="0 3 * * * cd $SRC_DIR && WORKFLOW_INTERNAL_TOKEN=\$(grep '^WORKFLOW_INTERNAL_TOKEN=' .env | cut -d= -f2) DEEPSEEK_API_KEY=\$(grep '^DEEPSEEK_API_KEY=' .env | cut -d= -f2) python3 harness/evolve_policies.py --base http://127.0.0.1 --budget-cny 5 --out reports/evolution >> /var/log/resumai-evolution.log 2>&1"
+( crontab -l 2>/dev/null | grep -v 'evolve_policies.py' ; echo "$CRON_LINE" ) | crontab - || \
+  log "WARN: cron install failed"
 
 log "container status"
 $COMPOSE ps

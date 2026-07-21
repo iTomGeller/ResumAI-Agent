@@ -10,6 +10,7 @@ import com.resumai.agent.api.dto.JdMatchResult;
 import com.resumai.agent.api.dto.JdSummaryResponse;
 import com.resumai.agent.api.dto.PageResult;
 import com.resumai.agent.api.dto.UpsertJdRequest;
+import com.resumai.agent.config.AgentMetrics;
 import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.dao.JdLibraryMapper;
 import com.resumai.agent.domain.entity.JdLibrary;
@@ -34,6 +35,7 @@ import java.time.LocalDateTime;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -54,6 +56,7 @@ public class JdRagService {
     private final JdLibraryMapper jdLibraryMapper;
     private final EmbeddingAvailability embeddingAvailability;
     private final MilvusVectorMaintenanceService vectorMaintenanceService;
+    private final AgentMetrics agentMetrics;
 
     private final Map<String, JdMeta> jdMetaCache = new ConcurrentHashMap<>();
 
@@ -92,13 +95,15 @@ public class JdRagService {
                         DeepSeekClient deepSeekClient,
                         JdLibraryMapper jdLibraryMapper,
                         EmbeddingAvailability embeddingAvailability,
-                        MilvusVectorMaintenanceService vectorMaintenanceService) {
+                        MilvusVectorMaintenanceService vectorMaintenanceService,
+                        AgentMetrics agentMetrics) {
         this.jdEmbeddingStore = jdEmbeddingStore;
         this.embeddingModel = embeddingModel;
         this.deepSeekClient = deepSeekClient;
         this.jdLibraryMapper = jdLibraryMapper;
         this.embeddingAvailability = embeddingAvailability;
         this.vectorMaintenanceService = vectorMaintenanceService;
+        this.agentMetrics = agentMetrics;
     }
 
     public int ensureDefaultJdsSeeded() {
@@ -313,22 +318,113 @@ public class JdRagService {
         return defaults;
     }
 
+    /**
+     * 词面路召回：标准 BM25（k1=1.2, b=0.75）。查询=简历分词后的词袋，
+     * 文档=JD（标题+类别+描述），df/avgdl 每次查询在 JD 全量语料上即时统计
+     * （JD 库量级为十~百级，统计成本微秒级，且天然随增删保持新鲜，
+     * 无需缓存失效逻辑）。分词：英文按词、中文按 bigram。
+     */
+    // EXP-3: BM25 参数 k1/b 待检索实验校准
+    private static final double BM25_K1 = 1.2;
+    private static final double BM25_B = 0.75;
+
     List<JdMatchResult> matchTopJdsViaLexical(String resumeText, int topK) {
         List<JdLibrary> allJds = loadJdsForMatching();
         if (allJds.isEmpty()) {
             return List.of();
         }
-        String resumeLower = resumeText.toLowerCase(Locale.ROOT);
-        List<JdMatchResult> scored = new ArrayList<>();
+        // 语料统计：每个 JD 的词频表与长度、全语料 df 与平均长度
+        List<Map<String, Integer>> termFrequencies = new ArrayList<>(allJds.size());
+        Map<String, Integer> documentFrequency = new HashMap<>();
+        long totalLength = 0;
         for (JdLibrary jd : allJds) {
-            String desc = jd.getDescription() != null ? jd.getDescription() : "";
-            double score = lexicalScore(resumeLower, desc, jd.getTitle(), jd.getCategory());
-            if (score > 0.08) {
-                scored.add(enrichMatchResult(jd.getJdId(), jd.getTitle(), jd.getCategory(), score, resumeText));
+            String docText = (jd.getTitle() != null ? jd.getTitle() : "") + " "
+                    + (jd.getCategory() != null ? jd.getCategory() : "") + " "
+                    + (jd.getDescription() != null ? jd.getDescription() : "");
+            Map<String, Integer> tf = new HashMap<>();
+            for (String term : bm25Tokenize(docText)) {
+                tf.merge(term, 1, Integer::sum);
+            }
+            termFrequencies.add(tf);
+            totalLength += tf.values().stream().mapToInt(Integer::intValue).sum();
+            for (String term : tf.keySet()) {
+                documentFrequency.merge(term, 1, Integer::sum);
             }
         }
+        int corpusSize = allJds.size();
+        double avgdl = Math.max(1.0, (double) totalLength / corpusSize);
+
+        // 查询词袋（简历截前 3000 字符足够覆盖技能与近期经历）
+        String queryText = resumeText.length() > 3000 ? resumeText.substring(0, 3000) : resumeText;
+        Set<String> queryTerms = new LinkedHashSet<>(bm25Tokenize(queryText));
+        if (queryTerms.isEmpty()) {
+            return List.of();
+        }
+
+        List<JdMatchResult> scored = new ArrayList<>();
+        double maxScore = 0;
+        double[] rawScores = new double[corpusSize];
+        for (int i = 0; i < corpusSize; i++) {
+            Map<String, Integer> tf = termFrequencies.get(i);
+            double docLength = tf.values().stream().mapToInt(Integer::intValue).sum();
+            double score = 0;
+            for (String term : queryTerms) {
+                Integer frequency = tf.get(term);
+                if (frequency == null) {
+                    continue;
+                }
+                int df = documentFrequency.getOrDefault(term, 1);
+                double idf = Math.log(1 + (corpusSize - df + 0.5) / (df + 0.5));
+                double numerator = frequency * (BM25_K1 + 1);
+                double denominator = frequency
+                        + BM25_K1 * (1 - BM25_B + BM25_B * docLength / avgdl);
+                score += idf * numerator / denominator;
+            }
+            rawScores[i] = score;
+            maxScore = Math.max(maxScore, score);
+        }
+        for (int i = 0; i < corpusSize; i++) {
+            if (rawScores[i] <= 0) {
+                continue;
+            }
+            JdLibrary jd = allJds.get(i);
+            // 归一化到 (0,1]，保持与向量路分数同一量纲供 RRF/展示使用
+            double normalized = maxScore > 0 ? rawScores[i] / maxScore : 0;
+            scored.add(enrichMatchResult(jd.getJdId(), jd.getTitle(), jd.getCategory(),
+                    Math.min(0.95, 0.15 + normalized * 0.8), resumeText));
+        }
         scored.sort((a, b) -> Double.compare(b.score(), a.score()));
-        return scored.stream().limit(topK).collect(Collectors.toList());
+        List<JdMatchResult> top = scored.stream().limit(topK).collect(Collectors.toList());
+        agentMetrics.recordRagRetrieval("jd_lexical_bm25", top.isEmpty(),
+                top.isEmpty() ? 0 : top.get(0).score());
+        return top;
+    }
+
+    /** BM25 分词：英文单词（含 +#. 的技术词）+ 中文 bigram。 */
+    private List<String> bm25Tokenize(String text) {
+        List<String> terms = new ArrayList<>();
+        if (!StringUtils.hasText(text)) {
+            return terms;
+        }
+        Matcher english = Pattern.compile("[a-zA-Z][a-zA-Z0-9+#\\.]*").matcher(text);
+        while (english.find()) {
+            String word = english.group().toLowerCase(Locale.ROOT);
+            if (word.length() >= 2) {
+                terms.add(word);
+            }
+        }
+        Matcher cjk = Pattern.compile("[\\u4e00-\\u9fff]+").matcher(text);
+        while (cjk.find()) {
+            String run = cjk.group();
+            if (run.length() == 1) {
+                terms.add(run);
+                continue;
+            }
+            for (int i = 0; i + 1 < run.length(); i++) {
+                terms.add(run.substring(i, i + 2));
+            }
+        }
+        return terms;
     }
 
     private Set<String> extractKeywords(String text) {

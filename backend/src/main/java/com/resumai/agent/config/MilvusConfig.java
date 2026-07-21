@@ -55,4 +55,44 @@ public class MilvusConfig {
             return null;
         }
     }
+
+    /** Long-term memory semantic index (recall source only; MySQL stays authoritative). */
+    @Bean
+    @Qualifier("memoryEmbeddingStore")
+    public MilvusEmbeddingStore memoryEmbeddingStore(MilvusProperties props, EmbeddingProperties embeddingProps) {
+        int dimension = props.getDimension() > 0 ? props.getDimension() : embeddingProps.resolveDimension();
+        String collection = "agent_memory_" + embeddingProps.resolveJdCollectionSuffix();
+        try {
+            return MilvusEmbeddingStore.builder()
+                    .host(props.getHost())
+                    .port(props.getPort())
+                    .collectionName(collection)
+                    .dimension(dimension)
+                    .build();
+        } catch (Exception e) {
+            log.warn("[milvus] memory vector store unavailable, lexical-only recall: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Knowledge-base chunk vector index (K4: unified retrieval pipeline). */
+    @Bean
+    @Qualifier("kbEmbeddingStore")
+    public MilvusEmbeddingStore kbEmbeddingStore(MilvusProperties props, EmbeddingProperties embeddingProps) {
+        // Always follow embedding provider dim — MILVUS_DIMENSION leftovers (e.g. 384 from
+        // MiniLM) must not create a collection named *_1024 with the wrong vector size.
+        int dimension = embeddingProps.resolveDimension();
+        String collection = "kb_chunks_" + embeddingProps.resolveJdCollectionSuffix();
+        try {
+            return MilvusEmbeddingStore.builder()
+                    .host(props.getHost())
+                    .port(props.getPort())
+                    .collectionName(collection)
+                    .dimension(dimension)
+                    .build();
+        } catch (Exception e) {
+            log.warn("[milvus] knowledge-base vector store unavailable, lexical-only: {}", e.getMessage());
+            return null;
+        }
+    }
 }

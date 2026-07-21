@@ -21,11 +21,12 @@ public class EmbeddingAvailability {
         if (!properties.isEnabled()) {
             return DISABLED_REASON;
         }
-        String provider = properties.getProvider() == null ? "local" : properties.getProvider().toLowerCase();
-        if ("local".equals(provider)) {
+        if (properties.isOperational()) {
             return "";
         }
-        if (properties.getApiKey() == null || properties.getApiKey().isBlank()) {
+        String provider = properties.getProvider() == null ? "local" : properties.getProvider().toLowerCase();
+        if (!"local".equals(provider)
+                && (properties.getApiKey() == null || properties.getApiKey().isBlank())) {
             return "EMBEDDING_API_KEY_MISSING";
         }
         return DISABLED_REASON;
@@ -37,7 +38,8 @@ public class EmbeddingAvailability {
             if ("local".equalsIgnoreCase(provider)) {
                 return "当前使用本地 MiniLM-L6-v2 向量检索（384 维）";
             }
-            return "向量检索已启用（provider=" + provider + "）";
+            return "向量检索：" + properties.getModel() + "（" + provider + "，"
+                    + properties.resolveDimension() + " 维）";
         }
         return "当前已自动回退到关键词匹配，岗位匹配仍可用";
     }

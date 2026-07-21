@@ -5,6 +5,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "resumai.workflow")
 public class WorkflowProperties {
 
+    /**
+     * Legacy mode switch. Java orchestrator path has been removed; production
+     * always runs through the unified Python Agent Runtime. Kept for
+     * application.yml binding compatibility — do not reintroduce a java branch.
+     */
     private String mode = "python";
     private String baseUrl = "http://ai-resume-workflow:8090";
     private String internalToken = "change-me";

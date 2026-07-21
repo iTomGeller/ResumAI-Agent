@@ -581,6 +581,25 @@ public class AgentMetrics {
                 .increment();
     }
 
+    public void recordRagRetrieval(String strategy, boolean empty, double topScore) {
+        Counter.builder("resumai.rag.retrieval.calls")
+                .tag("strategy", strategy == null ? "unknown" : strategy)
+                .tag("empty", empty ? "true" : "false")
+                .description("RAG 检索调用次数")
+                .register(registry)
+                .increment();
+        if (!empty && topScore > 0) {
+            DistributionSummary.builder("resumai.rag.retrieval.top_score")
+                    .tag("strategy", strategy == null ? "unknown" : strategy)
+                    .description("RAG 检索 top score")
+                    .register(registry)
+                    .record(topScore);
+        }
+        if (empty) {
+            recordRagRetrievalEmptyResults();
+        }
+    }
+
     public void recordRagRetrievalBelowThreshold() {
         Counter.builder("resumai.rag.retrieval.below_threshold")
                 .description("RAG 检索低于阈值次数")
@@ -589,12 +608,6 @@ public class AgentMetrics {
     }
 
     // ── Dimension 6: System Health ───────────────────────────────────────────
-
-    public void registerNeo4jConnectionPoolGauge(IntSupplier poolSizeSupplier) {
-        Gauge.builder("resumai.system.neo4j.connection_pool", poolSizeSupplier, IntSupplier::getAsInt)
-                .description("Neo4j 连接池大小")
-                .register(registry);
-    }
 
     public void registerMilvusConnectionAliveGauge(IntSupplier aliveSupplier) {
         Gauge.builder("resumai.system.milvus.connection_alive", aliveSupplier, IntSupplier::getAsInt)

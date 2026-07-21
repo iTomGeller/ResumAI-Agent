@@ -1,5 +1,6 @@
 package com.resumai.agent.service;
 
+import com.resumai.agent.ai.DeepSeekClient;
 import com.resumai.agent.api.dto.JdMatchResult;
 import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.rag.RagOptions;
@@ -13,8 +14,11 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -22,28 +26,38 @@ public class HybridRagService {
 
     private static final Logger log = LoggerFactory.getLogger(HybridRagService.class);
     private static final ExecutorService COMPARE_POOL = Executors.newFixedThreadPool(4);
+    private static final Pattern RANKED_IDS = Pattern.compile(
+            "\"rankedIds\"\\s*:\\s*\\[([^\\]]*)\\]", Pattern.CASE_INSENSITIVE);
 
     private final JdRagService jdRagService;
-    private final ResumeGraphService resumeGraphService;
     private final EmbeddingAvailability embeddingAvailability;
+    private final DeepSeekClient deepSeekClient;
 
     public HybridRagService(JdRagService jdRagService,
-                            ResumeGraphService resumeGraphService,
-                            EmbeddingAvailability embeddingAvailability) {
+                            EmbeddingAvailability embeddingAvailability,
+                            @Nullable DeepSeekClient deepSeekClient) {
         this.jdRagService = jdRagService;
-        this.resumeGraphService = resumeGraphService;
         this.embeddingAvailability = embeddingAvailability;
+        this.deepSeekClient = deepSeekClient;
     }
 
     public List<JdMatchResult> retrieve(String resumeText, RagOptions opts) {
         RagOptions effective = opts != null ? opts : RagOptions.defaults();
-        return switch (effective.strategy()) {
+        List<JdMatchResult> candidates = switch (effective.strategy()) {
             case "lexical" -> jdRagService.matchTopJdsViaLexical(resumeText, effective.topK());
             case "vector" -> retrieveVector(resumeText, effective);
-            case "hybrid" -> hybridRRF(resumeText, effective);
-            case "graph" -> resumeGraphService.matchViaGraph(resumeText, effective);
+            // The Neo4j graph strategy was removed with the knowledge graph
+            // (F item): unknown/legacy "graph" requests degrade to hybrid.
+            case "hybrid", "graph" -> hybridRRF(resumeText, effective);
             default -> throw new IllegalArgumentException("Unknown strategy: " + effective.strategy());
         };
+        if (effective.rerankerEnabled() && candidates.size() > 1) {
+            List<JdMatchResult> reranked = llmRerank(resumeText, candidates);
+            if (reranked != null && !reranked.isEmpty()) {
+                return reranked.stream().limit(effective.topK()).toList();
+            }
+        }
+        return candidates;
     }
 
     public Map<String, Object> compare(String resumeText, List<NamedVariant> variants) {
@@ -75,7 +89,8 @@ public class HybridRagService {
         return Map.of(
                 "candidates", candidates,
                 "metricsMs", elapsed,
-                "strategy", opts != null ? opts.strategy() : "hybrid");
+                "strategy", opts != null ? opts.strategy() : "hybrid",
+                "rerankerEnabled", opts != null && opts.rerankerEnabled());
     }
 
     private VariantResult runVariant(String resumeText, NamedVariant variant) {
@@ -95,7 +110,11 @@ public class HybridRagService {
     }
 
     private List<JdMatchResult> hybridRRF(String resumeText, RagOptions opts) {
-        int perChannelRecall = Math.min(200, Math.max(50, opts.topK() * 5));
+        // Pull Top-20 (or more) before optional LLM rerank truncates to topK.
+        int fuseLimit = opts.rerankerEnabled()
+                ? Math.max(20, opts.topK())
+                : opts.topK();
+        int perChannelRecall = Math.min(200, Math.max(50, fuseLimit * 5));
         List<JdMatchResult> vectorHits = embeddingAvailability.isOperational()
                 ? jdRagService.matchTopJdsViaVector(resumeText, perChannelRecall, opts)
                 : List.of();
@@ -105,10 +124,10 @@ public class HybridRagService {
             return List.of();
         }
         if (vectorHits.isEmpty()) {
-            return lexicalHits.stream().limit(opts.topK()).toList();
+            return lexicalHits.stream().limit(fuseLimit).toList();
         }
         if (lexicalHits.isEmpty()) {
-            return vectorHits.stream().limit(opts.topK()).toList();
+            return vectorHits.stream().limit(fuseLimit).toList();
         }
 
         Map<String, Double> fusedScores = fuseRRFWeighted(vectorHits, lexicalHits, opts);
@@ -119,7 +138,7 @@ public class HybridRagService {
         List<JdMatchResult> fused = new ArrayList<>();
         fusedScores.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue(Comparator.reverseOrder()))
-                .limit(opts.topK())
+                .limit(fuseLimit)
                 .forEach(entry -> {
                     JdMatchResult base = byId.get(entry.getKey());
                     if (base != null) {
@@ -131,6 +150,71 @@ public class HybridRagService {
                     }
                 });
         return fused;
+    }
+
+    /**
+     * Listwise DeepSeek rerank over Top-N JD candidates. Returns null on any
+     * failure so the caller keeps the RRF order.
+     */
+    private List<JdMatchResult> llmRerank(String resumeText, List<JdMatchResult> candidates) {
+        if (deepSeekClient == null || candidates.isEmpty()) {
+            return null;
+        }
+        List<JdMatchResult> top = candidates.stream().limit(20).toList();
+        String snippet = resumeText == null ? ""
+                : resumeText.substring(0, Math.min(resumeText.length(), 800));
+        StringBuilder sb = new StringBuilder();
+        sb.append("你是岗位匹配重排器。根据简历片段对候选 JD 按相关性降序重排，")
+                .append("只输出 JSON：{\"rankedIds\":[\"jdId\",...]}\n简历片段:\n")
+                .append(snippet)
+                .append("\n候选:\n");
+        for (int i = 0; i < top.size(); i++) {
+            JdMatchResult c = top.get(i);
+            sb.append(i + 1).append(". id=").append(c.jdId())
+                    .append(" title=").append(c.title())
+                    .append(" category=").append(c.category())
+                    .append(" score=").append(String.format(Locale.ROOT, "%.3f", c.score()))
+                    .append('\n');
+        }
+        try {
+            String text = deepSeekClient.evaluateResume(sb.toString(), "JdReranker", "listwise_rerank");
+            List<String> rankedIds = parseRankedIds(text);
+            if (rankedIds.isEmpty()) {
+                return null;
+            }
+            Map<String, JdMatchResult> byId = new LinkedHashMap<>();
+            for (JdMatchResult c : top) {
+                byId.put(c.jdId(), c);
+            }
+            List<JdMatchResult> ordered = new ArrayList<>();
+            for (String id : rankedIds) {
+                JdMatchResult row = byId.remove(id);
+                if (row != null) {
+                    ordered.add(row);
+                }
+            }
+            ordered.addAll(byId.values());
+            return ordered;
+        } catch (Exception e) {
+            log.debug("JD LLM rerank skipped: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static List<String> parseRankedIds(String text) {
+        if (text == null || text.isBlank()) {
+            return List.of();
+        }
+        Matcher m = RANKED_IDS.matcher(text);
+        if (!m.find()) {
+            return List.of();
+        }
+        List<String> ids = new ArrayList<>();
+        Matcher idm = Pattern.compile("\"([^\"]+)\"").matcher(m.group(1));
+        while (idm.find()) {
+            ids.add(idm.group(1));
+        }
+        return ids;
     }
 
     private Map<String, Double> fuseRRFWeighted(List<JdMatchResult> vectorHits,

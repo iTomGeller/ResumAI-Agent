@@ -2,6 +2,16 @@ package com.resumai.agent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.resumai.agent.ai.DeepSeekClient;
+import com.resumai.agent.config.EmbeddingAvailability;
+import dev.langchain4j.data.document.Metadata;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingSearchResult;
+import dev.langchain4j.store.embedding.milvus.MilvusEmbeddingStore;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -10,34 +20,64 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+/**
+ * Self-service knowledge base: structure-aware chunking on disk + hybrid
+ * BM25-like lexical / Milvus embedding retrieval with optional LLM rerank.
+ */
 @Service
 public class KnowledgeBaseDocumentService {
 
+    private static final Logger log = LoggerFactory.getLogger(KnowledgeBaseDocumentService.class);
     private static final int TARGET_CHUNK_CHARS = 320;
     private static final int OVERLAP_CHARS = 60;
+    private static final int RRF_K = 60;
+    private static final Pattern RANKED_IDS = Pattern.compile(
+            "\"rankedIds\"\\s*:\\s*\\[([^\\]]*)\\]", Pattern.CASE_INSENSITIVE);
 
     private final Path kbRoot;
     private final Path manifestPath;
     private final ObjectMapper objectMapper;
+    private final MilvusEmbeddingStore kbStore;
+    private final EmbeddingModel embeddingModel;
+    private final EmbeddingAvailability embeddingAvailability;
+    private final MilvusVectorMaintenanceService vectorMaintenance;
+    private final DeepSeekClient deepSeekClient;
 
     public KnowledgeBaseDocumentService(@Value("${resumai.upload-dir:./uploads}") String uploadDir,
-                                        ObjectMapper objectMapper) {
+                                        ObjectMapper objectMapper,
+                                        @Nullable @Qualifier("kbEmbeddingStore") MilvusEmbeddingStore kbStore,
+                                        @Nullable EmbeddingModel embeddingModel,
+                                        @Nullable EmbeddingAvailability embeddingAvailability,
+                                        @Nullable MilvusVectorMaintenanceService vectorMaintenance,
+                                        @Nullable DeepSeekClient deepSeekClient) {
         this.kbRoot = Paths.get(uploadDir).toAbsolutePath().normalize().resolve("knowledge-base");
         this.manifestPath = kbRoot.resolve("manifest.json");
         this.objectMapper = objectMapper;
+        this.kbStore = kbStore;
+        this.embeddingModel = embeddingModel;
+        this.embeddingAvailability = embeddingAvailability;
+        this.vectorMaintenance = vectorMaintenance;
+        this.deepSeekClient = deepSeekClient;
         try {
             Files.createDirectories(kbRoot);
         } catch (IOException e) {
@@ -67,7 +107,8 @@ public class KnowledgeBaseDocumentService {
             } else {
                 content = new String(file.getBytes(), StandardCharsets.UTF_8);
             }
-            return saveDocument(StringUtils.hasText(title) ? title : name, content, docType, tags, lower.endsWith(".pdf") ? "pdf" : "text");
+            return saveDocument(StringUtils.hasText(title) ? title : name, content, docType, tags,
+                    lower.endsWith(".pdf") ? "pdf" : "text");
         } catch (IOException e) {
             throw new IllegalArgumentException("knowledge document parse failed: " + e.getMessage(), e);
         }
@@ -77,7 +118,9 @@ public class KnowledgeBaseDocumentService {
         List<Map<String, Object>> docs = loadManifest();
         int chunkCount = docs.stream().mapToInt(d -> intValue(d.get("chunkCount"))).sum();
         Map<String, Long> byType = docs.stream()
-                .collect(Collectors.groupingBy(d -> stringValue(d.get("docType"), "unknown"), LinkedHashMap::new, Collectors.counting()));
+                .collect(Collectors.groupingBy(d -> stringValue(d.get("docType"), "unknown"),
+                        LinkedHashMap::new, Collectors.counting()));
+        boolean vectorReady = vectorReady();
         return Map.of(
                 "documentCount", docs.size(),
                 "chunkCount", chunkCount,
@@ -86,21 +129,21 @@ public class KnowledgeBaseDocumentService {
                         "overlapChars", OVERLAP_CHARS,
                         "splitPriority", List.of("markdown_heading", "numbered_section", "blank_line", "char_window")),
                 "retrievalPolicy", Map.of(
-                        "strategy", "lexical_metadata_semantic_like_rerank",
-                        "scoring", "title/tag/docType/section/content/recency/usage",
-                        "fallback", "low_score_results_are_reported_not_hidden"),
+                        "strategy", vectorReady ? "hybrid_bm25_embedding" : "lexical_bm25_like",
+                        "fusion", "rrf_k60",
+                        "rerank", "optional_deepseek_listwise",
+                        "vectorStore", vectorReady ? "milvus_kb_chunks" : "unavailable",
+                        "fallback", "lexical_only_when_embedding_down"),
                 "docTypes", byType,
                 "documents", docs.stream().limit(100).toList(),
                 "sampleChunks", sampleChunks(docs, 8)
         );
     }
 
-    /** All uploaded evaluation-standard documents (full manifest, no truncation). */
     public synchronized List<Map<String, Object>> listDocuments() {
         return loadManifest();
     }
 
-    /** Single document with full content + chunks so the UI can show the whole rubric. */
     public synchronized Map<String, Object> getDocument(String docId) {
         for (Map<String, Object> doc : loadManifest()) {
             if (docId.equals(stringValue(doc.get("docId"), ""))) {
@@ -138,6 +181,9 @@ public class KnowledgeBaseDocumentService {
                 objectMapper.writerWithDefaultPrettyPrinter().writeValue(manifestPath.toFile(), manifest);
                 Files.deleteIfExists(kbRoot.resolve(docId + ".txt"));
                 Files.deleteIfExists(kbRoot.resolve(docId + ".chunks.json"));
+                if (vectorMaintenance != null) {
+                    vectorMaintenance.deleteKbVectors(docId);
+                }
             } catch (IOException e) {
                 throw new IllegalStateException("delete knowledge document failed: " + e.getMessage(), e);
             }
@@ -145,44 +191,149 @@ public class KnowledgeBaseDocumentService {
         return removed;
     }
 
-    public synchronized List<Map<String, Object>> search(String query, int topK) {
-        List<String> terms = tokenize(query);
-        List<Map<String, Object>> scored = new ArrayList<>();
-        for (Map<String, Object> doc : loadManifest()) {
+    /** Backward-compatible: return only fused chunk list. */
+    public List<Map<String, Object>> search(String query, int topK) {
+        return searchDetailed(query, topK, false).chunks();
+    }
+
+    /** Search must not share the ingest/reindex monitor — vector index can take minutes. */
+    public SearchResult searchDetailed(String query, int topK, boolean rerank) {
+        int limit = Math.max(topK, 1);
+        List<Map<String, Object>> lexical = lexicalSearch(query, Math.max(limit * 4, 20));
+        List<Map<String, Object>> vector = vectorSearch(query, Math.max(limit * 4, 20));
+
+        String strategy;
+        List<Map<String, Object>> fused;
+        if (!lexical.isEmpty() && !vector.isEmpty()) {
+            fused = fuseRrf(lexical, vector, Math.max(limit * 2, 10));
+            strategy = "hybrid_bm25_embedding";
+        } else if (!vector.isEmpty()) {
+            fused = vector.stream().limit(Math.max(limit * 2, 10)).toList();
+            strategy = "embedding_only";
+        } else {
+            fused = lexical.stream().limit(Math.max(limit * 2, 10)).toList();
+            strategy = vectorReady() ? "lexical_only" : "lexical_bm25_like";
+        }
+
+        boolean rerankApplied = false;
+        if (rerank && fused.size() > 1) {
+            List<Map<String, Object>> reranked = llmRerank(query, fused);
+            if (reranked != null && !reranked.isEmpty()) {
+                fused = reranked;
+                rerankApplied = true;
+                strategy = strategy + "+llm_rerank";
+            }
+        }
+
+        final String resolvedStrategy = strategy;
+        final String queryText = query == null ? "" : query;
+        List<Map<String, Object>> hits = fused.stream().limit(limit).map(row -> {
+            Map<String, Object> copy = new LinkedHashMap<>(row);
+            copy.put("strategy", resolvedStrategy);
+            copy.put("query", queryText);
+            copy.put("fallbackUsed", "lexical_bm25_like".equals(resolvedStrategy)
+                    || "lexical_only".equals(resolvedStrategy));
+            copy.put("enabled", true);
+            return copy;
+        }).toList();
+        markHits(hits);
+        return new SearchResult(hits, resolvedStrategy, lexical.size(), vector.size(),
+                !lexical.isEmpty() && !vector.isEmpty() ? "rrf_k60" : "none",
+                rerankApplied);
+    }
+
+    /**
+     * Kick off a full rebuild asynchronously so nginx/proxy do not 504.
+     * Poll document embeddingStatus / search strategy for completion.
+     */
+    public synchronized Map<String, Object> reindexAll() {
+        if (!vectorReady()) {
+            return Map.of(
+                    "indexedChunks", 0,
+                    "failedChunks", 0,
+                    "documents", 0,
+                    "status", "skipped",
+                    "reason", embeddingAvailability != null
+                            ? embeddingAvailability.statusMessage()
+                            : "embedding_or_store_unavailable");
+        }
+        List<Map<String, Object>> manifest = loadManifest();
+        for (Map<String, Object> doc : manifest) {
+            doc.put("embeddingStatus", "reindexing");
+        }
+        try {
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(manifestPath.toFile(), manifest);
+        } catch (IOException e) {
+            log.warn("KB manifest reindex mark failed: {}", e.getMessage());
+        }
+        java.util.concurrent.CompletableFuture.runAsync(this::reindexAllSync);
+        return Map.of(
+                "documents", manifest.size(),
+                "status", "accepted",
+                "strategy", "hybrid_bm25_embedding");
+    }
+
+    private void reindexAllSync() {
+        int indexed = 0;
+        int failed = 0;
+        int docs = 0;
+        if (vectorMaintenance != null) {
+            vectorMaintenance.clearKbCollection();
+        }
+        List<Map<String, Object>> manifest;
+        synchronized (this) {
+            manifest = loadManifest();
+        }
+        for (Map<String, Object> doc : manifest) {
+            docs++;
             String docId = stringValue(doc.get("docId"), "");
             Path chunksPath = kbRoot.resolve(docId + ".chunks.json");
             if (!Files.isRegularFile(chunksPath)) {
+                failed++;
+                doc.put("embeddingStatus", "lexical_only");
                 continue;
             }
             try {
-                List<Map<String, Object>> chunks = objectMapper.readValue(chunksPath.toFile(), new TypeReference<>() {});
-                for (Map<String, Object> chunk : chunks) {
-                    String content = stringValue(chunk.get("content"), "");
-                    double score = scoreChunk(doc, chunk, terms);
-                    if (score >= 0.18) {
-                        Map<String, Object> row = new LinkedHashMap<>(chunk);
-                        row.put("score", score);
-                        row.put("query", query == null ? "" : query);
-                        row.put("strategy", "lexical_metadata_semantic_like_rerank");
-                        row.put("rerankReason", rerankReason(doc, chunk, terms));
-                        row.put("fallbackUsed", false);
-                        row.put("topScore", score);
-                        row.put("enabled", true);
-                        scored.add(row);
-                    }
+                List<Map<String, Object>> chunks = objectMapper.readValue(
+                        chunksPath.toFile(), new TypeReference<>() {});
+                int n = indexChunksSync(chunks);
+                indexed += n;
+                doc.put("embeddingStatus", n > 0 ? "indexed" : "lexical_only");
+                doc.put("updatedAt", LocalDateTime.now().toString());
+                if (n == 0) {
+                    failed++;
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                failed++;
+                log.warn("KB reindex failed for {}: {}", docId, e.getMessage());
+                doc.put("embeddingStatus", "lexical_only");
             }
         }
-        scored.sort((a, b) -> Double.compare(doubleValue(b.get("score")), doubleValue(a.get("score"))));
-        List<Map<String, Object>> hits = scored.stream().limit(Math.max(topK, 1)).toList();
-        markHits(hits);
-        return hits;
+        synchronized (this) {
+            try {
+                objectMapper.writerWithDefaultPrettyPrinter().writeValue(manifestPath.toFile(), manifest);
+            } catch (IOException e) {
+                log.warn("KB manifest status update failed: {}", e.getMessage());
+            }
+        }
+        log.info("KB reindex done: docs={} indexedChunks={} failed={}", docs, indexed, failed);
     }
 
-    private Map<String, Object> saveDocument(String title, String content, String docType, String tags, String sourceFormat) {
+    private Map<String, Object> saveDocument(String title, String content, String docType, String tags,
+                                             String sourceFormat) {
         String docId = "kb-" + UUID.randomUUID();
         List<Map<String, Object>> chunks = chunkDocument(docId, title, content, docType, tags);
+        int indexed = indexChunks(chunks);
+        String embStatus = indexed > 0 ? "indexed" : "lexical_only";
+        for (Map<String, Object> chunk : chunks) {
+            Object meta = chunk.get("metadata");
+            if (meta instanceof Map<?, ?> m) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> mutable = new LinkedHashMap<>((Map<String, Object>) m);
+                mutable.put("embeddingStatus", embStatus);
+                chunk.put("metadata", mutable);
+            }
+        }
         Map<String, Object> doc = new LinkedHashMap<>();
         doc.put("docId", docId);
         doc.put("title", StringUtils.hasText(title) ? title : docId);
@@ -191,7 +342,7 @@ public class KnowledgeBaseDocumentService {
         doc.put("sourceFormat", sourceFormat);
         doc.put("charLength", content.length());
         doc.put("chunkCount", chunks.size());
-        doc.put("embeddingStatus", "local_semantic_like");
+        doc.put("embeddingStatus", embStatus);
         doc.put("chunkPolicy", Map.of("targetChunkChars", TARGET_CHUNK_CHARS, "overlapChars", OVERLAP_CHARS));
         doc.put("usageCount", 0);
         doc.put("lastHitAt", null);
@@ -199,7 +350,8 @@ public class KnowledgeBaseDocumentService {
         doc.put("updatedAt", LocalDateTime.now().toString());
         try {
             Files.writeString(kbRoot.resolve(docId + ".txt"), content, StandardCharsets.UTF_8);
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(kbRoot.resolve(docId + ".chunks.json").toFile(), chunks);
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(
+                    kbRoot.resolve(docId + ".chunks.json").toFile(), chunks);
             List<Map<String, Object>> manifest = loadManifest();
             manifest.add(0, doc);
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(manifestPath.toFile(), manifest);
@@ -209,7 +361,239 @@ public class KnowledgeBaseDocumentService {
         return doc;
     }
 
-    private List<Map<String, Object>> chunkDocument(String docId, String title, String content, String docType, String tags) {
+    private int indexChunks(List<Map<String, Object>> chunks) {
+        if (!vectorReady() || chunks == null || chunks.isEmpty()) {
+            return 0;
+        }
+        // Fire-and-forget: OpenRouter embedding latency must not block HTTP ingest.
+        List<Map<String, Object>> snapshot = List.copyOf(chunks);
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                indexChunksSync(snapshot);
+            } catch (Exception e) {
+                log.warn("KB async vector index failed: {}", e.getMessage());
+            }
+        });
+        return snapshot.size();
+    }
+
+    private int indexChunksSync(List<Map<String, Object>> chunks) {
+        if (!vectorReady() || chunks == null || chunks.isEmpty()) {
+            return 0;
+        }
+        try {
+            List<TextSegment> segments = new ArrayList<>();
+            for (Map<String, Object> chunk : chunks) {
+                String content = stringValue(chunk.get("content"), "");
+                if (!StringUtils.hasText(content)) continue;
+                Map<String, String> meta = new LinkedHashMap<>();
+                meta.put("chunkId", stringValue(chunk.get("chunkId"), ""));
+                meta.put("docId", stringValue(chunk.get("docId"), ""));
+                meta.put("title", stringValue(chunk.get("title"), ""));
+                meta.put("docType", stringValue(chunk.get("docType"), "general"));
+                meta.put("sectionPath", stringValue(chunk.get("sectionPath"), ""));
+                segments.add(TextSegment.from(content, Metadata.from(meta)));
+            }
+            if (segments.isEmpty()) return 0;
+            // Small batches: remote providers rate-limit / timeout large embedAll calls.
+            final int batchSize = 8;
+            int stored = 0;
+            for (int i = 0; i < segments.size(); i += batchSize) {
+                List<TextSegment> batch = segments.subList(i, Math.min(i + batchSize, segments.size()));
+                List<Embedding> embeddings = embeddingModel.embedAll(batch).content();
+                kbStore.addAll(embeddings, batch);
+                stored += batch.size();
+            }
+            return stored;
+        } catch (Exception e) {
+            log.warn("KB vector index failed: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    private List<Map<String, Object>> lexicalSearch(String query, int topN) {
+        List<String> terms = tokenize(query);
+        List<Map<String, Object>> scored = new ArrayList<>();
+        for (Map<String, Object> doc : loadManifest()) {
+            String docId = stringValue(doc.get("docId"), "");
+            Path chunksPath = kbRoot.resolve(docId + ".chunks.json");
+            if (!Files.isRegularFile(chunksPath)) continue;
+            try {
+                List<Map<String, Object>> chunks = objectMapper.readValue(
+                        chunksPath.toFile(), new TypeReference<>() {});
+                for (Map<String, Object> chunk : chunks) {
+                    double score = scoreChunk(doc, chunk, terms);
+                    if (score >= 0.12) {
+                        Map<String, Object> row = new LinkedHashMap<>(chunk);
+                        row.put("score", score);
+                        row.put("channel", "lexical");
+                        row.put("rerankReason", rerankReason(doc, chunk, terms));
+                        row.put("topScore", score);
+                        scored.add(row);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        scored.sort((a, b) -> Double.compare(doubleValue(b.get("score")), doubleValue(a.get("score"))));
+        return scored.stream().limit(Math.max(topN, 1)).toList();
+    }
+
+    private List<Map<String, Object>> vectorSearch(String query, int topN) {
+        if (!vectorReady() || !StringUtils.hasText(query)) {
+            return List.of();
+        }
+        try {
+            Embedding embedding = embeddingModel.embed(query.length() > 1500
+                    ? query.substring(0, 1500) : query).content();
+            EmbeddingSearchResult<TextSegment> result = kbStore.search(
+                    EmbeddingSearchRequest.builder()
+                            .queryEmbedding(embedding)
+                            .maxResults(Math.max(topN, 1))
+                            .minScore(0.30)
+                            .build());
+            // Build a lookup of on-disk chunks for full payload.
+            Map<String, Map<String, Object>> byChunkId = loadAllChunksById();
+            List<Map<String, Object>> hits = new ArrayList<>();
+            for (EmbeddingMatch<TextSegment> match : result.matches()) {
+                TextSegment seg = match.embedded();
+                if (seg == null || seg.metadata() == null) continue;
+                String chunkId = seg.metadata().getString("chunkId");
+                Map<String, Object> base = byChunkId.getOrDefault(chunkId, new LinkedHashMap<>());
+                Map<String, Object> row = new LinkedHashMap<>(base);
+                if (row.isEmpty()) {
+                    row.put("chunkId", chunkId);
+                    row.put("docId", seg.metadata().getString("docId"));
+                    row.put("title", seg.metadata().getString("title"));
+                    row.put("docType", seg.metadata().getString("docType"));
+                    row.put("sectionPath", seg.metadata().getString("sectionPath"));
+                    row.put("content", seg.text());
+                    row.put("contentPreview", preview(seg.text(), 220));
+                }
+                row.put("score", match.score());
+                row.put("channel", "vector");
+                row.put("topScore", match.score());
+                row.put("rerankReason", "vector cosine " + String.format("%.3f", match.score()));
+                hits.add(row);
+            }
+            return hits;
+        } catch (Exception e) {
+            log.debug("KB vector search degraded: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    private List<Map<String, Object>> fuseRrf(List<Map<String, Object>> lexical,
+                                              List<Map<String, Object>> vector,
+                                              int topN) {
+        Map<String, Double> scores = new HashMap<>();
+        Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
+        for (int i = 0; i < lexical.size(); i++) {
+            Map<String, Object> row = lexical.get(i);
+            String id = stringValue(row.get("chunkId"), "lex-" + i);
+            scores.merge(id, 1.0 / (RRF_K + i + 1), Double::sum);
+            byId.putIfAbsent(id, row);
+        }
+        for (int i = 0; i < vector.size(); i++) {
+            Map<String, Object> row = vector.get(i);
+            String id = stringValue(row.get("chunkId"), "vec-" + i);
+            scores.merge(id, 1.0 / (RRF_K + i + 1), Double::sum);
+            byId.putIfAbsent(id, row);
+        }
+        return scores.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue(Comparator.reverseOrder()))
+                .limit(Math.max(topN, 1))
+                .map(e -> {
+                    Map<String, Object> row = new LinkedHashMap<>(byId.get(e.getKey()));
+                    row.put("score", e.getValue());
+                    row.put("channel", "rrf");
+                    row.put("topScore", e.getValue());
+                    return row;
+                })
+                .toList();
+    }
+
+    private List<Map<String, Object>> llmRerank(String query, List<Map<String, Object>> candidates) {
+        if (deepSeekClient == null || candidates.isEmpty()) {
+            return null;
+        }
+        List<Map<String, Object>> top = candidates.stream().limit(20).toList();
+        String q = query == null ? "" : query;
+        StringBuilder sb = new StringBuilder();
+        sb.append("你是检索重排器。按与查询的相关性对候选片段重排，只输出 JSON：")
+                .append("{\"rankedIds\":[\"chunkId\",...]}\n查询: ")
+                .append(q, 0, Math.min(q.length(), 300))
+                .append("\n候选:\n");
+        for (int i = 0; i < top.size(); i++) {
+            Map<String, Object> c = top.get(i);
+            sb.append(i + 1).append(". id=").append(c.get("chunkId"))
+                    .append(" | ").append(preview(stringValue(c.get("content"), ""), 160))
+                    .append('\n');
+        }
+        try {
+            String text = deepSeekClient.evaluateResume(sb.toString(), "KbReranker", "listwise_rerank");
+            List<String> rankedIds = parseRankedIds(text);
+            if (rankedIds.isEmpty()) return null;
+            Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
+            for (Map<String, Object> c : top) {
+                byId.put(stringValue(c.get("chunkId"), ""), c);
+            }
+            List<Map<String, Object>> ordered = new ArrayList<>();
+            for (String id : rankedIds) {
+                Map<String, Object> row = byId.remove(id);
+                if (row != null) {
+                    Map<String, Object> copy = new LinkedHashMap<>(row);
+                    copy.put("rerankReason", "llm_listwise");
+                    ordered.add(copy);
+                }
+            }
+            ordered.addAll(byId.values());
+            return ordered;
+        } catch (Exception e) {
+            log.debug("KB LLM rerank skipped: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static List<String> parseRankedIds(String text) {
+        if (!StringUtils.hasText(text)) return List.of();
+        Matcher m = RANKED_IDS.matcher(text);
+        if (!m.find()) return List.of();
+        List<String> ids = new ArrayList<>();
+        Matcher idm = Pattern.compile("\"([^\"]+)\"").matcher(m.group(1));
+        while (idm.find()) {
+            ids.add(idm.group(1));
+        }
+        return ids;
+    }
+
+    private Map<String, Map<String, Object>> loadAllChunksById() {
+        Map<String, Map<String, Object>> byId = new HashMap<>();
+        for (Map<String, Object> doc : loadManifest()) {
+            String docId = stringValue(doc.get("docId"), "");
+            Path chunksPath = kbRoot.resolve(docId + ".chunks.json");
+            if (!Files.isRegularFile(chunksPath)) continue;
+            try {
+                List<Map<String, Object>> chunks = objectMapper.readValue(
+                        chunksPath.toFile(), new TypeReference<>() {});
+                for (Map<String, Object> chunk : chunks) {
+                    byId.put(stringValue(chunk.get("chunkId"), ""), chunk);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return byId;
+    }
+
+    private boolean vectorReady() {
+        return kbStore != null
+                && embeddingModel != null
+                && embeddingAvailability != null
+                && embeddingAvailability.isOperational();
+    }
+
+    private List<Map<String, Object>> chunkDocument(String docId, String title, String content,
+                                                    String docType, String tags) {
         List<String> blocks = splitIntoBlocks(content);
         List<Map<String, Object>> chunks = new ArrayList<>();
         for (int i = 0; i < blocks.size(); i++) {
@@ -227,7 +611,7 @@ public class KnowledgeBaseDocumentService {
                     "tags", splitTags(tags),
                     "chunkIndex", i,
                     "source", "self_service_upload",
-                    "embeddingStatus", "local_semantic_like",
+                    "embeddingStatus", "pending",
                     "targetChunkChars", TARGET_CHUNK_CHARS,
                     "overlapChars", OVERLAP_CHARS));
             chunks.add(chunk);
@@ -235,17 +619,10 @@ public class KnowledgeBaseDocumentService {
         return chunks;
     }
 
-    /**
-     * Structure-aware chunking. Splits at semantic boundaries (markdown headings, numbered /
-     * lettered list items) so each rubric criterion / section becomes an independently retrievable
-     * chunk, then char-window-splits any oversize segment with overlap. Short structured docs (e.g.
-     * a 5-point rubric) therefore produce ~5 chunks instead of one opaque block.
-     */
     private List<String> splitIntoBlocks(String content) {
         String normalized = content == null ? "" : content.replace('\u0000', ' ').trim();
         if (!StringUtils.hasText(normalized)) return List.of();
 
-        // 1) Cut into semantic segments at headings / numbered list boundaries.
         List<String> segments = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         for (String line : normalized.split("\\R")) {
@@ -264,7 +641,6 @@ public class KnowledgeBaseDocumentService {
         segments.removeIf(s -> !StringUtils.hasText(s));
         if (segments.isEmpty()) return List.of(normalized);
 
-        // 2) Char-window-split oversize segments; merge ultra-short tails into the previous chunk.
         List<String> chunks = new ArrayList<>();
         for (String seg : segments) {
             if (seg.length() <= TARGET_CHUNK_CHARS) {
@@ -295,7 +671,8 @@ public class KnowledgeBaseDocumentService {
             Path chunksPath = kbRoot.resolve(docId + ".chunks.json");
             if (!Files.isRegularFile(chunksPath)) continue;
             try {
-                List<Map<String, Object>> chunks = objectMapper.readValue(chunksPath.toFile(), new TypeReference<>() {});
+                List<Map<String, Object>> chunks = objectMapper.readValue(
+                        chunksPath.toFile(), new TypeReference<>() {});
                 for (Map<String, Object> chunk : chunks) {
                     if (result.size() >= limit) break;
                     result.add(chunk);
@@ -433,4 +810,8 @@ public class KnowledgeBaseDocumentService {
     private double doubleValue(Object value) {
         return value instanceof Number n ? n.doubleValue() : 0D;
     }
+
+    public record SearchResult(List<Map<String, Object>> chunks, String strategy,
+                               int lexicalHits, int vectorHits, String fusion,
+                               boolean rerankApplied) {}
 }

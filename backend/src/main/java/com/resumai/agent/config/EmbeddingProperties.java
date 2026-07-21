@@ -64,6 +64,10 @@ public class EmbeddingProperties {
     }
 
     public int resolveDimension() {
+        Integer fromModel = dimensionFromModel();
+        if (fromModel != null) {
+            return fromModel;
+        }
         return switch (provider == null ? "local" : provider.toLowerCase(Locale.ROOT)) {
             case "openai", "openrouter" -> 1536;
             case "bailian", "zhipu" -> 1024;
@@ -73,13 +77,58 @@ public class EmbeddingProperties {
     }
 
     public String resolveJdCollectionSuffix() {
-        return switch (provider == null ? "local" : provider.toLowerCase(Locale.ROOT)) {
-            case "openai" -> "openai_1536";
-            case "openrouter" -> "openrouter_1536";
-            case "bailian" -> "bailian_1024";
-            case "zhipu" -> "zhipu_1024";
-            default -> "local_384";
+        String p = provider == null ? "local" : provider.toLowerCase(Locale.ROOT);
+        int dim = resolveDimension();
+        // Model-aware suffix so switching OpenRouter Qwen ↔ OpenAI does not collide collections.
+        String modelTag = modelCollectionTag();
+        return switch (p) {
+            case "openai" -> "openai_" + dim;
+            case "openrouter" -> "openrouter_" + modelTag + "_" + dim;
+            case "bailian" -> "bailian_te3_" + dim;
+            case "zhipu" -> "zhipu_" + dim;
+            default -> "local_" + dim;
         };
+    }
+
+    /** OpenRouter hosts Chinese Qwen3 embeddings with non-1536 dims. */
+    private Integer dimensionFromModel() {
+        String m = model == null ? "" : model.toLowerCase(Locale.ROOT);
+        if (m.contains("qwen3-embedding-8b")) {
+            return 4096;
+        }
+        if (m.contains("qwen3-embedding-4b")) {
+            return 2560;
+        }
+        if (m.contains("qwen3-embedding-0.6") || m.contains("qwen3-embedding-06")) {
+            return 1024;
+        }
+        if (m.contains("text-embedding-3-large")) {
+            return 3072;
+        }
+        if (m.contains("text-embedding-3-small") || m.contains("text-embedding-ada")) {
+            return 1536;
+        }
+        if (m.contains("text-embedding-v3") || m.contains("embedding-3")) {
+            return 1024;
+        }
+        return null;
+    }
+
+    private String modelCollectionTag() {
+        String m = model == null ? "" : model.toLowerCase(Locale.ROOT);
+        if (m.contains("qwen3-embedding-8b")) {
+            return "qwen8b";
+        }
+        if (m.contains("qwen3-embedding-4b")) {
+            return "qwen4b";
+        }
+        if (m.contains("qwen3-embedding-0.6") || m.contains("qwen3-embedding-06")) {
+            return "qwen06b";
+        }
+        if (m.contains("text-embedding-3-small")) {
+            return "te3s";
+        }
+        return "default";
     }
 
     public boolean isOperational() {

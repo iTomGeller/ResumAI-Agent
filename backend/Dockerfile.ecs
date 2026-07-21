@@ -27,4 +27,6 @@ COPY src/main/resources/skills/ /app/skills/
 COPY src/main/resources/mcp-servers.json /app/mcp-servers.json
 
 EXPOSE 8080
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=60", "-jar", "/app/resumai-agent-backend.jar"]
+# Force TLSv1.2: ECS→openrouter.ai TLS1.3 ClientHello hangs (DPI/path issue);
+# openssl -tls1_2 succeeds. Domestic Qwen embeddings via OpenRouter need this.
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=60", "-Djdk.tls.client.protocols=TLSv1.2", "-jar", "/app/resumai-agent-backend.jar"]

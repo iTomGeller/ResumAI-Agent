@@ -1,14 +1,11 @@
 package com.resumai.agent.config;
 
-import com.resumai.agent.ai.TracingChatModelListener;
 import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.listener.ChatModelListener;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.embedding.onnx.allminilml6v2.AllMiniLmL6V2EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import java.time.Duration;
-import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,24 +16,8 @@ import org.springframework.util.StringUtils;
 public class LangChain4jConfig {
 
     @Bean
-    @ConditionalOnProperty(prefix = "resumai.workflow", name = "mode", havingValue = "java")
-    public ChatModel chatModelWithTracing(DeepSeekProperties props, TracingChatModelListener tracingListener) {
-        return OpenAiChatModel.builder()
-                .baseUrl("https://api.deepseek.com/v1")
-                .apiKey(props.getApiKey() != null ? props.getApiKey() : "sk-placeholder")
-                .modelName(props.getModel())
-                .timeout(Duration.ofMillis(props.getReadTimeoutMs()))
-                .temperature(0.2)
-                .maxTokens(8192)
-                .maxRetries(3)
-                .listeners(List.of(tracingListener))
-                .build();
-    }
-
-    @Bean
     @Primary
-    @ConditionalOnProperty(prefix = "resumai.workflow", name = "mode", havingValue = "python", matchIfMissing = true)
-    public ChatModel chatModelWithoutTracing(DeepSeekProperties props) {
+    public ChatModel chatModel(DeepSeekProperties props) {
         return OpenAiChatModel.builder()
                 .baseUrl("https://api.deepseek.com/v1")
                 .apiKey(props.getApiKey() != null ? props.getApiKey() : "sk-placeholder")
@@ -74,17 +55,22 @@ public class LangChain4jConfig {
     @Bean
     @Primary
     @ConditionalOnProperty(prefix = "resumai.embedding", name = "provider", havingValue = "openrouter")
-    public EmbeddingModel openRouterEmbeddingModel(EmbeddingProperties embeddingProps) {
+    public EmbeddingModel openRouterEmbeddingModel(EmbeddingProperties embeddingProps,
+                                                   org.redisson.api.RedissonClient redisson) {
         if (!StringUtils.hasText(embeddingProps.getApiKey())) {
             return new NoopEmbeddingModel();
         }
-        return OpenAiEmbeddingModel.builder()
+        String model = StringUtils.hasText(embeddingProps.getModel())
+                ? embeddingProps.getModel() : "openai/text-embedding-3-small";
+        EmbeddingModel remote = OpenAiEmbeddingModel.builder()
                 .baseUrl(StringUtils.hasText(embeddingProps.getBaseUrl()) ? embeddingProps.getBaseUrl() : "https://openrouter.ai/api/v1")
                 .apiKey(embeddingProps.getApiKey())
-                .modelName(StringUtils.hasText(embeddingProps.getModel()) ? embeddingProps.getModel() : "openai/text-embedding-3-small")
+                .modelName(model)
                 .timeout(Duration.ofMillis(embeddingProps.getReadTimeoutMs()))
                 .maxRetries(1)
                 .build();
+        // Same text + model is never billed twice (Redis content-hash cache).
+        return new CachingEmbeddingModel(remote, redisson, model);
     }
 
     @Bean
@@ -97,17 +83,23 @@ public class LangChain4jConfig {
     @Bean
     @Primary
     @ConditionalOnProperty(prefix = "resumai.embedding", name = "provider", havingValue = "bailian")
-    public EmbeddingModel bailianEmbeddingModel(EmbeddingProperties embeddingProps) {
+    public EmbeddingModel bailianEmbeddingModel(EmbeddingProperties embeddingProps,
+                                                org.redisson.api.RedissonClient redisson) {
         if (!StringUtils.hasText(embeddingProps.getApiKey())) {
             return new NoopEmbeddingModel();
         }
-        return OpenAiEmbeddingModel.builder()
-                .baseUrl(StringUtils.hasText(embeddingProps.getBaseUrl()) ? embeddingProps.getBaseUrl() : "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        String model = StringUtils.hasText(embeddingProps.getModel())
+                ? embeddingProps.getModel() : "text-embedding-v3";
+        EmbeddingModel remote = OpenAiEmbeddingModel.builder()
+                .baseUrl(StringUtils.hasText(embeddingProps.getBaseUrl())
+                        ? embeddingProps.getBaseUrl()
+                        : "https://dashscope.aliyuncs.com/compatible-mode/v1")
                 .apiKey(embeddingProps.getApiKey())
-                .modelName(StringUtils.hasText(embeddingProps.getModel()) ? embeddingProps.getModel() : "text-embedding-v3")
+                .modelName(model)
                 .timeout(Duration.ofMillis(embeddingProps.getReadTimeoutMs()))
-                .maxRetries(1)
+                .maxRetries(2)
                 .build();
+        return new CachingEmbeddingModel(remote, redisson, "bailian:" + model);
     }
 
     @Bean
