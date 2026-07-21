@@ -1,0 +1,19 @@
+{
+  "experiment": "EXP-9 reward weight sensitivity",
+  "generatedAt": "2026-07-21T12:01:21Z",
+  "feedbackRewardRows": 2,
+  "policies": [
+    "agent_job",
+    "deep_analysis"
+  ],
+  "baselineRanking": [
+    "agent_job",
+    "deep_analysis"
+  ],
+  "champion": "agent_job",
+  "perturbation": 0.1,
+  "trials": 20,
+  "championFlips": [],
+  "robust": false,
+  "status": "insufficient_data"
+}

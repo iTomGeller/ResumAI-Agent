@@ -1,0 +1,8 @@
+{
+  "note": "EXP-3 frozen baseline (bailian text-embedding-v3, 1024d, hybrid-RRF). CI gate fails when best strategy recall@5 drops more than 0.02 below this floor.",
+  "generatedAt": "2026-07-21",
+  "deployment": "bailian-te3-1024",
+  "recall@5": 1.0,
+  "precision@5": 0.25,
+  "mrr": 1.0
+}

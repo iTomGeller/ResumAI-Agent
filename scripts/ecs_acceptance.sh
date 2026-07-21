@@ -17,9 +17,10 @@ check() {
 echo "# Acceptance $(date -Is)"
 echo
 
-check "health" curl -fsS "$BASE/api/health" | grep -q UP
+check "health" bash -c "curl -fsS $BASE/api/health | grep -q UP"
 check "workflow ready" docker exec ai-resume-workflow curl -fsS http://127.0.0.1:8090/ready
-check "sandbox health" docker exec resumai-sandbox-manager curl -fsS http://127.0.0.1:8070/health
+# sandbox manager image has no curl — probe with python (same as its compose healthcheck)
+check "sandbox health" docker exec resumai-sandbox-manager python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8070/health', timeout=4)"
 
 # Volume integrity
 set -a; source "$SRC_DIR/.env"; set +a
@@ -88,7 +89,7 @@ check "policy endpoint reachable" bash -c "echo '$POL' | grep -Eq 'policy|balanc
 
 # Sandbox security: worker image should exist; manager health shows concurrent
 check "sandbox worker image" docker image inspect resumai-sandbox-worker:latest >/dev/null
-NET=$(docker exec resumai-sandbox-manager python - <<'PY'
+NET=$(docker exec -i resumai-sandbox-manager python - <<'PY'
 import docker, json
 c=docker.from_env()
 # ensure no sandbox containers have network

@@ -26,6 +26,13 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r workflow/requirements.txt pytest==8.3.5
       - name: Compile all runtime modules
         run: python -m compileall -q workflow/app
+      - name: Compile harness / evolution / seed scripts
+        run: |
+          python -m py_compile harness/run_agent_e2e_benchmark.py \
+            harness/run_policy_contract_benchmark.py \
+            harness/run_retrieval_benchmark.py \
+            harness/evolve_policies.py \
+            scripts/seed_knowledge_base.py
       - name: Legacy runtime must stay deleted
         run: |
           set -e

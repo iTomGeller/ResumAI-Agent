@@ -1,0 +1,57 @@
+{
+  "experiment": "EXP-10 parallel vs serial specialists",
+  "generatedAt": "2026-07-21T12:11:56Z",
+  "cases": [
+    "gold-ai-agent-resume",
+    "gold-java-backend-normal"
+  ],
+  "policies": {
+    "parallel": "balanced",
+    "serial": "exp10-serial-balanced"
+  },
+  "results": {
+    "policies": {
+      "balanced": {
+        "runs": 2,
+        "successRate": 1.0,
+        "avgReward": 0.3279,
+        "rewardStdev": 0.0179,
+        "avgLlmCalls": 9.5,
+        "avgToolCalls": 4.0,
+        "avgPromptTokens": 15340,
+        "avgCompletionTokens": 3454,
+        "avgCostCny": 0.058316,
+        "avgLatencySeconds": 30.95,
+        "p95LatencySeconds": 25.57,
+        "avgMustFindScore": 0.0,
+        "avgViolationPenalty": 0.0,
+        "avgEvidenceSupport": 0.784,
+        "avgJdCoverage": 0.8335,
+        "sandboxTimeoutRate": 0.0,
+        "sandboxOomRate": 0.0,
+        "failureRate": 0.0
+      },
+      "exp10-serial-balanced": {
+        "runs": 2,
+        "successRate": 1.0,
+        "avgReward": 0.4376,
+        "rewardStdev": 0.1275,
+        "avgLlmCalls": 10.0,
+        "avgToolCalls": 3.5,
+        "avgPromptTokens": 17214,
+        "avgCompletionTokens": 5755,
+        "avgCostCny": 0.080469,
+        "avgLatencySeconds": 49.2,
+        "p95LatencySeconds": 36.74,
+        "avgMustFindScore": 0.25,
+        "avgViolationPenalty": 0.0,
+        "avgEvidenceSupport": 0.8475,
+        "avgJdCoverage": 0.8335,
+        "sandboxTimeoutRate": 0.0,
+        "sandboxOomRate": 0.0,
+        "failureRate": 0.0
+      }
+    },
+    "championPolicy": "exp10-serial-balanced"
+  }
+}

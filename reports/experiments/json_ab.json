@@ -1,0 +1,30 @@
+{
+  "experiment": "EXP-8 function calling vs json_object",
+  "generatedAt": "2026-07-21T12:08:04Z",
+  "model": "deepseek-chat",
+  "contexts": [
+    "tech",
+    "risk",
+    "report"
+  ],
+  "results": {
+    "function_calling": {
+      "calls": 60,
+      "onePassRate": 1.0,
+      "repairedRate": 0.0,
+      "failRate": 0.0,
+      "apiErrors": 0,
+      "avgLatencyMs": 2644.5,
+      "p95LatencyMs": 3383.8
+    },
+    "json_object": {
+      "calls": 60,
+      "onePassRate": 1.0,
+      "repairedRate": 0.0,
+      "failRate": 0.0,
+      "apiErrors": 0,
+      "avgLatencyMs": 2030.4,
+      "p95LatencyMs": 3337.9
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "experiment": "rerank",
+  "label": "",
+  "generatedAt": "2026-07-21T12:23:40Z",
+  "results": {
+    "hybrid": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "avgLatencyMs": 18.6,
+      "p95LatencyMs": 24.2
+    },
+    "hybrid_rerank": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "avgLatencyMs": 831.4,
+      "p95LatencyMs": 919.0
+    }
+  }
+}

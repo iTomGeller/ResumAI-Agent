@@ -1,0 +1,23 @@
+{
+  "experiment": "embedding",
+  "label": "bailian-te3-1024",
+  "generatedAt": "2026-07-21T12:23:48Z",
+  "results": {
+    "jd_match": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "avgLatencyMs": 14.4,
+      "p95LatencyMs": 15.7
+    },
+    "knowledge": {
+      "cases": 16,
+      "recall@5": 1.0,
+      "precision@5": 0.6625,
+      "mrr": 0.9688,
+      "avgLatencyMs": 24.2,
+      "p95LatencyMs": 35.9
+    }
+  }
+}

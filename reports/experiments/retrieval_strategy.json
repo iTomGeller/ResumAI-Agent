@@ -1,0 +1,55 @@
+{
+  "experiment": "strategy",
+  "label": "",
+  "generatedAt": "2026-07-21T12:23:38Z",
+  "results": {
+    "vector_only": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "avgLatencyMs": 23.9,
+      "p95LatencyMs": 25.2
+    },
+    "lexical_bm25_only": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.3,
+      "mrr": 1.0,
+      "avgLatencyMs": 9.1,
+      "p95LatencyMs": 9.8
+    },
+    "hybrid_w0.5": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "avgLatencyMs": 25.5,
+      "p95LatencyMs": 29.2
+    },
+    "hybrid_w0.6": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "avgLatencyMs": 22.1,
+      "p95LatencyMs": 26.1
+    },
+    "hybrid_w0.7": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "avgLatencyMs": 18.3,
+      "p95LatencyMs": 21.4
+    },
+    "hybrid_w0.8": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "avgLatencyMs": 23.1,
+      "p95LatencyMs": 27.6
+    }
+  }
+}
