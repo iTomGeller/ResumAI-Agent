@@ -1,0 +1,23 @@
+{
+  "experiment": "embedding",
+  "label": "local-minilm-384",
+  "generatedAt": "2026-07-21T12:38:47Z",
+  "results": {
+    "jd_match": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 0.8833,
+      "avgLatencyMs": 66.1,
+      "p95LatencyMs": 71.0
+    },
+    "knowledge": {
+      "cases": 16,
+      "recall@5": 1.0,
+      "precision@5": 0.4625,
+      "mrr": 0.8594,
+      "avgLatencyMs": 48.7,
+      "p95LatencyMs": 65.2
+    }
+  }
+}

@@ -8,7 +8,7 @@
 
 | ID | 主题 | 脚本 | 状态 | 结论摘要 |
 |----|------|------|------|----------|
-| EXP-1 | Embedding 模型选型 | `harness/run_retrieval_benchmark.py --exp embedding` | PARTIAL（2026-07-21） | bailian text-embedding-v3 已测：KB recall@5=1.0、MRR=0.94；OpenRouter/OpenAI 从本 ECS 网络不可达（TLS 层 Network unreachable），跨 provider 对照无法在该机完成 |
+| EXP-1 | Embedding 模型选型 | `harness/run_retrieval_benchmark.py --exp embedding` | DONE（2026-07-21） | 同机 A/B：bailian te3-1024 vs local MiniLM-384——KB precision@5 0.6625 vs 0.4625（+20pp）、KB MRR 0.9688 vs 0.8594、JD MRR 1.0 vs 0.8833；**bailian 全面胜出，定为线上默认**。OpenRouter/OpenAI 从本 ECS 网络不可达，无法纳入对照 |
 | EXP-2 | 切分策略 × chunk 参数 | `harness/run_retrieval_benchmark.py --exp chunking` | PARTIAL（2026-07-21） | 现行 A-320-60（结构感知 320/60）：KB recall@5=1.0、precision@5=0.66、MRR=0.97；其余网格需逐个重部署分块配置后重跑 |
 | EXP-3 | 检索策略与 RRF 权重 | `harness/run_retrieval_benchmark.py --exp strategy` | DONE（2026-07-21） | 全部变体 recall@5=1.0/MRR=1.0（10 例 JD 集未能区分召回）；lexical P95 18ms、hybrid ~24-35ms、vector-only P95 438ms；保持 hybrid-RRF 默认（0.7/0.3），基线已冻结进 CI 门 |
 | EXP-4 | Rerank 成本效益 | `harness/run_retrieval_benchmark.py --exp rerank` | DONE（2026-07-21） | rerank 零质量增益（本数据集已满分）且 avg 延迟 24ms→777ms（+753ms）；`rerankerEnabled` 默认 false，仅 agentic 二轮显式开启 |
@@ -28,6 +28,18 @@
 - 指标：recall@5、precision@5、MRR、P95 延迟。
 - **2026-07-21 实测（bailian-te3-1024）**：jd_match recall@5=1.0 / MRR=1.0 / P95 22.5ms；knowledge recall@5=1.0 / precision@5=0.6625 / MRR=0.9375 / P95 327ms（首查含远程 embedding；重复查询走 Redis 向量缓存后 P95 33ms，见 EXP-2 行）。
 - **2026-07-21 复跑（JD 库 4 篇全量重索引至 `jd_library_bailian_te3_1024` 后）**：jd_match recall@5=1.0 / MRR=1.0 / P95 15.7ms；knowledge recall@5=1.0 / precision@5=0.6625 / MRR=0.9688 / P95 35.9ms（缓存热）。
+- **2026-07-21 同机 A/B 对照（线上无流量窗口，切 provider→JD/KB 全量重索引→benchmark→切回）**：
+
+| 指标（同 golden set、hybrid-RRF 0.7/0.3） | local MiniLM-384 | bailian te3-1024 |
+|---|---|---|
+| jd_match MRR | 0.8833 | **1.0** |
+| jd_match P95 | 71.0ms | 49.5ms |
+| knowledge precision@5 | 0.4625 | **0.6625**（+20pp） |
+| knowledge MRR | 0.8594 | **0.9688** |
+| knowledge P95 | 65.2ms | 50.2ms |
+| recall@5（两任务） | 1.0 | 1.0 |
+
+  结论：召回率两者打平（数据集内 gold 均能进 Top5），但排序质量差距显著——MiniLM 在中文语义近邻上把 gold 排后（MRR -0.12/-0.11），knowledge precision 低 20pp；bailian 连远程调用延迟都更低（Redis 向量缓存 + 阿里同机房）。**bailian text-embedding-v3 定为唯一线上 provider**（报告：`retrieval_embedding_local-minilm-384.json` / `retrieval_embedding_bailian-te3-1024-rerun.json`）。
 - 网络事实：`openrouter.ai` 与 `api.openai.com` 从 ECS（8.138.10.189）TLS 不可达（`[Errno 101] Network is unreachable`）；`dashscope.aliyuncs.com`（~100ms）、`open.bigmodel.cn`（~20ms）、`api.deepseek.com` 可达。
 - 上线决策：**bailian text-embedding-v3 / 1024 维**写入 `.env` 与 compose 默认值；KB collection `kb_chunks_bailian_te3_1024` 已全量重索引（15 docs / 121 chunks / 0 failed）。
 
