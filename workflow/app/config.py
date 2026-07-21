@@ -15,6 +15,14 @@ class Settings(BaseSettings):
 
     skills_path: str = "/app/skills"
 
+    # Redis semantic cache (parse_resume / JD analysis / coordinator plans).
+    redis_url: str = "redis://:@resumai-redis:6379/1"
+    cache_enabled: bool = True
+
+    # OpenRouter embeddings (shared model/dimension with the Java side).
+    openrouter_api_key: str = ""
+    embedding_model: str = "openai/text-embedding-3-small"
+
 
 settings = Settings()
 

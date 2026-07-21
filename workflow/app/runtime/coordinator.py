@@ -118,16 +118,31 @@ class Coordinator:
                    failure_notes: List[str], memory_notes: List[str],
                    needs_parse: bool) -> Dict[str, Any]:
         """Full planning entry: returns plan, reason, parallelGroups,
-        requiredTerminalAgent and dependencies."""
+        requiredTerminalAgent, dependencies and budgetPlan."""
         base = self.base_plan(run_type, has_resume_facts=False, needs_parse=needs_parse)
         if self.is_simple(run_type) or self.llm is None:
             return self._finalize(base, f"rule_based({run_type})")
+
+        # Same runType + policy + question shape => same refined plan; one
+        # cached LLM refinement covers e.g. batch-screening against one JD.
+        from app.runtime import cache
+
+        cache_key = cache.content_key(
+            "plan", run_type, self.policy.policyId, (user_message or "")[:200],
+            ",".join(base))
+        cached = await cache.get_json(cache_key)
+        if isinstance(cached, dict) and cached.get("plan"):
+            return self._finalize([str(a) for a in cached["plan"]],
+                                  str(cached.get("reason", "cached")) + " (cached)")
+
         refined = await self._refine(base, run_type=run_type,
                                      user_message=user_message,
                                      conversation_summary=conversation_summary,
                                      shared_digest=shared_digest,
                                      failure_notes=failure_notes,
                                      memory_notes=memory_notes)
+        if refined["plan"] and not refined["reason"].startswith("rule_based(llm-error"):
+            await cache.set_json(cache_key, refined, cache.TTL_PLAN)
         return self._finalize(refined["plan"], refined["reason"])
 
     def _finalize(self, plan: List[str], reason: str) -> Dict[str, Any]:
@@ -141,7 +156,28 @@ class Coordinator:
             "parallelGroups": groups,
             "requiredTerminalAgent": terminal,
             "dependencies": {a: AGENT_DEPENDENCIES.get(a, []) for a in ordered},
+            "budgetPlan": self._budget_plan(ordered, terminal),
         }
+
+    def _budget_plan(self, ordered: List[str], terminal: str) -> Dict[str, Dict[str, int]]:
+        """Plan-time budget allocation: the terminal agent gets a guaranteed
+        floor of 2 LLM calls so specialists can never starve the report; the
+        rest of the run budget is split evenly across the other agents.
+        Runtime enforcement caps each agent at its quota."""
+        terminal_floor = 2
+        others = [a for a in ordered if a != terminal]
+        remaining_llm = max(1, self.policy.maxLlmCalls - terminal_floor)
+        per_agent_llm = max(1, remaining_llm // max(1, len(others)))
+        per_agent_tools = max(1, self.policy.toolBudget.maxToolCallsPerRun
+                              // max(1, len(ordered)))
+        budget: Dict[str, Dict[str, int]] = {}
+        for agent in ordered:
+            budget[agent] = {
+                "llmQuota": terminal_floor if agent == terminal else per_agent_llm,
+                "toolQuota": min(per_agent_tools,
+                                 self.policy.toolBudget.maxToolCallsPerAgent),
+            }
+        return budget
 
     def _order_by_dependencies(self, plan: List[str]) -> List[str]:
         """Stable topological pass: an agent is scheduled only after every
@@ -228,3 +264,41 @@ class Coordinator:
         if not any(a in TERMINAL_AGENTS for a in plan):
             plan.append("ReportAgent")
         return plan
+
+    async def adaptive_replan(self, *, remaining: List[str], executed: List[str],
+                              shared_digest: str, trigger: str,
+                              failure_notes: List[str]) -> Optional[Dict[str, Any]]:
+        """Mid-run replanning (bounded dynamism): when a group ends with
+        failures / new conflicts / low confidence, one budgeted LLM call may
+        adjust the remaining pipeline. Returns None to keep the current plan."""
+        if self.llm is None or not remaining:
+            return None
+        prompt_user = (
+            f"运行中触发重规划，原因: {trigger}\n"
+            f"已完成 Agent: {executed}\n"
+            f"剩余计划: {remaining}\n"
+            f"共享状态摘要: {shared_digest[:800]}\n"
+            f"失败记录: {'; '.join(failure_notes[-3:]) or '无'}\n"
+            f"可用 Agent 能力目录:\n{self.capability_catalog()}\n"
+            "只允许调整剩余部分（不得包含已完成 Agent），必须满足 requires 依赖，"
+            "最后一个必须是 terminal Agent。若当前剩余计划已合理，原样返回。"
+            "输出 json {\"plan\": [...], \"reason\": \"...\"}")
+        try:
+            from app.runtime.prompts import default_prompt_manager
+
+            system = default_prompt_manager.system_for_agent("CoordinatorAgent").content
+            raw = await self.llm.chat(
+                [{"role": "system", "content": system},
+                 {"role": "user", "content": prompt_user}],
+                agent_id="CoordinatorAgent", purpose="replan", max_tokens=300)
+            parsed = extract_json_object(raw)
+            plan = [str(a) for a in parsed.get("plan", [])
+                    if self.registry.known(str(a)) and str(a) not in executed]
+            if not plan or plan == remaining:
+                return None
+            finalized = self._finalize(plan, f"replan({trigger})")
+            finalized["reason"] = str(parsed.get("reason", finalized["reason"]))[:200]
+            return finalized
+        except Exception as exc:  # noqa: BLE001 - replanning must not kill the run
+            logger.info("adaptive replan skipped (%s): %s", trigger, exc)
+            return None

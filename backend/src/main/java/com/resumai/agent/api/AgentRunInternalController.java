@@ -84,7 +84,8 @@ public class AgentRunInternalController {
                                        Map<String, Object> skillVersions,
                                        String conversationSummary,
                                        String currentGoal,
-                                       Map<String, Object> executionSnapshot) {
+                                       Map<String, Object> executionSnapshot,
+                                       Map<String, Object> structuredReport) {
     }
 
     @PostMapping("/result")
@@ -97,9 +98,22 @@ public class AgentRunInternalController {
                         request.errorMessage(), request.sharedState(), request.metrics(),
                         request.promptVersions(), request.skillVersions(),
                         request.conversationSummary(), request.currentGoal(),
-                        request.executionSnapshot()));
+                        request.executionSnapshot(), request.structuredReport()));
         schedulerService.kick();
         return Map.of("status", "OK", "accepted", accepted);
+    }
+
+    public record CheckpointRequest(String runId, Map<String, Object> executionSnapshot) {
+    }
+
+    /** Group-boundary checkpoint used by failed-run retry (never on terminal runs). */
+    @PostMapping("/{runId}/checkpoint")
+    public Map<String, Object> saveCheckpoint(@RequestHeader("X-Internal-Token") String token,
+                                              @org.springframework.web.bind.annotation.PathVariable String runId,
+                                              @RequestBody CheckpointRequest request) {
+        authorize(token);
+        boolean saved = lifecycleService.saveRunCheckpoint(runId, request.executionSnapshot());
+        return Map.of("status", "OK", "saved", saved);
     }
 
     // ------------------------------------------------------------------

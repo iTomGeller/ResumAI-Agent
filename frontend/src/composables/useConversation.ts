@@ -81,6 +81,9 @@ export interface RunView {
   llmActive?: boolean;
   retrying?: boolean;
   lastEvent?: string;
+  /** plan-approval mode: Coordinator paused with this plan awaiting approval */
+  awaitingPlanApproval?: boolean;
+  plannedPipeline?: string[];
   events: RunEventPayload[];
 }
 
@@ -272,6 +275,21 @@ export function useConversation() {
       case 'run.cancelling':
         run.status = 'CANCELLING';
         break;
+      case 'agent.selected':
+        run.plannedPipeline = Array.isArray(payload.plan)
+          ? (payload.plan as string[]) : run.plannedPipeline;
+        break;
+      case 'run.progress':
+        if (payload.stage === 'awaiting_plan_approval') {
+          run.status = 'PAUSED';
+          run.awaitingPlanApproval = true;
+          run.plannedPipeline = Array.isArray(payload.plan)
+            ? (payload.plan as string[]) : run.plannedPipeline;
+        } else if (payload.stage === 'resumed') {
+          run.awaitingPlanApproval = false;
+          run.status = 'RUNNING';
+        }
+        break;
       case 'run.completed':
         run.status = 'SUCCEEDED';
         run.answer = String(payload.answer ?? '');
@@ -437,7 +455,8 @@ export function useConversation() {
     }
   }
 
-  async function controlTask(traceId: string, action: ConversationControlAction): Promise<TaskControlResponse | null> {
+  async function controlTask(traceId: string, action: ConversationControlAction,
+                             approvedPlan?: string[]): Promise<TaskControlResponse | null> {
     const requestedTraceId = traceId.trim();
     if (!requestedTraceId || controlling.value) return null;
     controlling.value = action;
@@ -447,7 +466,7 @@ export function useConversation() {
       const response = await fetch(`/api/tasks/${encodeURIComponent(requestedTraceId)}/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, approvedPlan: approvedPlan?.length ? approvedPlan : undefined }),
       });
       if (!response.ok) throw new Error(await responseError(response));
       const result = await response.json() as TaskControlResponse;

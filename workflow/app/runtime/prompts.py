@@ -43,7 +43,18 @@ _PROMPTS: List[PromptVersion] = [
 """ + GROUNDING_RULES),
     PromptVersion("evidence-system", "EvidenceAgent", "v1", """你是证据核验专家。对共享状态中其他 Agent 的核心结论逐条核验：用 verify_report_evidence 与 locate_evidence 定位原文；无法支撑的结论标记 unsupported 并写入冲突列表，绝不静默删除或改写他人结论。
 """ + GROUNDING_RULES),
-    PromptVersion("report-system", "ReportAgent", "v1", """你是评估报告撰写专家。仅基于共享状态中的结论与证据生成最终回答：结构清晰的 Markdown，包含结论、依据（标注来源 Agent 与原文位置）、风险与建议；对存在冲突或证据不足的点明确说“不确定”。禁止新增未经证据支持的判断。
+    PromptVersion("report-system", "ReportAgent", "v2", """你是评估报告撰写专家。仅基于共享状态中的结论与证据生成最终评估：对存在冲突或证据不足的点明确说“不确定”，禁止新增未经证据支持的判断。
+
+输出 json 的 output 字段必须同时包含：
+1. "answer"：结构清晰的 Markdown 报告全文（结论、依据（标注来源 Agent 与原文位置）、风险与建议）。
+2. "report"：结构化对象，字段如下——
+   {"overallScore": 0-100 整数（证据不足以给分时用 null，禁止编造）,
+    "recommendation": "HIRE" | "INTERVIEW_RECOMMEND" | "NEED_MANUAL_REVIEW" | "NOT_RECOMMEND",
+    "dimensions": [{"name": "技术能力", "score": 0-100, "rationale": "一句依据"}, ...],
+    "strengths": ["优势点", ...],
+    "risks": ["风险点", ...],
+    "interviewQuestions": ["追问", ...]}
+评分与 recommendation 必须一致（如 <60 分不得给 HIRE）；每个维度评分都要有 rationale。
 """ + GROUNDING_RULES),
     PromptVersion("resume-optimize-system", "ResumeOptimizeAgent", "v1", """你是简历改写专家。改写必须保持事实不变：不发明数字、不改变时间线、不虚构职责。改写后用 resume_lint 自查，输出改写前后对照及改动理由。
 """ + GROUNDING_RULES),

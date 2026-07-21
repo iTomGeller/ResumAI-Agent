@@ -146,6 +146,14 @@ public class RunQueueService {
                                    String traceId, int revision, String runType,
                                    String userMessage, String sourceTaskTraceId,
                                    int timeoutSeconds) {
+        return enqueueTaskRun(runId, conversationId, userId, traceId, revision, runType,
+                userMessage, sourceTaskTraceId, timeoutSeconds, false);
+    }
+
+    public AgentRun enqueueTaskRun(String runId, String conversationId, String userId,
+                                   String traceId, int revision, String runType,
+                                   String userMessage, String sourceTaskTraceId,
+                                   int timeoutSeconds, boolean planMode) {
         AgentRun existing = StringUtils.hasText(runId) ? runMapper.selectById(runId) : null;
         if (existing != null) {
             return existing; // idempotent re-dispatch of the same task
@@ -158,6 +166,7 @@ public class RunQueueService {
         run.setRevisionNo(Math.max(1, revision));
         run.setRunType(StringUtils.hasText(runType) ? runType : "full_evaluation");
         run.setQueueMode("collect");
+        run.setPlanMode(planMode ? 1 : 0);
         run.setUserMessage(userMessage);
         run.setMergedMessageIds("[]");
         run.setStatus(RunStatus.QUEUED.name());

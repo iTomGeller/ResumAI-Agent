@@ -33,6 +33,10 @@ public class AgentRun {
     @TableField("queue_mode")
     private String queueMode;
 
+    /** 1 = pause after the Coordinator plan and wait for user approval. */
+    @TableField("plan_mode")
+    private Integer planMode;
+
     @TableField("user_message")
     private String userMessage;
 

@@ -59,14 +59,16 @@ public class TaskController {
     public TaskResponse uploadTask(@RequestParam("file") MultipartFile file,
                                    @RequestParam("jobCategory") String jobCategory,
                                    @RequestParam("executionMode") String executionMode,
-                                   @RequestParam("jobDescription") String jobDescription) {
-        return evaluationService.createTaskFromUpload(file, jobCategory, executionMode, jobDescription);
+                                   @RequestParam("jobDescription") String jobDescription,
+                                   @RequestParam(value = "planMode", defaultValue = "false") boolean planMode) {
+        return evaluationService.createTaskFromUpload(file, jobCategory, executionMode, jobDescription, planMode);
     }
 
     @PostMapping("/tasks/upload-auto")
     public TaskResponse uploadTaskAutoMatch(@RequestParam("file") MultipartFile file,
-                                            @RequestParam(value = "executionMode", defaultValue = "DAG_CONCURRENT") String executionMode) {
-        return evaluationService.createTaskFromUploadAutoMatch(file, executionMode);
+                                            @RequestParam(value = "executionMode", defaultValue = "DAG_CONCURRENT") String executionMode,
+                                            @RequestParam(value = "planMode", defaultValue = "false") boolean planMode) {
+        return evaluationService.createTaskFromUploadAutoMatch(file, executionMode, planMode);
     }
 
     @GetMapping("/tasks")

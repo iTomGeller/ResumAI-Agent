@@ -2,6 +2,7 @@ package com.resumai.agent.api.dto;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 public record TaskResponse(
         Long id,
@@ -37,6 +38,10 @@ public record TaskResponse(
         String supersedesTraceId,
         String supersededByTraceId,
         String evaluationBrief,
-        List<String> invalidatedNodes
+        List<String> invalidatedNodes,
+        /** ReportAgent 的 Markdown 报告全文（评估报告 tab 的主体）。 */
+        String fullReport,
+        /** 校验过的结构化报告：overallScore/recommendation/dimensions/strengths/risks。 */
+        Map<String, Object> structuredReport
 ) {
 }

@@ -66,6 +66,53 @@ _SKILLS: List[SkillDefinition] = [
         output_requirements="technicalFindings 按 JD 条目对齐",
         evaluation_metrics=("evidence_support_ratio",)),
     SkillDefinition(
+        "frontend_evaluation", "前端岗位评估", "v1",
+        "针对前端/客户端岗位的技术评估侧重",
+        ("job_focus:frontend",),
+        "重点核查：框架深度（React/Vue 原理级 vs API 级）、工程化（构建/监控/性能优化的量化证据）、"
+        "跨端与兼容实践、与后端协作边界；仅列框架名而无性能指标或复杂交互实现的降权。",
+        required_tools=("calculate_jd_coverage", "resume_semantic_search"),
+        output_requirements="technicalFindings 按 JD 条目对齐",
+        evaluation_metrics=("evidence_support_ratio",)),
+    SkillDefinition(
+        "algorithm_llm_evaluation", "算法/LLM 岗位评估", "v1",
+        "针对算法与大模型岗位的技术评估侧重",
+        ("job_focus:algorithm",),
+        "重点核查：模型训练/微调的真实性（数据规模、算力、评测集与指标提升是否自洽）、"
+        "论文/竞赛/开源可核验性、工程落地能力（推理优化、部署）；"
+        "指标提升无 baseline 对照的标记为待核实。",
+        required_tools=("calculate_jd_coverage", "resume_semantic_search"),
+        output_requirements="technicalFindings 按 JD 条目对齐",
+        evaluation_metrics=("evidence_support_ratio",)),
+    SkillDefinition(
+        "data_engineer_evaluation", "数据工程师岗位评估", "v1",
+        "针对数据开发/数仓岗位的技术评估侧重",
+        ("job_focus:data",),
+        "重点核查：数据规模与链路真实性（日增量/存储量/时效）、调度与质量保障实践、"
+        "数仓建模方法论落地证据、SQL/Spark/Flink 深度信号；只报工具名不报规模的降权。",
+        required_tools=("calculate_jd_coverage", "resume_semantic_search"),
+        output_requirements="technicalFindings 按 JD 条目对齐",
+        evaluation_metrics=("evidence_support_ratio",)),
+    SkillDefinition(
+        "score_consistency", "评分一致性校准", "v1",
+        "评分与推荐结论、维度分的一致性约束",
+        ("always_for_report",),
+        "综合分必须能由维度分合理推出（偏差>15 需说明原因）；"
+        "recommendation 与综合分区间一致：>=80 可 HIRE/INTERVIEW_RECOMMEND，"
+        "60-79 默认 INTERVIEW_RECOMMEND/NEED_MANUAL_REVIEW，<60 禁止 HIRE；"
+        "证据不足以支撑打分时输出 null 而不是编造中间值。",
+        output_requirements="report.overallScore 与 dimensions/recommendation 自洽",
+        evaluation_metrics=("recommendation_accuracy",)),
+    SkillDefinition(
+        "english_resume_evaluation", "英文简历评估补充", "v1",
+        "英文简历的解析与评估注意事项",
+        ("resume_language:en",),
+        "职级词（Senior/Staff/Principal）按公司规模校准，不直接映射国内职级；"
+        "动词包装（spearheaded/orchestrated）不作为深度证据，只认量化结果与技术细节；"
+        "教育背景注意学制差异，GPA 满分制不同需换算说明。",
+        output_requirements="findings 中标注语言校准说明",
+        evaluation_metrics=("evidence_support_ratio",)),
+    SkillDefinition(
         "project_depth_analysis", "项目深度分析", "v1",
         "项目复杂度/贡献/深度评估",
         ("project_analysis", "full_evaluation"),
@@ -146,16 +193,22 @@ class SkillManager:
 
     def select_for(self, *, agent_id: str, run_type: str, job_focus: Optional[str],
                    overrides: Dict[str, str]) -> List[SkillDefinition]:
+        tech_skill_by_focus = {
+            "java_backend": "java_backend_evaluation",
+            "ai_agent": "ai_agent_job_evaluation",
+            "frontend": "frontend_evaluation",
+            "algorithm": "algorithm_llm_evaluation",
+            "data": "data_engineer_evaluation",
+        }
         base_map: Dict[str, List[str]] = {
             "ResumeParserAgent": ["resume_parsing"],
             "JDAnalysisAgent": ["jd_requirement_analysis"],
-            "TechAgent": ["java_backend_evaluation" if job_focus == "java_backend"
-                          else "ai_agent_job_evaluation" if job_focus == "ai_agent"
-                          else "jd_requirement_analysis"],
+            "TechAgent": [tech_skill_by_focus.get(job_focus or "",
+                                                  "jd_requirement_analysis")],
             "ProjectAgent": ["project_depth_analysis"],
             "RiskAgent": ["timeline_risk_analysis"],
             "EvidenceAgent": ["evidence_verification"],
-            "ReportAgent": ["report_generation"],
+            "ReportAgent": ["report_generation", "score_consistency"],
             "ResumeOptimizeAgent": ["resume_rewrite"],
             "InterviewQuestionAgent": ["interview_question_generation"],
             "CoordinatorAgent": [],

@@ -29,6 +29,14 @@ public class PolicyBundleRow {
     @TableField("is_champion")
     private Integer isChampion;
 
+    /** 变异来源策略（进化谱系）。 */
+    @TableField("parent_policy_id")
+    private String parentPolicyId;
+
+    /** 进化代数，0 = 人工种子策略。 */
+    @TableField("generation")
+    private Integer generation;
+
     @TableField("version")
     private Integer version;
 

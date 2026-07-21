@@ -61,6 +61,14 @@ class RuntimeEmitter:
         body["runId"] = self.run_id
         return await self._post("/api/internal/agent-runs/result", body, attempts=8, timeout=15.0)
 
+    async def save_checkpoint(self, snapshot: Dict[str, Any]) -> bool:
+        """Group-boundary checkpoint: persisted on the Java side so a FAILED
+        run can be retried from the last completed agent group."""
+        return await self._post(
+            f"/api/internal/agent-runs/{self.run_id}/checkpoint",
+            {"runId": self.run_id, "executionSnapshot": snapshot},
+            attempts=2, timeout=10.0)
+
     async def _post(self, path: str, body: Dict[str, Any], *, attempts: int, timeout: float) -> bool:
         url = f"{self._base}{path}"
         delay = 1.0

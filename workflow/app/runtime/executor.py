@@ -46,6 +46,57 @@ AGENT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容）：
   "done": true/false
 }"""
 
+# Provider-side schema enforcement (JSON guarantee layer 1): the decision loop
+# forces this function; DeepSeek then guarantees arguments match the schema.
+# Layers 2-4 (json_object mode, extract_json_object, pydantic + repair) stay
+# as fallbacks.
+EMIT_DECISION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "emit_decision",
+        "description": "提交本轮 agent 决策（json）：思考、需要的工具调用、结构化输出。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "thought": {"type": "string", "description": "简要计划"},
+                "toolCalls": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string"},
+                            "arguments": {"type": "object"},
+                        },
+                        "required": ["tool"],
+                    },
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string"},
+                        "claims": {"type": "array", "items": {"type": "object"}},
+                        "evidence": {"type": "array", "items": {"type": "object"}},
+                        "confidence": {"type": "number"},
+                        "requestedNextAction": {"type": "string"},
+                    },
+                },
+                "handoff": {
+                    "type": "object",
+                    "description": "需要移交任务给其它 Agent 时填写",
+                    "properties": {
+                        "to": {"type": "string"},
+                        "reason": {"type": "string"},
+                        "task": {"type": "string"},
+                    },
+                },
+                "done": {"type": "boolean"},
+            },
+            "required": ["done"],
+        },
+    },
+}
+FORCE_EMIT_DECISION = {"type": "function", "function": {"name": "emit_decision"}}
+
 # Explicit long-term preference statements we are allowed to persist.
 _PREFERENCE_PATTERNS = [
     (re.compile(r"(以后|今后|之后|每次)(都)?(请|要|用|使用|输出|给我)(?P<pref>[^。！!？?]{2,40})"), "explicit_instruction"),
@@ -92,16 +143,18 @@ class RunExecutor:
             "resumeText": request.resumeText or "",
             "jobDescription": request.jobDescription or "",
         }
-        self.tools = ToolExecutor(
-            emitter, self.budget, self.sandbox,
-            max_tool_calls_run=self.policy.toolBudget.maxToolCallsPerRun,
-            tool_timeout_seconds=self.policy.timeoutPolicy.toolTimeoutSeconds,
-            run_context=run_context)
         self.llm = llm or ResilientLlmClient(
             emitter, self.budget, self.policy.maxLlmCalls,
             self.policy.timeoutPolicy.llmTimeoutSeconds,
             max_cost_cny=self.policy.maxCostCny,
             max_total_tokens=self.policy.maxTotalTokens)
+        # The tool executor holds an llm reference only for query rewriting
+        # (agentic retrieval); it never drives its own decision loop.
+        self.tools = ToolExecutor(
+            emitter, self.budget, self.sandbox,
+            max_tool_calls_run=self.policy.toolBudget.maxToolCallsPerRun,
+            tool_timeout_seconds=self.policy.timeoutPolicy.toolTimeoutSeconds,
+            run_context=run_context, llm=self.llm)
         self.context = ContextManager(self.policy.contextBudget, emitter,
                                       request.runId, request.conversationId)
         self.guard = LoopGuard()
@@ -114,6 +167,15 @@ class RunExecutor:
         self.agent_counters: Dict[str, Dict[str, int]] = {}
         self.agent_timings: Dict[str, int] = {}
         self.report_agent_failed = False
+        # plan-time budget allocation (agent -> {llmQuota, toolQuota});
+        # empty means "no per-agent quota", only global limits apply.
+        self.budget_plan: Dict[str, Dict[str, int]] = {}
+        # set by _restore_snapshot when an approved plan needs regrouping
+        self._regroup_needed = False
+        # adaptive replan budget: at most 2 mid-run plan adjustments
+        self.replan_count = 0
+        # conflict arbitration runs exactly once (ruling is final)
+        self._arbitrated = False
         # populated by _restore_snapshot on resume
         self.plan: List[str] = []
         self.parallel_groups: List[List[str]] = []
@@ -162,8 +224,7 @@ class RunExecutor:
         if not resumed:
             await self.emitter.emit("run.progress", payload={
                 "stage": "observe", "message": "加载记忆与上下文"})
-            memory_types = ["CONVERSATION", "EPISODIC", "USER_PREFERENCE",
-                            "HR_FEEDBACK", "DOMAIN", "FAILURE"]
+            memory_types = ["CONVERSATION", "EPISODIC", "PREFERENCE", "FAILURE"]
             self.memory_hits = await self.memory.search(
                 request.userMessage, types=memory_types,
                 top_k=self.policy.memoryRetrieval.topK,
@@ -171,6 +232,22 @@ class RunExecutor:
             self.failure_notes = [
                 str(h.get("content", ""))[:160] for h in self.memory_hits
                 if h.get("type") == "FAILURE"][:3]
+            # Memory retrieval must be observable in the trace, not a black box.
+            type_counts: Dict[str, int] = {}
+            for hit in self.memory_hits:
+                hit_type = str(hit.get("type") or "UNKNOWN")
+                type_counts[hit_type] = type_counts.get(hit_type, 0) + 1
+            await self.emitter.emit("run.progress", payload={
+                "stage": "memory",
+                "message": f"记忆命中 {len(self.memory_hits)} 条",
+                "memoryHits": len(self.memory_hits),
+                "memoryTypeCounts": type_counts,
+                "memoryTop": [
+                    {"type": str(h.get("type") or ""),
+                     "confidence": h.get("confidence"),
+                     "content": str(h.get("content") or "")[:120]}
+                    for h in self.memory_hits[:3]
+                ]})
 
             coordinator = Coordinator(self.registry, self.policy, self.llm)
             needs_parse = bool(request.resumeText) \
@@ -186,14 +263,42 @@ class RunExecutor:
                 needs_parse=needs_parse)
             self.plan = planned["plan"]
             self.parallel_groups = planned["parallelGroups"]
+            self.budget_plan = planned.get("budgetPlan") or {}
             await self.emitter.emit("agent.selected", agent_id="CoordinatorAgent", payload={
                 "plan": self.plan, "reason": planned["reason"],
                 "parallelGroups": self.parallel_groups,
                 "requiredTerminalAgent": planned["requiredTerminalAgent"],
-                "policyId": self.policy.policyId})
+                "policyId": self.policy.policyId,
+                "budgetPlan": self.budget_plan,
+                "planMode": request.planMode,
+                "memoryHits": len(self.memory_hits),
+                "memoryNotes": [str(h.get("content", ""))[:120]
+                                for h in self.memory_hits[:3]]})
             self.state.set_pending(list(self.plan))
+            if request.planMode:
+                # Plan-approval gate: pause before any specialist burns budget.
+                # RESUME carries the (possibly user-edited) plan back in.
+                snapshot = self.export_snapshot()
+                snapshot["pauseReason"] = "AWAITING_PLAN_APPROVAL"
+                raise RunPaused(snapshot)
         else:
             coordinator = Coordinator(self.registry, self.policy, self.llm)
+            if self._regroup_needed:
+                # Plan approval edited the pipeline: recompute dependency
+                # ordering, parallel groups and budget from the approved plan.
+                refreshed = coordinator._finalize(self.plan, "user_approved_plan")
+                self.plan = refreshed["plan"]
+                self.parallel_groups = refreshed["parallelGroups"]
+                self.budget_plan = refreshed.get("budgetPlan") or {}
+                self.next_group_index = 0
+                await self.emitter.emit("agent.selected", agent_id="CoordinatorAgent", payload={
+                    "plan": self.plan, "reason": "用户确认/编辑后的计划",
+                    "parallelGroups": self.parallel_groups,
+                    "requiredTerminalAgent": refreshed["requiredTerminalAgent"],
+                    "policyId": self.policy.policyId,
+                    "budgetPlan": self.budget_plan,
+                    "approved": True})
+                self.state.set_pending(list(self.plan))
             await self.emitter.emit("run.progress", payload={
                 "stage": "resume",
                 "message": f"从快照恢复：已完成 {len(self.executed)} 个 Agent",
@@ -225,6 +330,7 @@ class RunExecutor:
             if not runnable:
                 continue
 
+            conflicts_before = len(self.state.data["conflicts"])
             if len(runnable) == 1:
                 ok = await self._run_single(runnable[0], coordinator)
                 consecutive_failures = 0 if ok else consecutive_failures + 1
@@ -235,6 +341,22 @@ class RunExecutor:
             if consecutive_failures >= 2:
                 self.degraded_reasons.append("consecutive_failures")
                 self._ensure_terminal_tail()
+
+            # Debate-style conflict arbitration (single round, final): after
+            # EvidenceAgent flagged conflicts, one LLM call adjudicates each
+            # claim as keep/reject/uncertain — no ping-pong re-litigation.
+            if any(d.agent_id == "EvidenceAgent" for d in runnable):
+                await self._arbitrate_conflicts()
+
+            # Bounded mid-run dynamism: group failure / fresh conflicts / low
+            # confidence trigger one Coordinator review of the remaining plan
+            # (at most twice per run — never an unbounded planning loop).
+            await self._maybe_replan(coordinator, ok, conflicts_before)
+
+            # Group-boundary checkpoint (fire-and-forget): a later FAILED /
+            # TIMED_OUT run can be retried from here, skipping finished work.
+            asyncio.ensure_future(
+                self.emitter.save_checkpoint(self.export_snapshot()))
 
         if not self.final_answer:
             self.degraded_reasons.append("no_terminal_answer")
@@ -368,6 +490,99 @@ class RunExecutor:
             if "ReportAgent" not in self.plan:
                 self.plan.append("ReportAgent")
 
+    async def _arbitrate_conflicts(self) -> None:
+        """One-round conflict adjudication: unresolved conflicts get a
+        keep / reject / uncertain ruling with a reason. The ruling is final
+        (written back onto the conflict), the ReportAgent cites it."""
+        conflicts = [c for c in self.state.data["conflicts"]
+                     if isinstance(c, dict) and not c.get("resolution")]
+        if not conflicts or self._arbitrated:
+            return
+        self._arbitrated = True
+        items = [{"claim": str(c.get("claim", c.get("key", "")))[:200],
+                  "reason": str(c.get("reason", c.get("type", "")))[:200]}
+                 for c in conflicts[:6]]
+        prompt_user = (
+            "以下是评估过程中被证据核验标记的冲突结论。请逐条裁决，输出 json：\n"
+            "{\"rulings\": [{\"claim\": \"...\", \"verdict\": \"keep|reject|uncertain\","
+            " \"reason\": \"一句依据\"}]}\n"
+            "裁决标准：简历原文/工具结果能支撑=keep；明确矛盾或无来源=reject；"
+            "证据不足以定夺=uncertain（报告中如实标注）。\n"
+            f"冲突列表: {json.dumps(items, ensure_ascii=False)}")
+        try:
+            raw = await self.llm.chat(
+                [{"role": "system",
+                  "content": "你是评估冲突仲裁者，只依据给定材料裁决，不新增事实。"},
+                 {"role": "user", "content": prompt_user}],
+                agent_id="EvidenceAgent", purpose="arbitration", max_tokens=600)
+            parsed = extract_json_object(raw)
+            rulings = {str(r.get("claim", ""))[:200]: r
+                       for r in parsed.get("rulings", []) if isinstance(r, dict)}
+            resolved = 0
+            for conflict in conflicts:
+                key = str(conflict.get("claim", conflict.get("key", "")))[:200]
+                ruling = rulings.get(key)
+                if ruling and ruling.get("verdict") in ("keep", "reject", "uncertain"):
+                    conflict["resolution"] = ruling["verdict"]
+                    conflict["resolutionReason"] = str(ruling.get("reason", ""))[:200]
+                    resolved += 1
+            await self.emitter.emit("run.progress", payload={
+                "stage": "arbitration",
+                "message": f"冲突仲裁完成：{resolved}/{len(conflicts)} 条已裁决",
+                "resolved": resolved, "total": len(conflicts)})
+        except Exception as exc:  # noqa: BLE001 - arbitration is best-effort
+            logger.info("conflict arbitration skipped: %s", exc)
+
+    async def _maybe_replan(self, coordinator: Coordinator, group_ok: bool,
+                            conflicts_before: int) -> None:
+        """Adaptive replan trigger after each group. Bounded: <=2 per run,
+        never for the terminal tail, threshold pending EXP-7."""
+        remaining = [a for g in self.parallel_groups[self.next_group_index:] for a in g]
+        non_terminal_remaining = [a for a in remaining if a not in TERMINAL_AGENTS]
+        if self.replan_count >= 2 or not non_terminal_remaining:
+            return
+        new_conflicts = len(self.state.data["conflicts"]) - conflicts_before
+        recent_outputs = self.state.data["agentOutputs"][-3:]
+        confidences = [float(o.get("confidence", 1.0)) for o in recent_outputs
+                       if isinstance(o, dict)]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 1.0
+        trigger = None
+        if not group_ok:
+            trigger = "group_failure"
+        elif new_conflicts > 0:
+            trigger = f"new_conflicts:{new_conflicts}"
+        elif avg_confidence < 0.55:  # EXP-7 pending
+            trigger = f"low_confidence:{avg_confidence:.2f}"
+        if trigger is None:
+            return
+        state = self.state.data
+        shared_digest = json.dumps({
+            "technicalFindings": len(state["technicalFindings"]),
+            "projectFindings": len(state["projectFindings"]),
+            "risks": len(state["risks"]),
+            "conflicts": [str(c.get("claim", c.get("key", "")))[:80]
+                          for c in state["conflicts"][-3:] if isinstance(c, dict)],
+        }, ensure_ascii=False)
+        adjusted = await coordinator.adaptive_replan(
+            remaining=remaining, executed=self.executed,
+            shared_digest=shared_digest, trigger=trigger,
+            failure_notes=self.failure_notes)
+        if adjusted is None:
+            return
+        self.replan_count += 1
+        self.parallel_groups = self.parallel_groups[: self.next_group_index] \
+            + adjusted["parallelGroups"]
+        self.plan = self.executed + adjusted["plan"]
+        for agent_id, quota in (adjusted.get("budgetPlan") or {}).items():
+            self.budget_plan[agent_id] = quota
+        await self.emitter.emit("agent.selected", agent_id="CoordinatorAgent", payload={
+            "plan": self.plan, "reason": adjusted["reason"],
+            "parallelGroups": self.parallel_groups,
+            "requiredTerminalAgent": adjusted["requiredTerminalAgent"],
+            "policyId": self.policy.policyId,
+            "replanned": True, "trigger": trigger,
+            "replanCount": self.replan_count})
+
     def _has_hard_degradation(self) -> bool:
         hard = {"run_timeout", "consecutive_failures"}
         return any(r in hard or r.endswith("_failed") for r in self.degraded_reasons)
@@ -387,6 +602,7 @@ class RunExecutor:
             "runId": self.request.runId,
             "plan": list(self.plan),
             "parallelGroups": [list(g) for g in self.parallel_groups],
+            "budgetPlan": dict(self.budget_plan),
             "nextPlanIndex": self.next_group_index,
             "executedAgents": list(self.executed),
             "sharedState": self.state.snapshot(),
@@ -412,9 +628,16 @@ class RunExecutor:
             return False
         try:
             self.plan = [str(a) for a in snapshot.get("plan", [])]
+            # A missing parallelGroups means the plan was edited during
+            # approval: groups/budget must be recomputed from the new plan.
+            self._regroup_needed = "parallelGroups" not in snapshot
             self.parallel_groups = [
                 [str(a) for a in group]
                 for group in snapshot.get("parallelGroups", [[a] for a in self.plan])]
+            budget_plan = snapshot.get("budgetPlan")
+            if isinstance(budget_plan, dict):
+                self.budget_plan = {str(k): dict(v) for k, v in budget_plan.items()
+                                    if isinstance(v, dict)}
             self.next_group_index = int(snapshot.get("nextPlanIndex", 0))
             self.executed = [str(a) for a in snapshot.get("executedAgents", [])]
             self.state.restore(snapshot.get("sharedState") or {})
@@ -436,6 +659,13 @@ class RunExecutor:
     # single agent execution (unchanged core loop, per-agent budget)
     # ------------------------------------------------------------------
 
+    def _agent_quota(self, agent_id: str, key: str, fallback: int) -> int:
+        """Plan-time quota for one agent (llmQuota/toolQuota); falls back to
+        the static policy limit when the coordinator did not allocate one."""
+        quota = self.budget_plan.get(agent_id) or {}
+        value = quota.get(key)
+        return int(value) if isinstance(value, (int, float)) and value > 0 else fallback
+
     async def _run_agent(self, definition: AgentDefinition) -> AgentOutput:
         request = self.request
         agent_id = definition.agent_id
@@ -449,16 +679,27 @@ class RunExecutor:
         tool_results_block = ""
         agent_tool_calls = 0
         agent_llm_calls = 0
+        agent_tool_limit = min(
+            definition.max_tool_calls,
+            self.policy.toolBudget.maxToolCallsPerAgent,
+            self._agent_quota(agent_id, "toolQuota",
+                              self.policy.toolBudget.maxToolCallsPerAgent))
 
         for tool, args in self._pre_steps(definition):
-            if agent_tool_calls >= min(definition.max_tool_calls,
-                                       self.policy.toolBudget.maxToolCallsPerAgent):
+            if agent_tool_calls >= agent_tool_limit:
                 break
             guard = self.guard.check_tool_call(ToolExecutor.signature(tool, args))
             if guard.triggered:
                 await self._emit_guard(guard, agent_id)
                 continue
-            call = await self.tools.execute(agent_id, tool, args)
+            # Copilot conversational RAG + TechAgent agentic retrieval: rewrite
+            # on knowledge/resume search presteps for followup/quick_answer.
+            rewrite = (
+                tool in ("knowledge_search", "resume_semantic_search")
+                and self.request.runType in ("followup", "quick_answer")
+            )
+            call = await self.tools.execute(agent_id, tool, args,
+                                            enable_rewrite=rewrite)
             agent_tool_calls += 1
             tool_results_block += self._format_tool_result(call)
             if call.status == "SUCCEEDED":
@@ -472,7 +713,9 @@ class RunExecutor:
                     self.state.put_artifact("parsedResume", call.result)
 
         output: Optional[AgentOutput] = None
-        max_iterations = min(definition.max_iterations, self.policy.maxIterationsPerAgent)
+        max_iterations = min(
+            definition.max_iterations, self.policy.maxIterationsPerAgent,
+            self._agent_quota(agent_id, "llmQuota", definition.max_iterations))
         iteration = 0
         while iteration < max_iterations and output is None:
             iteration += 1
@@ -502,9 +745,30 @@ class RunExecutor:
                     logger.warning("compaction consistency violations: %s", violations)
 
             is_terminal = definition.agent_id in TERMINAL_AGENTS
-            raw = await self.llm.chat(messages, agent_id=agent_id,
-                                      purpose=definition.output_type,
-                                      max_tokens=3600 if is_terminal else 2048)
+            # Specialists: provider-enforced function calling (strongest JSON
+            # guarantee). Terminal agents keep json_object mode — their long
+            # markdown answer lives inside the JSON envelope and function
+            # arguments are a poor fit for multi-KB text.
+            if is_terminal:
+                raw = await self.llm.chat(messages, agent_id=agent_id,
+                                          purpose=definition.output_type,
+                                          max_tokens=3600)
+            else:
+                try:
+                    raw = await self.llm.chat(messages, agent_id=agent_id,
+                                              purpose=definition.output_type,
+                                              max_tokens=2048,
+                                              tools=[EMIT_DECISION_TOOL],
+                                              tool_choice=FORCE_EMIT_DECISION)
+                except LlmError as exc:
+                    if exc.code in ("PROMPT_OR_SCHEMA_ERROR", "EMPTY_FUNCTION_ARGS"):
+                        # Provider rejected the tool schema: fall back to
+                        # json_object mode within the same iteration.
+                        raw = await self.llm.chat(messages, agent_id=agent_id,
+                                                  purpose=definition.output_type,
+                                                  max_tokens=2048)
+                    else:
+                        raise
             agent_llm_calls += 1
             decision, schema_error = self._parse_decision(raw)
             if decision is None and is_terminal and raw.strip():
@@ -549,8 +813,7 @@ class RunExecutor:
                     if tool not in definition.tools:
                         observations += f"\n[TOOL_RESULT {tool}] 拒绝：不在该 Agent 白名单"
                         continue
-                    if agent_tool_calls >= min(definition.max_tool_calls,
-                                               self.policy.toolBudget.maxToolCallsPerAgent):
+                    if agent_tool_calls >= agent_tool_limit:
                         observations += "\n[TOOL_RESULT budget] Agent 工具预算耗尽"
                         break
                     args = tool_call.get("arguments") or {}
@@ -559,7 +822,11 @@ class RunExecutor:
                         await self._emit_guard(guard, agent_id)
                         observations += f"\n[TOOL_RESULT {tool}] 跳过：重复调用被 Loop Guard 拦截"
                         continue
-                    call = await self.tools.execute(agent_id, tool, args)
+                    # Agentic retrieval: decision-loop calls get query
+                    # rewriting + multi-query RRF fusion; pre-steps stay
+                    # single-shot to save LLM budget.
+                    call = await self.tools.execute(agent_id, tool, args,
+                                                    enable_rewrite=True)
                     agent_tool_calls += 1
                     observations += self._format_tool_result(call)
                     if tool == "verify_report_evidence" and call.status == "SUCCEEDED":
@@ -569,6 +836,21 @@ class RunExecutor:
                     await self._emit_guard(guard, agent_id)
                     decision["done"] = True
                 tool_results_block += observations
+
+            # First-class handoff: reuse the requestedNextAction insertion
+            # path (dependency + delegation-cycle + budget checks live there),
+            # but emit an explicit edge for the trace view.
+            handoff = decision.get("handoff") or {}
+            if isinstance(handoff, dict) and handoff.get("to"):
+                target = str(handoff["to"])
+                raw_candidate = decision.get("output")
+                if not isinstance(raw_candidate, dict):
+                    decision["output"] = raw_candidate = {}
+                raw_candidate.setdefault("requestedNextAction", target)
+                await self.emitter.emit("agent.progress", agent_id=agent_id, payload={
+                    "handoff": {"to": target,
+                                "reason": str(handoff.get("reason", ""))[:200],
+                                "task": str(handoff.get("task", ""))[:200]}})
 
             raw_output = decision.get("output")
             if raw_output or decision.get("done") or iteration >= max_iterations:
@@ -601,6 +883,8 @@ class RunExecutor:
         decision["toolCalls"] = [
             {"tool": c["tool"], "arguments": c["arguments"]}
             for c in decision.get("toolCalls", [])]
+        if decision.get("handoff") is not None and not decision["handoff"].get("to"):
+            decision["handoff"] = None
         return decision, ""
 
     def _build_output(self, definition: AgentDefinition,
@@ -627,13 +911,52 @@ class RunExecutor:
             requestedNextAction=str(requested) if requested and not guard.triggered else None,
             summary=summary[:500])
         if definition.agent_id in TERMINAL_AGENTS:
-            answer = raw_output.get("answer") or raw_output.get("report") \
-                or raw_output.get("markdown") or summary
+            report = raw_output.get("report")
+            if isinstance(report, dict):
+                validated = self._validate_structured_report(report)
+                if validated:
+                    self.state.put_artifact("finalReport", validated)
+            answer = raw_output.get("answer") or raw_output.get("markdown") or summary
+            if not answer and isinstance(report, dict):
+                answer = json.dumps(report, ensure_ascii=False, indent=2)
             if isinstance(answer, dict):
                 answer = json.dumps(answer, ensure_ascii=False, indent=2)
             if answer:
                 self.final_answer = str(answer)
         return output
+
+    @staticmethod
+    def _validate_structured_report(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Range/enum-check the structured report; out-of-range fields are
+        dropped (never fabricated), an empty result returns None."""
+        allowed_recommendations = {
+            "HIRE", "INTERVIEW_RECOMMEND", "NEED_MANUAL_REVIEW", "NOT_RECOMMEND"}
+        out: Dict[str, Any] = {}
+        score = report.get("overallScore")
+        if isinstance(score, (int, float)) and 0 <= float(score) <= 100:
+            out["overallScore"] = int(round(float(score)))
+        recommendation = str(report.get("recommendation") or "").strip().upper()
+        if recommendation in allowed_recommendations:
+            out["recommendation"] = recommendation
+        dimensions = []
+        for dim in report.get("dimensions") or []:
+            if not isinstance(dim, dict) or not dim.get("name"):
+                continue
+            entry: Dict[str, Any] = {"name": str(dim["name"])[:60]}
+            dim_score = dim.get("score")
+            if isinstance(dim_score, (int, float)) and 0 <= float(dim_score) <= 100:
+                entry["score"] = int(round(float(dim_score)))
+            if dim.get("rationale"):
+                entry["rationale"] = str(dim["rationale"])[:300]
+            dimensions.append(entry)
+        if dimensions:
+            out["dimensions"] = dimensions[:10]
+        for key in ("strengths", "risks", "interviewQuestions"):
+            values = [str(v)[:300] for v in (report.get(key) or [])
+                      if isinstance(v, (str, int, float)) and str(v).strip()]
+            if values:
+                out[key] = values[:12]
+        return out or None
 
     def _pre_steps(self, definition: AgentDefinition) -> List[tuple]:
         request = self.request
@@ -659,6 +982,15 @@ class RunExecutor:
                                "claims": claims}))
         elif definition.agent_id == "ResumeOptimizeAgent" and resume:
             steps.append(("resume_lint", {"resumeText": resume}))
+        # Copilot 对话式 RAG：followup/quick_answer 只有 ReportAgent，回答前
+        # 自动检索知识库标准与简历证据，命中不足时报告里如实说明。
+        if definition.agent_id == "ReportAgent" \
+                and request.runType in ("followup", "quick_answer") \
+                and (request.userMessage or "").strip():
+            query = request.userMessage.strip()[:200]
+            steps.append(("knowledge_search", {"query": query}))
+            if resume:
+                steps.append(("resume_semantic_search", {"query": query}))
         return steps
 
     def _apply_verification(self, result: Any) -> None:
@@ -771,15 +1103,11 @@ class RunExecutor:
                 source="system_rule", confidence=0.8)
             unsupported = [c for c in self.state.data["conflicts"]
                            if isinstance(c, dict) and c.get("type") == "unsupported_claim"]
-            if unsupported:
-                await self.memory.write(
-                    type_="WORKING", owner_scope="RUN",
-                    content="未支持结论: " + "; ".join(
-                        str(c.get("claim", ""))[:100] for c in unsupported[:5]),
-                    source="system_rule", confidence=0.7, ttl_days=2)
+            # unsupported claims already live in the shared-state snapshot;
+            # a separate short-term WORKING memory row duplicated it (removed).
             for preference in self._explicit_preferences():
                 await self.memory.write(
-                    type_="USER_PREFERENCE", owner_scope="USER",
+                    type_="PREFERENCE", owner_scope="USER",
                     content=f"{preference['kind']}: {preference['text']}",
                     structured=preference,
                     source="user_explicit", confidence=0.9)
@@ -801,6 +1129,8 @@ class RunExecutor:
             "toolCalls": self.budget.tool_calls,
             "promptTokens": self.budget.prompt_tokens,
             "completionTokens": self.budget.completion_tokens,
+            "promptCacheHitTokens": self.budget.prompt_cache_hit_tokens,
+            "costCny": round(self.budget.cost_cny, 4),
             "latencySeconds": round(self.budget.elapsed_seconds(), 2),
             "agentsUsed": executed_agents,
             "agentTimingsMs": self.agent_timings,
@@ -829,6 +1159,9 @@ class RunExecutor:
             "conversationSummary": conversation_summary or "",
             "currentGoal": (self.request.currentGoal or self.request.userMessage or "")[:500],
         }
+        final_report = self.state.data["artifacts"].get("finalReport")
+        if isinstance(final_report, dict) and final_report:
+            result["structuredReport"] = final_report
         if snapshot is not None:
             result["executionSnapshot"] = snapshot
         return result

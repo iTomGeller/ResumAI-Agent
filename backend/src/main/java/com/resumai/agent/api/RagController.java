@@ -178,13 +178,14 @@ public class RagController {
         response.put("indexes", List.of(
                 Map.of("name", "lexical_bm25_like", "type", "in-memory lexical scoring", "purpose", "exact terms / sparse resume / fast path"),
                 Map.of("name", "milvus_embedding", "type", "vector", "provider", embeddingProperties.getProvider(), "purpose", "semantic recall"),
-                Map.of("name", "agentic_overlap_rerank", "type", "rerank/usefulness", "purpose", "selectedChunks + usefulnessScore")));
+                Map.of("name", "milvus_kb_chunks", "type", "vector", "purpose", "knowledge-base hybrid retrieval"),
+                Map.of("name", "llm_listwise_rerank", "type", "rerank", "purpose", "optional DeepSeek Top-20 listwise rerank")));
         response.put("retrievalPipeline", List.of(
                 "route strategy by document length and query",
-                "retrieve lexical candidates",
-                "retrieve embedding candidates when useful",
-                "merge by hybrid strategy",
-                "agentic usefulness scoring",
+                "retrieve lexical candidates (BM25-like)",
+                "retrieve embedding candidates when operational",
+                "RRF fusion (k=60)",
+                "optional DeepSeek listwise rerank when rerankerEnabled",
                 "return selectedChunks with metadata to downstream agents"));
         response.put("evaluationSet", Map.of(
                 "generatedPdfDataset", "testdata/resumes/metadata.json",
@@ -192,7 +193,9 @@ public class RagController {
                 "metrics", List.of("coverageRate", "hitCount", "topScore", "fallbackRate", "latencyMs", "usefulnessScore")));
         response.put("selfServiceKnowledgeBase", knowledgeBaseDocumentService.overview());
         response.put("agentMemory", agentMemoryService.overview());
-        response.put("ragStrategies", List.of("embedding", "lexical_bm25_like", "hybrid_embedding_bm25", "lexical_short_resume", "agentic_overlap_rerank"));
+        response.put("ragStrategies", List.of(
+                "hybrid_bm25_embedding", "lexical_bm25_like", "embedding_only",
+                "hybrid_bm25_embedding+llm_rerank"));
         response.put("recentJds", recentJds);
         response.put("recentResumes", recentResumes);
         response.put("sampleChunks", sampleChunks);
@@ -216,7 +219,22 @@ public class RagController {
     @PostMapping("/knowledge-base/search")
     public Map<String, Object> searchKnowledgeDocument(@RequestBody KnowledgeSearchRequest request) {
         int topK = request.topK() != null ? request.topK() : 5;
-        return Map.of("chunks", knowledgeBaseDocumentService.search(request.query(), topK));
+        boolean rerank = Boolean.TRUE.equals(request.rerank());
+        KnowledgeBaseDocumentService.SearchResult result =
+                knowledgeBaseDocumentService.searchDetailed(request.query(), topK, rerank);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("chunks", result.chunks());
+        body.put("strategy", result.strategy());
+        body.put("lexicalHits", result.lexicalHits());
+        body.put("vectorHits", result.vectorHits());
+        body.put("fusion", result.fusion());
+        body.put("rerankApplied", result.rerankApplied());
+        return body;
+    }
+
+    @PostMapping("/knowledge-base/reindex")
+    public Map<String, Object> reindexKnowledgeBase() {
+        return knowledgeBaseDocumentService.reindexAll();
     }
 
     @GetMapping("/knowledge-base/documents")
@@ -258,5 +276,5 @@ public class RagController {
 
     public record KnowledgeDocumentRequest(String title, String content, String docType, String tags) {}
 
-    public record KnowledgeSearchRequest(String query, Integer topK) {}
+    public record KnowledgeSearchRequest(String query, Integer topK, Boolean rerank) {}
 }

@@ -9,6 +9,9 @@ const props = defineProps<{
   traceId: string;
   revisionNo?: number;
   taskStatus: string;
+  overallScore?: number | null;
+  recommendation?: string | null;
+  runId?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -70,6 +73,76 @@ const lastFinishedRun = computed(() => activeRun.value
 
 async function stopGeneration() {
   await cancelRun();
+}
+
+const retrying = ref(false);
+const retryError = ref('');
+
+/** 失败 run 的断点重试：只重跑失败的那一段，完成的 Agent 不再执行。 */
+async function retryFromCheckpoint() {
+  const runId = lastFinishedRun.value?.runId || props.runId;
+  if (!runId || retrying.value) return;
+  retrying.value = true;
+  retryError.value = '';
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/retry`, { method: 'POST' });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      retryError.value = body.message || `重试失败（HTTP ${response.status}）`;
+      return;
+    }
+    await loadConversation(props.conversationId || props.traceId);
+  } catch (e) {
+    retryError.value = '重试请求失败，请稍后再试';
+  } finally {
+    retrying.value = false;
+  }
+}
+
+const canRetry = computed(() => {
+  const status = lastFinishedRun.value?.status || effectiveStatus.value;
+  return ['FAILED', 'TIMED_OUT'].includes(status);
+});
+
+const recommendationText = computed(() => {
+  switch (props.recommendation) {
+    case 'HIRE': return '建议录用';
+    case 'INTERVIEW_RECOMMEND':
+    case 'RECOMMEND':
+    case 'STRONG_RECOMMEND': return '推荐面试';
+    case 'NOT_RECOMMEND': return '不推荐';
+    default: return props.recommendation ? '需人工复核' : '';
+  }
+});
+
+// ---------- plan-approval mode ----------
+const AGENT_LABELS: Record<string, string> = {
+  ResumeParserAgent: '简历解析', JDAnalysisAgent: 'JD 分析', TechAgent: '技术评估',
+  ProjectAgent: '项目分析', RiskAgent: '风险审查', EvidenceAgent: '证据核验',
+  ReportAgent: '报告生成', ResumeOptimizeAgent: '简历优化', InterviewQuestionAgent: '面试追问',
+};
+const awaitingPlan = computed(() => !!activeRun.value?.awaitingPlanApproval
+  || (effectiveStatus.value === 'PAUSED' && !!activeRun.value?.plannedPipeline?.length
+      && activeRun.value?.awaitingPlanApproval !== false));
+const planDraft = ref<Array<{ name: string; enabled: boolean }>>([]);
+watch(() => activeRun.value?.plannedPipeline, (pipeline) => {
+  if (pipeline?.length) {
+    planDraft.value = pipeline.map((name) => ({ name, enabled: true }));
+  }
+}, { immediate: true });
+
+const approving = ref(false);
+async function approvePlan() {
+  if (approving.value) return;
+  approving.value = true;
+  try {
+    const approved = planDraft.value.filter((a) => a.enabled).map((a) => a.name);
+    const response = await controlTask(props.traceId, 'RESUME',
+      approved.length ? approved : undefined);
+    if (response) emit('statusChange', response);
+  } finally {
+    approving.value = false;
+  }
 }
 
 async function reanalyze() {
@@ -173,7 +246,27 @@ function friendlyError(raw: string): string {
       <span v-if="!isViewedCurrent" class="conversation-view-warning">正在查看历史 revision</span>
     </div>
 
-    <div v-if="canPause || canResume || canCancel" class="conversation-controls" aria-label="任务控制">
+    <!-- Plan 确认卡：Coordinator 规划后暂停，确认（可勾选删减）后才开始消耗预算 -->
+    <div v-if="awaitingPlan && planDraft.length" class="plan-approval-card">
+      <div class="plan-approval-head">
+        <strong>执行计划待确认</strong>
+        <span>Coordinator 已规划评估流水线，未开始消耗预算</span>
+      </div>
+      <div class="plan-approval-list">
+        <label v-for="step in planDraft" :key="step.name" class="plan-step" :class="{ off: !step.enabled }">
+          <input v-model="step.enabled" type="checkbox" :disabled="step.name === 'ReportAgent'" />
+          <span>{{ AGENT_LABELS[step.name] || step.name }}</span>
+        </label>
+      </div>
+      <div class="plan-approval-actions">
+        <button type="button" class="plan-approve" :disabled="approving" @click="approvePlan">
+          {{ approving ? '启动中…' : '✓ 确认执行' }}
+        </button>
+        <span class="plan-tip">去掉勾选可跳过对应 Agent（报告生成不可跳过）</span>
+      </div>
+    </div>
+
+    <div v-else-if="canPause || canResume || canCancel" class="conversation-controls" aria-label="任务控制">
       <button v-if="canPause" type="button" :disabled="!!controlling" @click="requestControl('PAUSE')">
         {{ controlling === 'PAUSE' ? '请求中…' : '⏸ 暂停' }}
       </button>
@@ -184,8 +277,19 @@ function friendlyError(raw: string): string {
         {{ controlling === 'CANCEL' ? '取消中…' : '✕ 取消' }}
       </button>
     </div>
-    <div v-else-if="isTerminal" class="conversation-controls-done">
-      本轮评估已结束 · 可继续追问，或点下方“重新分析”发起新一轮
+    <div v-else-if="isTerminal" class="conversation-result-card">
+      <div class="result-line">
+        <span class="result-score" v-if="overallScore">{{ overallScore }}<em>分</em></span>
+        <span class="result-recommendation" v-if="recommendationText">{{ recommendationText }}</span>
+        <span class="result-hint" v-if="!overallScore && !recommendationText">本轮评估已结束</span>
+      </div>
+      <div class="result-actions">
+        <button v-if="canRetry" type="button" class="result-retry" :disabled="retrying" @click="retryFromCheckpoint">
+          {{ retrying ? '重试中…' : '⟲ 从断点重试' }}
+        </button>
+        <span class="result-tip">可继续追问，或点下方“重新分析”发起新一轮</span>
+      </div>
+      <div v-if="retryError" class="conversation-error" role="alert">{{ retryError }}</div>
     </div>
 
     <div v-if="activeRun" class="run-monitor" :data-active="runActive">
@@ -339,15 +443,55 @@ function friendlyError(raw: string): string {
 .conversation-status[data-status="SUCCESS"],
 .conversation-status[data-status="PARTIAL_SUCCESS"] { background: var(--color-success-light); color: var(--color-success); }
 
-.conversation-controls-done {
+.conversation-result-card {
   margin: 0 14px 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border-light);
   background: var(--color-bg);
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  line-height: 1.5;
 }
+.result-line { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.result-score { font-size: 22px; font-weight: 700; color: var(--color-primary); }
+.result-score em { font-style: normal; font-size: 11px; color: var(--color-text-secondary); margin-left: 2px; }
+.result-recommendation {
+  padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: var(--color-success-light); color: var(--color-success);
+}
+.result-hint { font-size: 12px; color: var(--color-text-secondary); }
+.result-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.result-retry {
+  border: 1px solid var(--color-primary); background: none; color: var(--color-primary);
+  border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+.result-retry:disabled { opacity: .6; cursor: default; }
+.result-tip { font-size: 11px; color: var(--color-text-secondary); }
+
+/* Plan 确认卡 */
+.plan-approval-card {
+  margin: 0 14px 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary-light, #eef2ff);
+}
+.plan-approval-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.plan-approval-head strong { font-size: 13px; }
+.plan-approval-head span { font-size: 11px; color: var(--color-text-secondary); }
+.plan-approval-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.plan-step {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 999px; border: 1px solid var(--color-border);
+  background: var(--color-surface); font-size: 12px; cursor: pointer;
+}
+.plan-step.off { opacity: .45; text-decoration: line-through; }
+.plan-step input { margin: 0; }
+.plan-approval-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.plan-approve {
+  border: none; border-radius: 8px; padding: 6px 14px;
+  background: var(--color-primary); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.plan-approve:disabled { opacity: .6; cursor: default; }
+.plan-tip { font-size: 11px; color: var(--color-text-secondary); }
 .conversation-status[data-status="CANCELLED"],
 .conversation-status[data-status="FAILED"] { background: var(--color-danger-light); color: var(--color-danger); }
 .conversation-status[data-status="SUPERSEDED"] { background: #e2e8f0; color: #475569; }

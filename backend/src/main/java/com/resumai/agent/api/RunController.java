@@ -127,6 +127,14 @@ public class RunController {
         return toView(lifecycleService.resumePausedRun(run));
     }
 
+    /** Retry a FAILED/TIMED_OUT run from its last group-boundary checkpoint. */
+    @PostMapping("/api/runs/{runId}/retry")
+    public Map<String, Object> retryRun(@PathVariable String runId) {
+        AgentRun retry = lifecycleService.retryFromCheckpoint(runId);
+        schedulerService.kick();
+        return toView(retry);
+    }
+
     @GetMapping(value = "/sse/runs/{runId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamRun(@PathVariable String runId,
                                 @RequestParam(value = "afterSeq", defaultValue = "0") int afterSeq,

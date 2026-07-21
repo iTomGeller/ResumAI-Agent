@@ -48,14 +48,17 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         "TechAgent", "技术评估", "技能与 JD 匹配、深度信号评估",
         ("tech_evaluation",),
         skills=("java_backend_evaluation", "ai_agent_job_evaluation"),
-        tools=("calculate_jd_coverage", "resume_semantic_search", "knowledge_search"),
+        tools=("calculate_jd_coverage", "resume_semantic_search", "knowledge_search",
+               "mcp_fetch_url"),
+        mcp_servers=("fetch",),
         max_iterations=2, max_tool_calls=5, timeout_seconds=240,
         output_type="technical_findings"),
     "ProjectAgent": AgentDefinition(
         "ProjectAgent", "项目分析", "项目复杂度、贡献与真实性",
         ("project_analysis",),
         skills=("project_depth_analysis",),
-        tools=("locate_evidence", "resume_semantic_search"),
+        tools=("locate_evidence", "resume_semantic_search", "mcp_fetch_url"),
+        mcp_servers=("fetch",),
         max_iterations=2, max_tool_calls=5, timeout_seconds=240,
         output_type="project_findings"),
     "RiskAgent": AgentDefinition(
@@ -76,8 +79,12 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         "ReportAgent", "报告生成", "汇总证据生成最终回答",
         ("report_generation",),
         skills=("report_generation",),
-        tools=("validate_report_schema",),
-        max_iterations=1, max_tool_calls=2, timeout_seconds=240,
+        # knowledge_search / resume_semantic_search: Copilot 追问（followup/
+        # quick_answer 只有 ReportAgent）需要对话式 RAG——先查评估标准与简历
+        # 证据再回答。
+        tools=("validate_report_schema", "knowledge_search",
+               "resume_semantic_search"),
+        max_iterations=1, max_tool_calls=4, timeout_seconds=240,
         failure_policy="abort", output_type="report"),
     "ResumeOptimizeAgent": AgentDefinition(
         "ResumeOptimizeAgent", "简历优化", "事实不变前提下的改写",

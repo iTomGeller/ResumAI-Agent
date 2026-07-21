@@ -32,6 +32,9 @@ class AgentRunRequest(BaseModel):
     # execute inside isolated Docker workers. Normal user requests run the
     # same tool code in-process (they are pure functions — no container tax).
     isolatedSandbox: bool = False
+    # Plan-approval mode: pause right after the Coordinator produced the plan
+    # so the user can review/edit the agent pipeline before any budget burns.
+    planMode: bool = False
 
 
 class CancelRequest(BaseModel):
@@ -118,6 +121,16 @@ class ToolCallRequest(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
+class HandoffRequest(BaseModel):
+    """First-class agent handoff: transfer a follow-up task to a peer. The
+    harness validates dependencies, budget and delegation cycles before the
+    target is scheduled."""
+
+    to: str = ""
+    reason: str = ""
+    task: str = ""
+
+
 class AgentDecision(BaseModel):
     """Schema of every per-iteration agent reply.
 
@@ -130,6 +143,7 @@ class AgentDecision(BaseModel):
     thought: str = ""
     toolCalls: List[ToolCallRequest] = Field(default_factory=list)
     output: Optional[Dict[str, Any]] = None
+    handoff: Optional[HandoffRequest] = None
     done: bool = False
 
 
@@ -160,6 +174,7 @@ class RunBudget(BaseModel):
     tool_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    prompt_cache_hit_tokens: int = 0
     cost_cny: float = 0.0
     started_at: float = Field(default_factory=time.monotonic)
 

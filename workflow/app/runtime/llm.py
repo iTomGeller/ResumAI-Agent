@@ -99,7 +99,12 @@ class ResilientLlmClient:
 
     async def chat(self, messages: List[Dict[str, str]], *, agent_id: str,
                    purpose: str = "", max_tokens: int = 2048,
-                   temperature: float = 0.2, json_mode: bool = True) -> str:
+                   temperature: float = 0.2, json_mode: bool = True,
+                   tools: Optional[List[Dict[str, Any]]] = None,
+                   tool_choice: Optional[Dict[str, Any]] = None) -> str:
+        """When ``tools``/``tool_choice`` force a function call, the returned
+        string is the function's arguments JSON — provider-side schema
+        enforcement, one layer stronger than json_object mode."""
         if not self.api_key:
             raise LlmError("NO_API_KEY", "DeepSeek API key not configured; fail closed", False)
         if self.budget.llm_calls >= self.max_llm_calls:
@@ -123,13 +128,20 @@ class ResilientLlmClient:
         last_error: Optional[Exception] = None
         model = self.model
         effective_max_tokens = max_tokens
+        forcing_function = bool(tools and tool_choice)
         while attempts <= max_retries:
             attempts += 1
             started = time.monotonic()
             try:
                 content, usage, finish_reason = await self._invoke(
-                    messages, model, effective_max_tokens, temperature, json_mode)
-                if json_mode and not content.strip():
+                    messages, model, effective_max_tokens, temperature,
+                    json_mode and not forcing_function, tools=tools,
+                    tool_choice=tool_choice)
+                if forcing_function and not content.strip():
+                    # A forced function call must produce arguments.
+                    raise LlmError("EMPTY_FUNCTION_ARGS",
+                                   "forced tool call returned no arguments", True)
+                if json_mode and not forcing_function and not content.strip():
                     # Known DeepSeek JSON-mode failure mode: occasional empty
                     # content. Treat as retryable instead of returning garbage.
                     raise LlmError("EMPTY_JSON_CONTENT",
@@ -147,10 +159,16 @@ class ResilientLlmClient:
                 self.breaker.record_success()
                 prompt_tokens = usage.get("prompt_tokens", 0)
                 completion_tokens = usage.get("completion_tokens", 0)
+                cache_hit_tokens = usage.get("prompt_cache_hit_tokens", 0)
                 self.budget.prompt_tokens += prompt_tokens
                 self.budget.completion_tokens += completion_tokens
+                self.budget.prompt_cache_hit_tokens += cache_hit_tokens
+                # DeepSeek bills prefix-cache hits at ~1/10 of a miss; account
+                # for it so the cost budget reflects reality.
+                cache_miss_tokens = max(0, prompt_tokens - cache_hit_tokens)
                 self.budget.cost_cny += (
-                    prompt_tokens / 1e6 * PRICE_PROMPT_CNY_PER_M
+                    cache_miss_tokens / 1e6 * PRICE_PROMPT_CNY_PER_M
+                    + cache_hit_tokens / 1e6 * PRICE_PROMPT_CNY_PER_M * 0.1
                     + completion_tokens / 1e6 * PRICE_COMPLETION_CNY_PER_M)
                 try:
                     from app.runtime.context import calibrate, estimate_tokens
@@ -164,6 +182,7 @@ class ResilientLlmClient:
                     "durationMs": int((time.monotonic() - started) * 1000),
                     "promptTokens": prompt_tokens,
                     "completionTokens": completion_tokens,
+                    "promptCacheHitTokens": cache_hit_tokens,
                     "attempts": attempts})
                 return content
             except asyncio.CancelledError:
@@ -194,7 +213,10 @@ class ResilientLlmClient:
 
     async def _invoke(self, messages: List[Dict[str, str]], model: str,
                       max_tokens: int, temperature: float,
-                      json_mode: bool) -> tuple[str, Dict[str, int], str]:
+                      json_mode: bool, *,
+                      tools: Optional[List[Dict[str, Any]]] = None,
+                      tool_choice: Optional[Dict[str, Any]] = None
+                      ) -> tuple[str, Dict[str, int], str]:
         url = f"{self.base_url}/chat/completions"
         timeout = httpx.Timeout(
             connect=10.0, read=float(self.llm_timeout_seconds),
@@ -206,7 +228,13 @@ class ResilientLlmClient:
             "temperature": temperature,
             "stream": False,
         }
-        if json_mode:
+        if tools:
+            # Provider-side schema enforcement: the forced function's
+            # parameters ARE the decision schema.
+            body["tools"] = tools
+            if tool_choice:
+                body["tool_choice"] = tool_choice
+        elif json_mode:
             # API-enforced valid JSON (prompt already contains the word "json"
             # through the output schema, as DeepSeek requires).
             body["response_format"] = {"type": "json_object"}
@@ -234,13 +262,21 @@ class ResilientLlmClient:
         data = response.json()
         try:
             choice = data["choices"][0]
-            content = choice["message"]["content"] or ""
+            message = choice["message"]
+            content = message.get("content") or ""
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                # Forced function call: arguments JSON is the payload.
+                arguments = (tool_calls[0].get("function") or {}).get("arguments") or ""
+                if arguments:
+                    content = arguments
         except (KeyError, IndexError) as exc:
             raise LlmError("MALFORMED_RESPONSE", str(exc), False) from exc
         usage = data.get("usage") or {}
         return content, {
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "prompt_cache_hit_tokens": int(usage.get("prompt_cache_hit_tokens") or 0),
         }, str(choice.get("finish_reason") or "")
 
 

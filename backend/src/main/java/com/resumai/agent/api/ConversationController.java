@@ -118,7 +118,7 @@ public class ConversationController {
     public TaskControlResponse controlTask(
             @PathVariable String traceId,
             @Valid @RequestBody TaskControlRequest request) {
-        return taskControlService.control(traceId, request.action());
+        return taskControlService.control(traceId, request.action(), request.approvedPlan());
     }
 
     private Map<String, Object> sessionView(ConversationSession session) {

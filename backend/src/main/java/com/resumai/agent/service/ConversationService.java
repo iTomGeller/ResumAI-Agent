@@ -23,6 +23,7 @@ import com.resumai.agent.service.run.RunQueueService;
 import com.resumai.agent.service.run.RunSchedulerService;
 import com.resumai.agent.service.run.RunTypeClassifier;
 import com.resumai.agent.util.HrContext;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,6 +32,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import org.redisson.api.RMapCache;
+import org.redisson.api.RedissonClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,6 +44,8 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class ConversationService {
+
+    private static final Logger log = LoggerFactory.getLogger(ConversationService.class);
 
     private final ConversationSessionMapper sessionMapper;
     private final ConversationMessageMapper messageMapper;
@@ -51,6 +59,7 @@ public class ConversationService {
     private final RunSchedulerService runSchedulerService;
     private final RunLifecycleService runLifecycleService;
     private final RunTypeClassifier runTypeClassifier;
+    private final RedissonClient redisson;
 
     public ConversationService(ConversationSessionMapper sessionMapper,
                                ConversationMessageMapper messageMapper,
@@ -63,7 +72,8 @@ public class ConversationService {
                                RunQueueService runQueueService,
                                RunSchedulerService runSchedulerService,
                                RunLifecycleService runLifecycleService,
-                               RunTypeClassifier runTypeClassifier) {
+                               RunTypeClassifier runTypeClassifier,
+                               RedissonClient redisson) {
         this.sessionMapper = sessionMapper;
         this.messageMapper = messageMapper;
         this.resumeTaskMapper = resumeTaskMapper;
@@ -76,6 +86,52 @@ public class ConversationService {
         this.runSchedulerService = runSchedulerService;
         this.runLifecycleService = runLifecycleService;
         this.runTypeClassifier = runTypeClassifier;
+        this.redisson = redisson;
+    }
+
+    // ------------------------------------------------------------------
+    // Session hot-state cache (working-memory tier): Redis holds the hot
+    // conversation snapshot (goal/summary/revision) with a 7d TTL; MySQL
+    // stays the source of truth — every write goes through, reads fall back.
+    // ------------------------------------------------------------------
+
+    private static final Duration SESSION_CACHE_TTL = Duration.ofDays(7);
+
+    private RMapCache<String, String> sessionCache() {
+        return redisson.getMapCache("resumai:conversation:hot");
+    }
+
+    private ConversationSession cachedSession(String conversationId) {
+        try {
+            String json = sessionCache().get(conversationId);
+            if (json != null) {
+                return objectMapper.readValue(json, ConversationSession.class);
+            }
+        } catch (Exception e) {
+            log.debug("session cache read miss {}: {}", conversationId, e.getMessage());
+        }
+        ConversationSession session = sessionMapper.selectById(conversationId);
+        if (session != null) {
+            cacheSession(session);
+        }
+        return session;
+    }
+
+    private void cacheSession(ConversationSession session) {
+        if (session == null || session.getId() == null) {
+            return;
+        }
+        try {
+            sessionCache().fastPut(session.getId(), objectMapper.writeValueAsString(session),
+                    SESSION_CACHE_TTL.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            log.debug("session cache write skipped {}: {}", session.getId(), e.getMessage());
+        }
+    }
+
+    private void writeSession(ConversationSession session) {
+        sessionMapper.updateById(session);
+        cacheSession(session);
     }
 
     // ------------------------------------------------------------------
@@ -161,7 +217,7 @@ public class ConversationService {
         }
         if (dirty) {
             session.setUpdateTime(LocalDateTime.now());
-            sessionMapper.updateById(session);
+            writeSession(session);
         }
     }
 
@@ -190,7 +246,7 @@ public class ConversationService {
     }
 
     public ConversationSession getSession(String conversationId) {
-        return sessionMapper.selectById(conversationId);
+        return cachedSession(conversationId);
     }
 
     // ------------------------------------------------------------------
@@ -261,6 +317,28 @@ public class ConversationService {
             return response;
         }
 
+        // Second pass: rules didn't recognize the message — one budgeted LLM
+        // classification instead of guessing. Low confidence => clarify.
+        if ("UNCLASSIFIED".equals(decision.intent())) {
+            decision = llmIntentSecondPass(session, request.content(), decision);
+        }
+
+        // Ambiguity gate (rules or LLM): confirm before burning run budget.
+        if (decision.needsConfirmation()) {
+            saveMessage(session.getId(), request.clientMessageId(), "USER", decision.intent(),
+                    request.content(), activeRevision, null, queueMode,
+                    Map.of("needsConfirmation", true));
+            ConversationTurnResponse clarify = new ConversationTurnResponse(
+                    session.getId(), request.clientMessageId(), decision.intent(),
+                    false, false, true, "ASK_CONFIRMATION",
+                    decision.defaultMessage(), session.getActiveTraceId(), activeRevision,
+                    null, List.of(), null, null, null, queueMode, null);
+            saveMessage(session.getId(), request.clientMessageId() + ":assistant", "ASSISTANT",
+                    decision.intent(), decision.defaultMessage(), activeRevision,
+                    null, queueMode, clarify);
+            return clarify;
+        }
+
         ConversationMessage userMessage = saveMessage(
                 session.getId(), request.clientMessageId(), "USER", decision.intent(),
                 request.content(), activeRevision, null, queueMode,
@@ -272,7 +350,7 @@ public class ConversationService {
             session.setActiveRevision(resultingRevision);
             session.setCurrentGoal(trimTo(request.content(), 1900));
             session.setUpdateTime(LocalDateTime.now());
-            sessionMapper.updateById(session);
+            writeSession(session);
         }
 
         String runType = runTypeClassifier.classify(request.content(), session.getJobCategory());
@@ -352,7 +430,7 @@ public class ConversationService {
             session.setActiveTraceId(activeTraceId);
             session.setActiveRevision(resultingRevision);
             session.setUpdateTime(LocalDateTime.now());
-            sessionMapper.updateById(session);
+            writeSession(session);
             action = "REVISION_CREATED";
             assistantMessage += " 当前有效版本为 v" + resultingRevision + "。";
         }
@@ -370,7 +448,7 @@ public class ConversationService {
     }
 
     private ConversationSession ensureSession(String idOrTraceId) {
-        ConversationSession existing = sessionMapper.selectById(idOrTraceId);
+        ConversationSession existing = cachedSession(idOrTraceId);
         if (existing != null) {
             return existing;
         }
@@ -436,7 +514,7 @@ public class ConversationService {
     }
 
     private ConversationTurnResponse replayIfPresent(String idOrTraceId, String clientMessageId) {
-        ConversationSession session = sessionMapper.selectById(idOrTraceId);
+        ConversationSession session = cachedSession(idOrTraceId);
         if (session == null) {
             return null;
         }
@@ -452,6 +530,56 @@ public class ConversationService {
             return objectMapper.readValue(assistant.getMetadataJson(), ConversationTurnResponse.class);
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    private static final double INTENT_CONFIDENCE_FLOOR = 0.7; // EXP-6 pending
+
+    /**
+     * LLM second pass for messages the rule layer could not classify.
+     * Timeout/unavailability degrades back to the rule default; a low LLM
+     * confidence turns into a clarification instead of a guess.
+     */
+    private ConversationIntentClassifier.Decision llmIntentSecondPass(
+            ConversationSession session, String content,
+            ConversationIntentClassifier.Decision ruleDecision) {
+        try {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("conversationId", session.getId());
+            request.put("traceId", session.getActiveTraceId());
+            request.put("revision", session.getActiveRevision());
+            request.put("content", content);
+            request.put("runStatus", "RUNTIME");
+            Map<String, Object> context = new LinkedHashMap<>();
+            context.put("activeGoal", session.getCurrentGoal());
+            context.put("summary", session.getSummary());
+            context.put("runStatus", "RUNTIME");
+            request.put("context", context);
+            Optional<Map<String, Object>> runtime = runtimeClient.resolveConversationTurn(request);
+            if (runtime.isEmpty()) {
+                return ruleDecision;
+            }
+            Map<String, Object> payload = runtime.get();
+            double confidence = payload.get("confidence") instanceof Number n
+                    ? n.doubleValue() : 1.0;
+            String intent = String.valueOf(payload.getOrDefault("intent", ruleDecision.intent()));
+            boolean affects = booleanValue(payload.get("affectsEvaluation"),
+                    ruleDecision.affectsEvaluation());
+            if (confidence < INTENT_CONFIDENCE_FLOOR) {
+                return new ConversationIntentClassifier.Decision(
+                        intent, false, false, true, "ASK_CONFIRMATION", List.of(),
+                        "我不完全确定你的意图：是想补充当前评估的信息，还是提出一个新的目标？"
+                                + "如果要改评估方向，请明确说“改为……重新评估”。");
+            }
+            boolean confirmation = booleanValue(payload.get("requiresConfirmation"), false);
+            return new ConversationIntentClassifier.Decision(
+                    intent, affects, !affects, confirmation,
+                    affects ? "CREATE_REVISION" : "ANSWER_AND_CONTINUE",
+                    stringList(payload.get("affectedNodes")),
+                    ruleDecision.defaultMessage());
+        } catch (Exception e) {
+            log.debug("llm intent second pass degraded to rules: {}", e.getMessage());
+            return ruleDecision;
         }
     }
 

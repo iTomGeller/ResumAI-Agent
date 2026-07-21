@@ -243,6 +243,26 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .btn-sm { padding: 5px 10px; font-size: 12px; }
 .btn-xs { padding: 2px 6px; font-size: 11px; border-radius: 3px; min-width: unset; }
 
+/* 图标型危险操作按钮（删除 ✕）：默认低调，hover 红底白字 */
+.btn-icon-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1;
+  transition: all 0.15s ease;
+}
+
+.btn-icon-danger:hover {
+  background: var(--color-danger);
+  color: #fff;
+}
+
 /* === CARDS === */
 .card {
   background: var(--color-surface);
@@ -266,7 +286,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 /* === KPI CARDS === */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: var(--space-lg);
   margin-bottom: var(--space-xl);
 }
@@ -290,9 +310,48 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   margin-bottom: var(--space-md);
 }
 
-.queue-fail-hint {
-  margin: 0;
-  padding: 0 var(--space-xl) var(--space-lg);
+.queue-fail-details {
+  margin-top: var(--space-sm);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.queue-fail-details summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--color-text-muted);
+}
+
+.queue-fail-details ul {
+  margin: var(--space-xs) 0 0;
+  padding-left: var(--space-lg);
+  list-style: disc;
+}
+
+.queue-fail-details li {
+  word-break: break-all;
+  margin-bottom: 2px;
+}
+
+/* 总览页系统状态：一行文字的小卡片 */
+.system-status-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-xl);
+  margin-bottom: var(--space-xl);
+}
+
+.system-status-card .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-warning);
+  flex-shrink: 0;
+}
+
+.system-status-card .status-dot.online {
+  background: var(--color-success);
 }
 
 .kpi-card .kpi-label {
@@ -336,6 +395,24 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .data-table tr { transition: background 0.1s; cursor: pointer; }
 .data-table tr:hover { background: var(--color-bg); }
 .data-table tr.active { background: var(--color-primary-light); }
+
+/* 候选人列表：固定表格布局，防止长文件名/摘要撑出横向滚动条 */
+.candidate-table { table-layout: fixed; }
+.candidate-table .col-check { width: 32px; }
+.candidate-table .col-status { width: 104px; }
+.candidate-table .col-category { width: 84px; }
+.candidate-table .col-score { width: 56px; }
+.candidate-table .col-rec { width: 84px; }
+.candidate-table .col-summary { width: 168px; }
+.candidate-table .col-duration { width: 64px; }
+.candidate-table .col-actions { width: 56px; text-align: right; }
+.candidate-table td.col-actions { padding-right: var(--space-md); }
+
+.candidate-name-cell strong,
+.candidate-name-cell div {
+  display: block;
+  max-width: 100%;
+}
 
 /* === BADGES === */
 .badge {
@@ -721,11 +798,33 @@ select.form-input { appearance: auto; }
 /* === JOB EDITOR === */
 .job-layout {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  /* minmax(0, 1fr) 防止编辑区内容把列撑破产生横向溢出 */
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
   gap: var(--space-xl);
+  align-items: start;
 }
 
-.job-list-panel { display: flex; flex-direction: column; gap: var(--space-xs); }
+.job-layout > .card { min-width: 0; }
+
+.job-layout .form-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1100px) {
+  .job-layout { grid-template-columns: 1fr; }
+}
+
+.job-list-toolbar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.job-list-toolbar > input { grid-column: 1 / -1; }
+
+.job-list-panel { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
 
 .job-item {
   display: block;
@@ -741,7 +840,7 @@ select.form-input { appearance: auto; }
 .job-item:hover { background: var(--color-bg); }
 .job-item.active { background: var(--color-primary-light); border-color: var(--color-primary); }
 
-.job-item .job-title { font-size: 13px; font-weight: 500; display: block; }
+.job-item .job-title { font-size: 13px; font-weight: 500; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job-item .job-meta { font-size: 11px; color: var(--color-text-muted); display: block; margin-top: 2px; }
 
 /* === MODAL/OVERLAY for upload === */
@@ -818,6 +917,16 @@ select.form-input { appearance: auto; }
 .hr-decision-summary { font-size: 14px; color: var(--color-text-secondary); line-height: 1.6; }
 .hr-evidence-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-md); margin-bottom: var(--space-lg); }
 .hr-evidence-card { padding: var(--space-md); border: 1px solid var(--color-border-light); border-radius: var(--radius-md); background: var(--color-surface); }
+
+/* 分维度评分（结构化报告） */
+.dimension-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-md); margin-top: var(--space-sm); }
+.dimension-item { padding: 10px 12px; border: 1px solid var(--color-border-light); border-radius: var(--radius-md); background: var(--color-bg); }
+.dimension-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.dimension-score { font-weight: 700; font-size: 15px; color: var(--color-success); }
+.dimension-score.mid { color: var(--color-warning); }
+.dimension-score.low { color: var(--color-danger); }
+.dimension-bar { height: 6px; border-radius: 999px; background: var(--color-border-light); overflow: hidden; margin-bottom: 6px; }
+.dimension-bar-fill { height: 100%; border-radius: 999px; background: var(--color-primary); transition: width .4s ease; }
 .hr-evidence-card.risk { border-color: rgba(239, 68, 68, 0.25); }
 .hr-evidence-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
 .report-raw-md { margin-top: var(--space-md); font-size: 13px; color: var(--color-text-secondary); }
@@ -843,7 +952,7 @@ select.form-input { appearance: auto; }
 
 .kpi-hint { display: block; font-size: 11px; color: var(--color-text-muted); margin-top: 4px; }
 
-.data-table tbody tr.row-review { background: rgba(245, 158, 11, 0.06); cursor: pointer; }
+/* 行级状态背景已移除：队列/推荐状态只通过徽标表达，行统一白底 */
 .data-table tbody tr.row-selected { background: rgba(59, 130, 246, 0.08); }
 .data-table tbody tr { cursor: pointer; }
 .data-table tbody tr:hover { background: rgba(79, 70, 229, 0.04); }

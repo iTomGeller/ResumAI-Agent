@@ -195,14 +195,35 @@ public class RunTraceBridgeService {
         Map<String, Integer> phaseOf = new LinkedHashMap<>();
         List<List<String>> groups = List.of();
         String planReason = "";
+        int memoryHits = 0;
+        List<Object> memoryTop = new ArrayList<>();
+        // tool.started carries the arguments; correlate them onto the
+        // completed/failed rounds via toolCallId so the UI can show inputs.
+        Map<String, Object> argsByToolCall = new LinkedHashMap<>();
         for (RunEvent event : events) {
-            if ("agent.selected".equals(event.getEventType())) {
+            String type = event.getEventType();
+            if ("agent.selected".equals(type)) {
                 Map<String, Object> payload = readPayload(event.getPayload());
                 groups = castGroups(payload.get("parallelGroups"));
                 planReason = String.valueOf(payload.getOrDefault("reason", ""));
+                memoryHits = intOf(payload.get("memoryHits"));
                 for (int i = 0; i < groups.size(); i++) {
                     for (String agent : groups.get(i)) {
                         phaseOf.put(agent, i + 1);
+                    }
+                }
+            } else if ("tool.started".equals(type)) {
+                Map<String, Object> payload = readPayload(event.getPayload());
+                Object callId = payload.get("toolCallId");
+                if (callId != null && payload.get("arguments") != null) {
+                    argsByToolCall.put(String.valueOf(callId), payload.get("arguments"));
+                }
+            } else if ("run.progress".equals(type)) {
+                Map<String, Object> payload = readPayload(event.getPayload());
+                if ("memory".equals(payload.get("stage"))) {
+                    memoryHits = intOf(payload.get("memoryHits"));
+                    if (payload.get("memoryTop") instanceof List<?> top) {
+                        memoryTop = new ArrayList<>(top);
                     }
                 }
             }
@@ -276,14 +297,24 @@ public class RunTraceBridgeService {
                     round.put("title", "工具 " + event.getToolName());
                     round.put("hasToolCalls", true);
                     Map<String, Object> tool = new LinkedHashMap<>();
-                    tool.put("toolCallId", payload.getOrDefault("toolCallId", ""));
+                    String toolCallId = String.valueOf(payload.getOrDefault("toolCallId", ""));
+                    tool.put("toolCallId", toolCallId);
                     tool.put("name", event.getToolName());
                     tool.put("category", "tool");
                     tool.put("status", "tool.completed".equals(event.getEventType())
                             ? "SUCCESS" : "FAILED");
                     tool.put("durationMs", longOf(payload.get("durationMs")));
+                    Object arguments = payload.get("arguments");
+                    if (arguments == null) {
+                        arguments = argsByToolCall.get(toolCallId);
+                    }
+                    if (arguments != null) {
+                        tool.put("input", preview(arguments, 800));
+                    }
                     tool.put("result", preview(payload.getOrDefault(
                             "resultPreview", payload.getOrDefault("error", "")), 800));
+                    tool.put("output", preview(payload.getOrDefault(
+                            "resultPreview", payload.getOrDefault("error", "")), 1600));
                     round.put("toolCalls", List.of(tool));
                     rounds.get(agent).add(round);
                 }
@@ -321,11 +352,18 @@ public class RunTraceBridgeService {
         route.put("whySelected", planReason.isEmpty()
                 ? List.of() : List.of(planReason));
         route.put("estimatedLlmCalls", totalLlmCalls);
+        route.put("memoryHitCount", memoryHits);
         Map<String, Object> harnessPlan = new LinkedHashMap<>();
         harnessPlan.put("version", "unified-runtime-1");
         harnessPlan.put("route", route);
         harnessPlan.put("reportMode", "structured_evidence_report");
+        Map<String, Object> memoryInfluence = new LinkedHashMap<>();
+        memoryInfluence.put("hitCount", memoryHits);
+        memoryInfluence.put("influences", memoryTop);
+        harnessPlan.put("memoryInfluence", memoryInfluence);
         tree.put("harnessPlan", harnessPlan);
+        tree.put("memoryHits", memoryHits);
+        tree.put("memoryTop", memoryTop);
         return tree;
     }
 

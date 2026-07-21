@@ -8,7 +8,10 @@ ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 COPY workflow/requirements.txt ./requirements.txt
 COPY workflow/requirements.lock ./requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
-    && pip install --no-cache-dir pytest==8.3.5
+    && pip install --no-cache-dir pytest==8.3.5 \
+    # Outside the hash-locked set: redis (semantic cache) and the public-web
+    # MCP fetch server (real MCP protocol, allowlisted hosts only).
+    && pip install --no-cache-dir "redis>=5.0" mcp-server-fetch
 
 COPY workflow/app ./app
 COPY workflow/tests ./tests

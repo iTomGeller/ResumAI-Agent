@@ -45,8 +45,9 @@ class FakeLlm:
         self.fail_agents = set(fail_agents)
 
     async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
-                   temperature=0.2):
-        self.calls.append({"agent": agent_id, "purpose": purpose})
+                   temperature=0.2, json_mode=True, tools=None, tool_choice=None):
+        self.calls.append({"agent": agent_id, "purpose": purpose,
+                           "forcedFunction": bool(tools and tool_choice)})
         if self.delay:
             await asyncio.sleep(self.delay)
         if agent_id in self.fail_agents:
@@ -129,6 +130,101 @@ def test_coordinator_rule_pipelines_cover_business_scenarios():
     assert rewrite_plan == ["ProjectAgent", "ResumeOptimizeAgent"]
 
 
+def test_followup_report_agent_runs_conversational_rag_presteps():
+    """Copilot 追问（followup）必须先检索知识库与简历证据再回答。"""
+    request = make_request(run_type="followup", message="这个候选人的评分依据是什么？")
+    executor, emitter = make_executor(request)
+    result = run(executor.execute())
+    assert result["status"] in ("SUCCEEDED", "PARTIAL_SUCCESS")
+    started_tools = [e.get("toolName") for e in emitter.events
+                     if e["eventType"] == "tool.started"]
+    assert "knowledge_search" in started_tools, "追问必须先查知识库标准"
+    assert "resume_semantic_search" in started_tools, "追问必须带简历证据检索"
+
+
+def test_query_rewrite_degrades_to_single_query_without_llm():
+    """查询改写降级：无 llm 时 _retrieve_with_rewrite 用原 query 正常返回。"""
+    from app.runtime.events import NullEmitter as _NullEmitter
+    from app.runtime.models import RunBudget
+    from app.runtime.tools import ToolExecutor
+
+    executor = ToolExecutor(
+        _NullEmitter(), RunBudget(), LocalSandboxFallback(),
+        max_tool_calls_run=5, tool_timeout_seconds=10,
+        run_context={"resumeText": RESUME, "jobDescription": JD}, llm=None)
+
+    async def scenario():
+        queries = await executor._rewrite_queries("候选人的 Kafka 经验")
+        assert queries == ["候选人的 Kafka 经验"], "无 llm 必须只用原 query"
+
+    run(scenario())
+
+
+def test_enable_rewrite_flag_reaches_dispatch():
+    """enable_rewrite=True 必须真正触发 query_rewrite（此前参数写了但未接线）。"""
+    from app.runtime.events import NullEmitter as _NullEmitter
+    from app.runtime.models import RunBudget
+    from app.runtime.tools import ToolExecutor
+
+    class RewriteLlm(FakeLlm):
+        async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
+                       temperature=0.2, json_mode=True, tools=None, tool_choice=None):
+            self.calls.append({"agent": agent_id, "purpose": purpose})
+            if purpose == "query_rewrite":
+                return json.dumps({"queries": ["Kafka 消息队列经验", "异步解耦实践"]})
+            return await super().chat(
+                messages, agent_id=agent_id, purpose=purpose,
+                max_tokens=max_tokens, temperature=temperature,
+                json_mode=json_mode, tools=tools, tool_choice=tool_choice)
+
+    llm = RewriteLlm()
+    tools = ToolExecutor(
+        _NullEmitter("r", "c", "t"), RunBudget(), LocalSandboxFallback(),
+        max_tool_calls_run=10, tool_timeout_seconds=10,
+        run_context={"resumeText": RESUME, "jobDescription": JD}, llm=llm)
+
+    async def scenario():
+        # Monkeypatch gateway so we don't hit Java.
+        from app.runtime import gateway
+        async def fake_kb(query, top_k=5):
+            return json.dumps({
+                "chunks": [{"chunkId": f"c-{query[:8]}", "content": query,
+                            "title": "rubric"}],
+                "strategy": "hybrid_bm25_embedding",
+            })
+        original = gateway.java_knowledge_search
+        gateway.java_knowledge_search = fake_kb
+        try:
+            call = await tools.execute(
+                "ReportAgent", "knowledge_search",
+                {"query": "评分依据"}, enable_rewrite=True)
+            assert call.status == "SUCCEEDED"
+            assert any(c["purpose"] == "query_rewrite" for c in llm.calls)
+            result = call.result
+            assert isinstance(result, dict)
+            assert result.get("fusion") == "rrf_multi_query" or len(
+                result.get("queriesUsed", [])) >= 1
+        finally:
+            gateway.java_knowledge_search = original
+
+    run(scenario())
+
+
+def test_followup_presteps_enable_rewrite_flag_in_events():
+    """Copilot followup 的 knowledge_search prestep 必须带 rewriteEnabled。"""
+    request = make_request(run_type="followup", message="评分依据是什么？")
+    llm = FakeLlm()
+    executor, emitter = make_executor(request, llm=llm)
+    result = run(executor.execute())
+    assert result["status"] in ("SUCCEEDED", "PARTIAL_SUCCESS")
+    kb_starts = [e for e in emitter.events
+                 if e["eventType"] == "tool.started"
+                 and e.get("toolName") == "knowledge_search"]
+    assert kb_starts, "followup 必须启动 knowledge_search"
+    assert any(e.get("payload", {}).get("rewriteEnabled") for e in kb_starts), (
+        "followup knowledge_search 必须 enable_rewrite")
+
+
 def test_policy_low_cost_disables_evidence_agent():
     config = {"agentOrder": ["TechAgent", "ReportAgent"],
               "evidenceVerification": {"enabled": False},
@@ -183,7 +279,7 @@ def test_tool_whitelist_enforced_per_agent():
 
     class NaughtyLlm(FakeLlm):
         async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
-                       temperature=0.2):
+                       temperature=0.2, **kwargs):
             if agent_id == "ReportAgent" and not self.calls:
                 self.calls.append({"agent": agent_id})
                 return json.dumps({
@@ -208,7 +304,7 @@ def test_evidence_agent_marks_unsupported_claims():
 
     class OverclaimLlm(FakeLlm):
         async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
-                       temperature=0.2):
+                       temperature=0.2, **kwargs):
             if agent_id == "TechAgent":
                 return json.dumps({
                     "thought": "评估",
@@ -240,7 +336,7 @@ def test_llm_budget_exceeded_degrades():
             self.count = 0
 
         async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
-                       temperature=0.2):
+                       temperature=0.2, **kwargs):
             self.count += 1
             if self.count > 1:
                 raise BudgetExceeded("maxLlmCalls", "limit=1")

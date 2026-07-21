@@ -9,12 +9,17 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from app.runtime import gateway
+from app.runtime import cache, gateway
 from app.runtime.events import RuntimeEmitter
 from app.runtime.models import BudgetExceeded, RunBudget
 from app.runtime.sandbox import SANDBOX_TOOLS, SandboxClient, SandboxUnavailable
 
 logger = logging.getLogger(__name__)
+
+# Deterministic pure-function tools whose results are safe to cache by
+# content hash (same input => same output, no side effects).
+CACHEABLE_TOOLS = {"parse_resume", "check_timeline", "calculate_jd_coverage",
+                   "resume_lint", "jd_requirements_extract"}
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,16 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
         TEXT_ARGS, ANY_OBJECT, timeout_seconds=45.0, max_retries=0,
         network_policy="gateway", kind="gateway"))
 
+    # ---- public-web MCP tools (real MCP protocol, allowlisted hosts) ----
+    add(ToolDefinition(
+        "mcp_fetch_url", "通过 MCP fetch server 抓取候选人声明的公开主页"
+                         "（GitHub/Gitee/技术博客，白名单域名），核验开源贡献与博客内容",
+        {"type": "object", "properties": {
+            "url": {"type": "string"},
+            "maxLength": {"type": "integer"}}, "required": ["url"]},
+        ANY_OBJECT, timeout_seconds=40.0, max_retries=0,
+        network_policy="gateway", kind="mcp"))
+
     # ---- sandbox tools (fixed allowlist, executed in ephemeral docker) ----
     sandbox_schemas: Dict[str, Dict[str, Any]] = {
         "parse_resume": {"type": "object", "properties": {
@@ -149,13 +164,17 @@ class ToolExecutor:
 
     def __init__(self, emitter: RuntimeEmitter, budget: RunBudget,
                  sandbox: SandboxClient, *, max_tool_calls_run: int,
-                 tool_timeout_seconds: float, run_context: Dict[str, Any]) -> None:
+                 tool_timeout_seconds: float, run_context: Dict[str, Any],
+                 llm: Any = None) -> None:
         self.emitter = emitter
         self.budget = budget
         self.sandbox = sandbox
         self.max_tool_calls_run = max_tool_calls_run
         self.tool_timeout_seconds = tool_timeout_seconds
         self.run_context = run_context
+        # Optional LLM handle for query rewriting (agentic retrieval); None
+        # keeps every retrieval single-query (zero degradation risk).
+        self.llm = llm
         self.definitions = build_tool_definitions()
         self.signature_counts: Dict[str, int] = {}
         self.call_log: List[ToolCallResult] = []
@@ -177,7 +196,8 @@ class ToolExecutor:
         canonical = json.dumps(args or {}, sort_keys=True, ensure_ascii=False)[:2000]
         return f"{tool}:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:16]}"
 
-    async def execute(self, agent_id: str, tool: str, args: Dict[str, Any]) -> ToolCallResult:
+    async def execute(self, agent_id: str, tool: str, args: Dict[str, Any],
+                      enable_rewrite: bool = False) -> ToolCallResult:
         defn = self.definitions.get(tool)
         if defn is None:
             return self._reject(agent_id, tool, args, "TOOL_NOT_ALLOWED",
@@ -197,19 +217,48 @@ class ToolExecutor:
         except ToolValidationError as exc:
             return self._reject(agent_id, tool, args, "INPUT_SCHEMA", str(exc))
 
-        signature = self.signature(tool, args)
+        # Wire enable_rewrite AFTER schema validation (internal flag, not in tool schema).
+        if enable_rewrite and tool in ("resume_semantic_search", "knowledge_search"):
+            args["_rewrite"] = True
+
+        signature = self.signature(tool, {k: v for k, v in args.items()
+                                          if k != "_rewrite"})
         self.signature_counts[signature] = self.signature_counts.get(signature, 0) + 1
 
         tool_call_id = f"tc-{uuid.uuid4().hex[:16]}"
         self.budget.tool_calls += 1
+        public_args = {k: v for k, v in args.items() if k != "_rewrite"}
         await self.emitter.emit("tool.started", agent_id=agent_id, tool_name=tool, payload={
             "toolCallId": tool_call_id,
-            "arguments": _preview_args(args),
+            "arguments": _preview_args(public_args),
             "idempotencyKey": signature,
             "sideEffectLevel": defn.side_effect_level,
             "retryCount": 0,
+            "rewriteEnabled": bool(args.get("_rewrite")),
         })
         started = time.monotonic()
+
+        # Deterministic tools: content-hash cache (30d) — repeat evaluations
+        # of the same resume/JD skip the sandbox/local execution entirely.
+        cache_key = None
+        if tool in CACHEABLE_TOOLS:
+            cache_key = cache.content_key("tool", tool, json.dumps(
+                public_args, sort_keys=True, ensure_ascii=False)[:20000])
+            cached = await cache.get_json(cache_key)
+            if cached is not None:
+                duration_ms = int((time.monotonic() - started) * 1000)
+                call = ToolCallResult(tool_call_id, tool, "SUCCEEDED", cached,
+                                      duration_ms=duration_ms)
+                self.call_log.append(call)
+                await self.emitter.emit("tool.completed", agent_id=agent_id,
+                                        tool_name=tool, payload={
+                                            "toolCallId": tool_call_id,
+                                            "durationMs": duration_ms,
+                                            "cacheHit": True,
+                                            "arguments": _preview_args(public_args),
+                                            "resultPreview": _preview(cached),
+                                        })
+                return call
         retries = 0
         max_retries = defn.max_retries if (defn.idempotent and defn.side_effect_level == "read_only") else 0
         last_error: Optional[str] = None
@@ -229,11 +278,14 @@ class ToolExecutor:
                 call = ToolCallResult(tool_call_id, tool, "SUCCEEDED", result,
                                       duration_ms=duration_ms, retries=retries)
                 self.call_log.append(call)
+                if cache_key is not None:
+                    await cache.set_json(cache_key, result, cache.TTL_PARSE_RESUME)
                 await self.emitter.emit("tool.completed", agent_id=agent_id, tool_name=tool,
                                         payload={
                                             "toolCallId": tool_call_id,
                                             "durationMs": duration_ms,
                                             "retryCount": retries,
+                                            "arguments": _preview_args(args),
                                             "resultPreview": _preview(result),
                                         })
                 return call
@@ -263,25 +315,27 @@ class ToolExecutor:
         self.call_log.append(call)
         await self.emitter.emit("tool.failed", agent_id=agent_id, tool_name=tool, payload={
             "toolCallId": tool_call_id, "error": (last_error or "")[:300],
+            "arguments": _preview_args(args),
             "durationMs": duration_ms, "retryCount": retries})
         return call
 
     async def _dispatch(self, defn: ToolDefinition, args: Dict[str, Any]) -> Any:
+        rewrite = bool(args.pop("_rewrite", False))
         if defn.kind == "sandbox":
             return await self.sandbox.invoke(defn.name, args)
-        if defn.name == "resume_semantic_search":
-            return await gateway.java_resume_search(
-                query=str(args.get("query") or ""),
-                top_k=int(args.get("topK") or 5),
-                resume_text=str(args.get("resumeText") or ""),
-                jd_requirements=str(self.run_context.get("jobDescription") or "")[:2000],
-                strategy="hybrid")
+        if defn.kind == "mcp":
+            from app.runtime import mcp_client
+
+            if defn.name == "mcp_fetch_url":
+                return await mcp_client.fetch_url(
+                    str(args.get("url") or ""),
+                    max_length=int(args.get("maxLength") or 6000))
+            raise ToolValidationError(f"no MCP dispatcher for tool {defn.name}")
+        if defn.name in ("resume_semantic_search", "knowledge_search"):
+            return await self._retrieve_with_rewrite(defn, args, rewrite)
         if defn.name == "jd_match_search":
             return await gateway.java_jd_search(
                 resume_text=str(args.get("resumeText") or ""), top_k=3)
-        if defn.name == "knowledge_search":
-            return await gateway.java_knowledge_search(
-                query=str(args.get("query") or ""), top_k=int(args.get("topK") or 5))
         if defn.name == "timeline_validator":
             return await gateway.timeline_validator(
                 resume_text=str(args.get("resumeText") or ""))
@@ -289,6 +343,103 @@ class ToolExecutor:
             return await gateway.java_external_profile(
                 resume_text=str(args.get("resumeText") or ""))
         raise ToolValidationError(f"no dispatcher for tool {defn.name}")
+
+    # ------------------------------------------------------------------
+    # Agentic retrieval: query rewrite -> multi-query recall -> RRF fusion.
+    # ------------------------------------------------------------------
+
+    async def _rewrite_queries(self, query: str) -> List[str]:
+        """LLM query expansion (<=2 extra queries), cached by content hash.
+        No LLM handle or any failure => original query only."""
+        if self.llm is None or not query.strip():
+            return [query]
+
+        async def compute() -> List[str]:
+            prompt = ("把下面的检索请求改写成最多 2 个语义等价的检索 query"
+                      "（中文同义扩展、术语归一，保持简短），输出 json："
+                      "{\"queries\": [\"...\", \"...\"]}\n"
+                      f"原始请求: {query[:300]}")
+            raw = await self.llm.chat(
+                [{"role": "system",
+                  "content": "你是检索查询改写器，只输出 json。"},
+                 {"role": "user", "content": prompt}],
+                agent_id="RetrievalRewriter", purpose="query_rewrite",
+                max_tokens=150)
+            from app.runtime.llm import extract_json_object
+
+            parsed = extract_json_object(raw)
+            rewritten = [str(q).strip() for q in parsed.get("queries", [])
+                         if str(q).strip() and str(q).strip() != query]
+            return rewritten[:2]
+
+        try:
+            key = cache.content_key("rewrite", query[:300])
+            extra, _hit = await cache.get_or_compute(
+                key, cache.TTL_QUERY_REWRITE, compute)
+            return [query] + [q for q in (extra or []) if isinstance(q, str)]
+        except Exception as exc:  # noqa: BLE001 - rewrite is best-effort
+            logger.debug("query rewrite skipped: %s", exc)
+            return [query]
+
+    async def _retrieve_with_rewrite(self, defn: ToolDefinition,
+                                     args: Dict[str, Any],
+                                     rewrite: bool) -> Any:
+        query = str(args.get("query") or "")
+        top_k = int(args.get("topK") or 5)
+        queries = await self._rewrite_queries(query) if rewrite else [query]
+
+        async def one(q: str) -> Any:
+            if defn.name == "resume_semantic_search":
+                return await gateway.java_resume_search(
+                    query=q, top_k=top_k,
+                    resume_text=str(args.get("resumeText") or ""),
+                    jd_requirements=str(self.run_context.get("jobDescription") or "")[:2000],
+                    strategy="hybrid")
+            return await gateway.java_knowledge_search(query=q, top_k=top_k)
+
+        if len(queries) == 1:
+            result = await one(queries[0])
+            result = self._normalize_result(result)
+            if isinstance(result, dict):
+                result.setdefault("queriesUsed", queries)
+            return result
+
+        raws = await asyncio.gather(*(one(q) for q in queries),
+                                    return_exceptions=True)
+        # RRF fusion across query variants, dedup by item identity.
+        fused: Dict[str, Dict[str, Any]] = {}
+        scores: Dict[str, float] = {}
+        key_fields = ("chunkId", "id", "docId", "jdId", "title", "content")
+        for raw in raws:
+            if isinstance(raw, Exception):
+                continue
+            parsed = self._normalize_result(raw)
+            items = []
+            if isinstance(parsed, dict):
+                for field_name in ("chunks", "hits", "results", "items"):
+                    if isinstance(parsed.get(field_name), list):
+                        items = parsed[field_name]
+                        break
+            elif isinstance(parsed, list):
+                items = parsed
+            for rank, item in enumerate(items):
+                if not isinstance(item, dict):
+                    continue
+                identity = next((str(item[f]) for f in key_fields
+                                 if item.get(f)), None)
+                if identity is None:
+                    identity = json.dumps(item, sort_keys=True,
+                                          ensure_ascii=False)[:120]
+                fused.setdefault(identity, item)
+                scores[identity] = scores.get(identity, 0.0) + 1.0 / (60 + rank + 1)
+        ranked = sorted(fused.items(), key=lambda kv: scores[kv[0]],
+                        reverse=True)[:top_k]
+        return {
+            "success": True,
+            "chunks": [item for _, item in ranked],
+            "queriesUsed": queries,
+            "fusion": "rrf_multi_query",
+        }
 
     @staticmethod
     def _normalize_result(raw: Any) -> Any:

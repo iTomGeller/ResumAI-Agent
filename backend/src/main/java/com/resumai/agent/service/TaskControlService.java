@@ -42,6 +42,11 @@ public class TaskControlService {
     }
 
     public TaskControlResponse control(String traceId, TaskControlRequest.Action action) {
+        return control(traceId, action, null);
+    }
+
+    public TaskControlResponse control(String traceId, TaskControlRequest.Action action,
+                                       java.util.List<String> approvedPlan) {
         ResumeTask row = evaluationService.loadResumeTaskRow(traceId)
                 .orElseThrow(() -> new ApiNotFoundException("任务不存在：" + traceId));
         String current = row.getStatus();
@@ -56,7 +61,7 @@ public class TaskControlService {
 
         return switch (action) {
             case PAUSE -> pause(row, runId);
-            case RESUME -> resume(row, runId);
+            case RESUME -> resume(row, runId, approvedPlan);
             case CANCEL -> cancel(row, runId);
         };
     }
@@ -108,7 +113,8 @@ public class TaskControlService {
         return response(row, "PAUSE", "PAUSING", "正在安全暂停，当前 Agent 组结束后生效。", runId);
     }
 
-    private TaskControlResponse resume(ResumeTask row, String runId) {
+    private TaskControlResponse resume(ResumeTask row, String runId,
+                                       java.util.List<String> approvedPlan) {
         if ("RUNNING".equals(row.getStatus())) {
             return response(row, "RESUME", "RUNNING", "任务已在运行，无需重复恢复。", runId);
         }
@@ -150,7 +156,7 @@ public class TaskControlService {
                     "恢复请求已由并发操作处理。");
         }
         try {
-            runLifecycleService.resumePausedRun(run);
+            runLifecycleService.resumePausedRun(run, approvedPlan);
         } catch (Exception e) {
             evaluationService.compareAndSetControlState(
                     row.getTraceId(), Set.of("RESUMING"), "PAUSED", QueueStatus.PAUSED.name(),

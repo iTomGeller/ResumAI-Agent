@@ -70,8 +70,10 @@ public class ConversationIntentClassifier {
                     List.of(), "已记入会话备注，不改变当前评估。"
             );
         }
+        // Nothing matched: the rules are guessing. Mark it UNCLASSIFIED so the
+        // caller can run the LLM second pass instead of trusting the guess.
         return new Decision(
-                "SIDE_QUESTION", false, true, false, "ANSWER_AND_CONTINUE",
+                "UNCLASSIFIED", false, true, false, "ANSWER_AND_CONTINUE",
                 List.of(), "我会先回应这个新想法，当前评估继续运行；如果你要改主目标，请明确说“改为……重新评估”。"
         );
     }

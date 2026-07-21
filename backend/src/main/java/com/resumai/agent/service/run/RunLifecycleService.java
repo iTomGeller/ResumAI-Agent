@@ -57,6 +57,7 @@ public class RunLifecycleService {
     private final AgentRunProperties properties;
     private final ObjectMapper objectMapper;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+    private final org.redisson.api.RedissonClient redisson;
 
     public RunLifecycleService(AgentRunMapper runMapper,
                                AgentExecutionRecordMapper executionMapper,
@@ -72,7 +73,8 @@ public class RunLifecycleService {
                                @Lazy MemoryService memoryService,
                                AgentRunProperties properties,
                                ObjectMapper objectMapper,
-                               org.springframework.context.ApplicationEventPublisher eventPublisher) {
+                               org.springframework.context.ApplicationEventPublisher eventPublisher,
+                               org.redisson.api.RedissonClient redisson) {
         this.runMapper = runMapper;
         this.executionMapper = executionMapper;
         this.toolCallMapper = toolCallMapper;
@@ -88,6 +90,7 @@ public class RunLifecycleService {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.eventPublisher = eventPublisher;
+        this.redisson = redisson;
     }
 
     /** Called by the scheduler once permits are held and status is STARTING. */
@@ -136,6 +139,14 @@ public class RunLifecycleService {
                 // isolated Docker workers; normal user requests stay in-process.
                 payload.put("isolatedSandbox", true);
             }
+            // Checkpoint retry: a queued run created from a failed run carries
+            // its snapshot — the runtime resumes after the last finished group.
+            if (StringUtils.hasText(run.getExecutionSnapshot())) {
+                Map<String, Object> checkpoint = readJsonAsMap(run.getExecutionSnapshot());
+                if (checkpoint != null && !checkpoint.isEmpty()) {
+                    payload.put("resumeSnapshot", checkpoint);
+                }
+            }
             runtimeClient.startRun(payload);
         } catch (Exception e) {
             log.warn("run start failed run={}: {}", runId, e.getMessage());
@@ -172,6 +183,7 @@ public class RunLifecycleService {
         payload.put("revision", run.getRevisionNo());
         payload.put("runType", category(run));
         payload.put("userMessage", run.getUserMessage());
+        payload.put("planMode", run.getPlanMode() != null && run.getPlanMode() == 1);
         payload.put("resumeText", session.getResumeText());
         payload.put("jobDescription", session.getJobDescription());
         payload.put("jobCategory", session.getJobCategory());
@@ -336,7 +348,8 @@ public class RunLifecycleService {
                                 Map<String, Object> sharedState, Map<String, Object> metrics,
                                 Map<String, Object> promptVersions, Map<String, Object> skillVersions,
                                 String conversationSummary, String currentGoal,
-                                Map<String, Object> executionSnapshot) {
+                                Map<String, Object> executionSnapshot,
+                                Map<String, Object> structuredReport) {
     }
 
     /** Final callback from the runtime. Returns true when accepted. */
@@ -379,13 +392,19 @@ public class RunLifecycleService {
             return false;
         }
         LocalDateTime now = LocalDateTime.now();
+        Map<String, Object> snapshot = result.executionSnapshot();
+        boolean awaitingPlanApproval = snapshot != null
+                && "AWAITING_PLAN_APPROVAL".equals(snapshot.get("pauseReason"));
         UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
         update.eq("run_id", run.getRunId())
                 .in("status", RunStatus.ACTIVE)
                 .set("status", RunStatus.PAUSED.name())
-                .set("execution_snapshot", writeJson(result.executionSnapshot()))
+                .set("execution_snapshot", writeJson(snapshot))
                 .set("updated_at", now)
                 .set("current_phase", null);
+        if (awaitingPlanApproval) {
+            update.set("pause_reason", "AWAITING_PLAN_APPROVAL");
+        }
         if (runMapper.update(null, update) == 0) {
             return false;
         }
@@ -398,9 +417,27 @@ public class RunLifecycleService {
         runMapper.update(null, clearGlobal);
         eventService.publish(run.getRunId(), run.getConversationId(), run.getTraceId(),
                 "run.progress", null, null, Map.of(
-                        "stage", "paused",
-                        "message", "已在安全边界暂停，可随时恢复"));
-        log.info("run paused at safe boundary run={}", run.getRunId());
+                        "stage", awaitingPlanApproval ? "awaiting_plan_approval" : "paused",
+                        "message", awaitingPlanApproval
+                                ? "Coordinator 已产出执行计划，等待确认后开始评估"
+                                : "已在安全边界暂停，可随时恢复",
+                        "plan", snapshot != null
+                                ? snapshot.getOrDefault("plan", List.of()) : List.of()));
+        // Mirror the awaiting state onto the linked task so the UI can show
+        // the plan-approval card instead of a generic PAUSED badge.
+        if (awaitingPlanApproval && StringUtils.hasText(paused.getSourceTaskTraceId())) {
+            UpdateWrapper<com.resumai.agent.domain.entity.ResumeTask> taskUpdate = new UpdateWrapper<>();
+            taskUpdate.eq("trace_id", paused.getSourceTaskTraceId())
+                    .notIn("status", "SUCCESS", "PARTIAL_SUCCESS", "CANCELLED", "SUPERSEDED")
+                    .set("status", "PAUSED")
+                    .set("queue_status", "PAUSED")
+                    .set("update_time", now);
+            resumeTaskMapper.update(null, taskUpdate);
+            eventPublisher.publishEvent(new TaskRunSyncedEvent(
+                    paused.getSourceTaskTraceId(), "PAUSED"));
+        }
+        log.info("run paused at safe boundary run={} planApproval={}",
+                run.getRunId(), awaitingPlanApproval);
         return true;
     }
 
@@ -436,8 +473,33 @@ public class RunLifecycleService {
 
     /** Resume a PAUSED run using its stored execution snapshot. */
     public AgentRun resumePausedRun(AgentRun run) {
+        return resumePausedRun(run, null);
+    }
+
+    /**
+     * Resume with an optional user-approved plan (plan-approval mode): the
+     * edited plan replaces the snapshot's plan and grouping/budget are
+     * recomputed by the runtime from dependency rules.
+     */
+    public AgentRun resumePausedRun(AgentRun run, List<String> approvedPlan) {
         if (!RunStatus.PAUSED.name().equals(run.getStatus())) {
             return run;
+        }
+        if (approvedPlan != null && !approvedPlan.isEmpty()) {
+            Map<String, Object> snapshot = readJsonAsMap(run.getExecutionSnapshot());
+            if (snapshot != null && !snapshot.isEmpty()) {
+                snapshot.put("plan", approvedPlan);
+                snapshot.remove("parallelGroups");
+                snapshot.remove("budgetPlan");
+                snapshot.put("nextPlanIndex", 0);
+                UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
+                update.eq("run_id", run.getRunId())
+                        .eq("status", RunStatus.PAUSED.name())
+                        .set("execution_snapshot", writeJson(snapshot))
+                        .set("updated_at", LocalDateTime.now());
+                runMapper.update(null, update);
+                run = runMapper.selectById(run.getRunId());
+            }
         }
         String globalPermit = permitService.tryAcquireGlobal();
         if (globalPermit == null) {
@@ -617,9 +679,10 @@ public class RunLifecycleService {
 
     /**
      * Bridge to the legacy resume_task table: a run created for an uploaded
-     * resume evaluation mirrors its terminal state and answer back so the
-     * task list stays truthful. No score is fabricated — structured fields
-     * are filled only when the report actually contains them.
+     * resume evaluation mirrors its terminal state, answer and — when the
+     * ReportAgent produced one — the validated structured report (score,
+     * recommendation, dimensions) back so the task list, score circle and
+     * report tab stay truthful. No score is ever fabricated.
      */
     private void syncSourceTask(AgentRun run, RunStatus terminal, RuntimeResult result,
                                 String errorMessage) {
@@ -633,6 +696,28 @@ public class RunLifecycleService {
                 case CANCELLED -> "CANCELLED";
                 default -> "FAILED";
             };
+            String answer = result != null && StringUtils.hasText(result.answer())
+                    ? result.answer() : null;
+            Long durationMs = null;
+            Integer tokenCost = null;
+            if (result != null && result.metrics() != null) {
+                Object latency = result.metrics().get("latencySeconds");
+                if (latency instanceof Number n) {
+                    durationMs = (long) (n.doubleValue() * 1000);
+                }
+                Object prompt = result.metrics().get("promptTokens");
+                Object completion = result.metrics().get("completionTokens");
+                if (prompt instanceof Number p && completion instanceof Number c) {
+                    tokenCost = p.intValue() + c.intValue();
+                }
+            }
+            Map<String, Object> report = result != null && result.structuredReport() != null
+                    ? result.structuredReport() : Map.of();
+            Integer overallScore = report.get("overallScore") instanceof Number n
+                    ? n.intValue() : null;
+            String recommendation = report.get("recommendation") instanceof String s
+                    && StringUtils.hasText(s) ? s : null;
+
             UpdateWrapper<com.resumai.agent.domain.entity.ResumeTask> update = new UpdateWrapper<>();
             update.eq("trace_id", run.getSourceTaskTraceId())
                     .notIn("status", "SUCCESS", "PARTIAL_SUCCESS", "CANCELLED", "SUPERSEDED")
@@ -640,21 +725,27 @@ public class RunLifecycleService {
                     .set("queue_status", taskStatus)
                     .set("finished_at", LocalDateTime.now())
                     .set("update_time", LocalDateTime.now());
-            if (result != null && StringUtils.hasText(result.answer())) {
-                update.set("summary", result.answer());
+            if (answer != null) {
+                update.set("summary", trim(reportSummaryLine(report, answer), 1900));
             } else if (StringUtils.hasText(errorMessage)) {
                 update.set("summary", trim(errorMessage, 1900));
             }
-            if (result != null && result.metrics() != null) {
-                Object latency = result.metrics().get("latencySeconds");
-                if (latency instanceof Number n) {
-                    update.set("duration_ms", (long) (n.doubleValue() * 1000));
-                }
-                Object prompt = result.metrics().get("promptTokens");
-                Object completion = result.metrics().get("completionTokens");
-                if (prompt instanceof Number p && completion instanceof Number c) {
-                    update.set("token_cost", p.intValue() + c.intValue());
-                }
+            if (durationMs != null) {
+                update.set("duration_ms", durationMs);
+            }
+            if (tokenCost != null) {
+                update.set("token_cost", tokenCost);
+            }
+            if (overallScore != null) {
+                update.set("overall_score", overallScore);
+            }
+            if (recommendation != null) {
+                update.set("recommendation", recommendation);
+            }
+            String payload = buildTaskResultPayload(run, taskStatus, answer, report,
+                    durationMs, tokenCost);
+            if (payload != null) {
+                update.set("result_payload", payload);
             }
             resumeTaskMapper.update(null, update);
             // The task list, dashboard counters and /api/tasks/{id} serve from
@@ -664,6 +755,88 @@ public class RunLifecycleService {
         } catch (Exception e) {
             log.warn("resume_task sync failed run={} task={}: {}",
                     run.getRunId(), run.getSourceTaskTraceId(), e.getMessage());
+        }
+    }
+
+    /** First strengths/risks line as the one-line list summary, else the answer head. */
+    private String reportSummaryLine(Map<String, Object> report, String answer) {
+        Object recommendation = report.get("recommendation");
+        Object score = report.get("overallScore");
+        if (recommendation != null || score != null) {
+            StringBuilder line = new StringBuilder();
+            if (score != null) {
+                line.append("综合评分 ").append(score).append(" 分");
+            }
+            if (recommendation != null) {
+                if (line.length() > 0) {
+                    line.append(" · ");
+                }
+                line.append(recommendationLabel(String.valueOf(recommendation)));
+            }
+            String head = answer.replaceAll("^#+\\s*", "").replaceAll("\\s+", " ");
+            line.append("。").append(head, 0, Math.min(head.length(), 220));
+            return line.toString();
+        }
+        return answer;
+    }
+
+    private static String recommendationLabel(String recommendation) {
+        return switch (recommendation) {
+            case "HIRE" -> "建议录用";
+            case "INTERVIEW_RECOMMEND" -> "推荐面试";
+            case "NOT_RECOMMEND" -> "不推荐";
+            default -> "需人工复核";
+        };
+    }
+
+    /**
+     * result_payload JSON compatible with ResumeEvaluationService.hydrateTaskFromPayload —
+     * this is what makes the task survive restarts with score/report intact.
+     */
+    private String buildTaskResultPayload(AgentRun run, String taskStatus, String answer,
+                                          Map<String, Object> report,
+                                          Long durationMs, Integer tokenCost) {
+        try {
+            com.resumai.agent.domain.entity.ResumeTask row = resumeTaskMapper.selectOne(
+                    new QueryWrapper<com.resumai.agent.domain.entity.ResumeTask>()
+                            .eq("trace_id", run.getSourceTaskTraceId()).last("limit 1"));
+            if (row == null) {
+                return null;
+            }
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("fileName", StringUtils.hasText(row.getFileName())
+                    ? row.getFileName() : row.getCandidateName());
+            payload.put("jobCategory", row.getJobCategory());
+            payload.put("executionMode", row.getExecutionMode());
+            payload.put("status", taskStatus);
+            if (report.get("overallScore") instanceof Number score) {
+                payload.put("overallScore", score.intValue());
+            }
+            if (report.get("recommendation") instanceof String recommendation) {
+                payload.put("recommendation", recommendation);
+            }
+            payload.put("summary", trim(reportSummaryLine(report,
+                    answer != null ? answer : ""), 1900));
+            payload.put("fullReport", answer != null ? answer : "");
+            payload.put("structuredReport", report);
+            payload.put("strengths", report.getOrDefault("strengths", List.of()));
+            payload.put("risks", report.getOrDefault("risks", List.of()));
+            payload.put("interviewQuestions", report.getOrDefault("interviewQuestions", List.of()));
+            if (durationMs != null) {
+                payload.put("durationMs", durationMs);
+            }
+            if (tokenCost != null) {
+                payload.put("tokenCost", tokenCost);
+            }
+            payload.put("jobDescription", row.getJobDescription());
+            payload.put("matchedJdTitle", row.getMatchedJdTitle());
+            if (row.getJdMatchScore() != null) {
+                payload.put("jdMatchScore", row.getJdMatchScore());
+            }
+            return objectMapper.writeValueAsString(payload);
+        } catch (Exception e) {
+            log.debug("build result payload failed run={}: {}", run.getRunId(), e.getMessage());
+            return null;
         }
     }
 
@@ -716,7 +889,72 @@ public class RunLifecycleService {
         if (dirty) {
             session.setUpdateTime(LocalDateTime.now());
             sessionMapper.updateById(session);
+            // Keep the Redis hot-session cache coherent (write path lives in
+            // ConversationService; here we just invalidate).
+            try {
+                redisson.getMapCache("resumai:conversation:hot").fastRemove(session.getId());
+            } catch (Exception e) {
+                log.debug("session cache evict skipped {}: {}", session.getId(), e.getMessage());
+            }
         }
+    }
+
+    /** Persist a group-boundary checkpoint from the runtime (active runs only). */
+    public boolean saveRunCheckpoint(String runId, Map<String, Object> snapshot) {
+        if (snapshot == null || snapshot.isEmpty()) {
+            return false;
+        }
+        UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
+        update.eq("run_id", runId)
+                .notIn("status", RunStatus.TERMINAL)
+                .set("execution_snapshot", writeJson(snapshot))
+                .set("updated_at", LocalDateTime.now());
+        return runMapper.update(null, update) > 0;
+    }
+
+    /**
+     * Retry a FAILED/TIMED_OUT run from its last group-boundary checkpoint:
+     * a fresh QUEUED run (same conversation/trace/revision) carrying the old
+     * execution snapshot — completed agents and tool calls never re-execute.
+     */
+    public AgentRun retryFromCheckpoint(String failedRunId) {
+        AgentRun failed = runMapper.selectById(failedRunId);
+        if (failed == null) {
+            throw new IllegalArgumentException("run 不存在: " + failedRunId);
+        }
+        if (!RunStatus.FAILED.name().equals(failed.getStatus())
+                && !RunStatus.TIMED_OUT.name().equals(failed.getStatus())) {
+            throw new IllegalStateException("仅 FAILED/TIMED_OUT 的 run 支持断点重试，当前: "
+                    + failed.getStatus());
+        }
+        AgentRun retry = new AgentRun();
+        retry.setRunId("run-" + java.util.UUID.randomUUID());
+        retry.setConversationId(failed.getConversationId());
+        retry.setUserId(failed.getUserId());
+        retry.setTraceId(failed.getTraceId());
+        retry.setRevisionNo(failed.getRevisionNo());
+        retry.setRunType(failed.getRunType());
+        retry.setQueueMode("collect");
+        retry.setUserMessage(failed.getUserMessage());
+        retry.setMergedMessageIds("[]");
+        retry.setStatus(RunStatus.QUEUED.name());
+        retry.setRetryCount((failed.getRetryCount() != null ? failed.getRetryCount() : 0) + 1);
+        retry.setPolicyId(failed.getPolicyId());
+        retry.setSourceTaskTraceId(failed.getSourceTaskTraceId());
+        // snapshot.runId keeps the lineage back to the failed run.
+        retry.setExecutionSnapshot(failed.getExecutionSnapshot());
+        LocalDateTime now = LocalDateTime.now();
+        retry.setCreatedAt(now);
+        retry.setUpdatedAt(now);
+        retry.setTimeoutAt(now.plusSeconds(properties.getRunTimeoutSeconds()));
+        retry.setDeleted(0);
+        runMapper.insert(retry);
+        eventService.publish(retry.getRunId(), retry.getConversationId(), retry.getTraceId(),
+                "run.queued", null, null, Map.of(
+                        "retryOf", failedRunId,
+                        "fromCheckpoint", StringUtils.hasText(failed.getExecutionSnapshot()),
+                        "runType", retry.getRunType()));
+        return retry;
     }
 
     /** Watchdog: PAUSING never got its snapshot — the runtime kept going. */
