@@ -26,7 +26,7 @@ public class ConversationIntentClassifier {
         if (!pauseNegated && matchesAny(lower, "暂停", "先停一下", "pause")) {
             return control("PAUSE");
         }
-        if (matchesAny(lower, "继续", "恢复", "接着跑", "resume") && !isSideQuest(lower)) {
+        if (matchesAny(lower, "继续", "恢复", "接着跑", "跑完", "resume") && !isSideQuest(lower)) {
             return control("RESUME");
         }
 
@@ -110,6 +110,11 @@ public class ConversationIntentClassifier {
     }
 
     private boolean isEvaluationFocusChange(String value) {
+        // A question about a focus keyword ("为什么不要看学历？") is a side
+        // question, not an instruction — EXP-6 misroute fix.
+        if (matchesAny(value, "为什么", "什么意思", "是什么", "?", "？")) {
+            return false;
+        }
         return matchesAny(value, "重点看", "重点评估", "更关注", "忽略学历", "不要看学历", "调整权重", "评估重点", "只看")
                 || (value.contains("重新") && value.contains("重点"));
     }

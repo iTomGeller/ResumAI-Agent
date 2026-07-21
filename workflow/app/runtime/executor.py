@@ -31,6 +31,12 @@ from app.runtime.tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
 
+# EXP-7: adaptive replan fires when a group's average confidence drops below
+# this. Sweepable per deployment without an image rebuild.
+import os as _os
+
+REPLAN_CONFIDENCE_THRESHOLD = float(_os.getenv("REPLAN_CONFIDENCE_THRESHOLD", "0.55"))
+
 AGENT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容）：
 {
   "thought": "简要计划（一两句）",
@@ -551,7 +557,7 @@ class RunExecutor:
             trigger = "group_failure"
         elif new_conflicts > 0:
             trigger = f"new_conflicts:{new_conflicts}"
-        elif avg_confidence < 0.55:  # EXP-7 pending
+        elif avg_confidence < REPLAN_CONFIDENCE_THRESHOLD:  # EXP-7 knob
             trigger = f"low_confidence:{avg_confidence:.2f}"
         if trigger is None:
             return

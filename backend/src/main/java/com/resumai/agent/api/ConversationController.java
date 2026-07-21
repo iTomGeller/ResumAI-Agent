@@ -114,6 +114,25 @@ public class ConversationController {
         return conversationService.sendTurn(conversationId, request);
     }
 
+    public record IntentPreviewBody(String content) {
+    }
+
+    /**
+     * EXP-6 evaluation hook: rule-layer classification only, no run is created
+     * and no LLM is called. UNCLASSIFIED marks the LLM-second-pass boundary.
+     */
+    @PostMapping("/conversations/intent-preview")
+    public Map<String, Object> previewIntent(@RequestBody IntentPreviewBody body) {
+        var decision = conversationService.classifyRuleOnly(body.content());
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("intent", decision.intent());
+        view.put("action", decision.action());
+        view.put("affectsEvaluation", decision.affectsEvaluation());
+        view.put("needsConfirmation", decision.needsConfirmation());
+        view.put("llmSecondPass", "UNCLASSIFIED".equals(decision.intent()));
+        return view;
+    }
+
     @PostMapping("/tasks/{traceId}/control")
     public TaskControlResponse controlTask(
             @PathVariable String traceId,

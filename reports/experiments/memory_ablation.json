@@ -1,0 +1,577 @@
+{
+  "experiment": "memory_channel_ablation",
+  "generatedAt": "2026-07-21T13:06:03Z",
+  "queries": 14,
+  "memories": 24,
+  "results": {
+    "lexical": {
+      "recall@5": 0.7143,
+      "mrr": 0.9107,
+      "avgLatencyMs": 227.8
+    },
+    "semantic": {
+      "recall@5": 0.9643,
+      "mrr": 1.0,
+      "avgLatencyMs": 17.6
+    },
+    "fused": {
+      "recall@5": 0.9643,
+      "mrr": 1.0,
+      "avgLatencyMs": 19.1
+    }
+  },
+  "perQuery": {
+    "lexical": [
+      {
+        "recall": 0.5,
+        "mrr": 1.0,
+        "latencyMs": 270.2477650018409,
+        "query": "学历和项目经验哪个更重要",
+        "hits": [
+          "pref_edu",
+          "lesson_project",
+          "rule_l5",
+          "pref_remote",
+          "pref_salary"
+        ]
+      },
+      {
+        "recall": 0.5,
+        "mrr": 1.0,
+        "latencyMs": 202.26580201415345,
+        "query": "候选人薪资要求太高怎么处理",
+        "hits": [
+          "pref_salary",
+          "lesson_ref_hard",
+          "fact_bytedance",
+          "fact_award",
+          "fact_patent"
+        ]
+      },
+      {
+        "recall": 0.5,
+        "mrr": 1.0,
+        "latencyMs": 241.8722520233132,
+        "query": "张三在字节跳动做什么",
+        "hits": [
+          "fact_bytedance",
+          "lesson_project_hard",
+          "pref_edu_hard",
+          "pref_salary",
+          "pref_edu"
+        ]
+      },
+      {
+        "recall": 0.5,
+        "mrr": 0.25,
+        "latencyMs": 216.19161404669285,
+        "query": "候选人有什么竞赛获奖经历",
+        "hits": [
+          "pref_salary",
+          "lesson_ref_hard",
+          "fact_bytedance",
+          "fact_award",
+          "fact_patent"
+        ]
+      },
+      {
+        "recall": 0.5,
+        "mrr": 1.0,
+        "latencyMs": 212.19078800641,
+        "query": "时间线重叠应该怎么核实",
+        "hits": [
+          "lesson_timeline",
+          "pref_salary",
+          "pref_edu",
+          "pref_remote_hard",
+          "rule_english_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 197.29732198175043,
+        "query": "项目真实性追问的正确顺序",
+        "hits": [
+          "lesson_project",
+          "pref_edu",
+          "lesson_project_hard",
+          "pref_salary",
+          "pref_remote_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 204.20506899245083,
+        "query": "英文简历怎么评估",
+        "hits": [
+          "rule_english",
+          "rule_english_hard",
+          "pref_salary",
+          "pref_edu",
+          "pref_remote_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 0.5,
+        "latencyMs": 191.88243901589885,
+        "query": "L5 工程师的能力门槛是什么",
+        "hits": [
+          "pref_edu",
+          "rule_l5_hard",
+          "lesson_project_hard",
+          "pref_edu_hard",
+          "rule_l5"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 370.51327602239326,
+        "query": "远程工作经验加分吗",
+        "hits": [
+          "pref_remote",
+          "pref_edu",
+          "rule_l5",
+          "pref_salary",
+          "pref_remote_hard"
+        ]
+      },
+      {
+        "recall": 0.5,
+        "mrr": 1.0,
+        "latencyMs": 189.6246249671094,
+        "query": "候选人有专利吗",
+        "hits": [
+          "fact_patent",
+          "pref_salary",
+          "lesson_ref_hard",
+          "fact_bytedance",
+          "fact_award"
+        ]
+      },
+      {
+        "recall": 0.5,
+        "mrr": 1.0,
+        "latencyMs": 347.25545899709687,
+        "query": "背调应该找谁核实",
+        "hits": [
+          "lesson_ref",
+          "pref_salary",
+          "pref_edu",
+          "pref_remote_hard",
+          "rule_english_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 11.606213985942304,
+        "query": "评分和推荐结论矛盾怎么办",
+        "hits": [
+          "rule_scoring",
+          "rule_scoring_hard",
+          "fact_bytedance",
+          "pref_salary",
+          "pref_edu"
+        ]
+      },
+      {
+        "recall": 0.5,
+        "mrr": 1.0,
+        "latencyMs": 337.4949660501443,
+        "query": "履历上的日期对不上要查什么",
+        "hits": [
+          "lesson_timeline_hard",
+          "pref_salary",
+          "lesson_project_hard",
+          "lesson_ref_hard",
+          "pref_edu_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 197.19378900481388,
+        "query": "怎么判断智能体框架设计经验是否达标",
+        "hits": [
+          "rule_l5_hard",
+          "rule_l5",
+          "pref_edu",
+          "lesson_project_hard",
+          "fact_award_hard"
+        ]
+      }
+    ],
+    "semantic": [
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 27.366827009245753,
+        "query": "学历和项目经验哪个更重要",
+        "hits": [
+          "pref_edu",
+          "pref_edu_hard",
+          "pref_remote",
+          "lesson_project",
+          "lesson_ref_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 34.07004801556468,
+        "query": "候选人薪资要求太高怎么处理",
+        "hits": [
+          "pref_salary",
+          "lesson_ref_hard",
+          "rule_scoring_hard",
+          "pref_salary_hard",
+          "rule_english"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 17.59933400899172,
+        "query": "张三在字节跳动做什么",
+        "hits": [
+          "fact_bytedance",
+          "fact_bytedance_hard",
+          "fact_patent_hard",
+          "fact_award_hard",
+          "fact_award"
+        ]
+      },
+      {
+        "recall": 0.5,
+        "mrr": 1.0,
+        "latencyMs": 28.55626097880304,
+        "query": "候选人有什么竞赛获奖经历",
+        "hits": [
+          "fact_award_hard",
+          "pref_edu",
+          "lesson_ref_hard",
+          "fact_bytedance",
+          "fact_patent"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 17.005304980557412,
+        "query": "时间线重叠应该怎么核实",
+        "hits": [
+          "lesson_timeline",
+          "lesson_timeline_hard",
+          "lesson_project_hard",
+          "lesson_project",
+          "rule_scoring"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 14.731950999703258,
+        "query": "项目真实性追问的正确顺序",
+        "hits": [
+          "lesson_project",
+          "lesson_project_hard",
+          "pref_edu",
+          "lesson_ref_hard",
+          "rule_scoring"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 13.16337799653411,
+        "query": "英文简历怎么评估",
+        "hits": [
+          "rule_english",
+          "pref_edu",
+          "rule_english_hard",
+          "lesson_ref_hard",
+          "rule_scoring_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 14.982488995883614,
+        "query": "L5 工程师的能力门槛是什么",
+        "hits": [
+          "rule_l5",
+          "pref_edu",
+          "rule_l5_hard",
+          "pref_salary",
+          "pref_edu_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 12.76509597664699,
+        "query": "远程工作经验加分吗",
+        "hits": [
+          "pref_remote",
+          "pref_remote_hard",
+          "pref_edu",
+          "rule_scoring_hard",
+          "lesson_ref_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 14.968689996749163,
+        "query": "候选人有专利吗",
+        "hits": [
+          "fact_patent",
+          "lesson_ref_hard",
+          "fact_patent_hard",
+          "pref_edu",
+          "fact_award_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 13.4273010189645,
+        "query": "背调应该找谁核实",
+        "hits": [
+          "lesson_ref",
+          "lesson_ref_hard",
+          "lesson_timeline_hard",
+          "pref_salary_hard",
+          "lesson_timeline"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 13.914475974161178,
+        "query": "评分和推荐结论矛盾怎么办",
+        "hits": [
+          "rule_scoring",
+          "rule_scoring_hard",
+          "lesson_ref_hard",
+          "rule_english",
+          "lesson_project"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 12.2020379640162,
+        "query": "履历上的日期对不上要查什么",
+        "hits": [
+          "lesson_timeline_hard",
+          "lesson_timeline",
+          "rule_english",
+          "lesson_ref_hard",
+          "pref_edu_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 11.313983995933086,
+        "query": "怎么判断智能体框架设计经验是否达标",
+        "hits": [
+          "rule_l5_hard",
+          "lesson_project",
+          "pref_edu",
+          "rule_l5",
+          "pref_edu_hard"
+        ]
+      }
+    ],
+    "fused": [
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 28.524405031930655,
+        "query": "学历和项目经验哪个更重要",
+        "hits": [
+          "pref_edu",
+          "pref_edu_hard",
+          "pref_remote",
+          "lesson_project",
+          "lesson_ref_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 34.422891039866954,
+        "query": "候选人薪资要求太高怎么处理",
+        "hits": [
+          "pref_salary",
+          "lesson_ref_hard",
+          "rule_scoring_hard",
+          "pref_salary_hard",
+          "rule_english"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 18.07345199631527,
+        "query": "张三在字节跳动做什么",
+        "hits": [
+          "fact_bytedance",
+          "fact_bytedance_hard",
+          "fact_patent_hard",
+          "fact_award_hard",
+          "fact_award"
+        ]
+      },
+      {
+        "recall": 0.5,
+        "mrr": 1.0,
+        "latencyMs": 20.39417700143531,
+        "query": "候选人有什么竞赛获奖经历",
+        "hits": [
+          "fact_award_hard",
+          "pref_edu",
+          "lesson_ref_hard",
+          "fact_bytedance",
+          "fact_patent"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 16.318482987117022,
+        "query": "时间线重叠应该怎么核实",
+        "hits": [
+          "lesson_timeline",
+          "lesson_timeline_hard",
+          "lesson_project_hard",
+          "lesson_project",
+          "rule_scoring"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 13.848981994669884,
+        "query": "项目真实性追问的正确顺序",
+        "hits": [
+          "lesson_project",
+          "lesson_project_hard",
+          "pref_edu",
+          "lesson_ref_hard",
+          "rule_scoring"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 16.656793013680726,
+        "query": "英文简历怎么评估",
+        "hits": [
+          "rule_english",
+          "pref_edu",
+          "rule_english_hard",
+          "lesson_ref_hard",
+          "rule_scoring_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 14.047614007722586,
+        "query": "L5 工程师的能力门槛是什么",
+        "hits": [
+          "rule_l5",
+          "pref_edu",
+          "rule_l5_hard",
+          "pref_salary",
+          "pref_edu_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 32.57070202380419,
+        "query": "远程工作经验加分吗",
+        "hits": [
+          "pref_remote",
+          "pref_remote_hard",
+          "pref_edu",
+          "rule_scoring_hard",
+          "lesson_ref_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 15.080545039381832,
+        "query": "候选人有专利吗",
+        "hits": [
+          "fact_patent",
+          "lesson_ref_hard",
+          "fact_patent_hard",
+          "pref_edu",
+          "fact_award_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 13.713742955587804,
+        "query": "背调应该找谁核实",
+        "hits": [
+          "lesson_ref",
+          "lesson_ref_hard",
+          "lesson_timeline_hard",
+          "pref_salary_hard",
+          "lesson_timeline"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 11.68059598421678,
+        "query": "评分和推荐结论矛盾怎么办",
+        "hits": [
+          "rule_scoring",
+          "rule_scoring_hard",
+          "lesson_ref_hard",
+          "rule_english",
+          "lesson_project"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 13.535492995288223,
+        "query": "履历上的日期对不上要查什么",
+        "hits": [
+          "lesson_timeline_hard",
+          "lesson_timeline",
+          "rule_english",
+          "lesson_ref_hard",
+          "pref_edu_hard"
+        ]
+      },
+      {
+        "recall": 1.0,
+        "mrr": 1.0,
+        "latencyMs": 19.020070030819625,
+        "query": "怎么判断智能体框架设计经验是否达标",
+        "hits": [
+          "rule_l5_hard",
+          "lesson_project",
+          "pref_edu",
+          "rule_l5",
+          "pref_edu_hard"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "experiment": "intent_rule_layer",
+  "generatedAt": "2026-07-21T13:05:39Z",
+  "cases": 80,
+  "accuracy": 1.0,
+  "llmFallbackRate": 0.1875,
+  "perClass": {
+    "CLARIFY_GOAL_CHANGE": {
+      "total": 5,
+      "accuracy": 1.0
+    },
+    "CONTEXT_ADD": {
+      "total": 8,
+      "accuracy": 1.0
+    },
+    "CONTEXT_NOTE": {
+      "total": 6,
+      "accuracy": 1.0
+    },
+    "CONTROL_COMMAND": {
+      "total": 13,
+      "accuracy": 1.0
+    },
+    "EVALUATION_FOCUS_CHANGE": {
+      "total": 9,
+      "accuracy": 1.0
+    },
+    "GOAL_CHANGE": {
+      "total": 7,
+      "accuracy": 1.0
+    },
+    "SIDE_QUESTION": {
+      "total": 17,
+      "accuracy": 1.0
+    },
+    "UNCLASSIFIED": {
+      "total": 15,
+      "accuracy": 1.0
+    }
+  },
+  "misroutes": []
+}

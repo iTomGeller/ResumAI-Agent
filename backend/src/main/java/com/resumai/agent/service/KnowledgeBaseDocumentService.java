@@ -48,9 +48,11 @@ import org.springframework.web.multipart.MultipartFile;
 public class KnowledgeBaseDocumentService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeBaseDocumentService.class);
-    private static final int TARGET_CHUNK_CHARS = 320;
-    private static final int OVERLAP_CHARS = 60;
     private static final int RRF_K = 60;
+
+    // EXP-2: grid-tunable via KB_CHUNK_CHARS / KB_OVERLAP_CHARS (default 320/60)
+    private final int targetChunkChars;
+    private final int overlapChars;
     private static final Pattern RANKED_IDS = Pattern.compile(
             "\"rankedIds\"\\s*:\\s*\\[([^\\]]*)\\]", Pattern.CASE_INSENSITIVE);
 
@@ -64,12 +66,16 @@ public class KnowledgeBaseDocumentService {
     private final DeepSeekClient deepSeekClient;
 
     public KnowledgeBaseDocumentService(@Value("${resumai.upload-dir:./uploads}") String uploadDir,
+                                        @Value("${resumai.kb.chunk-chars:320}") int targetChunkChars,
+                                        @Value("${resumai.kb.overlap-chars:60}") int overlapChars,
                                         ObjectMapper objectMapper,
                                         @Nullable @Qualifier("kbEmbeddingStore") MilvusEmbeddingStore kbStore,
                                         @Nullable EmbeddingModel embeddingModel,
                                         @Nullable EmbeddingAvailability embeddingAvailability,
                                         @Nullable MilvusVectorMaintenanceService vectorMaintenance,
                                         @Nullable DeepSeekClient deepSeekClient) {
+        this.targetChunkChars = targetChunkChars > 0 ? targetChunkChars : 320;
+        this.overlapChars = overlapChars >= 0 ? overlapChars : 60;
         this.kbRoot = Paths.get(uploadDir).toAbsolutePath().normalize().resolve("knowledge-base");
         this.manifestPath = kbRoot.resolve("manifest.json");
         this.objectMapper = objectMapper;
@@ -125,8 +131,8 @@ public class KnowledgeBaseDocumentService {
                 "documentCount", docs.size(),
                 "chunkCount", chunkCount,
                 "chunkPolicy", Map.of(
-                        "targetChunkChars", TARGET_CHUNK_CHARS,
-                        "overlapChars", OVERLAP_CHARS,
+                        "targetChunkChars", targetChunkChars,
+                        "overlapChars", overlapChars,
                         "splitPriority", List.of("markdown_heading", "numbered_section", "blank_line", "char_window")),
                 "retrievalPolicy", Map.of(
                         "strategy", vectorReady ? "hybrid_bm25_embedding" : "lexical_bm25_like",
@@ -343,7 +349,7 @@ public class KnowledgeBaseDocumentService {
         doc.put("charLength", content.length());
         doc.put("chunkCount", chunks.size());
         doc.put("embeddingStatus", embStatus);
-        doc.put("chunkPolicy", Map.of("targetChunkChars", TARGET_CHUNK_CHARS, "overlapChars", OVERLAP_CHARS));
+        doc.put("chunkPolicy", Map.of("targetChunkChars", targetChunkChars, "overlapChars", overlapChars));
         doc.put("usageCount", 0);
         doc.put("lastHitAt", null);
         doc.put("createdAt", LocalDateTime.now().toString());
@@ -612,8 +618,8 @@ public class KnowledgeBaseDocumentService {
                     "chunkIndex", i,
                     "source", "self_service_upload",
                     "embeddingStatus", "pending",
-                    "targetChunkChars", TARGET_CHUNK_CHARS,
-                    "overlapChars", OVERLAP_CHARS));
+                    "targetChunkChars", targetChunkChars,
+                    "overlapChars", overlapChars));
             chunks.add(chunk);
         }
         return chunks;
@@ -643,7 +649,7 @@ public class KnowledgeBaseDocumentService {
 
         List<String> chunks = new ArrayList<>();
         for (String seg : segments) {
-            if (seg.length() <= TARGET_CHUNK_CHARS) {
+            if (seg.length() <= targetChunkChars) {
                 if (!chunks.isEmpty() && seg.length() < 30) {
                     int last = chunks.size() - 1;
                     chunks.set(last, chunks.get(last) + "\n" + seg);
@@ -654,10 +660,10 @@ public class KnowledgeBaseDocumentService {
             }
             int start = 0;
             while (start < seg.length()) {
-                int end = Math.min(seg.length(), start + TARGET_CHUNK_CHARS);
+                int end = Math.min(seg.length(), start + targetChunkChars);
                 chunks.add(seg.substring(start, end).trim());
                 if (end >= seg.length()) break;
-                start = Math.max(end - OVERLAP_CHARS, start + 1);
+                start = Math.max(end - overlapChars, start + 1);
             }
         }
         return chunks.stream().filter(StringUtils::hasText).toList();

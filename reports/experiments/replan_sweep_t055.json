@@ -1,0 +1,40 @@
+{
+  "experiment": "replan_threshold_sweep",
+  "label": "t055",
+  "threshold": "0.55",
+  "generatedAt": "2026-07-21T13:29:12Z",
+  "rows": [
+    {
+      "case": "exp7-strong",
+      "runId": "run-2721214f-264f-409c-9338-01ead379b9b5",
+      "status": "SUCCEEDED",
+      "durationMs": null,
+      "tokenCost": null,
+      "replanEvents": 0,
+      "llmStartEvents": "4"
+    },
+    {
+      "case": "exp7-borderline",
+      "runId": "run-0e7b4b60-e145-4766-8d13-f736c8ce6ce9",
+      "status": "SUCCEEDED",
+      "durationMs": null,
+      "tokenCost": null,
+      "replanEvents": 0,
+      "llmStartEvents": "4"
+    },
+    {
+      "case": "exp7-weak-mismatch",
+      "runId": "run-4b9a9d66-7699-4142-93d5-40788cbcc2b6",
+      "status": "PARTIAL_SUCCESS",
+      "durationMs": null,
+      "tokenCost": null,
+      "replanEvents": 0,
+      "llmStartEvents": "6"
+    }
+  ],
+  "summary": {
+    "succeeded": 2,
+    "totalReplans": 0,
+    "avgDurationMs": 0
+  }
+}

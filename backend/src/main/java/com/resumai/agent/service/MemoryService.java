@@ -156,7 +156,16 @@ public class MemoryService {
 
     public record SearchRequest(String query, List<String> types, String userId,
                                 String conversationId, String runId, Integer topK,
-                                Double minConfidence, Boolean includeSensitive) {
+                                Double minConfidence, Boolean includeSensitive,
+                                /** EXP-5 ablation: fused (default) | lexical | semantic */
+                                String channel) {
+
+        public SearchRequest(String query, List<String> types, String userId,
+                             String conversationId, String runId, Integer topK,
+                             Double minConfidence, Boolean includeSensitive) {
+            this(query, types, userId, conversationId, runId, topK,
+                    minConfidence, includeSensitive, null);
+        }
     }
 
     /**
@@ -192,7 +201,8 @@ public class MemoryService {
         // Two-way recall: semantic scores from Milvus are fused with the
         // lexical path; the DB-side scope/status/confidence filter above stays
         // authoritative so a vector hit can never cross scope boundaries.
-        // Fusion weights pending EXP-5 (see harness/experiments).
+        // EXP-5 (2026-07-21): max-fusion validated — semantic recall 0.96 vs
+        // lexical 0.71 on paraphrased queries, fused never below either path.
         Map<String, Double> vectorScores = vectorService.recall(request.query(), 20);
         List<Map.Entry<MemoryEntryRow, Double>> scored = new ArrayList<>();
         LocalDateTime now = LocalDateTime.now();
@@ -211,7 +221,11 @@ public class MemoryService {
                     Duration.between(row.getUpdateTime(), now).toHours() / 24.0);
             double recency = Math.exp(-ageDays / 30.0);
             double semantic = vectorScores.getOrDefault(row.getMemoryId(), 0.0);
-            double relevance = Math.max(lexical, semantic);
+            double relevance = switch (request.channel() == null ? "fused" : request.channel()) {
+                case "lexical" -> lexical;
+                case "semantic" -> semantic;
+                default -> Math.max(lexical, semantic);
+            };
             double score = (0.25 + 0.75 * relevance)
                     * row.getConfidence().doubleValue() * (0.3 + 0.7 * recency);
             scored.add(Map.entry(row, score));

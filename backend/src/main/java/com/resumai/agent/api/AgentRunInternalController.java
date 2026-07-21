@@ -141,7 +141,7 @@ public class AgentRunInternalController {
 
     public record MemorySearchRequest(String query, List<String> types, String userId,
                                       String conversationId, String runId, Integer topK,
-                                      Double minConfidence) {
+                                      Double minConfidence, String channel) {
     }
 
     @PostMapping("/memory/search")
@@ -150,7 +150,8 @@ public class AgentRunInternalController {
         authorize(token);
         List<Map<String, Object>> hits = memoryService.search(new MemoryService.SearchRequest(
                 request.query(), request.types(), request.userId(), request.conversationId(),
-                request.runId(), request.topK(), request.minConfidence(), false));
+                request.runId(), request.topK(), request.minConfidence(), false,
+                request.channel()));
         return Map.of("hits", hits, "hitCount", hits.size());
     }
 

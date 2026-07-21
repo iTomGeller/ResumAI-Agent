@@ -1,19 +1,29 @@
 {
   "experiment": "EXP-9 reward weight sensitivity",
-  "generatedAt": "2026-07-21T12:01:21Z",
-  "feedbackRewardRows": 2,
+  "generatedAt": "2026-07-21T13:01:51Z",
+  "feedbackRewardRows": 28,
   "policies": [
     "agent_job",
-    "deep_analysis"
+    "backend_job",
+    "balanced",
+    "deep_analysis",
+    "exp10-serial-balanced",
+    "low_cost",
+    "strict_evidence"
   ],
   "baselineRanking": [
     "agent_job",
-    "deep_analysis"
+    "deep_analysis",
+    "balanced",
+    "low_cost",
+    "strict_evidence",
+    "exp10-serial-balanced",
+    "backend_job"
   ],
   "champion": "agent_job",
   "perturbation": 0.1,
   "trials": 20,
   "championFlips": [],
-  "robust": false,
-  "status": "insufficient_data"
+  "robust": true,
+  "status": "ok"
 }

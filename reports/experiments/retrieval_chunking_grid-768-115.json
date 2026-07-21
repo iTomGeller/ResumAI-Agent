@@ -1,0 +1,23 @@
+{
+  "experiment": "chunking",
+  "label": "grid-768-115",
+  "generatedAt": "2026-07-21T13:18:17Z",
+  "results": {
+    "jd_match": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "avgLatencyMs": 49.0,
+      "p95LatencyMs": 56.3
+    },
+    "knowledge": {
+      "cases": 16,
+      "recall@5": 0.9375,
+      "precision@5": 0.65,
+      "mrr": 0.9062,
+      "avgLatencyMs": 29.8,
+      "p95LatencyMs": 40.2
+    }
+  }
+}

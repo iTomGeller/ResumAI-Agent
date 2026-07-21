@@ -533,7 +533,14 @@ public class ConversationService {
         }
     }
 
-    private static final double INTENT_CONFIDENCE_FLOOR = 0.7; // EXP-6 pending
+    // EXP-6: data-driven floor, see harness/run_intent_eval.py
+    @org.springframework.beans.factory.annotation.Value("${resumai.intent.confidence-floor:0.7}")
+    private double intentConfidenceFloor;
+
+    /** EXP-6 evaluation hook — rule layer only, no side effects. */
+    public ConversationIntentClassifier.Decision classifyRuleOnly(String content) {
+        return classifier.classify(content);
+    }
 
     /**
      * LLM second pass for messages the rule layer could not classify.
@@ -565,7 +572,7 @@ public class ConversationService {
             String intent = String.valueOf(payload.getOrDefault("intent", ruleDecision.intent()));
             boolean affects = booleanValue(payload.get("affectsEvaluation"),
                     ruleDecision.affectsEvaluation());
-            if (confidence < INTENT_CONFIDENCE_FLOOR) {
+            if (confidence < intentConfidenceFloor) {
                 return new ConversationIntentClassifier.Decision(
                         intent, false, false, true, "ASK_CONFIRMATION", List.of(),
                         "我不完全确定你的意图：是想补充当前评估的信息，还是提出一个新的目标？"

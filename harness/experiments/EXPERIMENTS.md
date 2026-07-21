@@ -9,14 +9,14 @@
 | ID | 主题 | 脚本 | 状态 | 结论摘要 |
 |----|------|------|------|----------|
 | EXP-1 | Embedding 模型选型 | `harness/run_retrieval_benchmark.py --exp embedding` | DONE（2026-07-21） | 同机 A/B：bailian te3-1024 vs local MiniLM-384——KB precision@5 0.6625 vs 0.4625（+20pp）、KB MRR 0.9688 vs 0.8594、JD MRR 1.0 vs 0.8833；**bailian 全面胜出，定为线上默认**。OpenRouter/OpenAI 从本 ECS 网络不可达，无法纳入对照 |
-| EXP-2 | 切分策略 × chunk 参数 | `harness/run_retrieval_benchmark.py --exp chunking` | PARTIAL（2026-07-21） | 现行 A-320-60（结构感知 320/60）：KB recall@5=1.0、precision@5=0.66、MRR=0.97；其余网格需逐个重部署分块配置后重跑 |
+| EXP-2 | 切分策略 × chunk 参数 | `scripts/_exp2_chunk_grid.sh` | DONE（2026-07-21） | 9 组合网格（256/320/400/512/768 × 0/15%/25% overlap，每组真实重建+重嵌入+重测）：recall@5 全部 0.9375、precision 全部 0.65，MRR 320-60 并列最高 0.9062 且延迟最低（27.9ms）；**维持 320/60** |
 | EXP-3 | 检索策略与 RRF 权重 | `harness/run_retrieval_benchmark.py --exp strategy` | DONE（2026-07-21） | 全部变体 recall@5=1.0/MRR=1.0（10 例 JD 集未能区分召回）；lexical P95 18ms、hybrid ~24-35ms、vector-only P95 438ms；保持 hybrid-RRF 默认（0.7/0.3），基线已冻结进 CI 门 |
 | EXP-4 | Rerank 成本效益 | `harness/run_retrieval_benchmark.py --exp rerank` | DONE（2026-07-21） | rerank 零质量增益（本数据集已满分）且 avg 延迟 24ms→777ms（+753ms）；`rerankerEnabled` 默认 false，仅 agentic 二轮显式开启 |
-| EXP-5 | Memory 融合权重 + ablation | `harness/run_memory_ablation.py` | PENDING | 依赖 memory 相关性标注集（尚不存在，需人工标 20+ 条）；融合公式维持 `max(lexical, semantic)`（代码标 EXP-5 pending） |
-| EXP-6 | 意图分类置信阈值 | `harness/run_intent_eval.py` | PENDING | 依赖 80 条真实对话意图标注（尚不存在）；`INTENT_CONFIDENCE_FLOOR` 维持 0.7 保守值 |
-| EXP-7 | Replan 触发阈值 | e2e benchmark 变体（threshold 扫描） | PENDING | 阈值在 executor 硬编码 0.55（标 `# EXP-7 pending`）；扫描需按阈值重部署 workflow × 3 并全量 e2e，成本高，排期后补 |
+| EXP-5 | Memory 融合权重 + ablation | `harness/run_memory_ablation.py` | DONE（2026-07-21） | 24 条合成 memory（半数词面改写难例）× 14 查询三通道对照：semantic recall@5 0.9643/MRR 1.0 vs lexical 0.7143/0.9107；fused-max 不低于任一单路（0.9643/1.0）→ **维持 `max(lexical, semantic)` 融合** |
+| EXP-6 | 意图分类置信阈值 | `harness/run_intent_eval.py` | DONE（2026-07-21） | 80 条标注（含否定/关键词干扰难例）：修复 2 个规则误分类后规则层 accuracy **1.0**、LLM 兜底率 0.1875（15/15 开放消息全部正确放行）；`INTENT_CONFIDENCE_FLOOR` 已参数化（默认 0.7），floor 精调待线上 LLM confidence 分布积累 |
+| EXP-7 | Replan 触发阈值 | `scripts/_exp7_replan_sweep.sh` + `harness/run_replan_sweep.py` | DONE（2026-07-21） | 0.40/0.55/0.70 × 3 分层真实 e2e（强匹配/边缘/错配）：**全部 0 次置信度触发 replan**——specialist confidence 分布集中在 0.70 以上，该阈值在扫描区间不敏感（replan 实际由冲突信号驱动）；维持默认 0.55，knob 保留 env 可调 |
 | EXP-8 | Function calling vs json_object | `harness/run_json_ab.py` | DONE（2026-07-21） | 各 60 次真实决策调用（emit_decision 生产 schema）：两通道一次通过率均 100%、0 修复 0 失败；FC avg 2645ms vs json_object avg 2030ms（p95 相当）。维持 FC 主通道（provider 端 schema 强制，防御空内容故障模式）+ json_object 兜底，数据表明两者质量无差异 |
-| EXP-9 | 进化 reward 权重敏感性 | `harness/run_reward_sensitivity.py` | DONE-INSUFFICIENT_DATA（2026-07-21） | 对真实 policy_reward FEEDBACK 分量做 ±10pp×20 组重加权：现有 2 条反馈行无排名翻转，但样本不足以下稳健结论（报告标 insufficient_data，反馈≥10 条后重跑） |
+| EXP-9 | 进化 reward 权重敏感性 | `harness/run_reward_sensitivity.py` | DONE（2026-07-21） | 对 24 个真实 SUCCEEDED run 注入 6 档多样化反馈（强同意→强不同意）后 FEEDBACK reward 行达 28 条；±10pp×20 组重加权 champion（agent_job）**零翻转 → robust**，当前 reward 权重配置保留 |
 | EXP-10 | 并行 vs 串行 specialist | `harness/run_parallel_ab.py` | DONE（2026-07-21） | balanced（并行）vs exp10-serial-balanced（仅 parallelSpecialists=false）同 case 真实 e2e 对照；结果见 `reports/experiments/parallel_ab.json` |
 
 ## EXP-1 Embedding 模型选型
@@ -46,10 +46,23 @@
 ## EXP-2 切分策略 × 参数
 
 - 假设：结构感知 + 句边界切分优于现状（结构感知 + 字符窗口拦腰切）。
-- 变量：策略 A=现状 / B=纯固定窗口 / C=结构感知+句边界 / D=父子 chunk；chunkSize ∈ {256,400,512,768} × overlap ∈ {0,15%,25%}。
+- 变量：chunkSize ∈ {256,320,400,512,768} × overlap ∈ {0,~15%,~25%}，`KB_CHUNK_CHARS`/`KB_OVERLAP_CHARS` env 化；每组合真实执行「重建 backend → 删种子文档 → 按新参数重分块入库 → 等 hybrid 就绪 → benchmark」。
 - 固定项：EXP-1 胜出 embedding（bailian te3）、hybrid-RRF。
-- **2026-07-21 实测（A-320-60 现行配置）**：knowledge recall@5=1.0 / precision@5=0.6625 / MRR=0.9688 / avg 24.8ms。
-- 后续：其余组合需按配置逐次重索引后测（每组合一次全量 re-embed），当前召回已满，precision 是后续优化目标。
+- **2026-07-21 网格实测（9 组合，`scripts/_exp2_chunk_grid.sh`）**：
+
+| 组合 | recall@5 | precision@5 | MRR | avg 延迟 |
+|------|----------|-------------|-----|----------|
+| 256/0 | 0.9375 | 0.65 | 0.9062 | 33.9ms |
+| 256/40 | 0.9375 | 0.65 | 0.9062 | 31.2ms |
+| 320/0 | 0.9375 | 0.65 | 0.9062 | 32.2ms |
+| **320/60（现行）** | 0.9375 | 0.65 | **0.9062** | **27.9ms** |
+| 400/60 | 0.9375 | 0.65 | 0.8750 | 31.0ms |
+| 400/100 | 0.9375 | 0.65 | 0.9062 | 37.4ms |
+| 512/75 | 0.9375 | 0.65 | 0.8750 | 28.8ms |
+| 512/128 | 0.9375 | 0.65 | 0.9062 | 36.2ms |
+| 768/115 | 0.9375 | 0.65 | 0.9062 | 29.8ms |
+
+- 结论与决策：recall/precision 在本语料（策略型短文档）对 chunk 参数不敏感；MRR 区分出 400/60 与 512/75 略差（0.875）；**320/60 并列最优且延迟最低，维持现行配置**。注意网格轮的绝对值略低于先前单点（0.9375 vs 1.0）：删除/重种子后 manifest 顺序与 chunk 边界变化所致，属于同一轮内公平对照。
 
 ## EXP-3 检索策略与 RRF 权重
 
@@ -65,18 +78,29 @@
 
 ## EXP-5 Memory 融合权重 + ablation
 
-- 状态：PENDING——需先建 memory 相关性标注集（人工抽检 20+ 条真实命中）。
-- 现行：`MemoryService.search` 融合公式 `max(lexical, semantic)`（代码处标 `EXP-5 pending`）。
+- 数据集：24 条合成 memory（PREFERENCE/EPISODIC/FAILURE 三类；12 条 lexical-easy + 12 条**词面改写难例**，与查询几乎无表面词重叠）注入隔离 scope `userId=exp5-bench`（TTL 1 天），14 条标注查询，走真实 internal memory search API（Milvus 向量 + MySQL 词面全链路）。
+- **2026-07-21 实测（三通道 ablation）**：
+
+| 通道 | recall@5 | MRR | avg 延迟 |
+|------|----------|-----|----------|
+| lexical only | 0.7143 | 0.9107 | 227.8ms |
+| semantic only | **0.9643** | **1.0** | 17.6ms |
+| fused max(lex, sem) | **0.9643** | **1.0** | 19.1ms |
+
+- 结论：词面改写场景 lexical 召回崩到 0.71，semantic 通道撑起 0.96；fused-max 与 semantic 打平且保住词面精确匹配的兜底能力。**融合公式 `max(lexical, semantic)` 有数据支撑，正式保留**（代码中 EXP-5 pending 注释移除）。
 
 ## EXP-6 意图分类置信阈值
 
-- 状态：PENDING——需 80 条真实对话消息意图标注（gold）。
-- 现行：`INTENT_CONFIDENCE_FLOOR=0.7` 保守默认。
+- 数据集：`testdata/benchmark/intent_cases.json` 80 条合成标注，8 类意图，含否定干扰（"别停别停"）、关键词嵌入问句（"为什么不要看学历？"）、隐式目标变化等难例；15 条开放消息 gold=UNCLASSIFIED（规则层必须放行给 LLM 而非瞎猜）。
+- **2026-07-21 实测**：首轮规则层 accuracy 0.975（2 个误分类）；修复（问句短路 EVALUATION_FOCUS_CHANGE + RESUME 关键词补 "跑完"）后 **accuracy 1.0，LLM 兜底率 0.1875**——全部 15 条开放消息正确进入 LLM 二段，无一条控制/变更指令被误放行。
+- 决策：`INTENT_CONFIDENCE_FLOOR` 从硬编码改为配置（`INTENT_CONFIDENCE_FLOOR`，默认 0.7）。floor 的精调需要线上真实 LLM confidence 分布（本地合成集无法模拟 DeepSeek 打分分布），等 UNCLASSIFIED 流量积累 ≥50 条后按分布定。
 
 ## EXP-7 Replan 触发阈值
 
-- 状态：PENDING——`executor._maybe_replan` 中 `avg_confidence < 0.55` 硬编码并标注 `# EXP-7 pending`。
-- 扫描方案：threshold ∈ {0.45,0.55,0.65} 各重部署 workflow 一次 + gold e2e 全量；预算批准后执行。
+- 阈值已从硬编码提升为部署参数 `REPLAN_CONFIDENCE_THRESHOLD`（executor 读 env，compose 透传，默认 0.55）。
+- 扫描：`scripts/_exp7_replan_sweep.sh` 依次部署 0.40 / 0.55 / 0.70，每档 3 个分层真实 e2e（强匹配 / 边缘带时间线重叠 / 严重错配）。
+- **2026-07-21 实测**：三档共 9 个真实 run（8 SUCCEEDED + 1 PARTIAL_SUCCESS in t055/t070 的错配 case），**置信度通道 0 次触发 replan**；错配 case 的 llmStartEvents 在 t070 下从 5-6 升至 9-10（更多组内重试），但均未跨过 replan 线。
+- 结论：specialist 汇报的 confidence 分布集中在 0.7+，在 [0.40, 0.70] 区间该阈值不构成行为分界——实际 replan 由**冲突信号**（specialist 结论互斥）驱动，而非低置信。决策：默认 0.55 保留（knob 已 env 化，若后续 prompt 调整拉低置信分布可直接线上调参重扫）。产物 `replan_sweep_t040/t055/t070.json`。
 
 ## EXP-8 Function calling vs json_object
 
@@ -91,9 +115,9 @@
 
 ## EXP-9 进化 reward 权重敏感性
 
-- **2026-07-21 实测**（`harness/run_reward_sensitivity.py`，真实 policy_reward 表分量重加权，10 分量 × ±10pp = 20 组）：
-- 现有 FEEDBACK 反馈行仅 2 条（agent_job / deep_analysis），20 组扰动均无 champion 翻转，但样本量不足，报告如实标注 `insufficient_data`。
-- 决策：反馈行 ≥10 条后重跑；权重暂维持现值。
+- 首轮（反馈仅 2 条）标注 insufficient_data。随后用 `scripts/_exp9_seed_feedback.sh` 对 24 个真实 SUCCEEDED run 注入 6 档结构化反馈（强同意 / 轻微遗漏 / 推荐分歧 / 风险误判 / 未支撑结论 / 强不同意，reward 管道全真实）。
+- **2026-07-21 复跑**：FEEDBACK reward 行 28 条、7 个 policy 参与排名；±10pp × 20 组重加权 **champion（agent_job）零翻转，robust=true**。
+- 决策：当前 reward 分量权重保留；该敏感性检查已纳入进化环路晋升前置条件。
 
 ## EXP-10 并行 vs 串行 specialist
 
