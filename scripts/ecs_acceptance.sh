@@ -87,20 +87,20 @@ POL=$(curl -fsS "$BASE/api/policies/statistics" || true)
 echo "policies=$POL"
 check "policy endpoint reachable" bash -c "echo '$POL' | grep -Eq 'policy|balanced|champion|avg|reward|\\[|\\{'"
 
-# Sandbox security: worker image should exist; manager health shows concurrent
-check "sandbox worker image" docker image inspect resumai-sandbox-worker:latest >/dev/null
-NET=$(docker exec -i resumai-sandbox-manager python - <<'PY'
-import docker, json
-c=docker.from_env()
-# ensure no sandbox containers have network
-bad=[]
-for ct in c.containers.list(all=True, filters={"label":"sandbox=true"}):
-    nets=ct.attrs.get("NetworkSettings",{}).get("Networks") or {}
-    if nets and set(nets.keys()) - {"none"}:
-        bad.append(ct.name)
-print("ok" if not bad else "bad:"+str(bad))
-PY
-)
+# Sandbox security: worker image pinned to commit tag; no sandbox container may
+# have any network besides "none". Probe from the host docker CLI directly —
+# the manager image does not ship the docker python SDK.
+check "sandbox worker image" bash -c "docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -q '^resumai-sandbox-worker:'"
+NET=$(bash -c '
+bad=""
+for ct in $(docker ps -aq --filter label=sandbox=true); do
+  nets=$(docker inspect "$ct" --format "{{range \$k,\$v := .NetworkSettings.Networks}}{{\$k}} {{end}}")
+  for n in $nets; do
+    [ "$n" = "none" ] || bad="$bad $ct:$n"
+  done
+done
+[ -z "$bad" ] && echo ok || echo "bad:$bad"
+')
 echo "sandbox_network_check=$NET"
 check "sandbox network none" test "$NET" = "ok"
 
