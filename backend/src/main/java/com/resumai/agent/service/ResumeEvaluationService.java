@@ -219,8 +219,7 @@ public class ResumeEvaluationService {
                     cached.status = row.getStatus();
                     cached.queueStatus = row.getQueueStatus();
                     cached.summary = row.getSummary();
-                    cached.overallScore = row.getOverallScore() != null
-                            ? row.getOverallScore() : cached.overallScore;
+                    cached.overallScore = row.getOverallScore();
                     cached.recommendation = StringUtils.hasText(row.getRecommendation())
                             ? row.getRecommendation() : cached.recommendation;
                     cached.durationMs = row.getDurationMs() != null ? row.getDurationMs() : cached.durationMs;
@@ -295,7 +294,7 @@ public class ResumeEvaluationService {
                 stringValue(payload.get("jobCategory"), row.getJobCategory()),
                 stringValue(payload.get("executionMode"), row.getExecutionMode()),
                 stringValue(payload.get("status"), row.getStatus()),
-                intValue(payload.get("overallScore"), 0),
+                nullableInteger(payload.get("overallScore"), row.getOverallScore()),
                 stringValue(payload.get("recommendation"), "NEED_MANUAL_REVIEW"),
                 stringValue(payload.get("summary"), ""),
                 longValue(payload.get("durationMs"), 0L),
@@ -424,7 +423,7 @@ public class ResumeEvaluationService {
                 jobCategory,
                 normalizeExecutionMode(request.executionMode()),
                 QueueStatus.QUEUED.name(),
-                0,
+                null,
                 null,
                 "任务已进入队列，等待后台评估。",
                 0L,
@@ -787,7 +786,7 @@ public class ResumeEvaluationService {
                 row.getId(), row.getTraceId(),
                 StringUtils.hasText(row.getFileName()) ? row.getFileName() : row.getCandidateName(),
                 row.getJobCategory(), row.getExecutionMode(), row.getStatus(),
-                row.getOverallScore() != null ? row.getOverallScore() : 0,
+                row.getOverallScore(),
                 row.getRecommendation(), row.getSummary(),
                 row.getDurationMs() != null ? row.getDurationMs() : 0L,
                 row.getTokenCost() != null ? row.getTokenCost() : 0,
@@ -882,7 +881,15 @@ public class ResumeEvaluationService {
                 "",
                 resumeText
         );
-        TaskResponse created = createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(), fileType, null);
+        // Hybrid-RRF 预匹配：创建时写入 matched_jd / topJdMatches，与 runtime jd-search 同源。
+        List<JdMatchResult> matches = List.of();
+        try {
+            matches = hybridRagService.retrieve(resumeText, ragConfigService.getDefaultOptions());
+        } catch (Exception e) {
+            log.warn("[eval] hybrid JD pre-match skipped: {}", e.getMessage());
+        }
+        TaskResponse created = createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(),
+                fileType, matches.isEmpty() ? null : matches);
         markPlanMode(traceId, planMode);
         return created;
     }
@@ -986,6 +993,15 @@ public class ResumeEvaluationService {
             entity.setQueuedAt(task.queuedAt);
             entity.setAttemptCount(task.attemptCount);
             applyListColumns(entity, task);
+            if (task.topJdMatches != null && !task.topJdMatches.isEmpty()) {
+                Map<String, Object> seed = new LinkedHashMap<>();
+                seed.put("topJdMatches", task.topJdMatches);
+                seed.put("matchedJdTitle", task.matchedJdTitle);
+                seed.put("jdMatchScore", task.jdMatchScore);
+                seed.put("status", task.status);
+                seed.put("fileName", task.fileName);
+                entity.setResultPayload(toJson(seed));
+            }
             entity.setStartTime(task.createTime);
             entity.setCreateTime(task.createTime);
             entity.setUpdateTime(task.updateTime);
@@ -2370,6 +2386,10 @@ public class ResumeEvaluationService {
         int running = 0;
         int success = 0;
         int failed = 0;
+        int queued = 0;
+        int completed = 0;
+        int recommended = 0;
+        int manualReview = 0;
         double avgDuration = 0D;
         double avgScore = 0D;
         int totalToken = 0;
@@ -2381,6 +2401,9 @@ public class ResumeEvaluationService {
                     "COALESCE(SUM(status = 'RUNNING'), 0) AS running",
                     "COALESCE(SUM(status = 'SUCCESS'), 0) AS success",
                     "COALESCE(SUM(status = 'FAILED'), 0) AS failed",
+                    "COALESCE(SUM(queue_status = 'QUEUED'), 0) AS queued",
+                    "COALESCE(SUM(status = 'SUCCESS' AND recommendation IN ('RECOMMEND', 'STRONG_RECOMMEND')), 0) AS recommended",
+                    "COALESCE(SUM(status = 'SUCCESS' AND (recommendation IS NULL OR recommendation NOT IN ('RECOMMEND', 'STRONG_RECOMMEND'))), 0) AS manual_review",
                     "COALESCE(AVG(duration_ms), 0) AS avg_duration",
                     "COALESCE(AVG(CASE WHEN status = 'SUCCESS' AND overall_score > 0 THEN overall_score END), 0) AS avg_score",
                     "COALESCE(SUM(token_cost), 0) AS total_token");
@@ -2390,6 +2413,10 @@ public class ResumeEvaluationService {
             running = metricInt(row.get("running"));
             success = metricInt(row.get("success"));
             failed = metricInt(row.get("failed"));
+            queued = metricInt(row.get("queued"));
+            completed = success;
+            recommended = metricInt(row.get("recommended"));
+            manualReview = metricInt(row.get("manual_review"));
             avgDuration = metricDouble(row.get("avg_duration"));
             avgScore = metricDouble(row.get("avg_score"));
             totalToken = metricInt(row.get("total_token"));
@@ -2412,6 +2439,16 @@ public class ResumeEvaluationService {
             running = (int) snapshot.stream().filter(task -> "RUNNING".equals(task.status)).count();
             success = (int) snapshot.stream().filter(task -> "SUCCESS".equals(task.status)).count();
             failed = (int) snapshot.stream().filter(task -> "FAILED".equals(task.status)).count();
+            queued = (int) snapshot.stream().filter(task -> "QUEUED".equals(task.queueStatus)).count();
+            completed = success;
+            recommended = (int) snapshot.stream()
+                    .filter(task -> "SUCCESS".equals(task.status)
+                            && ("RECOMMEND".equals(task.recommendation) || "STRONG_RECOMMEND".equals(task.recommendation)))
+                    .count();
+            manualReview = (int) snapshot.stream()
+                    .filter(task -> "SUCCESS".equals(task.status)
+                            && !("RECOMMEND".equals(task.recommendation) || "STRONG_RECOMMEND".equals(task.recommendation)))
+                    .count();
             avgDuration = snapshot.stream().mapToLong(task -> task.durationMs).average().orElse(0D);
             avgScore = snapshot.stream()
                     .filter(task -> "SUCCESS".equals(task.status) && task.overallScore != null && task.overallScore > 0)
@@ -2432,7 +2469,10 @@ public class ResumeEvaluationService {
         Map<String, Long> agentDuration = new LinkedHashMap<>();
         durationSum.forEach((agent, duration) ->
                 agentDuration.put(agent, duration / Math.max(1L, durationCount.getOrDefault(agent, 1L))));
-        return new DashboardMetricsResponse(total, running, success, failed, avgDuration, avgScore, totalToken, modeDuration, agentDuration);
+        return new DashboardMetricsResponse(
+                total, running, success, failed,
+                queued, completed, recommended, manualReview,
+                avgDuration, avgScore, totalToken, modeDuration, agentDuration);
     }
 
     private static int metricInt(Object value) {
@@ -2899,6 +2939,21 @@ public class ResumeEvaluationService {
     private int intValue(Object value, int fallback) {
         if (value instanceof Number number) {
             return number.intValue();
+        }
+        return fallback;
+    }
+
+    /** Nullable score/fields: missing value must stay null (never coerce to 0). */
+    private Integer nullableInteger(Object value, Integer fallback) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text && StringUtils.hasText(text)) {
+            try {
+                return Integer.parseInt(text.trim());
+            } catch (NumberFormatException ignored) {
+                return fallback;
+            }
         }
         return fallback;
     }

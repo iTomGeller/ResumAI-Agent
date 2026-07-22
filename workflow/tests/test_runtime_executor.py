@@ -69,7 +69,20 @@ class FakeLlm:
             "done": True,
         }
         if agent_id == "ReportAgent":
-            output["output"]["answer"] = "## 评估结论\n候选人 Kafka 证据充分，存在时间线重叠风险。"
+            output["output"]["report"] = {
+                "recommendation": "INTERVIEW_RECOMMEND",
+                "dimensions": [
+                    {"name": "技术能力", "score": 78, "rationale": "Kafka 项目证据充分"},
+                    {"name": "项目深度", "score": 72, "rationale": "有峰值 QPS 量化"},
+                    {"name": "JD匹配", "score": 70, "rationale": "Java/Redis 覆盖，K8s 缺口"},
+                    {"name": "履历可信度", "score": 60, "rationale": "时间线存在重叠风险"},
+                ],
+                "strengths": ["Kafka 异步解耦经验"],
+                "risks": ["时间线重叠"],
+                "interviewQuestions": ["请说明订单中台峰值如何压测？"],
+                "dataQuality": "SUFFICIENT",
+                "missingEvidence": [],
+            }
         return json.dumps(output, ensure_ascii=False)
 
 
@@ -104,7 +117,9 @@ def test_tech_match_pipeline_produces_grounded_answer():
     executor, emitter = make_executor(request)
     result = run(executor.execute())
     assert result["status"] == "SUCCEEDED"
-    assert "Kafka" in result["answer"]
+    assert "Kafka" in result["answer"] or "技术能力" in result["answer"]
+    assert isinstance(result.get("structuredReport"), dict)
+    assert isinstance(result["structuredReport"].get("overallScore"), int)
     agents_used = result["metrics"]["agentsUsed"]
     assert "TechAgent" in agents_used and "ReportAgent" in agents_used
     assert "EvidenceAgent" in agents_used
@@ -186,7 +201,7 @@ def test_enable_rewrite_flag_reaches_dispatch():
     async def scenario():
         # Monkeypatch gateway so we don't hit Java.
         from app.runtime import gateway
-        async def fake_kb(query, top_k=5):
+        async def fake_kb(query, top_k=5, rerank=False, **kwargs):
             return json.dumps({
                 "chunks": [{"chunkId": f"c-{query[:8]}", "content": query,
                             "title": "rubric"}],

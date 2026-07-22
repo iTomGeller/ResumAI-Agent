@@ -153,9 +153,46 @@ public class RunLifecycleService {
             AgentRun latest = runMapper.selectById(runId);
             if (latest != null && !RunStatus.isTerminal(latest.getStatus())) {
                 finishInternal(latest, RunStatus.FAILED, null,
-                        "RUNTIME_START_FAILED", trim(e.getMessage(), 1800), null);
+                        "RUNTIME_START_FAILED", trim(e.getMessage(), 1800), null,
+                        controlPlaneMeta("RUNTIME_START_FAILED", latest, "start"));
             }
         }
+    }
+
+    /**
+     * After process restart: re-attach a RUNNING/WAITING_* run that already
+     * has a group-boundary checkpoint by calling the runtime /resume API.
+     */
+    public void resumeAfterRestart(String runId) throws Exception {
+        AgentRun run = runMapper.selectById(runId);
+        if (run == null || !StringUtils.hasText(run.getExecutionSnapshot())) {
+            throw new IllegalStateException("no checkpoint for run " + runId);
+        }
+        ConversationSession session = sessionMapper.selectById(run.getConversationId());
+        if (session == null) {
+            throw new IllegalStateException("conversation missing for run " + runId);
+        }
+        PolicyBundleRow bundle = policyService.getBundle(run.getPolicyId());
+        Map<String, Object> payload = buildRuntimePayload(run, session, bundle);
+        payload.put("resumeSnapshot", readJsonAsMap(run.getExecutionSnapshot()));
+        runtimeClient.resumeRun(runId, payload);
+        UpdateWrapper<AgentRun> toRunning = new UpdateWrapper<>();
+        toRunning.eq("run_id", runId)
+                .in("status", List.of(
+                        RunStatus.RUNNING.name(),
+                        RunStatus.WAITING_LLM.name(),
+                        RunStatus.WAITING_TOOL.name(),
+                        RunStatus.WAITING_SANDBOX.name(),
+                        RunStatus.RESUMING.name(),
+                        RunStatus.STARTING.name()))
+                .set("status", RunStatus.RUNNING.name())
+                .set("updated_at", LocalDateTime.now());
+        runMapper.update(null, toRunning);
+        eventService.publish(runId, run.getConversationId(), run.getTraceId(),
+                "run.progress", null, null, Map.of(
+                        "stage", "resume_after_restart",
+                        "message", "服务重启后从 checkpoint 恢复执行",
+                        "controlPlaneStage", "resume"));
     }
 
     private Map<String, Object> selectionContext(AgentRun run, ConversationSession session) {
@@ -579,11 +616,18 @@ public class RunLifecycleService {
         if (latest == null || RunStatus.isTerminal(latest.getStatus())) {
             return;
         }
-        finishInternal(latest, terminal, null, errorCode, message, null);
+        Map<String, Object> meta = controlPlaneMeta(errorCode, latest, stageForError(errorCode));
+        finishInternal(latest, terminal, null, errorCode, message, null, meta);
     }
 
     private void finishInternal(AgentRun run, RunStatus terminal, RuntimeResult result,
                                 String errorCode, String errorMessage, String answerOverride) {
+        finishInternal(run, terminal, result, errorCode, errorMessage, answerOverride, null);
+    }
+
+    private void finishInternal(AgentRun run, RunStatus terminal, RuntimeResult result,
+                                String errorCode, String errorMessage, String answerOverride,
+                                Map<String, Object> controlPlaneMeta) {
         LocalDateTime now = LocalDateTime.now();
         UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
         update.eq("run_id", run.getRunId())
@@ -651,6 +695,16 @@ public class RunLifecycleService {
         payload.put("status", terminal.name());
         payload.put("errorCode", errorCode != null ? errorCode : "");
         payload.put("errorMessage", errorMessage != null ? trim(errorMessage, 500) : "");
+        int attemptNo = (finished.getRetryCount() != null ? finished.getRetryCount() : 0) + 1;
+        payload.put("attemptNo", attemptNo);
+        boolean retryable = isRetryableControlPlaneError(errorCode);
+        payload.put("retryable", retryable);
+        String stage = stageForError(errorCode);
+        if (controlPlaneMeta != null) {
+            payload.putAll(controlPlaneMeta);
+        } else if (stage != null) {
+            payload.put("controlPlaneStage", stage);
+        }
         if (result != null && StringUtils.hasText(result.answer())) {
             payload.put("answer", result.answer());
         }
@@ -718,6 +772,21 @@ public class RunLifecycleService {
             String recommendation = report.get("recommendation") instanceof String s
                     && StringUtils.hasText(s) ? s : null;
 
+            List<Map<String, Object>> topJdMatches = extractTopJdMatches(result, 5);
+            String matchedJdTitle = null;
+            Double jdMatchScore = null;
+            if (!topJdMatches.isEmpty()) {
+                Map<String, Object> best = topJdMatches.get(0);
+                Object title = best.get("title");
+                if (title != null && StringUtils.hasText(String.valueOf(title))) {
+                    matchedJdTitle = String.valueOf(title);
+                }
+                Object score = best.get("score");
+                if (score instanceof Number n) {
+                    jdMatchScore = n.doubleValue();
+                }
+            }
+
             UpdateWrapper<com.resumai.agent.domain.entity.ResumeTask> update = new UpdateWrapper<>();
             update.eq("trace_id", run.getSourceTaskTraceId())
                     .notIn("status", "SUCCESS", "PARTIAL_SUCCESS", "CANCELLED", "SUPERSEDED")
@@ -742,8 +811,14 @@ public class RunLifecycleService {
             if (recommendation != null) {
                 update.set("recommendation", recommendation);
             }
+            if (matchedJdTitle != null) {
+                update.set("matched_jd_title", matchedJdTitle);
+            }
+            if (jdMatchScore != null) {
+                update.set("jd_match_score", jdMatchScore);
+            }
             String payload = buildTaskResultPayload(run, taskStatus, answer, report,
-                    durationMs, tokenCost);
+                    durationMs, tokenCost, topJdMatches, matchedJdTitle, jdMatchScore);
             if (payload != null) {
                 update.set("result_payload", payload);
             }
@@ -795,7 +870,9 @@ public class RunLifecycleService {
      */
     private String buildTaskResultPayload(AgentRun run, String taskStatus, String answer,
                                           Map<String, Object> report,
-                                          Long durationMs, Integer tokenCost) {
+                                          Long durationMs, Integer tokenCost,
+                                          List<Map<String, Object>> topJdMatches,
+                                          String matchedJdTitle, Double jdMatchScore) {
         try {
             com.resumai.agent.domain.entity.ResumeTask row = resumeTaskMapper.selectOne(
                     new QueryWrapper<com.resumai.agent.domain.entity.ResumeTask>()
@@ -829,15 +906,70 @@ public class RunLifecycleService {
                 payload.put("tokenCost", tokenCost);
             }
             payload.put("jobDescription", row.getJobDescription());
-            payload.put("matchedJdTitle", row.getMatchedJdTitle());
-            if (row.getJdMatchScore() != null) {
-                payload.put("jdMatchScore", row.getJdMatchScore());
+            String title = StringUtils.hasText(matchedJdTitle)
+                    ? matchedJdTitle : row.getMatchedJdTitle();
+            payload.put("matchedJdTitle", title);
+            Double scoreValue = jdMatchScore != null ? jdMatchScore : row.getJdMatchScore();
+            if (scoreValue != null) {
+                payload.put("jdMatchScore", scoreValue);
+            }
+            if (topJdMatches != null && !topJdMatches.isEmpty()) {
+                payload.put("topJdMatches", topJdMatches);
+            } else {
+                // Preserve create-time AutoMatch Top-N when runtime did not
+                // re-emit jdMatches (e.g. user JD provided / fast path skip).
+                try {
+                    if (StringUtils.hasText(row.getResultPayload())) {
+                        Map<String, Object> existing = objectMapper.readValue(
+                                row.getResultPayload(),
+                                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                        Object prior = existing.get("topJdMatches");
+                        if (prior instanceof List<?> list && !list.isEmpty()) {
+                            payload.put("topJdMatches", prior);
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // best-effort preserve
+                }
             }
             return objectMapper.writeValueAsString(payload);
         } catch (Exception e) {
             log.debug("build result payload failed run={}: {}", run.getRunId(), e.getMessage());
             return null;
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> extractTopJdMatches(RuntimeResult result, int topN) {
+        if (result == null || result.sharedState() == null) {
+            return List.of();
+        }
+        Object artifactsObj = result.sharedState().get("artifacts");
+        if (!(artifactsObj instanceof Map<?, ?> artifacts)) {
+            return List.of();
+        }
+        Object raw = artifacts.get("jdMatches");
+        List<?> items;
+        if (raw instanceof List<?> list) {
+            items = list;
+        } else if (raw instanceof Map<?, ?> wrapped && wrapped.get("items") instanceof List<?> nested) {
+            items = nested;
+        } else {
+            return List.of();
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object item : items) {
+            if (!(item instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((k, v) -> copy.put(String.valueOf(k), v));
+            out.add(copy);
+            if (out.size() >= topN) {
+                break;
+            }
+        }
+        return out;
     }
 
     /** Published after a linked resume_task row was mirrored from a run. */
@@ -1079,6 +1211,43 @@ public class RunLifecycleService {
             return null;
         }
         return text.length() > max ? text.substring(0, max) : text;
+    }
+
+    private static Map<String, Object> controlPlaneMeta(String errorCode, AgentRun run,
+                                                        String stage) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("retryable", isRetryableControlPlaneError(errorCode));
+        meta.put("attemptNo", (run.getRetryCount() != null ? run.getRetryCount() : 0) + 1);
+        if (stage != null) {
+            meta.put("controlPlaneStage", stage);
+        }
+        meta.put("category", "CONTROL_PLANE");
+        return meta;
+    }
+
+    private static boolean isRetryableControlPlaneError(String errorCode) {
+        if (errorCode == null) {
+            return false;
+        }
+        return switch (errorCode) {
+            case "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED", "START_STUCK",
+                 "RUN_TIMEOUT" -> true;
+            default -> false;
+        };
+    }
+
+    private static String stageForError(String errorCode) {
+        if (errorCode == null) {
+            return null;
+        }
+        return switch (errorCode) {
+            case "RUNTIME_START_FAILED", "START_STUCK" -> "start";
+            case "ORPHANED_ON_RESTART" -> "restart_recovery";
+            case "RUN_TIMEOUT" -> "watchdog";
+            case "CANCEL_FORCED" -> "cancel";
+            case "PAUSE_EXPIRED" -> "pause";
+            default -> null;
+        };
     }
 
     /** Duration since a timestamp, guarding nulls (watchdog helper). */

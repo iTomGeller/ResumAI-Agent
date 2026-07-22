@@ -15,9 +15,9 @@
         "rrfK": 60,
         "rerankerEnabled": false,
         "rerankerModel": "none",
-        "chunkSize": 400,
-        "chunkOverlap": 80,
-        "embeddingProvider": "local",
+        "chunkSize": 320,
+        "chunkOverlap": 60,
+        "embeddingProvider": "bailian",
         "generation": { "temperature": 0.2, "topP": 0.9, "maxTokens": 1200 },
         "presetName": "fast"
       }
@@ -38,9 +38,9 @@
         "rrfK": 60,
         "rerankerEnabled": false,
         "rerankerModel": "none",
-        "chunkSize": 400,
-        "chunkOverlap": 80,
-        "embeddingProvider": "local",
+        "chunkSize": 320,
+        "chunkOverlap": 60,
+        "embeddingProvider": "bailian",
         "generation": { "temperature": 0.4, "topP": 0.9, "maxTokens": 1200 },
         "presetName": "balanced"
       }
@@ -50,7 +50,7 @@
       "name": "严格匹配",
       "icon": "🎯",
       "description": "只要高度匹配的，命中率高",
-      "tagline": "启用智能重排序",
+      "tagline": "高精度召回（默认不启用 rerank）",
       "options": {
         "strategy": "hybrid",
         "topK": 3,
@@ -58,11 +58,11 @@
         "semanticWeight": 0.8,
         "keywordWeight": 0.2,
         "rrfK": 60,
-        "rerankerEnabled": true,
-        "rerankerModel": "bge-reranker-v2-m3",
-        "chunkSize": 400,
-        "chunkOverlap": 80,
-        "embeddingProvider": "local",
+        "rerankerEnabled": false,
+        "rerankerModel": "none",
+        "chunkSize": 320,
+        "chunkOverlap": 60,
+        "embeddingProvider": "bailian",
         "generation": { "temperature": 0.2, "topP": 0.9, "maxTokens": 1200 },
         "presetName": "strict"
       }
@@ -82,9 +82,9 @@
         "rrfK": 60,
         "rerankerEnabled": false,
         "rerankerModel": "none",
-        "chunkSize": 400,
-        "chunkOverlap": 80,
-        "embeddingProvider": "local",
+        "chunkSize": 320,
+        "chunkOverlap": 60,
+        "embeddingProvider": "bailian",
         "generation": { "temperature": 0.5, "topP": 0.9, "maxTokens": 1200 },
         "presetName": "wide"
       }

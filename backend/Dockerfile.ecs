@@ -25,6 +25,7 @@ RUN mkdir -p /opt/java \
 COPY target/resumai-agent-backend.jar /app/resumai-agent-backend.jar
 COPY src/main/resources/skills/ /app/skills/
 COPY src/main/resources/mcp-servers.json /app/mcp-servers.json
+COPY src/main/resources/mcp-servers.json /app/config/mcp-servers.json
 
 EXPOSE 8080
 # Force TLSv1.2: ECS→openrouter.ai TLS1.3 ClientHello hangs (DPI/path issue);

@@ -302,21 +302,7 @@ public class AgentMetrics {
                 .record(length);
     }
 
-    public void recordNeo4jNodesWritten(String operation, int count) {
-        DistributionSummary.builder("resumai.tool.neo4j.nodes_written")
-                .description("Neo4j 写入节点数")
-                .tag("operation", safeTag(operation))
-                .register(registry)
-                .record(count);
-    }
-
-    public void recordNeo4jRelationshipsWritten(String operation, int count) {
-        DistributionSummary.builder("resumai.tool.neo4j.relationships_written")
-                .description("Neo4j 写入关系数")
-                .tag("operation", safeTag(operation))
-                .register(registry)
-                .record(count);
-    }
+    // Neo4j / knowledge-graph metrics removed with the graph feature (plan §3).
 
     public void recordMilvusChunksIndexed(int count) {
         DistributionSummary.builder("resumai.tool.milvus.chunks_indexed")

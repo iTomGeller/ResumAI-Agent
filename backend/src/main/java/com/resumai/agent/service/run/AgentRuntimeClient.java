@@ -17,14 +17,18 @@ import org.springframework.util.StringUtils;
 
 /**
  * HTTP client for the Python agent runtime (/agent/runs). Start requests are
- * idempotent by runId, so transient transport failures are retried (max 2,
- * exponential backoff with jitter). Cancellation propagates a reason and
- * never retries indefinitely — Java remains the authoritative state owner.
+ * idempotent by runId, so transient transport failures are retried (max 1,
+ * short timeout). Worst-case start path stays under ~12s: readiness 2s +
+ * startRun 5s × (1 + 1 retry) with brief backoff.
  */
 @Service
 public class AgentRuntimeClient {
 
     private static final Logger log = LoggerFactory.getLogger(AgentRuntimeClient.class);
+
+    private static final Duration READINESS_TIMEOUT = Duration.ofSeconds(2);
+    private static final Duration START_TIMEOUT = Duration.ofSeconds(5);
+    private static final int START_MAX_RETRIES = 1;
 
     private final WorkflowProperties workflowProperties;
     private final ObjectMapper objectMapper;
@@ -34,19 +38,46 @@ public class AgentRuntimeClient {
         this.workflowProperties = workflowProperties;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(8))
+                .connectTimeout(Duration.ofSeconds(3))
                 .version(HttpClient.Version.HTTP_1_1)
                 .build();
     }
 
+    /** Fail fast when the runtime is not ready (2s budget). */
+    public void ensureReady() throws Exception {
+        HttpRequest request = builder("/ready")
+                .timeout(READINESS_TIMEOUT)
+                .GET()
+                .build();
+        HttpResponse<String> response =
+                httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) {
+            throw new IllegalStateException(
+                    "runtime not ready: HTTP " + response.statusCode()
+                            + " " + trim(response.body()));
+        }
+    }
+
+    public boolean isReady() {
+        try {
+            ensureReady();
+            return true;
+        } catch (Exception e) {
+            log.debug("runtime readiness failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
     public void startRun(Map<String, Object> payload) throws Exception {
-        postWithRetry("/agent/runs", payload, Duration.ofSeconds(20), 2);
+        ensureReady();
+        postWithRetry("/agent/runs", payload, START_TIMEOUT, START_MAX_RETRIES);
     }
 
     /** Resume a paused run: same runId, payload carries resumeSnapshot. */
     public void resumeRun(String runId, Map<String, Object> payload) throws Exception {
+        ensureReady();
         postWithRetry("/agent/runs/" + runId + "/resume", payload,
-                Duration.ofSeconds(20), 2);
+                START_TIMEOUT, START_MAX_RETRIES);
     }
 
     public void pauseRun(String runId, String reason) throws Exception {
@@ -114,7 +145,7 @@ public class AgentRuntimeClient {
     private void postWithRetry(String path, Map<String, ?> body, Duration timeout, int maxRetries)
             throws Exception {
         Exception last = null;
-        long delayMs = 800;
+        long delayMs = 400;
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             try {
                 String json = objectMapper.writeValueAsString(body);
@@ -143,7 +174,7 @@ public class AgentRuntimeClient {
             }
             if (attempt < maxRetries) {
                 Thread.sleep(delayMs + ThreadLocalRandom.current().nextLong(200));
-                delayMs = Math.min(delayMs * 2, 8000);
+                delayMs = Math.min(delayMs * 2, 2000);
             }
         }
         throw last != null ? last : new IllegalStateException("runtime call failed: " + path);

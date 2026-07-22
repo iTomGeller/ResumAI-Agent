@@ -46,6 +46,29 @@ def scenario_coordinator_contracts() -> None:
     policy = PolicyBundle.from_config("balanced", {})
     coordinator = Coordinator(default_agent_registry, policy, llm=None)
 
+    # Primary path: GOAL_ARTIFACTS backward-chaining (not TASK_PIPELINES).
+    artifact_plan = coordinator.plan_from_artifacts(
+        run_type="full_evaluation", needs_parse=True,
+        resume_text="项目经历\n订单中台\n工作经历\n2020-2024 工程师",
+        job_description="需要 Java")
+    check("artifact_plan_ends_with_terminal",
+          artifact_plan["plan"][-1] in TERMINAL_AGENTS,
+          detail=str(artifact_plan["plan"]))
+    check("artifact_plan_contains_parser",
+          "ResumeParserAgent" in artifact_plan["plan"])
+    check("artifact_plan_persists_because",
+          bool(artifact_plan.get("selectedBecause")))
+    no_project = coordinator.plan_from_artifacts(
+        run_type="full_evaluation", needs_parse=True,
+        resume_text="工作经历\n2020-2024 工程师 技能 Java",
+        job_description="Java")
+    check("no_project_skips_project",
+          "ProjectAgent" not in no_project["plan"],
+          detail=str(no_project["plan"]))
+    check("no_project_records_skip_reason",
+          "ProjectAgent" in (no_project.get("skippedBecause") or {}),
+          detail=str(no_project.get("skippedBecause")))
+
     plan = coordinator.base_plan("full_evaluation", has_resume_facts=False,
                                  needs_parse=True)
     final = coordinator._finalize(plan, "gate")

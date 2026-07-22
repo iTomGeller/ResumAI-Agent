@@ -48,14 +48,19 @@ grep -q '^SANDBOX_MEM_LIMIT=' .env || echo 'SANDBOX_MEM_LIMIT=384m' >> .env
 grep -q '^SANDBOX_CPU=' .env || echo 'SANDBOX_CPU=0.5' >> .env
 grep -q '^SANDBOX_TTL_SECONDS=' .env || echo 'SANDBOX_TTL_SECONDS=240' >> .env
 
-# Real LLM embeddings (OpenRouter). The key itself must already be present in
-# the deploy env source (.deploy.local.env -> .env); we only wire defaults.
-if grep -q '^OPENROUTER_API_KEY=..*' .env; then
+# Embedding defaults: Bailian is the EXP-1 winner and reachable from this ECS.
+# Never silently fall back to local MiniLM for production deploys.
+if grep -qE '^DASHSCOPE_API_KEY=.+' .env || grep -qE '^EMBEDDING_PROVIDER=bailian' .env; then
+  grep -q '^EMBEDDING_PROVIDER=' .env || echo 'EMBEDDING_PROVIDER=bailian' >> .env
+  grep -q '^EMBEDDING_MODEL=' .env || echo 'EMBEDDING_MODEL=text-embedding-v3' >> .env
+  grep -q '^EMBEDDING_BASE_URL=' .env || echo 'EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1' >> .env
+  log "embedding provider: bailian ($(grep '^EMBEDDING_MODEL=' .env | cut -d= -f2))"
+elif grep -qE '^OPENROUTER_API_KEY=.+' .env; then
   grep -q '^EMBEDDING_PROVIDER=' .env || echo 'EMBEDDING_PROVIDER=openrouter' >> .env
   grep -q '^EMBEDDING_MODEL=' .env || echo 'EMBEDDING_MODEL=openai/text-embedding-3-small' >> .env
   log "embedding provider: openrouter ($(grep '^EMBEDDING_MODEL=' .env | cut -d= -f2))"
 else
-  log "OPENROUTER_API_KEY absent -> embedding stays local MiniLM"
+  log "WARN: no DashScope/OpenRouter key — ensure EMBEDDING_* already set in .env"
 fi
 grep -q '^CACHE_ENABLED=' .env || echo 'CACHE_ENABLED=true' >> .env
 
@@ -100,6 +105,56 @@ LEGACY_PATTERN='workflow/'run
 if grep -q "${LEGACY_PATTERN}s" /tmp/resumai-compose.validated.yml; then
   echo "legacy workflow runtime detected in compose config" >&2
   exit 1
+fi
+
+# ------------------------------------------------------------------
+# Deploy drain: stop new dispatch, wait for ACTIVE runs to finish or
+# checkpoint, then (after image build) restart workflow/backend and
+# resume dispatch — avoids ORPHANED_ON_RESTART from mid-flight kills.
+# ------------------------------------------------------------------
+INTERNAL_TOKEN="${WORKFLOW_INTERNAL_TOKEN:-${INTERNAL_TOKEN:-}}"
+BACKEND_DRAIN_URL="http://127.0.0.1:8080/api/internal/agent-runs"
+drain_api() {
+  local method="$1" path="$2" data="${3:-}"
+  if [[ -z "$INTERNAL_TOKEN" ]]; then
+    return 1
+  fi
+  if [[ "$method" == "GET" ]]; then
+    curl -fsS -H "X-Internal-Token: ${INTERNAL_TOKEN}" "${BACKEND_DRAIN_URL}${path}"
+  else
+    curl -fsS -X POST -H "X-Internal-Token: ${INTERNAL_TOKEN}" \
+      -H "Content-Type: application/json" \
+      ${data:+-d "$data"} \
+      "${BACKEND_DRAIN_URL}${path}"
+  fi
+}
+
+if docker ps --format '{{.Names}}' | grep -q '^ai-resume-backend$'; then
+  log "enable scheduler drain before rebuild/restart"
+  drain_api POST /drain '{"enabled":true}' >/tmp/resumai-drain.json || log "WARN: drain call failed"
+  DRAIN_WAIT_SEC="${DRAIN_WAIT_SEC:-90}"
+  for ((i=0; i<DRAIN_WAIT_SEC; i+=3)); do
+    snap="$(drain_api GET /active 2>/dev/null || echo '')"
+    echo "$snap" > /tmp/resumai-active.json || true
+    ready="$(python3 - <<'PY' 2>/dev/null || echo 0
+import json
+try:
+  d=json.load(open("/tmp/resumai-active.json"))
+  print(1 if d.get("readyToRestart") or int(d.get("activeCount") or 0)==0 else 0)
+except Exception:
+  print(0)
+PY
+)"
+    if [[ "$ready" == "1" ]]; then
+      log "drain ready (active cleared or all checkpointed) after ${i}s"
+      break
+    fi
+    active_count="$(python3 -c 'import json;print(json.load(open("/tmp/resumai-active.json")).get("activeCount", "?"))' 2>/dev/null || echo "?")"
+    log "waiting drain... active=${active_count} elapsed=${i}s"
+    sleep 3
+  done
+else
+  log "backend not running yet — skip pre-build drain"
 fi
 
 log "Java compile + package"
@@ -189,6 +244,22 @@ for i in $(seq 1 60); do
     exit 1
   fi
 done
+
+log "wait workflow readiness"
+for i in $(seq 1 30); do
+  if docker exec ai-resume-workflow curl -fsS http://127.0.0.1:8090/ready >/dev/null 2>&1; then
+    log "workflow ready (attempt $i)"
+    break
+  fi
+  sleep 2
+  if [[ "$i" -eq 30 ]]; then
+    log "WARN: workflow /ready not confirmed"
+  fi
+done
+
+log "resume scheduler dispatch after deploy"
+drain_api POST /resume-dispatch || drain_api POST /drain '{"enabled":false}' >/tmp/resumai-drain-off.json || \
+  log "WARN: resume-dispatch call failed"
 
 AFTER_TASKS="$(docker exec resumai-mysql mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" \
   "$MYSQL_DATABASE" -e 'SELECT COUNT(*) FROM resume_task' 2>/dev/null | tail -1 || echo unknown)"

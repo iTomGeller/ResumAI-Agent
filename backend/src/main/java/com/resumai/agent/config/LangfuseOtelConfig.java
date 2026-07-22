@@ -41,6 +41,7 @@ public class LangfuseOtelConfig {
         OtlpHttpSpanExporter exporter = OtlpHttpSpanExporter.builder()
                 .setEndpoint(endpoint)
                 .addHeader("Authorization", "Basic " + auth)
+                .addHeader("x-langfuse-ingestion-version", "4")
                 .build();
 
         Resource resource = Resource.getDefault().merge(
@@ -55,7 +56,7 @@ public class LangfuseOtelConfig {
                 .setTracerProvider(tracerProvider)
                 .buildAndRegisterGlobal();
 
-        log.info("[langfuse] OTel tracing enabled → {}", endpoint);
+        log.info("[langfuse] OTel tracing enabled → {} (ingestion-version=4)", endpoint);
         return sdk;
     }
 }

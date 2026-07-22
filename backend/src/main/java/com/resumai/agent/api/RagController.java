@@ -229,6 +229,8 @@ public class RagController {
         body.put("vectorHits", result.vectorHits());
         body.put("fusion", result.fusion());
         body.put("rerankApplied", result.rerankApplied());
+        body.put("fallbackStage", result.fallbackStage());
+        body.put("fallbackChain", result.fallbackChain());
         return body;
     }
 

@@ -72,11 +72,12 @@ resumai:
     jd-collection: ${MILVUS_JD_COLLECTION:jd_library}
     dimension: ${MILVUS_DIMENSION:0}
   embedding:
-    provider: ${EMBEDDING_PROVIDER:local}
+    # EXP-1 winner: Bailian text-embedding-v3 (1024-d). Local MiniLM is offline-only.
+    provider: ${EMBEDDING_PROVIDER:bailian}
     enabled: ${EMBEDDING_ENABLED:true}
-    base-url: ${EMBEDDING_BASE_URL:https://api.openai.com/v1}
-    api-key: ${EMBEDDING_API_KEY:}
-    model: ${EMBEDDING_MODEL:text-embedding-3-small}
+    base-url: ${EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    api-key: ${EMBEDDING_API_KEY:${DASHSCOPE_API_KEY:}}
+    model: ${EMBEDDING_MODEL:text-embedding-v3}
     read-timeout-ms: ${EMBEDDING_READ_TIMEOUT_MS:60000}
   kb:
     # EXP-2 chunk grid knobs (winner locked after the grid run)
@@ -129,6 +130,9 @@ resumai:
     dispatch-interval-ms: ${RUN_DISPATCH_INTERVAL_MS:500}
     watchdog-interval-ms: ${RUN_WATCHDOG_INTERVAL_MS:15000}
     cancel-grace-seconds: ${RUN_CANCEL_GRACE_SECONDS:90}
+    pause-grace-seconds: ${RUN_PAUSE_GRACE_SECONDS:120}
+    pause-ttl-seconds: ${RUN_PAUSE_TTL_SECONDS:7200}
+    start-grace-seconds: ${RUN_START_GRACE_SECONDS:90}
     permit-lease-minutes: ${RUN_PERMIT_LEASE_MINUTES:30}
     worker-id: ${TASK_WORKER_ID:backend-1}
   policy:
@@ -137,13 +141,13 @@ resumai:
     cleanup-interval-ms: ${MEMORY_CLEANUP_INTERVAL_MS:600000}
 
 langfuse:
-  otel-endpoint: ${LANGFUSE_OTEL_ENDPOINT:}
+  otel-endpoint: ${LANGFUSE_OTEL_ENDPOINT:${OTEL_EXPORTER_OTLP_ENDPOINT:}}
   public-key: ${LANGFUSE_PUBLIC_KEY:}
   secret-key: ${LANGFUSE_SECRET_KEY:}
   public-url: ${LANGFUSE_PUBLIC_URL:}
 
 app:
   mcp:
-    config-path: ${MCP_CONFIG_PATH:mcp-servers.json}
+    config-path: ${MCP_CONFIG_PATH:/app/config/mcp-servers.json}
   skills:
     path: ${SKILLS_PATH:/app/skills}

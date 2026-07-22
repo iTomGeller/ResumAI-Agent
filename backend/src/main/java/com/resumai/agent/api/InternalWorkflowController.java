@@ -6,8 +6,10 @@ import com.resumai.agent.api.dto.InternalResumeSearchRequest;
 import com.resumai.agent.api.dto.InternalSkillExecuteRequest;
 import com.resumai.agent.api.dto.JdMatchResult;
 import com.resumai.agent.ai.SkillProvider;
+import com.resumai.agent.rag.RagOptions;
 import com.resumai.agent.service.ExternalProfileService;
 import com.resumai.agent.service.AgentMemoryService;
+import com.resumai.agent.service.HybridRagService;
 import com.resumai.agent.service.InternalWorkflowService;
 import com.resumai.agent.service.JdRagService;
 import com.resumai.agent.service.KnowledgeBaseDocumentService;
@@ -16,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -30,6 +33,7 @@ public class InternalWorkflowController {
     private final InternalWorkflowService internalWorkflowService;
     private final ResumeRagService resumeRagService;
     private final JdRagService jdRagService;
+    private final HybridRagService hybridRagService;
     private final ExternalProfileService externalProfileService;
     private final SkillProvider skillProvider;
     private final KnowledgeBaseDocumentService knowledgeBaseDocumentService;
@@ -38,6 +42,7 @@ public class InternalWorkflowController {
     public InternalWorkflowController(InternalWorkflowService internalWorkflowService,
                                       ResumeRagService resumeRagService,
                                       JdRagService jdRagService,
+                                      HybridRagService hybridRagService,
                                       ExternalProfileService externalProfileService,
                                       SkillProvider skillProvider,
                                       KnowledgeBaseDocumentService knowledgeBaseDocumentService,
@@ -45,6 +50,7 @@ public class InternalWorkflowController {
         this.internalWorkflowService = internalWorkflowService;
         this.resumeRagService = resumeRagService;
         this.jdRagService = jdRagService;
+        this.hybridRagService = hybridRagService;
         this.externalProfileService = externalProfileService;
         this.skillProvider = skillProvider;
         this.knowledgeBaseDocumentService = knowledgeBaseDocumentService;
@@ -152,15 +158,25 @@ public class InternalWorkflowController {
                                         @RequestBody InternalJdSearchRequest request) {
         authorize(token);
         int topK = request.topK() != null ? request.topK() : 3;
-        List<JdMatchResult> items = jdRagService.matchTopJds(request.resumeText(), topK);
+        // 与 AutoMatch 同源：hybrid-RRF（可选 rerank），不再走 vector-or-lexical 单通道。
+        List<JdMatchResult> items = hybridRagService.retrieve(
+                request.resumeText(), RagOptions.defaults().withTopK(topK));
         double topScore = items.stream().mapToDouble(JdMatchResult::score).max().orElse(0D);
+        String effectiveJd = "";
+        if (!items.isEmpty()) {
+            effectiveJd = jdRagService.getJdDescription(items.get(0).jdId());
+            if (!StringUtils.hasText(effectiveJd) && StringUtils.hasText(items.get(0).title())) {
+                effectiveJd = items.get(0).title();
+            }
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("items", items);
+        body.put("effectiveJd", effectiveJd);
         body.put("hitCount", items.size());
         body.put("topScore", topScore);
         body.put("fallbackUsed", items.isEmpty());
         body.put("fallbackReason", items.isEmpty() ? "no_jd_match" : null);
-        body.put("strategy", items.isEmpty() ? "lexical" : "vector");
+        body.put("strategy", "hybrid");
         return body;
     }
 

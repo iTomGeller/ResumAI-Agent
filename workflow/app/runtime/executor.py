@@ -52,6 +52,27 @@ AGENT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容）：
   "done": true/false
 }"""
 
+REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；不要写长 Markdown）：
+{
+  "thought": "简要计划",
+  "toolCalls": [],
+  "output": {
+    "summary": "一句话结论",
+    "confidence": 0.0-1.0,
+    "report": {
+      "recommendation": "HIRE|INTERVIEW_RECOMMEND|NEED_MANUAL_REVIEW|NOT_RECOMMEND",
+      "dimensions": [{"name": "技术能力|项目深度|JD匹配|履历可信度", "score": 0-100, "rationale": "..."}],
+      "strengths": ["..."],
+      "risks": ["..."],
+      "interviewQuestions": ["..."],
+      "dataQuality": "SUFFICIENT|PARTIAL|INSUFFICIENT",
+      "missingEvidence": ["..."]
+    }
+  },
+  "done": true
+}
+禁止输出 overallScore 与长 Markdown；综合分与正文由系统生成。"""
+
 # Provider-side schema enforcement (JSON guarantee layer 1): the decision loop
 # forces this function; DeepSeek then guarantees arguments match the schema.
 # Layers 2-4 (json_object mode, extract_json_object, pydantic + repair) stay
@@ -102,6 +123,88 @@ EMIT_DECISION_TOOL = {
     },
 }
 FORCE_EMIT_DECISION = {"type": "function", "function": {"name": "emit_decision"}}
+
+# ReportAgent: strong schema for structured report (Markdown is rendered offline).
+_REPORT_DIM = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "rationale": {"type": "string"},
+    },
+    "required": ["name", "score", "rationale"],
+}
+EMIT_REPORT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "emit_decision",
+        "description": "提交 ReportAgent 结构化评估（仅 JSON，不含长 Markdown）。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "thought": {"type": "string"},
+                "toolCalls": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string"},
+                            "arguments": {"type": "object"},
+                        },
+                        "required": ["tool"],
+                    },
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string"},
+                        "confidence": {"type": "number"},
+                        "report": {
+                            "type": "object",
+                            "properties": {
+                                "recommendation": {
+                                    "type": "string",
+                                    "enum": ["HIRE", "INTERVIEW_RECOMMEND",
+                                             "NEED_MANUAL_REVIEW", "NOT_RECOMMEND"],
+                                },
+                                "dimensions": {"type": "array", "items": _REPORT_DIM},
+                                "strengths": {"type": "array", "items": {"type": "string"}},
+                                "risks": {"type": "array", "items": {"type": "string"}},
+                                "interviewQuestions": {
+                                    "type": "array", "items": {"type": "string"}},
+                                "dataQuality": {
+                                    "type": "string",
+                                    "enum": ["SUFFICIENT", "PARTIAL", "INSUFFICIENT"],
+                                },
+                                "missingEvidence": {
+                                    "type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["recommendation", "dimensions", "strengths",
+                                         "risks", "interviewQuestions", "dataQuality"],
+                        },
+                    },
+                    "required": ["summary", "report"],
+                },
+                "done": {"type": "boolean"},
+            },
+            "required": ["done", "output"],
+        },
+    },
+}
+
+# Dimension weights for deterministic overallScore (name normalized lowercase).
+_DIMENSION_WEIGHTS = {
+    "技术能力": 0.35,
+    "项目深度": 0.25,
+    "jd匹配": 0.25,
+    "履历可信度": 0.15,
+}
+MIN_REPORT_ANSWER_CHARS = 80
+MIN_RESUME_TEXT_CHARS = 80
+_SCORE_CONTRACT_SKIP_TYPES = {
+    "followup", "quick_answer", "resume_optimize", "project_rewrite",
+    "interview_questions",
+}
 
 # Explicit long-term preference statements we are allowed to persist.
 _PREFERENCE_PATTERNS = [
@@ -180,6 +283,11 @@ class RunExecutor:
         self._regroup_needed = False
         # adaptive replan budget: at most 2 mid-run plan adjustments
         self.replan_count = 0
+        # pending mid-run replan hints set by agent loops
+        self._pending_handoff: Optional[str] = None
+        self._tool_failed_this_group = False
+        self._missing_artifacts: List[str] = []
+        self.plan_meta: Dict[str, Any] = {}
         # conflict arbitration runs exactly once (ruling is final)
         self._arbitrated = False
         # populated by _restore_snapshot on resume
@@ -187,12 +295,32 @@ class RunExecutor:
         self.parallel_groups: List[List[str]] = []
         self.next_group_index = 0
         self.executed: List[str] = []
+        # Attach probed MCP catalog (best-effort; empty catalog if probe fails).
+        try:
+            from app.runtime.mcp_registry import get_mcp_registry_sync, get_mcp_registry
+            registry = get_mcp_registry_sync()
+            if registry is not None:
+                self.tools.attach_mcp(registry)
+            else:
+                # Lazy probe will run on first execute; schedule soft attach.
+                self._mcp_attach_pending = True
+        except Exception as exc:  # noqa: BLE001
+            logger.info("MCP attach deferred: %s", exc)
+            self._mcp_attach_pending = True
 
     # ------------------------------------------------------------------
 
     async def execute(self) -> Dict[str, Any]:
         started = time.monotonic()
         try:
+            if self._requires_score_contract():
+                resume = (self.request.resumeText or "").strip()
+                if len(resume) < MIN_RESUME_TEXT_CHARS:
+                    return self._result(
+                        "FAILED", "",
+                        error_code="RESUME_TEXT_INSUFFICIENT",
+                        error_message=(
+                            f"简历文本过短（{len(resume)} 字），无法生成可靠评分与报告"))
             result = await asyncio.wait_for(
                 self._execute_inner(),
                 timeout=self.policy.timeoutPolicy.runTimeoutSeconds)
@@ -260,22 +388,46 @@ class RunExecutor:
                 and request.runType in ("full_evaluation", "jd_evaluation",
                                         "backend_eval", "agent_eval",
                                         "resume_optimize", "project_rewrite")
+            if getattr(self, "_mcp_attach_pending", False):
+                try:
+                    from app.runtime.mcp_registry import get_mcp_registry
+                    registry = await get_mcp_registry(probe=True)
+                    self.tools.attach_mcp(registry)
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("MCP probe skipped: %s", exc)
+                self._mcp_attach_pending = False
             planned = await coordinator.plan(
                 run_type=request.runType, user_message=request.userMessage,
                 conversation_summary=request.conversationSummary or "",
                 shared_digest="", failure_notes=self.failure_notes,
                 memory_notes=[str(h.get("content", ""))[:120]
                               for h in self.memory_hits[:3]],
-                needs_parse=needs_parse)
+                needs_parse=needs_parse,
+                resume_text=request.resumeText or "",
+                job_description=request.jobDescription or "",
+                artifacts=self.state.data.get("artifacts") or {},
+                shared=self.state.data)
             self.plan = planned["plan"]
             self.parallel_groups = planned["parallelGroups"]
-            self.budget_plan = planned.get("budgetPlan") or {}
+            self.budget_plan = planned.get("budgetPlan") or planned.get("budget") or {}
+            self.plan_meta = {
+                "selectedBecause": planned.get("selectedBecause") or {},
+                "skippedBecause": planned.get("skippedBecause") or {},
+                "artifactEdges": planned.get("artifactEdges") or [],
+                "goalArtifacts": planned.get("goalArtifacts") or [],
+                "budget": self.budget_plan,
+            }
             await self.emitter.emit("agent.selected", agent_id="CoordinatorAgent", payload={
                 "plan": self.plan, "reason": planned["reason"],
                 "parallelGroups": self.parallel_groups,
                 "requiredTerminalAgent": planned["requiredTerminalAgent"],
                 "policyId": self.policy.policyId,
                 "budgetPlan": self.budget_plan,
+                "budget": self.budget_plan,
+                "selectedBecause": self.plan_meta["selectedBecause"],
+                "skippedBecause": self.plan_meta["skippedBecause"],
+                "artifactEdges": self.plan_meta["artifactEdges"],
+                "goalArtifacts": self.plan_meta["goalArtifacts"],
                 "planMode": request.planMode,
                 "memoryHits": len(self.memory_hits),
                 "memoryNotes": [str(h.get("content", ""))[:120]
@@ -337,6 +489,9 @@ class RunExecutor:
                 continue
 
             conflicts_before = len(self.state.data["conflicts"])
+            self._tool_failed_this_group = False
+            self._pending_handoff = None
+            self._missing_artifacts = []
             if len(runnable) == 1:
                 ok = await self._run_single(runnable[0], coordinator)
                 consecutive_failures = 0 if ok else consecutive_failures + 1
@@ -354,9 +509,8 @@ class RunExecutor:
             if any(d.agent_id == "EvidenceAgent" for d in runnable):
                 await self._arbitrate_conflicts()
 
-            # Bounded mid-run dynamism: group failure / fresh conflicts / low
-            # confidence trigger one Coordinator review of the remaining plan
-            # (at most twice per run — never an unbounded planning loop).
+            # Bounded mid-run dynamism: missing artifact / tool failure /
+            # new conflict / handoff / group failure / low confidence.
             await self._maybe_replan(coordinator, ok, conflicts_before)
 
             # Group-boundary checkpoint (fire-and-forget): a later FAILED /
@@ -372,7 +526,18 @@ class RunExecutor:
         await self._write_memories(summary)
         status = "PARTIAL_SUCCESS" if (self.report_agent_failed or
                                        self._has_hard_degradation()) else "SUCCEEDED"
-        return self._result(status, self.final_answer, conversation_summary=summary)
+        error_code = None
+        error_message = None
+        if status == "SUCCEEDED" and self._requires_score_contract():
+            contract_error = self._report_contract_violation()
+            if contract_error:
+                status = "PARTIAL_SUCCESS"
+                error_code = "REPORT_CONTRACT_FAILED"
+                error_message = contract_error
+                self.degraded_reasons.append("report_contract_failed")
+        return self._result(status, self.final_answer,
+                            error_code=error_code, error_message=error_message,
+                            conversation_summary=summary)
 
     # ------------------------------------------------------------------
     # group execution
@@ -541,8 +706,9 @@ class RunExecutor:
 
     async def _maybe_replan(self, coordinator: Coordinator, group_ok: bool,
                             conflicts_before: int) -> None:
-        """Adaptive replan trigger after each group. Bounded: <=2 per run,
-        never for the terminal tail, threshold pending EXP-7."""
+        """Adaptive replan trigger after each group. Bounded: <=2 per run.
+        Triggers: missing_required_artifact / tool_failed / new_conflict /
+        handoff_requested / group_failure / low_confidence."""
         remaining = [a for g in self.parallel_groups[self.next_group_index:] for a in g]
         non_terminal_remaining = [a for a in remaining if a not in TERMINAL_AGENTS]
         if self.replan_count >= 2 or not non_terminal_remaining:
@@ -552,12 +718,51 @@ class RunExecutor:
         confidences = [float(o.get("confidence", 1.0)) for o in recent_outputs
                        if isinstance(o, dict)]
         avg_confidence = sum(confidences) / len(confidences) if confidences else 1.0
+
+        # Detect missing required artifacts for remaining agents.
+        missing: List[str] = list(self._missing_artifacts)
+        present = set()
+        arts = self.state.data.get("artifacts") or {}
+        if arts.get("parsedResume") or self.state.data.get("resumeFacts"):
+            present.add("resume_facts")
+        if arts.get("effectiveJd") or self.state.data.get("jdRequirements"):
+            present.add("jd_requirements")
+        if self.state.data.get("technicalFindings"):
+            present.add("technical_findings")
+        if self.state.data.get("projectFindings"):
+            present.add("project_findings")
+        if self.state.data.get("risks") or arts.get("timelineCheck"):
+            present.add("risks")
+        if self.state.data.get("evidence"):
+            present.add("evidence_ledger")
+        for agent_id in remaining:
+            if not self.registry.known(agent_id):
+                continue
+            try:
+                definition = self.registry.get(agent_id)
+            except KeyError:
+                continue
+            for req in definition.requires_artifacts:
+                if req not in present and req not in missing:
+                    missing.append(req)
+
         trigger = None
-        if not group_ok:
+        handoff_to = self._pending_handoff
+        if handoff_to:
+            # Handoff 去环：目标已执行则忽略。
+            if handoff_to in self.executed:
+                handoff_to = None
+            else:
+                trigger = f"handoff_requested:{handoff_to}"
+        elif missing:
+            trigger = "missing_required_artifact"
+        elif self._tool_failed_this_group:
+            trigger = "tool_failed"
+        elif not group_ok:
             trigger = "group_failure"
         elif new_conflicts > 0:
-            trigger = f"new_conflicts:{new_conflicts}"
-        elif avg_confidence < REPLAN_CONFIDENCE_THRESHOLD:  # EXP-7 knob
+            trigger = f"new_conflict:{new_conflicts}"
+        elif avg_confidence < REPLAN_CONFIDENCE_THRESHOLD:
             trigger = f"low_confidence:{avg_confidence:.2f}"
         if trigger is None:
             return
@@ -568,30 +773,66 @@ class RunExecutor:
             "risks": len(state["risks"]),
             "conflicts": [str(c.get("claim", c.get("key", "")))[:80]
                           for c in state["conflicts"][-3:] if isinstance(c, dict)],
+            "missingArtifacts": missing[:6],
         }, ensure_ascii=False)
         adjusted = await coordinator.adaptive_replan(
             remaining=remaining, executed=self.executed,
             shared_digest=shared_digest, trigger=trigger,
-            failure_notes=self.failure_notes)
+            failure_notes=self.failure_notes,
+            missing_artifacts=missing,
+            handoff_to=handoff_to)
         if adjusted is None:
             return
         self.replan_count += 1
+        self._pending_handoff = None
+        self._tool_failed_this_group = False
+        self._missing_artifacts = []
         self.parallel_groups = self.parallel_groups[: self.next_group_index] \
             + adjusted["parallelGroups"]
         self.plan = self.executed + adjusted["plan"]
         for agent_id, quota in (adjusted.get("budgetPlan") or {}).items():
             self.budget_plan[agent_id] = quota
+        self.plan_meta = {
+            "selectedBecause": adjusted.get("selectedBecause") or {},
+            "skippedBecause": adjusted.get("skippedBecause") or {},
+            "artifactEdges": adjusted.get("artifactEdges") or [],
+            "goalArtifacts": adjusted.get("goalArtifacts") or missing,
+            "budget": self.budget_plan,
+        }
         await self.emitter.emit("agent.selected", agent_id="CoordinatorAgent", payload={
             "plan": self.plan, "reason": adjusted["reason"],
             "parallelGroups": self.parallel_groups,
             "requiredTerminalAgent": adjusted["requiredTerminalAgent"],
             "policyId": self.policy.policyId,
+            "budgetPlan": self.budget_plan,
+            "budget": self.budget_plan,
+            "selectedBecause": self.plan_meta["selectedBecause"],
+            "skippedBecause": self.plan_meta["skippedBecause"],
+            "artifactEdges": self.plan_meta["artifactEdges"],
             "replanned": True, "trigger": trigger,
             "replanCount": self.replan_count})
 
     def _has_hard_degradation(self) -> bool:
         hard = {"run_timeout", "consecutive_failures"}
         return any(r in hard or r.endswith("_failed") for r in self.degraded_reasons)
+
+    def _requires_score_contract(self) -> bool:
+        return self.request.runType not in _SCORE_CONTRACT_SKIP_TYPES
+
+    def _report_contract_violation(self) -> Optional[str]:
+        """SUCCEEDED requires non-empty structuredReport, numeric score, and
+        a rendered answer that meets the minimum length contract."""
+        report = self.state.data.get("artifacts", {}).get("finalReport")
+        if not isinstance(report, dict) or not report:
+            return "structuredReport 为空"
+        if not isinstance(report.get("overallScore"), int):
+            quality = str(report.get("dataQuality") or "").upper()
+            if quality == "INSUFFICIENT":
+                return "简历证据不足，无法给出数值分"
+            return "overallScore 为空"
+        if len(self.final_answer or "") < MIN_REPORT_ANSWER_CHARS:
+            return f"报告正文过短（<{MIN_REPORT_ANSWER_CHARS} 字）"
+        return None
 
     # ------------------------------------------------------------------
     # pause / resume
@@ -677,10 +918,30 @@ class RunExecutor:
         agent_id = definition.agent_id
         prompt = default_prompt_manager.system_for_agent(
             agent_id, self.policy.promptVersions.get(agent_id))
+        signals = Coordinator(self.registry, self.policy, None).inspect_signals(
+            resume_text=request.resumeText or "",
+            job_description=request.jobDescription or "",
+            artifacts=self.state.data.get("artifacts") or {},
+            shared=self.state.data)
         skills = default_skill_manager.select_for(
             agent_id=agent_id, run_type=request.runType,
-            job_focus=self.policy.jobFocus, overrides=self.policy.skillOverrides)
+            job_focus=self.policy.jobFocus, overrides=self.policy.skillOverrides,
+            signals=signals, user_message=request.userMessage or "")
         self.skill_selections[agent_id] = skills
+        try:
+            await default_skill_manager.emit_selection(
+                self.emitter, agent_id, skills)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("skill event emit skipped: %s", exc)
+
+        # Live tool catalog: static definition tools + AVAILABLE MCP route.
+        allowed_tools = set(definition.tools)
+        try:
+            catalog = self.tools.catalog_for_agent(agent_id, list(definition.tools))
+            for entry in catalog:
+                allowed_tools.add(str(entry.get("name") or ""))
+        except Exception:  # noqa: BLE001
+            pass
 
         tool_results_block = ""
         agent_tool_calls = 0
@@ -707,6 +968,8 @@ class RunExecutor:
             call = await self.tools.execute(agent_id, tool, args,
                                             enable_rewrite=rewrite)
             agent_tool_calls += 1
+            if call.status == "FAILED":
+                self._tool_failed_this_group = True
             tool_results_block += self._format_tool_result(call)
             if call.status == "SUCCEEDED":
                 if tool == "calculate_jd_coverage":
@@ -717,6 +980,29 @@ class RunExecutor:
                     self._apply_verification(call.result)
                 elif tool == "parse_resume":
                     self.state.put_artifact("parsedResume", call.result)
+                    facts = self._resume_facts_from_parse(call.result)
+                    if facts:
+                        self.state.put_artifact("resumeFacts", facts)
+                elif tool == "jd_match_search":
+                    self._store_jd_match_artifacts(call.result)
+
+        # Performance fast-path: high-quality deterministic parse → skip LLM.
+        if definition.agent_id == "ResumeParserAgent":
+            fast = self._maybe_skip_parser_llm(tool_results_block)
+            if fast is not None:
+                self.agent_counters[definition.agent_id] = {
+                    "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
+                    "fastPath": 1}
+                return fast
+
+        # Performance fast-path: Evidence verify clean → skip arbitration LLM.
+        if definition.agent_id == "EvidenceAgent":
+            fast = self._maybe_skip_evidence_llm(tool_results_block)
+            if fast is not None:
+                self.agent_counters[definition.agent_id] = {
+                    "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
+                    "fastPath": 1}
+                return fast
 
         output: Optional[AgentOutput] = None
         max_iterations = min(
@@ -738,7 +1024,8 @@ class RunExecutor:
                 conversation_summary=request.conversationSummary or "",
                 memory_block=self._memory_block(definition),
                 tool_results_block=tool_results_block,
-                output_schema=AGENT_OUTPUT_SCHEMA)
+                output_schema=(REPORT_OUTPUT_SCHEMA if agent_id == "ReportAgent"
+                               else AGENT_OUTPUT_SCHEMA))
             if self.context.needs_compaction(messages):
                 messages = await self.context.compact(
                     messages, reason="context_over_threshold",
@@ -751,11 +1038,25 @@ class RunExecutor:
                     logger.warning("compaction consistency violations: %s", violations)
 
             is_terminal = definition.agent_id in TERMINAL_AGENTS
-            # Specialists: provider-enforced function calling (strongest JSON
-            # guarantee). Terminal agents keep json_object mode — their long
-            # markdown answer lives inside the JSON envelope and function
-            # arguments are a poor fit for multi-KB text.
-            if is_terminal:
+            is_report = definition.agent_id == "ReportAgent"
+            # Specialists + ReportAgent: provider-enforced function calling.
+            # Other terminal agents (optimize/interview) keep json_object mode —
+            # their long markdown answer lives inside the JSON envelope.
+            if is_report:
+                try:
+                    raw = await self.llm.chat(
+                        messages, agent_id=agent_id,
+                        purpose=definition.output_type, max_tokens=2048,
+                        tools=[EMIT_REPORT_TOOL],
+                        tool_choice=FORCE_EMIT_DECISION)
+                except LlmError as exc:
+                    if exc.code in ("PROMPT_OR_SCHEMA_ERROR", "EMPTY_FUNCTION_ARGS"):
+                        raw = await self.llm.chat(
+                            messages, agent_id=agent_id,
+                            purpose=definition.output_type, max_tokens=2048)
+                    else:
+                        raise
+            elif is_terminal:
                 raw = await self.llm.chat(messages, agent_id=agent_id,
                                           purpose=definition.output_type,
                                           max_tokens=3600)
@@ -777,18 +1078,10 @@ class RunExecutor:
                         raise
             agent_llm_calls += 1
             decision, schema_error = self._parse_decision(raw)
-            if decision is None and is_terminal and raw.strip():
-                # Long reports frequently overflow the JSON envelope. The
-                # report IS the deliverable — accept the raw markdown instead
-                # of burning repair calls and failing the terminal agent.
-                decision = {"thought": "", "toolCalls": [],
-                            "output": {"summary": raw.strip()[:400],
-                                       "answer": raw.strip(),
-                                       "claims": [], "evidence": [],
-                                       "confidence": 0.6},
-                            "done": True}
             if decision is None:
                 # Repair with the exact violation fed back, not a generic nag.
+                # Terminal raw-markdown acceptance was removed: ReportAgent must
+                # produce structured JSON or the run fails the report contract.
                 raw = await self.llm.chat(
                     messages + [{"role": "assistant", "content": raw[:1500]},
                                 {"role": "user",
@@ -816,7 +1109,7 @@ class RunExecutor:
                 observations = ""
                 for tool_call in tool_calls[:3]:
                     tool = str(tool_call.get("tool") or "")
-                    if tool not in definition.tools:
+                    if tool not in allowed_tools:
                         observations += f"\n[TOOL_RESULT {tool}] 拒绝：不在该 Agent 白名单"
                         continue
                     if agent_tool_calls >= agent_tool_limit:
@@ -834,9 +1127,14 @@ class RunExecutor:
                     call = await self.tools.execute(agent_id, tool, args,
                                                     enable_rewrite=True)
                     agent_tool_calls += 1
+                    if call.status == "FAILED":
+                        self._tool_failed_this_group = True
                     observations += self._format_tool_result(call)
-                    if tool == "verify_report_evidence" and call.status == "SUCCEEDED":
-                        self._apply_verification(call.result)
+                    if call.status == "SUCCEEDED":
+                        if tool == "verify_report_evidence":
+                            self._apply_verification(call.result)
+                        elif tool == "jd_match_search":
+                            self._store_jd_match_artifacts(call.result)
                 guard = self.guard.check_observation(observations)
                 if guard.triggered:
                     await self._emit_guard(guard, agent_id)
@@ -849,14 +1147,25 @@ class RunExecutor:
             handoff = decision.get("handoff") or {}
             if isinstance(handoff, dict) and handoff.get("to"):
                 target = str(handoff["to"])
-                raw_candidate = decision.get("output")
-                if not isinstance(raw_candidate, dict):
-                    decision["output"] = raw_candidate = {}
-                raw_candidate.setdefault("requestedNextAction", target)
-                await self.emitter.emit("agent.progress", agent_id=agent_id, payload={
-                    "handoff": {"to": target,
-                                "reason": str(handoff.get("reason", ""))[:200],
-                                "task": str(handoff.get("task", ""))[:200]}})
+                # Handoff 去环：拒绝已完成目标；LoopGuard 另检双向委派。
+                if target not in self.executed:
+                    delegation = self.guard.check_delegation(agent_id, target)
+                    if delegation.triggered:
+                        await self._emit_guard(delegation, agent_id)
+                    else:
+                        self._pending_handoff = target
+                        raw_candidate = decision.get("output")
+                        if not isinstance(raw_candidate, dict):
+                            decision["output"] = raw_candidate = {}
+                        raw_candidate.setdefault("requestedNextAction", target)
+                        await self.emitter.emit("agent.progress", agent_id=agent_id, payload={
+                            "handoff": {"to": target,
+                                        "reason": str(handoff.get("reason", ""))[:200],
+                                        "task": str(handoff.get("task", ""))[:200]}})
+                else:
+                    await self.emitter.emit("agent.progress", agent_id=agent_id, payload={
+                        "handoffRejected": True, "to": target,
+                        "reason": "handoff 去环：目标 Agent 已执行"})
 
             raw_output = decision.get("output")
             if raw_output or decision.get("done") or iteration >= max_iterations:
@@ -917,6 +1226,22 @@ class RunExecutor:
             requestedNextAction=str(requested) if requested and not guard.triggered else None,
             summary=summary[:500])
         if definition.agent_id in TERMINAL_AGENTS:
+            if definition.agent_id == "ReportAgent":
+                report = raw_output.get("report")
+                if isinstance(report, dict):
+                    if summary and not report.get("summary"):
+                        report = {**report, "summary": summary}
+                    validated = self._validate_structured_report(report)
+                    if validated:
+                        self.state.put_artifact("finalReport", validated)
+                        self.final_answer = self.render_report(validated)
+                        return output
+                # followup/quick_answer 可降级为短答；评估类必须走结构化契约。
+                if not self._requires_score_contract():
+                    answer = raw_output.get("answer") or summary
+                    if answer:
+                        self.final_answer = str(answer)
+                return output
             report = raw_output.get("report")
             if isinstance(report, dict):
                 validated = self._validate_structured_report(report)
@@ -931,20 +1256,158 @@ class RunExecutor:
                 self.final_answer = str(answer)
         return output
 
+    def _store_jd_match_artifacts(self, result: Any) -> None:
+        """Persist hybrid JD matches + effectiveJd for Tech coverage / sync."""
+        if not isinstance(result, dict):
+            return
+        items = result.get("items") if isinstance(result.get("items"), list) else None
+        if items is None and isinstance(result.get("jdMatches"), list):
+            items = result["jdMatches"]
+        if items is not None:
+            self.state.put_artifact("jdMatches", items)
+        effective = result.get("effectiveJd")
+        if isinstance(effective, str) and effective.strip():
+            self.state.put_artifact("effectiveJd", effective.strip())
+        elif items:
+            top = items[0] if isinstance(items[0], dict) else {}
+            title = str(top.get("title") or "").strip()
+            reasons = top.get("matchReasons") or []
+            lines = [f"岗位：{title}"] if title else []
+            for reason in reasons[:6]:
+                if reason:
+                    lines.append(f"- {reason}")
+            if lines:
+                self.state.put_artifact("effectiveJd", "\n".join(lines))
+
+    @staticmethod
+    def _resume_facts_from_parse(parsed: Any) -> Optional[Dict[str, Any]]:
+        """Map deterministic parse_resume output into resumeFacts artifact."""
+        if not isinstance(parsed, dict) or not parsed.get("success"):
+            return None
+        sections = parsed.get("sections") if isinstance(parsed.get("sections"), dict) else {}
+        skills = list(parsed.get("skills") or [])
+        projects = list(parsed.get("projectNames") or [])
+        experiences = list(sections.get("experience") or [])[:20]
+        education = list(sections.get("education") or [])[:12]
+        completeness = 0
+        if skills:
+            completeness += 1
+        if projects or sections.get("projects"):
+            completeness += 1
+        if experiences:
+            completeness += 1
+        if education:
+            completeness += 1
+        if parsed.get("timelinePeriods"):
+            completeness += 1
+        if completeness < 3 and float(parsed.get("confidence") or 0) < 0.75:
+            return None
+        return {
+            "skills": skills[:40],
+            "projects": [{"name": p} for p in projects[:12]],
+            "experiences": [{"raw": e} for e in experiences],
+            "education": [{"raw": e} for e in education],
+            "contact": parsed.get("contact") or {},
+            "timelinePeriods": parsed.get("timelinePeriods") or [],
+            "source": "parse_resume_fast_path",
+            "completeness": completeness,
+            "confidence": float(parsed.get("confidence") or 0.8),
+        }
+
+    def _maybe_skip_parser_llm(self, tool_results_block: str) -> Optional[AgentOutput]:
+        facts = self.state.data.get("artifacts", {}).get("resumeFacts")
+        if not isinstance(facts, dict) or facts.get("source") != "parse_resume_fast_path":
+            return None
+        summary = (f"确定性解析完成：技能 {len(facts.get('skills') or [])}、"
+                   f"项目 {len(facts.get('projects') or [])}、"
+                   f"经历 {len(facts.get('experiences') or [])}")
+        return AgentOutput(
+            agentId="ResumeParserAgent",
+            type="resume_facts",
+            claims=[{"text": summary, "confidence": facts.get("confidence", 0.8)}],
+            evidence=[],
+            confidence=float(facts.get("confidence") or 0.8),
+            source="tools",
+            dependencies=[],
+            requestedNextAction=None,
+            summary=summary[:500])
+
+    def _maybe_skip_evidence_llm(self, tool_results_block: str) -> Optional[AgentOutput]:
+        """Skip Evidence LLM when deterministic verify is clean and support is high."""
+        support = self.state.evidence_support_ratio()
+        conflicts = self.state.data.get("conflicts") or []
+        if conflicts:
+            return None
+        if support is None or support < 0.85:
+            return None
+        if "verify_report_evidence" not in tool_results_block:
+            return None
+        summary = f"确定性核验通过：支持率 {support:.2f}，无冲突，跳过 Evidence LLM"
+        return AgentOutput(
+            agentId="EvidenceAgent",
+            type="evidence",
+            claims=[],
+            evidence=[],
+            confidence=max(0.7, float(support)),
+            source="tools",
+            dependencies=[],
+            requestedNextAction=None,
+            summary=summary[:500])
+
+    @staticmethod
+    def render_report(report: Dict[str, Any]) -> str:
+        """Deterministic Markdown from a validated structured report."""
+        score = report.get("overallScore")
+        recommendation = report.get("recommendation") or "NEED_MANUAL_REVIEW"
+        quality = report.get("dataQuality") or "SUFFICIENT"
+        sections: List[str] = []
+        title_bits = []
+        if isinstance(score, int):
+            title_bits.append(f"综合评分 {score}")
+        title_bits.append(f"建议 {recommendation}")
+        sections.append("# 简历评估报告\n\n" + " · ".join(title_bits))
+        if report.get("summary"):
+            sections.append(f"## 结论\n\n{report['summary']}")
+        dimensions = report.get("dimensions") or []
+        if dimensions:
+            lines = ["## 维度评分\n"]
+            for dim in dimensions:
+                if not isinstance(dim, dict):
+                    continue
+                name = dim.get("name", "")
+                dim_score = dim.get("score")
+                rationale = dim.get("rationale") or ""
+                score_part = f"{dim_score} 分" if dim_score is not None else "未评分"
+                lines.append(f"- **{name}**：{score_part}"
+                             + (f" — {rationale}" if rationale else ""))
+            sections.append("\n".join(lines))
+        for key, heading in (("strengths", "优势"), ("risks", "风险"),
+                             ("interviewQuestions", "面试追问"),
+                             ("missingEvidence", "证据缺口")):
+            values = [str(v) for v in (report.get(key) or []) if str(v).strip()]
+            if values:
+                body = "\n".join(f"- {v}" for v in values)
+                sections.append(f"## {heading}\n\n{body}")
+        if quality and quality != "SUFFICIENT":
+            sections.append(f"## 数据质量\n\n- {quality}")
+        return "\n\n".join(sections).strip()
+
     @staticmethod
     def _validate_structured_report(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Range/enum-check the structured report; out-of-range fields are
-        dropped (never fabricated), an empty result returns None."""
+        """Validate structured report; overallScore is computed from dimension
+        scores with fixed weights (never taken from the model verbatim)."""
         allowed_recommendations = {
             "HIRE", "INTERVIEW_RECOMMEND", "NEED_MANUAL_REVIEW", "NOT_RECOMMEND"}
         out: Dict[str, Any] = {}
-        score = report.get("overallScore")
-        if isinstance(score, (int, float)) and 0 <= float(score) <= 100:
-            out["overallScore"] = int(round(float(score)))
         recommendation = str(report.get("recommendation") or "").strip().upper()
         if recommendation in allowed_recommendations:
             out["recommendation"] = recommendation
+        quality = str(report.get("dataQuality") or "SUFFICIENT").strip().upper()
+        if quality not in {"SUFFICIENT", "PARTIAL", "INSUFFICIENT"}:
+            quality = "SUFFICIENT"
+        out["dataQuality"] = quality
         dimensions = []
+        scored: List[Tuple[str, int]] = []
         for dim in report.get("dimensions") or []:
             if not isinstance(dim, dict) or not dim.get("name"):
                 continue
@@ -952,39 +1415,85 @@ class RunExecutor:
             dim_score = dim.get("score")
             if isinstance(dim_score, (int, float)) and 0 <= float(dim_score) <= 100:
                 entry["score"] = int(round(float(dim_score)))
+                scored.append((entry["name"], entry["score"]))
             if dim.get("rationale"):
                 entry["rationale"] = str(dim["rationale"])[:300]
             dimensions.append(entry)
         if dimensions:
             out["dimensions"] = dimensions[:10]
-        for key in ("strengths", "risks", "interviewQuestions"):
+        # overallScore: weighted mean of known dimensions; equal weights otherwise.
+        # If the model marked INSUFFICIENT but still provided dimension scores,
+        # treat quality as PARTIAL and compute the score (do not hide a numeric
+        # result behind a contradictory dataQuality flag).
+        if scored:
+            if quality == "INSUFFICIENT":
+                quality = "PARTIAL"
+                out["dataQuality"] = quality
+            weight_sum = 0.0
+            weighted = 0.0
+            for name, score in scored:
+                key = name.replace(" ", "").lower()
+                weight = next(
+                    (w for n, w in _DIMENSION_WEIGHTS.items()
+                     if n.replace(" ", "").lower() == key),
+                    None)
+                if weight is None:
+                    continue
+                weighted += score * weight
+                weight_sum += weight
+            if weight_sum > 0:
+                out["overallScore"] = int(round(weighted / weight_sum))
+            else:
+                out["overallScore"] = int(round(sum(s for _, s in scored) / len(scored)))
+        elif quality == "INSUFFICIENT":
+            # No dimension scores and insufficient evidence → no numeric score.
+            out.pop("overallScore", None)
+        for key in ("strengths", "risks", "interviewQuestions", "missingEvidence"):
             values = [str(v)[:300] for v in (report.get(key) or [])
                       if isinstance(v, (str, int, float)) and str(v).strip()]
             if values:
                 out[key] = values[:12]
+        if report.get("summary"):
+            out["summary"] = str(report["summary"])[:500]
+        # Require the core contract fields for a non-empty artifact.
+        if "recommendation" not in out and "dimensions" not in out:
+            return None
         return out or None
 
     def _pre_steps(self, definition: AgentDefinition) -> List[tuple]:
         request = self.request
         resume = request.resumeText or ""
+        artifacts = self.state.data.get("artifacts", {})
         steps: List[tuple] = []
-        parsed_already = "parsedResume" in self.state.data.get("artifacts", {})
+        parsed_already = "parsedResume" in artifacts
         if definition.agent_id == "ResumeParserAgent" and resume and not parsed_already:
             steps.append(("parse_resume", {"resumeText": resume}))
+        elif definition.agent_id == "JDAnalysisAgent" and resume \
+                and not (request.jobDescription or "").strip() \
+                and "jdMatches" not in artifacts:
+            # No user JD: deterministic hybrid match (do not rely on LLM tool whim).
+            steps.append(("jd_match_search", {"resumeText": resume}))
         elif definition.agent_id == "RiskAgent" and resume \
-                and "timelineCheck" not in self.state.data.get("artifacts", {}):
+                and "timelineCheck" not in artifacts:
             steps.append(("check_timeline", {"resumeText": resume}))
         elif definition.agent_id == "TechAgent" and resume \
-                and (request.jobDescription or "").strip() \
-                and "jdCoverage" not in self.state.data.get("artifacts", {}):
-            steps.append(("calculate_jd_coverage",
-                          {"resumeText": resume, "jdText": request.jobDescription}))
+                and "jdCoverage" not in artifacts:
+            effective_jd = ""
+            artifact_jd = artifacts.get("effectiveJd")
+            if isinstance(artifact_jd, str) and artifact_jd.strip():
+                effective_jd = artifact_jd.strip()
+            elif (request.jobDescription or "").strip():
+                effective_jd = request.jobDescription.strip()
+            if effective_jd:
+                steps.append(("calculate_jd_coverage",
+                              {"resumeText": resume, "jdText": effective_jd}))
         elif definition.agent_id == "EvidenceAgent" and resume:
             claims = self.state.claims_for_verification()
             if claims:
                 steps.append(("verify_report_evidence",
                               {"resumeText": resume,
-                               "jdText": request.jobDescription or "",
+                               "jdText": (artifacts.get("effectiveJd")
+                                          or request.jobDescription or ""),
                                "claims": claims}))
         elif definition.agent_id == "ResumeOptimizeAgent" and resume:
             steps.append(("resume_lint", {"resumeText": resume}))

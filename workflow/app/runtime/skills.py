@@ -1,8 +1,35 @@
 from __future__ import annotations
 
+"""Skill manager: backend/src/main/resources/skills is the single source of truth.
+
+Workflow loads SKILL.md packages at startup (and on refresh). Selection follows
+the plan trigger matrix — never dump every skill into the prompt.
+"""
+
 import hashlib
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+import logging
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Deprecated aliases kept on disk for admin/compat but not injected into the
+# candidate-evaluation main runtime path.
+DEPRECATED_SKILLS = {
+    "project_depth_analysis",
+    "tech_stack_assessment",
+    "evidence_synthesis",
+    "intent_routing",
+    "webapp-testing",
+    "mcp-builder",
+    "skill-creator",
+}
+
+# Skills that are admin-only / not part of candidate evaluation.
+ADMIN_ONLY_SKILLS = {"webapp-testing", "mcp-builder", "skill-creator"}
 
 
 @dataclass(frozen=True)
@@ -20,164 +47,128 @@ class SkillDefinition:
     output_requirements: str = ""
     evaluation_metrics: tuple = ()
     status: str = "ACTIVE"
+    source_path: str = ""
+    deprecated: bool = False
 
     @property
     def hash(self) -> str:
         return hashlib.sha256(self.instructions.encode("utf-8")).hexdigest()[:12]
 
 
-_SKILLS: List[SkillDefinition] = [
-    SkillDefinition(
-        "resume_parsing", "简历结构化解析", "v1",
-        "从原始简历文本/PDF 提取结构化事实",
-        ("run_start", "resume_available"),
-        "优先使用 parse_resume 沙箱工具获得客观结构；只补充工具遗漏的字段；"
-        "每个字段标注来源行号；空 PDF/扫描件直接报告解析失败而不是编造内容。",
-        positive_examples=("技能'Kafka'来自第12行'基于Kafka实现异步解耦'",),
-        negative_examples=("凭空补全教育经历",),
-        required_tools=("parse_resume",),
-        output_requirements="resumeFacts JSON：skills/projects/experiences/education",
-        evaluation_metrics=("parsing_success_rate",)),
-    SkillDefinition(
-        "jd_requirement_analysis", "JD 需求提取", "v1",
-        "提取硬性要求/加分项/关键词/级别",
-        ("jd_available", "jd_evaluation"),
-        "区分硬性要求与加分项；每条要求归一化为可比对的技能短语；"
-        "没有 JD 时使用 jd_match_search 并明确标注来源是检索。",
-        required_tools=("jd_match_search",),
-        output_requirements="jdRequirements JSON：required/preferred/keywords/level",
-        evaluation_metrics=("jd_coverage",)),
-    SkillDefinition(
-        "java_backend_evaluation", "Java 后端岗位评估", "v1",
-        "针对 Java 后端岗位的技术评估侧重",
-        ("job_focus:java_backend",),
-        "重点核查：并发与 JVM 证据、数据库与缓存实践、消息中间件、分布式一致性、"
-        "性能指标真实性；只在技能栏出现而无项目支撑的技能降权并提示面试验证。",
-        required_tools=("calculate_jd_coverage", "resume_semantic_search"),
-        output_requirements="technicalFindings 按 JD 条目对齐",
-        evaluation_metrics=("evidence_support_ratio",)),
-    SkillDefinition(
-        "ai_agent_job_evaluation", "AI Agent 岗位评估", "v1",
-        "针对 LLM/Agent 岗位的技术评估侧重",
-        ("job_focus:ai_agent",),
-        "重点核查：Agent 编排/工具调用/RAG/评测方法论的实践深度；分辨 Demo 和生产化证据；"
-        "关注 prompt 管理、评测集、可观测性等工程化信号。",
-        required_tools=("calculate_jd_coverage", "resume_semantic_search"),
-        output_requirements="technicalFindings 按 JD 条目对齐",
-        evaluation_metrics=("evidence_support_ratio",)),
-    SkillDefinition(
-        "frontend_evaluation", "前端岗位评估", "v1",
-        "针对前端/客户端岗位的技术评估侧重",
-        ("job_focus:frontend",),
-        "重点核查：框架深度（React/Vue 原理级 vs API 级）、工程化（构建/监控/性能优化的量化证据）、"
-        "跨端与兼容实践、与后端协作边界；仅列框架名而无性能指标或复杂交互实现的降权。",
-        required_tools=("calculate_jd_coverage", "resume_semantic_search"),
-        output_requirements="technicalFindings 按 JD 条目对齐",
-        evaluation_metrics=("evidence_support_ratio",)),
-    SkillDefinition(
-        "algorithm_llm_evaluation", "算法/LLM 岗位评估", "v1",
-        "针对算法与大模型岗位的技术评估侧重",
-        ("job_focus:algorithm",),
-        "重点核查：模型训练/微调的真实性（数据规模、算力、评测集与指标提升是否自洽）、"
-        "论文/竞赛/开源可核验性、工程落地能力（推理优化、部署）；"
-        "指标提升无 baseline 对照的标记为待核实。",
-        required_tools=("calculate_jd_coverage", "resume_semantic_search"),
-        output_requirements="technicalFindings 按 JD 条目对齐",
-        evaluation_metrics=("evidence_support_ratio",)),
-    SkillDefinition(
-        "data_engineer_evaluation", "数据工程师岗位评估", "v1",
-        "针对数据开发/数仓岗位的技术评估侧重",
-        ("job_focus:data",),
-        "重点核查：数据规模与链路真实性（日增量/存储量/时效）、调度与质量保障实践、"
-        "数仓建模方法论落地证据、SQL/Spark/Flink 深度信号；只报工具名不报规模的降权。",
-        required_tools=("calculate_jd_coverage", "resume_semantic_search"),
-        output_requirements="technicalFindings 按 JD 条目对齐",
-        evaluation_metrics=("evidence_support_ratio",)),
-    SkillDefinition(
-        "score_consistency", "评分一致性校准", "v1",
-        "评分与推荐结论、维度分的一致性约束",
-        ("always_for_report",),
-        "综合分必须能由维度分合理推出（偏差>15 需说明原因）；"
-        "recommendation 与综合分区间一致：>=80 可 HIRE/INTERVIEW_RECOMMEND，"
-        "60-79 默认 INTERVIEW_RECOMMEND/NEED_MANUAL_REVIEW，<60 禁止 HIRE；"
-        "证据不足以支撑打分时输出 null 而不是编造中间值。",
-        output_requirements="report.overallScore 与 dimensions/recommendation 自洽",
-        evaluation_metrics=("recommendation_accuracy",)),
-    SkillDefinition(
-        "english_resume_evaluation", "英文简历评估补充", "v1",
-        "英文简历的解析与评估注意事项",
-        ("resume_language:en",),
-        "职级词（Senior/Staff/Principal）按公司规模校准，不直接映射国内职级；"
-        "动词包装（spearheaded/orchestrated）不作为深度证据，只认量化结果与技术细节；"
-        "教育背景注意学制差异，GPA 满分制不同需换算说明。",
-        output_requirements="findings 中标注语言校准说明",
-        evaluation_metrics=("evidence_support_ratio",)),
-    SkillDefinition(
-        "project_depth_analysis", "项目深度分析", "v1",
-        "项目复杂度/贡献/深度评估",
-        ("project_analysis", "full_evaluation"),
-        "对每个项目回答：解决什么问题、个人负责边界、技术难点与权衡、量化结果是否可信；"
-        "指标必须能在原文定位（locate_evidence），否则标记为待核实。",
-        required_tools=("locate_evidence",),
-        output_requirements="projectFindings 列表，含 blindSpots",
-        evaluation_metrics=("unsupported_claim_rate",)),
-    SkillDefinition(
-        "timeline_risk_analysis", "时间线风险分析", "v1",
-        "履历时间线一致性检查",
-        ("timeline_check", "risk_check", "full_evaluation"),
-        "以 check_timeline 工具输出为准描述重叠/空窗/未来时间；"
-        "合理重叠（实习+在校）不判为高风险；高风险必须给出原文行号。",
-        required_tools=("check_timeline",),
-        output_requirements="risks 列表，含 severity 与 evidence",
-        evaluation_metrics=("timeline_precision", "timeline_recall")),
-    SkillDefinition(
-        "evidence_verification", "证据核验", "v1",
-        "对结论逐条核验证据",
-        ("evidence_check", "full_evaluation", "strict_evidence"),
-        "对共享状态所有 claims 运行 verify_report_evidence；"
-        "unsupported 结论写入 conflicts 并附原因（无原文/数字对不上/语义弱匹配）；"
-        "不得删除他人结论，只能标记。",
-        required_tools=("verify_report_evidence", "locate_evidence"),
-        output_requirements="evidence + conflicts 更新",
-        evaluation_metrics=("evidence_support_ratio", "unsupported_claim_rate")),
-    SkillDefinition(
-        "resume_rewrite", "简历改写", "v1",
-        "项目描述与整体改写",
-        ("project_rewrite", "resume_optimize"),
-        "STAR 结构 + 量化优先；保持事实不变（时间/公司/数字不可改动/新增）；"
-        "每条改写给出改动理由；改写后跑 resume_lint 并把剩余问题列出。",
-        required_tools=("resume_lint",),
-        output_requirements="rewrittenSections 前后对照",
-        evaluation_metrics=("lint_score",)),
-    SkillDefinition(
-        "interview_question_generation", "面试追问生成", "v1",
-        "基于风险与证据缺口生成追问",
-        ("interview_questions",),
-        "每题包含：问题、考察点、好答案信号、追问来源（风险/缺口/项目模糊点）；"
-        "优先追问 unsupported 结论与高风险时间线。",
-        output_requirements="questions 列表",
-        evaluation_metrics=("question_specificity",)),
-    SkillDefinition(
-        "report_generation", "报告生成", "v1",
-        "汇总生成最终回答/报告",
-        ("always_for_report",),
-        "结论分为：确定（有证据）/不确定（证据不足或冲突）；引用来源 Agent 与原文位置；"
-        "评分与推荐结论一致；用 validate_report_schema 自检结构。",
-        required_tools=("validate_report_schema",),
-        output_requirements="Markdown 回答 + 结构化 report JSON",
-        evaluation_metrics=("recommendation_accuracy",)),
-]
+def _skills_root_candidates() -> List[Path]:
+    configured = (os.getenv("SKILLS_PATH") or "").strip()
+    here = Path(__file__).resolve()
+    # workflow/app/runtime -> repo root = parents[3]
+    repo = here.parents[3]
+    candidates: List[Path] = []
+    if configured:
+        candidates.append(Path(configured))
+    candidates.extend([
+        Path("/app/skills"),
+        repo / "backend" / "src" / "main" / "resources" / "skills",
+        Path("backend/src/main/resources/skills"),
+        Path("src/main/resources/skills"),
+        Path("skills"),
+    ])
+    return candidates
+
+
+def resolve_skills_root() -> Optional[Path]:
+    for candidate in _skills_root_candidates():
+        if not candidate or not str(candidate).strip() or str(candidate) in (".", ""):
+            continue
+        if candidate.is_dir() and any(candidate.glob("*/SKILL.md")):
+            return candidate
+        if candidate.is_dir() and candidate.name == "skills":
+            # Prefer dirs that look like a skills root even before packages exist.
+            return candidate
+    # Fallback: first existing directory among candidates.
+    for candidate in _skills_root_candidates():
+        if candidate and candidate.is_dir() and str(candidate) not in (".", ""):
+            return candidate
+    return None
+
+
+def _parse_frontmatter(text: str) -> Tuple[Dict[str, str], str]:
+    if not text.startswith("---"):
+        return {}, text
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}, text
+    header = text[3:end].strip()
+    body = text[end + 4:].lstrip("\n")
+    meta: Dict[str, str] = {}
+    for line in header.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        meta[key.strip()] = value.strip().strip('"').strip("'")
+    return meta, body
+
+
+def _load_skill_dir(skill_dir: Path) -> Optional[SkillDefinition]:
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        return None
+    try:
+        raw = skill_md.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("failed reading %s: %s", skill_md, exc)
+        return None
+    meta, body = _parse_frontmatter(raw)
+    skill_id = meta.get("name") or skill_dir.name
+    description = meta.get("description") or ""
+    allowed = tuple(
+        t for t in re.split(r"\s+", meta.get("allowed-tools", "").strip()) if t)
+    version = meta.get("version") or "v1"
+    deprecated = skill_id in DEPRECATED_SKILLS or skill_id in ADMIN_ONLY_SKILLS \
+        or meta.get("status", "").lower() == "deprecated"
+    status = "DEPRECATED" if deprecated else "ACTIVE"
+    return SkillDefinition(
+        skill_id=skill_id,
+        name=skill_id,
+        version=version,
+        description=description[:500],
+        applicable_conditions=(),
+        instructions=body.strip()[:12000],
+        required_tools=allowed,
+        output_requirements="",
+        status=status,
+        source_path=str(skill_md),
+        deprecated=deprecated,
+    )
 
 
 class SkillManager:
-    """Versioned skill registry with condition-based dynamic loading. Only
-    skills applicable to the current task/policy are injected into context;
-    versions are recorded into the trajectory for benchmark binding."""
+    """Disk-backed skill registry with the plan trigger matrix."""
 
-    def __init__(self) -> None:
+    def __init__(self, root: Optional[Path] = None) -> None:
+        self.root = root or resolve_skills_root()
         self._by_id: Dict[str, Dict[str, SkillDefinition]] = {}
-        for skill in _SKILLS:
-            self._by_id.setdefault(skill.skill_id, {})[skill.version] = skill
+        self.reload()
+
+    def reload(self) -> int:
+        self._by_id.clear()
+        root = self.root or resolve_skills_root()
+        self.root = root
+        if root is None:
+            logger.warning("skills root not found; skill catalog empty")
+            return 0
+        count = 0
+        try:
+            for child in sorted(root.iterdir()):
+                if not child.is_dir():
+                    continue
+                skill = _load_skill_dir(child)
+                if skill is None:
+                    continue
+                self._by_id.setdefault(skill.skill_id, {})[skill.version] = skill
+                count += 1
+        except OSError as exc:
+            logger.warning("skills scan failed: %s", exc)
+            return 0
+        logger.info("loaded %d skills from %s", count, root)
+        return count
 
     def get(self, skill_id: str, version: Optional[str] = None) -> SkillDefinition:
         versions = self._by_id.get(skill_id)
@@ -192,57 +183,126 @@ class SkillManager:
         return list(self._by_id.keys())
 
     def select_for(self, *, agent_id: str, run_type: str, job_focus: Optional[str],
-                   overrides: Dict[str, str]) -> List[SkillDefinition]:
-        tech_skill_by_focus = {
-            "java_backend": "java_backend_evaluation",
-            "ai_agent": "ai_agent_job_evaluation",
-            "frontend": "frontend_evaluation",
-            "algorithm": "algorithm_llm_evaluation",
-            "data": "data_engineer_evaluation",
-        }
-        base_map: Dict[str, List[str]] = {
-            "ResumeParserAgent": ["resume_parsing"],
-            "JDAnalysisAgent": ["jd_requirement_analysis"],
-            "TechAgent": [tech_skill_by_focus.get(job_focus or "",
-                                                  "jd_requirement_analysis")],
-            "ProjectAgent": ["project_depth_analysis"],
-            "RiskAgent": ["timeline_risk_analysis"],
-            "EvidenceAgent": ["evidence_verification"],
-            "ReportAgent": ["report_generation", "score_consistency"],
-            "ResumeOptimizeAgent": ["resume_rewrite"],
-            "InterviewQuestionAgent": ["interview_question_generation"],
-            "CoordinatorAgent": [],
-        }
-        skill_ids = list(base_map.get(agent_id, []))
+                   overrides: Dict[str, str],
+                   signals: Optional[Dict[str, bool]] = None,
+                   user_message: str = "") -> List[SkillDefinition]:
+        """Precise trigger matrix from the agent-runtime plan §5.2."""
+        signals = signals or {}
+        selected_ids: List[str] = []
+
+        def add(skill_id: str) -> None:
+            if skill_id and skill_id not in selected_ids and skill_id in self._by_id:
+                if skill_id in ADMIN_ONLY_SKILLS:
+                    return
+                selected_ids.append(skill_id)
+
+        # Every turn: conversation routing (Coordinator / first specialist).
+        if agent_id in ("CoordinatorAgent", "ResumeParserAgent", "ReportAgent"):
+            add("route-conversation-turn")
+
+        if agent_id == "ResumeParserAgent":
+            add("assess-ats-compatibility")
+
+        if agent_id == "JDAnalysisAgent":
+            if signals.get("has_jd") or run_type in (
+                    "full_evaluation", "jd_evaluation", "jd_gap",
+                    "backend_eval", "agent_eval"):
+                add("normalize-job-description")
+
+        if agent_id == "TechAgent":
+            if signals.get("has_jd_requirements") or signals.get("has_jd") \
+                    or run_type in ("tech_match", "jd_gap", "full_evaluation",
+                                    "jd_evaluation", "backend_eval", "agent_eval"):
+                add("assess-technical-evidence")
+
+        if agent_id == "ProjectAgent":
+            if signals.get("has_projects", True):
+                add("ground-project-claims")
+            if signals.get("has_external_urls"):
+                add("retrieve-public-candidate-evidence")
+                add("inspect-github-portfolio")
+
+        if agent_id == "RiskAgent":
+            if signals.get("has_timeline", True) or run_type in (
+                    "risk_check", "timeline_check", "interview_questions"):
+                add("risk_pattern_detection")
+
+        if agent_id == "EvidenceAgent":
+            add("calibrate-evidence-confidence")
+
+        if agent_id == "ReportAgent":
+            add("calibrate-evidence-confidence")
+            add("audit-job-relevant-evaluation")
+            add("handle-knowledge-no-evidence")
+            if run_type not in ("followup", "quick_answer"):
+                add("generate-interview-probes")
+            if run_type in ("followup", "quick_answer") or "为什么" in (user_message or "") \
+                    or "依据" in (user_message or ""):
+                add("explain-evaluation-decision")
+            if signals.get("compare_roles"):
+                add("compare-target-roles")
+
+        if agent_id == "InterviewQuestionAgent":
+            add("generate-interview-probes")
+
+        if agent_id == "ResumeOptimizeAgent":
+            add("ground-project-claims")
+
+        if run_type in ("followup", "quick_answer") and agent_id == "ReportAgent":
+            add("plan-evaluation-revision")
+
+        # Policy / focus overrides (still capped).
         override = overrides.get(agent_id)
-        if override and override in self._by_id and override not in skill_ids:
-            skill_ids.insert(0, override)
-        if run_type in ("timeline_check", "risk_check") and agent_id == "RiskAgent" \
-                and "timeline_risk_analysis" not in skill_ids:
-            skill_ids.append("timeline_risk_analysis")
-        skills = []
-        for skill_id in skill_ids[:2]:  # never flood context with every skill
+        if override:
+            add(override)
+
+        # Hard cap: never flood the prompt.
+        skills: List[SkillDefinition] = []
+        for skill_id in selected_ids[:4]:
             try:
-                skills.append(self.get(skill_id))
+                skill = self.get(skill_id)
             except KeyError:
                 continue
+            if skill.deprecated and skill_id not in (override or "",):
+                continue
+            skills.append(skill)
         return skills
 
     @staticmethod
     def render(skills: List[SkillDefinition]) -> str:
         blocks = []
         for skill in skills:
+            tools = (", ".join(skill.required_tools) if skill.required_tools
+                     else "（未声明）")
             blocks.append(
-                f"技能 {skill.name}（{skill.skill_id}@{skill.version}）：\n"
-                f"{skill.instructions}\n输出要求：{skill.output_requirements}")
+                f"技能 {skill.name}（{skill.skill_id}@{skill.version}"
+                f"#{skill.hash}）：\n{skill.description}\n"
+                f"{skill.instructions}\nallowedTools: {tools}")
         return "\n\n".join(blocks)
 
     def versions_used(self, selections: Dict[str, List[SkillDefinition]]) -> Dict[str, str]:
         used = {}
-        for agent_id, skills in selections.items():
+        for _agent_id, skills in selections.items():
             for skill in skills:
                 used[skill.skill_id] = f"{skill.version}#{skill.hash}"
         return used
+
+    async def emit_selection(self, emitter: Any, agent_id: str,
+                             skills: List[SkillDefinition]) -> None:
+        for skill in skills:
+            payload = {
+                "skillId": skill.skill_id,
+                "skillVersion": skill.version,
+                "skillHash": skill.hash,
+                "agentId": agent_id,
+            }
+            await emitter.emit("skill.selected", agent_id=agent_id,
+                               tool_name=skill.skill_id, payload=payload)
+            await emitter.emit("skill.started", agent_id=agent_id,
+                               tool_name=skill.skill_id, payload=payload)
+            await emitter.emit("skill.completed", agent_id=agent_id,
+                               tool_name=skill.skill_id, payload={
+                                   **payload, "injected": True})
 
 
 default_skill_manager = SkillManager()

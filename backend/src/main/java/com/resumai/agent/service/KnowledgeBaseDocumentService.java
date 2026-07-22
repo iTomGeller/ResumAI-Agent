@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.ai.DeepSeekClient;
 import com.resumai.agent.config.EmbeddingAvailability;
+import com.resumai.agent.config.EmbeddingProperties;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -49,6 +50,15 @@ public class KnowledgeBaseDocumentService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeBaseDocumentService.class);
     private static final int RRF_K = 60;
+    public static final List<String> DOC_TYPE_ENUMS = List.of(
+            "interview_rubric", "tech_guide", "policy", "verification_checklist",
+            "question_bank", "scoring_standard", "general");
+    public static final List<String> TAG_ENUMS = List.of(
+            "java", "backend", "frontend", "python", "interview", "rubric",
+            "risk", "project", "ats", "devops", "product", "ai");
+    public static final List<String> FALLBACK_CHAIN = List.of("vector", "hybrid", "lexical", "none");
+    public static final List<String> INDEX_STATUS_MACHINE = List.of(
+            "pending", "indexing", "ready", "failed", "degraded");
 
     // EXP-2: grid-tunable via KB_CHUNK_CHARS / KB_OVERLAP_CHARS (default 320/60)
     private final int targetChunkChars;
@@ -62,6 +72,7 @@ public class KnowledgeBaseDocumentService {
     private final MilvusEmbeddingStore kbStore;
     private final EmbeddingModel embeddingModel;
     private final EmbeddingAvailability embeddingAvailability;
+    private final EmbeddingProperties embeddingProperties;
     private final MilvusVectorMaintenanceService vectorMaintenance;
     private final DeepSeekClient deepSeekClient;
 
@@ -72,6 +83,7 @@ public class KnowledgeBaseDocumentService {
                                         @Nullable @Qualifier("kbEmbeddingStore") MilvusEmbeddingStore kbStore,
                                         @Nullable EmbeddingModel embeddingModel,
                                         @Nullable EmbeddingAvailability embeddingAvailability,
+                                        @Nullable EmbeddingProperties embeddingProperties,
                                         @Nullable MilvusVectorMaintenanceService vectorMaintenance,
                                         @Nullable DeepSeekClient deepSeekClient) {
         this.targetChunkChars = targetChunkChars > 0 ? targetChunkChars : 320;
@@ -82,6 +94,7 @@ public class KnowledgeBaseDocumentService {
         this.kbStore = kbStore;
         this.embeddingModel = embeddingModel;
         this.embeddingAvailability = embeddingAvailability;
+        this.embeddingProperties = embeddingProperties;
         this.vectorMaintenance = vectorMaintenance;
         this.deepSeekClient = deepSeekClient;
         try {
@@ -121,39 +134,55 @@ public class KnowledgeBaseDocumentService {
     }
 
     public synchronized Map<String, Object> overview() {
-        List<Map<String, Object>> docs = loadManifest();
+        List<Map<String, Object>> docs = loadManifest().stream()
+                .map(this::enrichDocument)
+                .toList();
         int chunkCount = docs.stream().mapToInt(d -> intValue(d.get("chunkCount"))).sum();
         Map<String, Long> byType = docs.stream()
                 .collect(Collectors.groupingBy(d -> stringValue(d.get("docType"), "unknown"),
                         LinkedHashMap::new, Collectors.counting()));
+        Map<String, Long> byIndexStatus = docs.stream()
+                .collect(Collectors.groupingBy(d -> stringValue(d.get("indexStatus"), "pending"),
+                        LinkedHashMap::new, Collectors.counting()));
+        for (String status : INDEX_STATUS_MACHINE) {
+            byIndexStatus.putIfAbsent(status, 0L);
+        }
         boolean vectorReady = vectorReady();
-        return Map.of(
-                "documentCount", docs.size(),
-                "chunkCount", chunkCount,
-                "chunkPolicy", Map.of(
-                        "targetChunkChars", targetChunkChars,
-                        "overlapChars", overlapChars,
-                        "splitPriority", List.of("markdown_heading", "numbered_section", "blank_line", "char_window")),
-                "retrievalPolicy", Map.of(
-                        "strategy", vectorReady ? "hybrid_bm25_embedding" : "lexical_bm25_like",
-                        "fusion", "rrf_k60",
-                        "rerank", "optional_deepseek_listwise",
-                        "vectorStore", vectorReady ? "milvus_kb_chunks" : "unavailable",
-                        "fallback", "lexical_only_when_embedding_down"),
-                "docTypes", byType,
-                "documents", docs.stream().limit(100).toList(),
-                "sampleChunks", sampleChunks(docs, 8)
-        );
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("documentCount", docs.size());
+        response.put("chunkCount", chunkCount);
+        response.put("chunkPolicy", Map.of(
+                "targetChunkChars", targetChunkChars,
+                "overlapChars", overlapChars,
+                "splitPriority", List.of("markdown_heading", "numbered_section", "blank_line", "char_window")));
+        response.put("retrievalPolicy", Map.of(
+                "strategy", vectorReady ? "hybrid_bm25_embedding" : "lexical_bm25_like",
+                "fusion", "rrf_k60",
+                "rerank", "optional_deepseek_listwise",
+                "vectorStore", vectorReady ? "milvus_kb_chunks" : "unavailable",
+                "fallback", "vector→hybrid→lexical→none",
+                "fallbackChain", FALLBACK_CHAIN));
+        response.put("docTypes", byType);
+        response.put("docTypeEnums", DOC_TYPE_ENUMS);
+        response.put("tagEnums", TAG_ENUMS);
+        response.put("indexStatusMachine", INDEX_STATUS_MACHINE);
+        response.put("indexStatusCounts", byIndexStatus);
+        response.put("fallbackChain", FALLBACK_CHAIN);
+        response.put("embeddingProvider", embeddingProvider());
+        response.put("indexVersion", indexVersion());
+        response.put("documents", docs.stream().limit(100).toList());
+        response.put("sampleChunks", sampleChunks(docs, 8));
+        return response;
     }
 
     public synchronized List<Map<String, Object>> listDocuments() {
-        return loadManifest();
+        return loadManifest().stream().map(this::enrichDocument).toList();
     }
 
     public synchronized Map<String, Object> getDocument(String docId) {
         for (Map<String, Object> doc : loadManifest()) {
             if (docId.equals(stringValue(doc.get("docId"), ""))) {
-                Map<String, Object> result = new LinkedHashMap<>(doc);
+                Map<String, Object> result = enrichDocument(doc);
                 Path txt = kbRoot.resolve(docId + ".txt");
                 if (Files.isRegularFile(txt)) {
                     try {
@@ -165,7 +194,12 @@ public class KnowledgeBaseDocumentService {
                 Path chunksPath = kbRoot.resolve(docId + ".chunks.json");
                 if (Files.isRegularFile(chunksPath)) {
                     try {
-                        result.put("chunks", objectMapper.readValue(chunksPath.toFile(), new TypeReference<>() {}));
+                        List<Map<String, Object>> chunks = objectMapper.readValue(
+                                chunksPath.toFile(), new TypeReference<>() {});
+                        String indexStatus = stringValue(result.get("indexStatus"), "pending");
+                        result.put("chunks", chunks.stream()
+                                .map(c -> enrichChunk(c, indexStatus, null))
+                                .toList());
                     } catch (Exception e) {
                         result.put("chunks", List.of());
                     }
@@ -209,16 +243,24 @@ public class KnowledgeBaseDocumentService {
         List<Map<String, Object>> vector = vectorSearch(query, Math.max(limit * 4, 20));
 
         String strategy;
+        String fallbackStage;
         List<Map<String, Object>> fused;
         if (!lexical.isEmpty() && !vector.isEmpty()) {
             fused = fuseRrf(lexical, vector, Math.max(limit * 2, 10));
             strategy = "hybrid_bm25_embedding";
+            fallbackStage = "hybrid";
         } else if (!vector.isEmpty()) {
             fused = vector.stream().limit(Math.max(limit * 2, 10)).toList();
             strategy = "embedding_only";
-        } else {
+            fallbackStage = "vector";
+        } else if (!lexical.isEmpty()) {
             fused = lexical.stream().limit(Math.max(limit * 2, 10)).toList();
             strategy = vectorReady() ? "lexical_only" : "lexical_bm25_like";
+            fallbackStage = "lexical";
+        } else {
+            fused = List.of();
+            strategy = "none";
+            fallbackStage = "none";
         }
 
         boolean rerankApplied = false;
@@ -232,20 +274,21 @@ public class KnowledgeBaseDocumentService {
         }
 
         final String resolvedStrategy = strategy;
+        final String resolvedStage = fallbackStage;
         final String queryText = query == null ? "" : query;
         List<Map<String, Object>> hits = fused.stream().limit(limit).map(row -> {
-            Map<String, Object> copy = new LinkedHashMap<>(row);
+            Map<String, Object> copy = enrichChunk(row, null, resolvedStage);
             copy.put("strategy", resolvedStrategy);
             copy.put("query", queryText);
-            copy.put("fallbackUsed", "lexical_bm25_like".equals(resolvedStrategy)
-                    || "lexical_only".equals(resolvedStrategy));
+            copy.put("fallbackStage", resolvedStage);
+            copy.put("fallbackUsed", "lexical".equals(resolvedStage) || "none".equals(resolvedStage));
             copy.put("enabled", true);
             return copy;
         }).toList();
         markHits(hits);
         return new SearchResult(hits, resolvedStrategy, lexical.size(), vector.size(),
                 !lexical.isEmpty() && !vector.isEmpty() ? "rrf_k60" : "none",
-                rerankApplied);
+                rerankApplied, resolvedStage, FALLBACK_CHAIN);
     }
 
     /**
@@ -266,6 +309,7 @@ public class KnowledgeBaseDocumentService {
         List<Map<String, Object>> manifest = loadManifest();
         for (Map<String, Object> doc : manifest) {
             doc.put("embeddingStatus", "reindexing");
+            doc.put("indexStatus", "indexing");
         }
         try {
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(manifestPath.toFile(), manifest);
@@ -296,7 +340,8 @@ public class KnowledgeBaseDocumentService {
             Path chunksPath = kbRoot.resolve(docId + ".chunks.json");
             if (!Files.isRegularFile(chunksPath)) {
                 failed++;
-                doc.put("embeddingStatus", "lexical_only");
+                doc.put("embeddingStatus", "failed");
+                doc.put("indexStatus", "failed");
                 continue;
             }
             try {
@@ -304,7 +349,12 @@ public class KnowledgeBaseDocumentService {
                         chunksPath.toFile(), new TypeReference<>() {});
                 int n = indexChunksSync(chunks);
                 indexed += n;
-                doc.put("embeddingStatus", n > 0 ? "indexed" : "lexical_only");
+                String embStatus = n > 0 ? "indexed" : "lexical_only";
+                String indexStatus = n > 0 ? "ready" : (vectorReady() ? "degraded" : "degraded");
+                doc.put("embeddingStatus", embStatus);
+                doc.put("indexStatus", indexStatus);
+                doc.put("embeddingProvider", embeddingProvider());
+                doc.put("indexVersion", indexVersion());
                 doc.put("updatedAt", LocalDateTime.now().toString());
                 if (n == 0) {
                     failed++;
@@ -312,7 +362,8 @@ public class KnowledgeBaseDocumentService {
             } catch (Exception e) {
                 failed++;
                 log.warn("KB reindex failed for {}: {}", docId, e.getMessage());
-                doc.put("embeddingStatus", "lexical_only");
+                doc.put("embeddingStatus", "failed");
+                doc.put("indexStatus", "failed");
             }
         }
         synchronized (this) {
@@ -329,14 +380,18 @@ public class KnowledgeBaseDocumentService {
                                              String sourceFormat) {
         String docId = "kb-" + UUID.randomUUID();
         List<Map<String, Object>> chunks = chunkDocument(docId, title, content, docType, tags);
-        int indexed = indexChunks(chunks);
-        String embStatus = indexed > 0 ? "indexed" : "lexical_only";
+        boolean canIndex = vectorReady() && !chunks.isEmpty();
+        String embStatus = canIndex ? "reindexing" : (vectorReady() ? "pending" : "lexical_only");
+        String indexStatus = canIndex ? "indexing" : (vectorReady() ? "pending" : "degraded");
         for (Map<String, Object> chunk : chunks) {
             Object meta = chunk.get("metadata");
             if (meta instanceof Map<?, ?> m) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> mutable = new LinkedHashMap<>((Map<String, Object>) m);
                 mutable.put("embeddingStatus", embStatus);
+                mutable.put("indexStatus", indexStatus);
+                mutable.put("embeddingProvider", embeddingProvider());
+                mutable.put("indexVersion", indexVersion());
                 chunk.put("metadata", mutable);
             }
         }
@@ -349,6 +404,9 @@ public class KnowledgeBaseDocumentService {
         doc.put("charLength", content.length());
         doc.put("chunkCount", chunks.size());
         doc.put("embeddingStatus", embStatus);
+        doc.put("indexStatus", indexStatus);
+        doc.put("embeddingProvider", embeddingProvider());
+        doc.put("indexVersion", indexVersion());
         doc.put("chunkPolicy", Map.of("targetChunkChars", targetChunkChars, "overlapChars", overlapChars));
         doc.put("usageCount", 0);
         doc.put("lastHitAt", null);
@@ -364,23 +422,47 @@ public class KnowledgeBaseDocumentService {
         } catch (IOException e) {
             throw new IllegalStateException("save knowledge document failed: " + e.getMessage(), e);
         }
-        return doc;
+        if (canIndex) {
+            scheduleIndex(docId, chunks);
+        }
+        return enrichDocument(doc);
     }
 
-    private int indexChunks(List<Map<String, Object>> chunks) {
-        if (!vectorReady() || chunks == null || chunks.isEmpty()) {
-            return 0;
-        }
-        // Fire-and-forget: OpenRouter embedding latency must not block HTTP ingest.
+    private void scheduleIndex(String docId, List<Map<String, Object>> chunks) {
         List<Map<String, Object>> snapshot = List.copyOf(chunks);
         java.util.concurrent.CompletableFuture.runAsync(() -> {
             try {
-                indexChunksSync(snapshot);
+                int n = indexChunksSync(snapshot);
+                updateDocumentIndexStatus(docId, n > 0 ? "ready" : "degraded",
+                        n > 0 ? "indexed" : "lexical_only");
             } catch (Exception e) {
                 log.warn("KB async vector index failed: {}", e.getMessage());
+                updateDocumentIndexStatus(docId, "failed", "failed");
             }
         });
-        return snapshot.size();
+    }
+
+    private synchronized void updateDocumentIndexStatus(String docId, String indexStatus, String embStatus) {
+        List<Map<String, Object>> manifest = loadManifest();
+        boolean changed = false;
+        for (Map<String, Object> doc : manifest) {
+            if (docId.equals(stringValue(doc.get("docId"), ""))) {
+                doc.put("indexStatus", indexStatus);
+                doc.put("embeddingStatus", embStatus);
+                doc.put("embeddingProvider", embeddingProvider());
+                doc.put("indexVersion", indexVersion());
+                doc.put("updatedAt", LocalDateTime.now().toString());
+                changed = true;
+                break;
+            }
+        }
+        if (changed) {
+            try {
+                objectMapper.writerWithDefaultPrettyPrinter().writeValue(manifestPath.toFile(), manifest);
+            } catch (IOException e) {
+                log.warn("KB index status update failed: {}", e.getMessage());
+            }
+        }
     }
 
     private int indexChunksSync(List<Map<String, Object>> chunks) {
@@ -613,13 +695,19 @@ public class KnowledgeBaseDocumentService {
             chunk.put("content", block);
             chunk.put("contentPreview", preview(block, 220));
             chunk.put("tokenEstimate", Math.max(1, block.length() / 2));
-            chunk.put("metadata", Map.of(
-                    "tags", splitTags(tags),
-                    "chunkIndex", i,
-                    "source", "self_service_upload",
-                    "embeddingStatus", "pending",
-                    "targetChunkChars", targetChunkChars,
-                    "overlapChars", overlapChars));
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("docId", docId);
+            metadata.put("chunkIndex", i);
+            metadata.put("tags", splitTags(tags));
+            metadata.put("source", "self_service_upload");
+            metadata.put("embeddingStatus", "pending");
+            metadata.put("indexStatus", "pending");
+            metadata.put("embeddingProvider", embeddingProvider());
+            metadata.put("indexVersion", indexVersion());
+            metadata.put("fallbackStage", null);
+            metadata.put("targetChunkChars", targetChunkChars);
+            metadata.put("overlapChars", overlapChars);
+            chunk.put("metadata", metadata);
             chunks.add(chunk);
         }
         return chunks;
@@ -681,7 +769,9 @@ public class KnowledgeBaseDocumentService {
                         chunksPath.toFile(), new TypeReference<>() {});
                 for (Map<String, Object> chunk : chunks) {
                     if (result.size() >= limit) break;
-                    result.add(chunk);
+                    String indexStatus = normalizeIndexStatus(stringValue(doc.get("indexStatus"),
+                            stringValue(doc.get("embeddingStatus"), "pending")));
+                    result.add(enrichChunk(chunk, indexStatus, null));
                 }
             } catch (Exception ignored) {
             }
@@ -782,6 +872,90 @@ public class KnowledgeBaseDocumentService {
         }
     }
 
+    private Map<String, Object> enrichDocument(Map<String, Object> doc) {
+        Map<String, Object> copy = new LinkedHashMap<>(doc);
+        String indexStatus = normalizeIndexStatus(stringValue(doc.get("indexStatus"),
+                stringValue(doc.get("embeddingStatus"), "pending")));
+        copy.put("indexStatus", indexStatus);
+        copy.putIfAbsent("embeddingProvider", embeddingProvider());
+        copy.putIfAbsent("indexVersion", indexVersion());
+        return copy;
+    }
+
+    private Map<String, Object> enrichChunk(Map<String, Object> chunk, String indexStatusHint,
+                                            String fallbackStage) {
+        Map<String, Object> copy = new LinkedHashMap<>(chunk);
+        Map<String, Object> meta = new LinkedHashMap<>();
+        Object existing = chunk.get("metadata");
+        if (existing instanceof Map<?, ?> m) {
+            m.forEach((k, v) -> meta.put(String.valueOf(k), v));
+        }
+        String docId = stringValue(chunk.get("docId"), stringValue(meta.get("docId"), ""));
+        int chunkIndex = meta.containsKey("chunkIndex")
+                ? intValue(meta.get("chunkIndex"))
+                : parseChunkIndex(stringValue(chunk.get("chunkId"), ""));
+        String indexStatus = normalizeIndexStatus(stringValue(
+                indexStatusHint != null ? indexStatusHint : meta.get("indexStatus"),
+                stringValue(meta.get("embeddingStatus"), "pending")));
+        meta.put("docId", docId);
+        meta.put("chunkIndex", chunkIndex);
+        meta.putIfAbsent("source", "self_service_upload");
+        meta.put("embeddingProvider", embeddingProvider());
+        meta.put("indexVersion", indexVersion());
+        meta.put("indexStatus", indexStatus);
+        meta.put("embeddingStatus", stringValue(meta.get("embeddingStatus"), indexStatus));
+        if (fallbackStage != null) {
+            meta.put("fallbackStage", fallbackStage);
+        }
+        copy.put("docId", docId);
+        copy.put("chunkIndex", chunkIndex);
+        copy.put("source", stringValue(meta.get("source"), "self_service_upload"));
+        copy.put("embeddingProvider", embeddingProvider());
+        copy.put("indexVersion", indexVersion());
+        copy.put("indexStatus", indexStatus);
+        if (fallbackStage != null) {
+            copy.put("fallbackStage", fallbackStage);
+        }
+        copy.put("metadata", meta);
+        return copy;
+    }
+
+    private String normalizeIndexStatus(String raw) {
+        if (!StringUtils.hasText(raw)) return "pending";
+        return switch (raw.trim().toLowerCase()) {
+            case "ready", "indexed", "success" -> "ready";
+            case "indexing", "reindexing" -> "indexing";
+            case "failed", "error" -> "failed";
+            case "degraded", "lexical_only", "lexical" -> "degraded";
+            case "pending" -> "pending";
+            default -> "pending";
+        };
+    }
+
+    private int parseChunkIndex(String chunkId) {
+        int idx = chunkId.lastIndexOf("chunk-");
+        if (idx < 0) return 0;
+        try {
+            return Integer.parseInt(chunkId.substring(idx + 6));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private String embeddingProvider() {
+        if (embeddingProperties == null || !StringUtils.hasText(embeddingProperties.getProvider())) {
+            return "unknown";
+        }
+        return embeddingProperties.getProvider();
+    }
+
+    private String indexVersion() {
+        if (embeddingProperties == null) {
+            return "kb_v1_unknown";
+        }
+        return "kb_v1_" + embeddingProperties.resolveJdCollectionSuffix();
+    }
+
     private String preview(String content, int max) {
         if (content == null) return "";
         String text = content.replaceAll("\\s+", " ").trim();
@@ -819,5 +993,6 @@ public class KnowledgeBaseDocumentService {
 
     public record SearchResult(List<Map<String, Object>> chunks, String strategy,
                                int lexicalHits, int vectorHits, String fusion,
-                               boolean rerankApplied) {}
+                               boolean rerankApplied, String fallbackStage,
+                               List<String> fallbackChain) {}
 }

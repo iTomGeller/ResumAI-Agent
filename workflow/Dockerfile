@@ -11,12 +11,17 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
     && pip install --no-cache-dir pytest==8.3.5 \
     # Outside the hash-locked set: redis (semantic cache) and the public-web
     # MCP fetch server (real MCP protocol, allowlisted hosts only).
-    && pip install --no-cache-dir "redis>=5.0" mcp-server-fetch
+    && pip install --no-cache-dir "redis>=5.0" mcp-server-fetch \
+    && pip install --no-cache-dir \
+         "opentelemetry-api>=1.27.0" \
+         "opentelemetry-sdk>=1.27.0" \
+         "opentelemetry-exporter-otlp-proto-http>=1.27.0"
 
 COPY workflow/app ./app
 COPY workflow/tests ./tests
 COPY workflow/run_agent_harness.py ./run_agent_harness.py
 COPY backend/src/main/resources/skills ./skills
+COPY config/mcp-servers.json ./config/mcp-servers.json
 
 # Build gate: compile, unit tests and the deterministic runtime contract gate
 # must all pass before an image can exist.
@@ -39,6 +44,7 @@ COPY --from=build /tmp/runtime-tests-passed /app/.runtime-tests-passed
 
 ENV PYTHONUNBUFFERED=1
 ENV SKILLS_PATH=/app/skills
+ENV MCP_CONFIG_PATH=/app/config/mcp-servers.json
 EXPOSE 8090
 
 HEALTHCHECK --interval=20s --timeout=5s --retries=5 \

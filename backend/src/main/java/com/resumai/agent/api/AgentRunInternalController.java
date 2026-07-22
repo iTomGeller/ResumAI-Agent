@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -227,6 +228,42 @@ public class AgentRunInternalController {
             sandboxExecutionMapper.updateById(row);
         }
         return Map.of("status", "OK");
+    }
+
+    // ------------------------------------------------------------------
+    // Deploy drain / recovery control plane
+    // ------------------------------------------------------------------
+
+    /** Deploy drain: stop dispatching new QUEUED→STARTING transitions. */
+    @PostMapping("/drain")
+    public Map<String, Object> beginDrain(@RequestHeader("X-Internal-Token") String token,
+                                         @RequestBody(required = false) Map<String, Object> body) {
+        authorize(token);
+        boolean enabled = body == null || !Boolean.FALSE.equals(body.get("enabled"));
+        schedulerService.setDraining(enabled);
+        Map<String, Object> snap = new java.util.LinkedHashMap<>(
+                schedulerService.activeRunsSnapshot());
+        snap.put("status", enabled ? "DRAINING" : "DISPATCHING");
+        return snap;
+    }
+
+    /** Resume dispatch after deploy readiness. */
+    @PostMapping("/resume-dispatch")
+    public Map<String, Object> resumeDispatch(@RequestHeader("X-Internal-Token") String token) {
+        authorize(token);
+        schedulerService.setDraining(false);
+        schedulerService.kick();
+        Map<String, Object> snap = new java.util.LinkedHashMap<>(
+                schedulerService.activeRunsSnapshot());
+        snap.put("status", "DISPATCHING");
+        return snap;
+    }
+
+    /** Active-run snapshot for the safe-deploy wait loop. */
+    @GetMapping("/active")
+    public Map<String, Object> activeRuns(@RequestHeader("X-Internal-Token") String token) {
+        authorize(token);
+        return schedulerService.activeRunsSnapshot();
     }
 
     private String trim(String text, int max) {

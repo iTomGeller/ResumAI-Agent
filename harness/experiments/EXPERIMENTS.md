@@ -17,7 +17,7 @@
 | EXP-7 | Replan 触发阈值 | `scripts/_exp7_replan_sweep.sh` + `harness/run_replan_sweep.py` | DONE（2026-07-21） | 0.40/0.55/0.70 × 3 分层真实 e2e（强匹配/边缘/错配）：**全部 0 次置信度触发 replan**——specialist confidence 分布集中在 0.70 以上，该阈值在扫描区间不敏感（replan 实际由冲突信号驱动）；维持默认 0.55，knob 保留 env 可调 |
 | EXP-8 | Function calling vs json_object | `harness/run_json_ab.py` | DONE（2026-07-21） | 各 60 次真实决策调用（emit_decision 生产 schema）：两通道一次通过率均 100%、0 修复 0 失败；FC avg 2645ms vs json_object avg 2030ms（p95 相当）。维持 FC 主通道（provider 端 schema 强制，防御空内容故障模式）+ json_object 兜底，数据表明两者质量无差异 |
 | EXP-9 | 进化 reward 权重敏感性 | `harness/run_reward_sensitivity.py` | DONE（2026-07-21） | 对 24 个真实 SUCCEEDED run 注入 6 档多样化反馈（强同意→强不同意）后 FEEDBACK reward 行达 28 条；±10pp×20 组重加权 champion（agent_job）**零翻转 → robust**，当前 reward 权重配置保留 |
-| EXP-10 | 并行 vs 串行 specialist | `harness/run_parallel_ab.py` | DONE（2026-07-21） | balanced（并行）vs exp10-serial-balanced（仅 parallelSpecialists=false）同 case 真实 e2e 对照；结果见 `reports/experiments/parallel_ab.json` |
+| EXP-10 | 并行 vs 串行 specialist | `harness/run_parallel_ab.py` | DONE（2026-07-21） | 串行 reward 略高但延迟/成本显著更差（49.2s vs 30.95s）；**拒绝 serial 默认**，上线「并行 + 冲突时串行仲裁」 |
 
 ## EXP-1 Embedding 模型选型
 
@@ -123,3 +123,4 @@
 
 - **2026-07-21 实测**（`harness/run_parallel_ab.py`）：以 `balanced` 为基线创建 CANDIDATE 策略 `exp10-serial-balanced`（唯一差异 `parallelSpecialists=false`），gold 两例（java-backend-normal / ai-agent-resume）真实 e2e 对照。
 - 结果落 `reports/experiments/parallel_ab.json`（avgLatencySeconds / avgReward / token 详见报告）；RESUME_PROJECT_DESCRIPTION 中性能数字引用本产物。
+- **上线决策（拒绝 serial champion）**：样本上串行 reward 略高，但延迟约 49.2s vs 并行 30.95s、token/成本也更高。生产默认保持并行 Specialist；仅在 Evidence 发现冲突时做单轮串行仲裁（见 executor `_arbitrate_conflicts`），不把 serial 设为默认。

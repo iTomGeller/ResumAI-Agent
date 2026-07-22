@@ -31,6 +31,7 @@ INCLUDE_PREFIXES = (
     "frontend/index.html",
     "workflow/",
     "harness/",
+    "config/",
     "scripts/ecs_safe_deploy.sh",
     "scripts/seed_knowledge_base.py",
     "scripts/ecs_acceptance.sh",

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import ConversationPanel from './components/conversation/ConversationPanel.vue';
 import TraceView from './components/trace/TraceView.vue';
+import OpsPanel from './components/ops/OpsPanel.vue';
 import { splitTextPages, usePagination } from './composables/usePagination';
 import { buildQuery, useServerPagination, type PageResult } from './composables/useServerPagination';
 import type { ConversationTurnResponse, TaskControlResponse } from './composables/useConversation';
@@ -39,7 +40,7 @@ interface TaskResponse {
   jobCategory: string;
   executionMode: string;
   status: string;
-  overallScore: number;
+  overallScore: number | null | undefined;
   recommendation: string;
   durationMs: number;
   tokenCost: number;
@@ -183,6 +184,10 @@ interface Metrics {
   runningTasks: number;
   successTasks: number;
   failedTasks: number;
+  queuedTasks?: number;
+  completedTasks?: number;
+  recommendedTasks?: number;
+  manualReviewTasks?: number;
   averageDurationMs: number;
   averageScore: number;
   totalTokenCost: number;
@@ -251,8 +256,19 @@ const defaultJobs: JobProfile[] = [
   }
 ];
 
-type ViewName = 'dashboard' | 'positions' | 'candidates' | 'knowledge' | 'detail' | 'analytics';
+type ViewName = 'dashboard' | 'positions' | 'candidates' | 'knowledge' | 'detail' | 'analytics' | 'ops';
 type DetailTab = 'resume' | 'report' | 'trace' | 'graph' | 'feedback';
+
+const KB_DOC_TYPE_ENUMS = [
+  'interview_rubric', 'tech_guide', 'policy', 'verification_checklist',
+  'question_bank', 'scoring_standard', 'general',
+] as const;
+const KB_TAG_ENUMS = [
+  'java', 'backend', 'frontend', 'python', 'interview', 'rubric',
+  'risk', 'project', 'ats', 'devops', 'product', 'ai',
+] as const;
+const KB_INDEX_STATUSES = ['pending', 'indexing', 'ready', 'failed', 'degraded'] as const;
+const KB_FALLBACK_CHAIN = ['vector', 'hybrid', 'lexical', 'none'] as const;
 
 const appView = ref<ViewName>('dashboard');
 const detailTab = ref<DetailTab>('report');
@@ -296,7 +312,12 @@ const knowledgeBaseLoading = ref(false);
 const knowledgeBaseError = ref('');
 const knowledgeUploadTitle = ref('');
 const knowledgeUploadType = ref('interview_rubric');
-const knowledgeUploadTags = ref('interview,rubric');
+const knowledgeUploadTags = ref<string[]>(['interview', 'rubric']);
+const knowledgeSearchQuery = ref('');
+const knowledgeSearchLoading = ref(false);
+const knowledgeSearchResult = ref<any>(null);
+const copilotWidth = ref(Number(localStorage.getItem('resumai.copilotWidth') || 420));
+const copilotFullscreen = ref(false);
 const ragPreviewText = ref('');
 const ragPreviewResult = ref<any[]>([]);
 const ragCompareResult = ref<Record<string, any>>({});
@@ -610,11 +631,20 @@ const recommendationLabel = computed(() => {
   return '需要人工复核';
 });
 
-const recommendedCount = computed(() => tasks.value.filter(t => t.status === 'SUCCESS' && isPositiveRecommendation(t.recommendation)).length);
-const reviewCount = computed(() => tasks.value.filter(t => t.status === 'SUCCESS' && !isPositiveRecommendation(t.recommendation)).length);
+const recommendedCount = computed(() =>
+  metrics.value?.recommendedTasks ?? tasks.value.filter(t => t.status === 'SUCCESS' && isPositiveRecommendation(t.recommendation)).length
+);
+const reviewCount = computed(() =>
+  metrics.value?.manualReviewTasks ?? tasks.value.filter(t => t.status === 'SUCCESS' && !isPositiveRecommendation(t.recommendation)).length
+);
+const metricsCompletedCount = computed(() =>
+  metrics.value?.completedTasks ?? metrics.value?.successTasks ?? completedTasks.value.length
+);
+const metricsTotalCount = computed(() => metrics.value?.totalTasks ?? tasks.value.length);
 const passRate = computed(() => {
-  if (!completedTasks.value.length) return 0;
-  return Math.round(recommendedCount.value / completedTasks.value.length * 100);
+  const done = metricsCompletedCount.value;
+  if (!done) return 0;
+  return Math.round(recommendedCount.value / done * 100);
 });
 const avgEvalTime = computed(() => {
   const finished = completedTasks.value.filter(t => t.durationMs);
@@ -862,7 +892,7 @@ async function uploadKnowledgeDocument(event: Event) {
     form.append('file', file);
     form.append('title', knowledgeUploadTitle.value || file.name);
     form.append('docType', knowledgeUploadType.value || 'general');
-    form.append('tags', knowledgeUploadTags.value || '');
+    form.append('tags', knowledgeUploadTags.value.join(','));
     const res = await fetch('/api/rag/knowledge-base/upload', { method: 'POST', body: form });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     successMessage.value = '知识文档已入库';
@@ -874,6 +904,119 @@ async function uploadKnowledgeDocument(event: Event) {
     knowledgeBaseLoading.value = false;
   }
 }
+
+function toggleKnowledgeTag(tag: string) {
+  const set = new Set(knowledgeUploadTags.value);
+  if (set.has(tag)) set.delete(tag);
+  else set.add(tag);
+  knowledgeUploadTags.value = Array.from(set);
+}
+
+const knowledgeDocTypeOptions = computed(() =>
+  knowledgeBase.value?.selfServiceKnowledgeBase?.docTypeEnums?.length
+    ? knowledgeBase.value.selfServiceKnowledgeBase.docTypeEnums
+    : [...KB_DOC_TYPE_ENUMS]
+);
+const knowledgeTagOptions = computed(() =>
+  knowledgeBase.value?.selfServiceKnowledgeBase?.tagEnums?.length
+    ? knowledgeBase.value.selfServiceKnowledgeBase.tagEnums
+    : [...KB_TAG_ENUMS]
+);
+const knowledgeIndexCounts = computed(() => {
+  const counts = knowledgeBase.value?.selfServiceKnowledgeBase?.indexStatusCounts || {};
+  return KB_INDEX_STATUSES.map((status) => ({
+    status,
+    count: Number(counts[status] ?? 0),
+  }));
+});
+const knowledgeFallbackChain = computed(() =>
+  knowledgeBase.value?.selfServiceKnowledgeBase?.fallbackChain?.length
+    ? knowledgeBase.value.selfServiceKnowledgeBase.fallbackChain
+    : [...KB_FALLBACK_CHAIN]
+);
+const knowledgeFallbackStage = computed(() =>
+  knowledgeSearchResult.value?.fallbackStage
+    || knowledgeBase.value?.selfServiceKnowledgeBase?.retrievalPolicy?.fallbackStage
+    || (knowledgeBase.value?.embeddingOperational ? 'hybrid' : 'lexical')
+);
+
+function indexStatusLabel(status?: string) {
+  switch ((status || '').toLowerCase()) {
+    case 'ready': return '就绪';
+    case 'indexing': return '索引中';
+    case 'failed': return '失败';
+    case 'degraded': return '降级';
+    default: return '待处理';
+  }
+}
+
+function chunkMetaEntries(chunk: any): Array<{ key: string; value: string }> {
+  const meta = chunk?.metadata && typeof chunk.metadata === 'object' ? chunk.metadata : {};
+  const preferred = [
+    'docId', 'chunkIndex', 'source', 'embeddingProvider', 'indexVersion',
+    'fallbackStage', 'indexStatus', 'embeddingStatus', 'tags',
+  ];
+  const keys = [...preferred, ...Object.keys(meta).filter((k) => !preferred.includes(k))];
+  const flat: Record<string, unknown> = {
+    docId: chunk?.docId ?? meta.docId,
+    chunkIndex: chunk?.chunkIndex ?? meta.chunkIndex,
+    source: chunk?.source ?? meta.source,
+    embeddingProvider: chunk?.embeddingProvider ?? meta.embeddingProvider,
+    indexVersion: chunk?.indexVersion ?? meta.indexVersion,
+    fallbackStage: chunk?.fallbackStage ?? meta.fallbackStage,
+    indexStatus: chunk?.indexStatus ?? meta.indexStatus,
+    ...meta,
+  };
+  return keys
+    .filter((k) => flat[k] != null && flat[k] !== '')
+    .map((k) => ({
+      key: k,
+      value: Array.isArray(flat[k]) ? (flat[k] as unknown[]).join(', ') : String(flat[k]),
+    }));
+}
+
+async function runKnowledgeSearch() {
+  const query = knowledgeSearchQuery.value.trim();
+  if (!query) return;
+  knowledgeSearchLoading.value = true;
+  knowledgeBaseError.value = '';
+  try {
+    const res = await fetch('/api/rag/knowledge-base/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, topK: 5, rerank: false }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    knowledgeSearchResult.value = await res.json();
+  } catch {
+    knowledgeBaseError.value = '知识库检索失败';
+  } finally {
+    knowledgeSearchLoading.value = false;
+  }
+}
+
+const jdMatchEmptyHint = computed(() => {
+  const task = activeTask.value;
+  if (!task) return '暂无任务详情';
+  if (task.status && !['SUCCESS', 'PARTIAL_SUCCESS'].includes(task.status)
+    && !['SUCCEEDED', 'PARTIAL_SUCCESS'].includes(resolveQueueStatus(task))) {
+    return '待评估：任务尚未完成，hybrid 匹配结果会在评估结束后写入。';
+  }
+  if (task.topJdMatches && task.topJdMatches.length) return '';
+  if (task.matchedJdTitle || task.jdMatchScore != null) {
+    return 'hybrid 未返回 Top 列表：已有主匹配岗位，但 topJdMatches 为空。';
+  }
+  return '未命中：岗位库检索未返回匹配，或 hybrid 未返回 topJdMatches。';
+});
+
+function onCopilotWidth(width: number) {
+  copilotWidth.value = width;
+  localStorage.setItem('resumai.copilotWidth', String(width));
+}
+
+watch(copilotFullscreen, (full) => {
+  document.body.classList.toggle('copilot-fullscreen-lock', full);
+});
 
 async function openRagPanel(tab: 'knowledge' | 'business' | 'compare' | 'expert' = 'business') {
   ragDrawerTab.value = tab;
@@ -1045,7 +1188,7 @@ async function loadCandidateList() {
 
 async function loadTasks() {
   try {
-    const q = buildQuery({ page: 1, pageSize: 50, sortBy: 'create_time', sortOrder: 'desc' });
+    const q = buildQuery({ page: 1, pageSize: 8, sortBy: 'create_time', sortOrder: 'desc' });
     const r = await fetch(`/api/tasks${q}`);
     if (r.ok) {
       const page = (await r.json()) as PageResult<TaskResponse>;
@@ -1414,6 +1557,8 @@ function syncHash() {
     history.replaceState(null, '', '#/candidates');
   } else if (appView.value === 'knowledge') {
     history.replaceState(null, '', '#/knowledge');
+  } else if (appView.value === 'ops') {
+    history.replaceState(null, '', '#/ops');
   } else if (appView.value === 'positions') {
     history.replaceState(null, '', '#/positions');
   } else if (appView.value === 'analytics') {
@@ -1440,6 +1585,7 @@ async function restoreFromHash() {
     appView.value = 'knowledge';
     await loadKnowledgeBase();
   }
+  else if (hash.startsWith('#/ops')) appView.value = 'ops';
   else if (hash.startsWith('#/positions')) appView.value = 'positions';
   else if (hash.startsWith('#/analytics')) appView.value = 'analytics';
   else appView.value = 'dashboard';
@@ -2155,6 +2301,9 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         <button :class="{ active: appView === 'knowledge' }" @click="appView = 'knowledge'; clearNotices(); loadKnowledgeBase()">
           <span class="nav-icon">▣</span> 知识库
         </button>
+        <button :class="{ active: appView === 'ops' }" @click="appView = 'ops'; clearNotices()">
+          <span class="nav-icon">⚙</span> Agent Ops
+        </button>
         <button :class="{ active: appView === 'analytics' }" @click="appView = 'analytics'; clearNotices()">
           <span class="nav-icon">◈</span> 招聘洞察
         </button>
@@ -2188,10 +2337,10 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         </div>
 
         <div class="kpi-grid">
-          <div class="kpi-card"><span class="kpi-label">候选人</span><div class="kpi-value">{{ tasks.length }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">排队中</span><div class="kpi-value">{{ taskQueueStatus?.queued ?? queuedTasksCount }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">评估中</span><div class="kpi-value">{{ taskQueueStatus?.running ?? runningTasks.length }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">已完成</span><div class="kpi-value">{{ completedTasks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">候选人</span><div class="kpi-value">{{ metrics?.totalTasks ?? '-' }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">排队中</span><div class="kpi-value">{{ metrics?.queuedTasks ?? taskQueueStatus?.queued ?? queuedTasksCount }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">评估中</span><div class="kpi-value">{{ taskQueueStatus?.running ?? metrics?.runningTasks ?? runningTasks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">已完成</span><div class="kpi-value">{{ metrics?.completedTasks ?? metrics?.successTasks ?? completedTasks.length }}</div></div>
           <div class="kpi-card"><span class="kpi-label">平均分</span><div class="kpi-value">{{ metrics?.averageScore?.toFixed(1) ?? '-' }}</div></div>
         </div>
 
@@ -2234,7 +2383,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                 <td class="truncate" style="max-width:200px" :title="task.fileName">{{ candidateDisplayName(task.fileName) }}</td>
                 <td><span class="badge" :class="taskStatusClass(task)">{{ taskStatusLabel(task) }}</span></td>
                 <td>{{ displayJobCategory(task.jobCategory) }}</td>
-                <td><strong>{{ task.overallScore || '-' }}</strong></td>
+                <td><strong>{{ task.overallScore ?? '-' }}</strong></td>
                 <td class="text-muted">{{ formatDuration(task.durationMs) }}</td>
               </tr>
             </tbody>
@@ -2443,7 +2592,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                 </td>
                 <td><span class="badge" :class="taskStatusClass(task)">{{ taskStatusLabel(task) }}</span></td>
                 <td>{{ displayJobCategory(task.jobCategory) }}</td>
-                <td><strong>{{ task.overallScore || '-' }}</strong></td>
+                <td><strong>{{ task.overallScore ?? '-' }}</strong></td>
                 <td><span class="badge" :class="isPositiveRecommendation(task.recommendation) ? 'badge-success' : task.recommendation === 'NOT_RECOMMEND' ? 'badge-danger' : 'badge-warning'">{{ recommendationShort(task.recommendation || '') }}</span></td>
                 <td class="text-muted text-sm truncate">{{ candidateReviewHint(task) }}</td>
                 <td class="text-muted">{{ formatDuration(task.durationMs) }}</td>
@@ -2473,7 +2622,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
       </section>
 
       <!-- ========== KNOWLEDGE BASE ========== -->
-      <section v-if="appView === 'knowledge'" class="page-stack">
+      <section v-if="appView === 'knowledge'" class="page-stack knowledge-page">
         <div class="knowledge-hero">
           <div>
             <h1>知识库</h1>
@@ -2506,8 +2655,20 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
           <div class="rag-expert-grid mt-sm">
             <label>标题<input v-model="knowledgeUploadTitle" class="form-input" placeholder="如：Java 后端面试 Rubric" /></label>
-            <label>类型<input v-model="knowledgeUploadType" class="form-input" placeholder="interview_rubric / tech_guide / policy" /></label>
-            <label>标签<input v-model="knowledgeUploadTags" class="form-input" placeholder="java,backend,interview" /></label>
+            <label>类型
+              <select v-model="knowledgeUploadType" class="form-input">
+                <option v-for="t in knowledgeDocTypeOptions" :key="t" :value="t">{{ t }}</option>
+              </select>
+            </label>
+            <div class="kb-tag-field">
+              <span>标签</span>
+              <div class="kb-tag-enum">
+                <label v-for="tag in knowledgeTagOptions" :key="tag" class="kb-tag-option">
+                  <input type="checkbox" :checked="knowledgeUploadTags.includes(tag)" @change="toggleKnowledgeTag(tag)" />
+                  {{ tag }}
+                </label>
+              </div>
+            </div>
           </div>
           <input class="form-input mt-sm" type="file" accept=".pdf,.txt,.md,.csv" @change="uploadKnowledgeDocument" />
         </div>
@@ -2515,8 +2676,60 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         <div v-if="knowledgeBase" class="knowledge-grid">
           <div class="knowledge-metric"><span>评估标准文档</span><strong>{{ knowledgeBase.selfServiceKnowledgeBase?.documentCount ?? 0 }}</strong><small>已上传可检索</small></div>
           <div class="knowledge-metric"><span>切分片段</span><strong>{{ knowledgeBase.selfServiceKnowledgeBase?.chunkCount ?? 0 }}</strong><small>用于检索命中</small></div>
-          <div class="knowledge-metric"><span>Embedding</span><strong>{{ knowledgeBase.embeddingOperational ? '可用' : '降级' }}</strong><small>{{ knowledgeBase.embeddingProvider || '-' }}</small></div>
-          <div class="knowledge-metric"><span>当前检索策略</span><strong>{{ currentRagOptions.strategy }}</strong><small>TopK {{ currentRagOptions.topK }} · 阈值 {{ currentRagOptions.scoreThreshold }}</small></div>
+          <div class="knowledge-metric"><span>Embedding</span><strong>{{ knowledgeBase.embeddingOperational ? '可用' : '降级' }}</strong><small>{{ knowledgeBase.embeddingProvider || knowledgeBase.selfServiceKnowledgeBase?.embeddingProvider || '-' }}</small></div>
+          <div class="knowledge-metric"><span>Index Version</span><strong>{{ knowledgeBase.selfServiceKnowledgeBase?.indexVersion || '-' }}</strong><small>当前检索 {{ knowledgeFallbackStage }}</small></div>
+        </div>
+
+        <div class="card">
+          <h3>索引状态机</h3>
+          <div class="kb-status-machine">
+            <div
+              v-for="item in knowledgeIndexCounts"
+              :key="item.status"
+              class="kb-status-step"
+              :class="item.status"
+              :data-active="item.count > 0"
+            >
+              <strong>{{ indexStatusLabel(item.status) }}</strong>
+              <span>{{ item.status }}</span>
+              <em>{{ item.count }}</em>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>多层 Fallback</h3>
+          <p class="text-muted text-sm">检索降级链：vector → hybrid → lexical → none。当前 stage 高亮。</p>
+          <div class="kb-fallback-chain">
+            <div
+              v-for="stage in knowledgeFallbackChain"
+              :key="stage"
+              class="kb-fallback-stage"
+              :class="{ active: knowledgeFallbackStage === stage }"
+            >{{ stage }}</div>
+          </div>
+          <div class="kb-search-row mt-sm">
+            <input v-model="knowledgeSearchQuery" class="form-input" placeholder="试检索：如 Java 面试评分标准" @keydown.enter.prevent="runKnowledgeSearch" />
+            <button class="btn btn-primary" :disabled="knowledgeSearchLoading || !knowledgeSearchQuery.trim()" @click="runKnowledgeSearch">
+              {{ knowledgeSearchLoading ? '检索中...' : '试检索' }}
+            </button>
+          </div>
+          <div v-if="knowledgeSearchResult" class="kb-search-result">
+            <div class="ops-row-head" style="margin-bottom:8px">
+              <span class="rag-chip readonly">stage={{ knowledgeSearchResult.fallbackStage }}</span>
+              <span class="rag-chip readonly">{{ knowledgeSearchResult.strategy }}</span>
+              <span class="text-muted text-xs">lex {{ knowledgeSearchResult.lexicalHits }} · vec {{ knowledgeSearchResult.vectorHits }}</span>
+            </div>
+            <ul class="knowledge-list">
+              <li v-for="chunk in (knowledgeSearchResult.chunks || []).slice(0, 5)" :key="chunk.chunkId">
+                <strong>{{ chunk.sectionPath || chunk.chunkId }}</strong>
+                <div class="kb-meta-grid">
+                  <span v-for="m in chunkMetaEntries(chunk)" :key="m.key"><em>{{ m.key }}</em>{{ m.value }}</span>
+                </div>
+                <p class="text-muted text-xs">{{ truncateText(chunk.content || chunk.contentPreview || '', 200) }}</p>
+              </li>
+            </ul>
+          </div>
         </div>
 
         <div class="card">
@@ -2526,24 +2739,27 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <p class="text-muted text-sm">这些是你上传的面试标准/题库/核验清单，可点击查看全文或删除。评估时系统检索它们来约束评分与追问，不会当成候选人事实。</p>
             </div>
           </div>
-          <table v-if="knowledgeDocuments.length" class="kb-doc-table">
-            <thead>
-              <tr><th>标题</th><th>类型</th><th>标签</th><th>片段数</th><th>上传时间</th><th>操作</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="doc in knowledgeDocuments" :key="doc.docId">
-                <td>{{ doc.title || doc.docId }}</td>
-                <td><span class="rag-chip readonly">{{ doc.docType || 'general' }}</span></td>
-                <td class="text-muted text-xs">{{ (doc.tags || []).join('、') || '-' }}</td>
-                <td>{{ doc.chunkCount ?? 0 }}</td>
-                <td class="text-muted text-xs">{{ (doc.createdAt || '').slice(0, 16).replace('T', ' ') }}</td>
-                <td class="kb-doc-actions">
-                  <button class="btn btn-ghost btn-sm" @click="viewKnowledgeDocument(doc.docId)">查看全文</button>
-                  <button class="btn btn-danger btn-sm" @click="deleteKnowledgeDocument(doc.docId)">删除</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div v-if="knowledgeDocuments.length" class="table-wrap">
+            <table class="kb-doc-table">
+              <thead>
+                <tr><th>标题</th><th>类型</th><th>索引</th><th>标签</th><th>片段</th><th>时间</th><th>操作</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="doc in knowledgeDocuments" :key="doc.docId">
+                  <td>{{ doc.title || doc.docId }}</td>
+                  <td><span class="rag-chip readonly">{{ doc.docType || 'general' }}</span></td>
+                  <td><span class="kb-index-badge" :data-status="doc.indexStatus || 'pending'">{{ indexStatusLabel(doc.indexStatus) }}</span></td>
+                  <td class="text-muted text-xs">{{ (doc.tags || []).join('、') || '-' }}</td>
+                  <td>{{ doc.chunkCount ?? 0 }}</td>
+                  <td class="text-muted text-xs">{{ (doc.createdAt || '').slice(0, 16).replace('T', ' ') }}</td>
+                  <td class="kb-doc-actions">
+                    <button class="btn btn-ghost btn-sm" @click="viewKnowledgeDocument(doc.docId)">查看</button>
+                    <button class="btn btn-danger btn-sm" @click="deleteKnowledgeDocument(doc.docId)">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <p v-else class="text-muted text-sm">暂无评估标准文档。上传一份面试 Rubric 或技术题库后，评估会自动检索并在 Trace 里显示命中的标准。</p>
         </div>
 
@@ -2552,7 +2768,12 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             <div class="modal-head">
               <div>
                 <h3>{{ activeKnowledgeDoc.title || activeKnowledgeDoc.docId }}</h3>
-                <span class="text-muted text-xs">{{ activeKnowledgeDoc.docType }} · {{ (activeKnowledgeDoc.tags || []).join('、') }} · {{ activeKnowledgeDoc.chunkCount ?? 0 }} 片段</span>
+                <span class="text-muted text-xs">
+                  {{ activeKnowledgeDoc.docType }} · {{ (activeKnowledgeDoc.tags || []).join('、') }} ·
+                  {{ activeKnowledgeDoc.chunkCount ?? 0 }} 片段 ·
+                  index={{ activeKnowledgeDoc.indexStatus || 'pending' }} ·
+                  {{ activeKnowledgeDoc.embeddingProvider || '-' }} / {{ activeKnowledgeDoc.indexVersion || '-' }}
+                </span>
               </div>
               <button class="btn btn-ghost btn-sm" @click="closeKnowledgeDocument">关闭</button>
             </div>
@@ -2563,6 +2784,9 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <ul class="knowledge-list">
                 <li v-for="chunk in (activeKnowledgeDoc.chunks || [])" :key="chunk.chunkId">
                   <strong>{{ chunk.sectionPath || chunk.chunkId }}</strong>
+                  <div class="kb-meta-grid">
+                    <span v-for="m in chunkMetaEntries(chunk)" :key="m.key"><em>{{ m.key }}</em>{{ m.value }}</span>
+                  </div>
                   <p class="text-muted text-xs">{{ truncateText(chunk.content || chunk.contentPreview || '', 240) }}</p>
                 </li>
               </ul>
@@ -2578,6 +2802,10 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         </div>
       </section>
 
+      <section v-if="appView === 'ops'">
+        <OpsPanel />
+      </section>
+
       <!-- ========== CANDIDATE DETAIL ========== -->
       <section v-if="appView === 'detail' && detailLoading && !activeTask">
         <div class="empty-state"><p>正在加载任务详情...</p></div>
@@ -2589,8 +2817,8 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         <button class="back-link" @click="goBack">← 返回列表</button>
 
         <div class="detail-header">
-          <div class="score-circle" :class="{ low: (activeTask.overallScore || 0) < 60, mid: (activeTask.overallScore || 0) >= 60 && (activeTask.overallScore || 0) < 75 }">
-            <span class="score-value">{{ activeTask.overallScore || '-' }}</span>
+          <div class="score-circle" :class="{ low: (activeTask.overallScore ?? 0) < 60, mid: (activeTask.overallScore ?? 0) >= 60 && (activeTask.overallScore ?? 0) < 75 }">
+            <span class="score-value">{{ activeTask.overallScore ?? '-' }}</span>
             <span class="score-label">综合评估</span>
           </div>
           <div class="score-circle" v-if="activeTask.jdMatchScore" :class="{ low: activeTask.jdMatchScore < 0.5, mid: activeTask.jdMatchScore >= 0.5 && activeTask.jdMatchScore < 0.7 }">
@@ -2608,7 +2836,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
         </div>
 
-        <div class="candidate-detail-workspace">
+        <div class="candidate-detail-workspace" :style="{ '--copilot-width': copilotWidth + 'px' }" :class="{ 'is-copilot-fullscreen': copilotFullscreen }">
           <div class="candidate-detail-main">
         <div class="tab-bar">
           <button :class="{ active: detailTab === 'resume' }" @click="detailTab = 'resume'">简历原文</button>
@@ -2657,7 +2885,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <div class="hr-decision-card" :class="activeTask.recommendation === 'STRONG_RECOMMEND' ? 'strong' : activeTask.recommendation === 'RECOMMEND' ? 'recommend' : 'review'">
             <div class="hr-decision-header">
               <span class="hr-decision-badge">{{ recommendationLabel }}</span>
-              <span class="hr-decision-score" v-if="activeTask.overallScore">综合评分 {{ activeTask.overallScore }}</span>
+              <span class="hr-decision-score" v-if="activeTask.overallScore != null">综合评分 {{ activeTask.overallScore }}</span>
               <span class="hr-decision-score" v-if="activeTask.jdMatchScore" style="margin-left: 8px; color: var(--color-text-light);">JD 匹配 {{ Math.round(activeTask.jdMatchScore * 100) }}%</span>
             </div>
             <div class="hr-decision-meta" v-if="activeTask.aiRecommendation && activeTask.aiRecommendation !== activeTask.recommendation">
@@ -2819,8 +3047,8 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             </div>
           </div>
           <div v-else class="empty-state">
-            <p>暂无 JD 匹配数据</p>
-            <p class="text-muted text-sm">评估完成后这里展示岗位库检索命中的 Top 岗位、匹配依据与能力缺口。</p>
+            <p>{{ jdMatchEmptyHint }}</p>
+            <p class="text-muted text-sm">有 topJdMatches 时会展示 Top 岗位、匹配依据与能力缺口；空态可能是未命中、待评估，或 hybrid 未返回列表。</p>
           </div>
         </div>
 
@@ -2854,6 +3082,10 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             :overall-score="activeTask.overallScore"
             :recommendation="activeTask.recommendation"
             :run-id="activeTask.workflowRunId"
+            :width="copilotWidth"
+            :fullscreen="copilotFullscreen"
+            @update:width="onCopilotWidth"
+            @update:fullscreen="copilotFullscreen = $event"
             @revision-created="handleConversationRevisionCreated"
             @control-turn="handleConversationControlTurn"
             @select-revision="handleConversationRevisionSelect"
@@ -2869,11 +3101,11 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         </div>
 
         <div class="kpi-grid">
-          <div class="kpi-card"><span class="kpi-label">总候选人</span><div class="kpi-value">{{ tasks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">总候选人</span><div class="kpi-value">{{ metrics?.totalTasks ?? '-' }}</div></div>
           <div class="kpi-card"><span class="kpi-label">推荐面试</span><div class="kpi-value">{{ recommendedCount }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">通过率</span><div class="kpi-value">{{ tasks.length >= 3 ? passRate + '%' : (recommendedCount + '/' + completedTasks.length) }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">JD 匹配成功率</span><div class="kpi-value">{{ jdMatchSuccessRate != null ? jdMatchSuccessRate + '%' : '-' }}</div><span class="kpi-hint" v-if="jdMatchSuccessRate == null">暂无已完成任务</span><span class="kpi-hint" v-else-if="completedTasks.length < 3">样本不足 ({{ completedTasks.length }})</span></div>
-          <div class="kpi-card"><span class="kpi-label">待复核队列</span><div class="kpi-value">{{ pendingReviewTasks.length }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">通过率</span><div class="kpi-value">{{ metricsTotalCount >= 3 ? passRate + '%' : (recommendedCount + '/' + metricsCompletedCount) }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">JD 匹配成功率</span><div class="kpi-value">{{ jdMatchSuccessRate != null ? jdMatchSuccessRate + '%' : '-' }}</div><span class="kpi-hint" v-if="jdMatchSuccessRate == null">暂无已完成任务</span><span class="kpi-hint" v-else-if="metricsCompletedCount < 3">样本不足 ({{ metricsCompletedCount }})</span></div>
+          <div class="kpi-card"><span class="kpi-label">待复核队列</span><div class="kpi-value">{{ metrics?.manualReviewTasks ?? pendingReviewTasks.length }}</div></div>
         </div>
 
         <div class="analytics-grid">
@@ -2882,19 +3114,19 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             <div style="display:flex;flex-direction:column;gap:10px;margin-top:var(--space-md)">
               <div style="display:flex;align-items:center;gap:12px">
                 <span style="width:80px;font-size:12px;color:var(--color-text-secondary)">已提交</span>
-                <div style="flex:1;height:24px;background:var(--color-primary-light);border-radius:4px;display:flex;align-items:center;padding:0 10px"><span style="font-size:12px;font-weight:600">{{ tasks.length }}</span></div>
+                <div style="flex:1;height:24px;background:var(--color-primary-light);border-radius:4px;display:flex;align-items:center;padding:0 10px"><span style="font-size:12px;font-weight:600">{{ metricsTotalCount }}</span></div>
               </div>
               <div style="display:flex;align-items:center;gap:12px">
                 <span style="width:80px;font-size:12px;color:var(--color-text-secondary)">已评估</span>
-                <div :style="{ flex: 1, height: '24px', background: 'var(--color-success-light)', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', maxWidth: (completedTasks.length / Math.max(1, tasks.length) * 100) + '%' }"><span style="font-size:12px;font-weight:600">{{ completedTasks.length }}</span></div>
+                <div :style="{ flex: 1, height: '24px', background: 'var(--color-success-light)', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', maxWidth: (metricsCompletedCount / Math.max(1, metricsTotalCount) * 100) + '%' }"><span style="font-size:12px;font-weight:600">{{ metricsCompletedCount }}</span></div>
               </div>
               <div style="display:flex;align-items:center;gap:12px">
                 <span style="width:80px;font-size:12px;color:var(--color-text-secondary)">推荐面试</span>
-                <div :style="{ flex: 1, height: '24px', background: 'var(--color-success-light)', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', maxWidth: (recommendedCount / Math.max(1, tasks.length) * 100) + '%' }"><span style="font-size:12px;font-weight:600">{{ recommendedCount }}</span></div>
+                <div :style="{ flex: 1, height: '24px', background: 'var(--color-success-light)', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', maxWidth: (recommendedCount / Math.max(1, metricsTotalCount) * 100) + '%' }"><span style="font-size:12px;font-weight:600">{{ recommendedCount }}</span></div>
               </div>
               <div style="display:flex;align-items:center;gap:12px">
                 <span style="width:80px;font-size:12px;color:var(--color-text-secondary)">需复核</span>
-                <div :style="{ flex: 1, height: '24px', background: 'var(--color-warning-light)', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', maxWidth: (reviewCount / Math.max(1, tasks.length) * 100) + '%' }"><span style="font-size:12px;font-weight:600">{{ reviewCount }}</span></div>
+                <div :style="{ flex: 1, height: '24px', background: 'var(--color-warning-light)', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', maxWidth: (reviewCount / Math.max(1, metricsTotalCount) * 100) + '%' }"><span style="font-size:12px;font-weight:600">{{ reviewCount }}</span></div>
               </div>
             </div>
           </div>
@@ -3086,8 +3318,20 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                 <p class="text-muted text-sm">可上传面试评分标准、技术题库、岗位 Rubric、项目真实性核验规则、团队招聘偏好等文档，进入 RAG 知识库后会参与 Agent 检索。</p>
                 <div class="rag-expert-grid">
                   <label>标题<input v-model="knowledgeUploadTitle" class="form-input" placeholder="如：Java 后端面试 Rubric" /></label>
-                  <label>类型<input v-model="knowledgeUploadType" class="form-input" placeholder="interview_rubric / tech_guide / policy" /></label>
-                  <label>标签<input v-model="knowledgeUploadTags" class="form-input" placeholder="java,backend,interview" /></label>
+                  <label>类型
+                    <select v-model="knowledgeUploadType" class="form-input">
+                      <option v-for="t in knowledgeDocTypeOptions" :key="t" :value="t">{{ t }}</option>
+                    </select>
+                  </label>
+                  <div class="kb-tag-field">
+                    <span>标签</span>
+                    <div class="kb-tag-enum">
+                      <label v-for="tag in knowledgeTagOptions" :key="tag" class="kb-tag-option">
+                        <input type="checkbox" :checked="knowledgeUploadTags.includes(tag)" @change="toggleKnowledgeTag(tag)" />
+                        {{ tag }}
+                      </label>
+                    </div>
+                  </div>
                 </div>
                 <input class="form-input" type="file" accept=".pdf,.txt,.md,.csv" @change="uploadKnowledgeDocument" />
               </div>

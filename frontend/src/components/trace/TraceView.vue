@@ -7,24 +7,35 @@ import { computed, ref, watch } from 'vue';
  * 右栏是选中 span 的详情面板（目标 / 判断 / 入参出参 / tokens / 耗时）。
  */
 
+type ToolCategory = 'mcp' | 'skill' | 'sandbox' | 'internal' | 'gateway' | 'llm' | 'tool';
+
+interface ToolCallView {
+  toolCallId?: string;
+  name?: string;
+  status?: string;
+  durationMs?: number;
+  input?: string;
+  result?: string;
+  output?: string;
+  category?: string;
+  origin?: string;
+  mcpServer?: string;
+  skillId?: string;
+  skillVersion?: string;
+  sandboxExecutionId?: string;
+}
+
 interface RoundView {
   roundNum?: number;
   type?: string;
+  category?: string;
   title?: string;
   tokens?: number;
   durationMs?: number;
   model?: string;
   error?: string;
   hasToolCalls?: boolean;
-  toolCalls?: Array<{
-    toolCallId?: string;
-    name?: string;
-    status?: string;
-    durationMs?: number;
-    input?: string;
-    result?: string;
-    output?: string;
-  }>;
+  toolCalls?: ToolCallView[];
   input?: string;
   output?: string;
   decisionText?: string;
@@ -44,6 +55,19 @@ interface AgentView {
   confidence?: number;
   output?: string;
   rounds?: RoundView[];
+}
+
+interface HistoricalAttempt {
+  runId?: string;
+  status?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  attemptNo?: number;
+  category?: string;
+  retryable?: boolean;
+  controlPlaneStage?: string;
+  finishedAt?: string;
+  createdAt?: string;
 }
 
 interface ExecTree {
@@ -68,6 +92,9 @@ interface ExecTree {
   runId?: string;
   runStatus?: string;
   policyId?: string;
+  attemptNo?: number;
+  historicalAttempts?: HistoricalAttempt[];
+  langfuseTraceUrl?: string;
 }
 
 const props = defineProps<{
@@ -86,15 +113,29 @@ interface SpanRow {
   durationMs?: number;
   tokens?: number;
   parallel?: boolean;
+  badge?: ToolCategory;
   agent?: AgentView;
   round?: RoundView;
-  tool?: RoundView['toolCalls'] extends Array<infer T> | undefined ? T : never;
+  tool?: ToolCallView;
 }
+
+const FILTERS: Array<{ id: ToolCategory | 'all'; label: string }> = [
+  { id: 'all', label: '全部' },
+  { id: 'llm', label: 'LLM' },
+  { id: 'mcp', label: 'MCP' },
+  { id: 'skill', label: 'SKILL' },
+  { id: 'sandbox', label: 'SANDBOX' },
+  { id: 'internal', label: 'INTERNAL' },
+  { id: 'gateway', label: 'GATEWAY' },
+];
 
 const selectedId = ref<string>('');
 const collapsed = ref<Set<string>>(new Set());
+const kindFilter = ref<ToolCategory | 'all'>('all');
+const historyOpen = ref(false);
 
 const agents = computed<AgentView[]>(() => props.tree?.executionTree || []);
+const historicalAttempts = computed(() => props.tree?.historicalAttempts || []);
 
 const groups = computed<AgentView[][]>(() => {
   const byPhase = new Map<number, AgentView[]>();
@@ -112,6 +153,37 @@ function displayName(name?: string): string {
 
 function purpose(agent: AgentView): string {
   return props.agentPurposes[agent.name || ''] || agent.role || '';
+}
+
+function normalizeCategory(raw?: string, toolName?: string, isLlm = false): ToolCategory {
+  if (isLlm) return 'llm';
+  const value = (raw || '').toLowerCase();
+  if (value === 'mcp' || value === 'skill' || value === 'sandbox'
+      || value === 'internal' || value === 'gateway' || value === 'llm') {
+    return value;
+  }
+  const name = toolName || '';
+  if (name.startsWith('mcp_') || name.includes('.')) return 'mcp';
+  if (name === 'execute_skill' || name === 'list_skills') return 'skill';
+  if (['parse_resume', 'check_timeline', 'calculate_jd_coverage', 'locate_evidence',
+    'verify_report_evidence', 'resume_lint'].includes(name)) return 'sandbox';
+  if (name === 'external_profile_lookup') return 'gateway';
+  return 'internal';
+}
+
+function badgeLabel(badge?: ToolCategory): string {
+  if (!badge) return 'TOOL';
+  return badge.toUpperCase();
+}
+
+function roundBadge(round: RoundView): ToolCategory {
+  const tool = round.toolCalls?.[0];
+  const isTool = round.type === 'tool' || round.hasToolCalls;
+  return normalizeCategory(
+    round.category || tool?.category || tool?.origin,
+    tool?.name,
+    !isTool,
+  );
 }
 
 const spans = computed<SpanRow[]>(() => {
@@ -151,7 +223,8 @@ const spans = computed<SpanRow[]>(() => {
       if (collapsed.value.has(agentId)) return;
       (agent.rounds || []).forEach((round, ri) => {
         const roundId = `${agentId}-r-${ri}`;
-        const isTool = round.type === 'tool' || round.hasToolCalls;
+        const isTool = round.type === 'tool' || !!round.hasToolCalls;
+        const badge = roundBadge(round);
         rows.push({
           id: roundId,
           depth: 2,
@@ -161,8 +234,10 @@ const spans = computed<SpanRow[]>(() => {
             : round.toolCalls?.some((t) => t.status === 'FAILED') ? 'FAILED' : 'SUCCESS',
           durationMs: round.durationMs ?? round.toolCalls?.[0]?.durationMs,
           tokens: round.tokens,
+          badge,
           agent,
           round,
+          tool: round.toolCalls?.[0],
         });
       });
     });
@@ -170,10 +245,20 @@ const spans = computed<SpanRow[]>(() => {
   return rows;
 });
 
-const selected = computed<SpanRow | null>(() =>
-  spans.value.find((s) => s.id === selectedId.value) || null);
+const filteredSpans = computed(() => {
+  if (kindFilter.value === 'all') return spans.value;
+  return spans.value.filter((row) => {
+    if (row.kind === 'group' || row.kind === 'agent') return true;
+    return row.badge === kindFilter.value;
+  });
+});
 
-watch(spans, (rows) => {
+const selected = computed<SpanRow | null>(() =>
+  filteredSpans.value.find((s) => s.id === selectedId.value)
+  || spans.value.find((s) => s.id === selectedId.value)
+  || null);
+
+watch(filteredSpans, (rows) => {
   if (!rows.length) return;
   if (!rows.some((r) => r.id === selectedId.value)) {
     selectedId.value = rows.find((r) => r.kind === 'agent')?.id || rows[0].id;
@@ -248,6 +333,32 @@ async function copyText(text?: string) {
       <span class="trace-summary-item"><em>Tokens</em>{{ totals.tokens || '-' }}</span>
       <span class="trace-summary-item" v-if="tree?.policyId"><em>策略</em>{{ tree.policyId }}</span>
       <span class="trace-summary-item" v-if="tree?.runStatus"><em>状态</em>{{ tree.runStatus }}</span>
+      <span class="trace-summary-item" v-if="tree?.attemptNo"><em>当前尝试</em>#{{ tree.attemptNo }}</span>
+    </div>
+
+    <!-- 历史尝试（控制面失败折叠） -->
+    <div class="trace-history" v-if="historicalAttempts.length">
+      <button class="history-toggle" type="button" @click="historyOpen = !historyOpen">
+        {{ historyOpen ? '▾' : '▸' }}
+        历史尝试（{{ historicalAttempts.length }}）
+        <span class="history-tag">CONTROL_PLANE</span>
+      </button>
+      <div v-if="historyOpen" class="history-list">
+        <div v-for="(attempt, ai) in historicalAttempts" :key="attempt.runId || ai" class="history-card">
+          <div class="history-card-head">
+            <span class="history-badge">CONTROL_PLANE</span>
+            <strong>#{{ attempt.attemptNo ?? ai + 1 }}</strong>
+            <span class="history-code">{{ attempt.errorCode || attempt.status }}</span>
+            <span class="history-retry" v-if="attempt.retryable">可重试</span>
+          </div>
+          <p class="history-msg">{{ attempt.errorMessage || '控制面失败（非 Agent 推理错误）' }}</p>
+          <div class="history-meta">
+            <span v-if="attempt.controlPlaneStage">阶段 {{ attempt.controlPlaneStage }}</span>
+            <span v-if="attempt.runId">run {{ attempt.runId }}</span>
+            <span v-if="attempt.finishedAt">{{ attempt.finishedAt }}</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 路由决策卡（Coordinator 规划） -->
@@ -279,11 +390,23 @@ async function copyText(text?: string) {
       </div>
     </div>
 
+    <!-- 类型筛选 -->
+    <div class="trace-filters" v-if="spans.length">
+      <button
+        v-for="f in FILTERS"
+        :key="f.id"
+        type="button"
+        class="filter-chip"
+        :class="[{ active: kindFilter === f.id }, f.id !== 'all' ? `badge-${f.id}` : '']"
+        @click="kindFilter = f.id"
+      >{{ f.label }}</button>
+    </div>
+
     <!-- 两栏：span 树 + 详情 -->
-    <div class="trace-panes" v-if="spans.length">
+    <div class="trace-panes" v-if="filteredSpans.length">
       <div class="span-tree" role="tree">
         <div
-          v-for="row in spans"
+          v-for="row in filteredSpans"
           :key="row.id"
           class="span-row"
           :class="[statusClass(row.status), { selected: row.id === selectedId, [`depth-${row.depth}`]: true }]"
@@ -299,8 +422,19 @@ async function copyText(text?: string) {
           >{{ collapsed.has(row.id) ? '▸' : '▾' }}</button>
           <span v-else class="span-caret-placeholder"></span>
           <span class="span-dot" :class="statusClass(row.status)"></span>
-          <span class="span-kind" v-if="row.kind === 'tool'">TOOL</span>
-          <span class="span-kind llm" v-else-if="row.kind === 'round'">LLM</span>
+          <span
+            v-if="row.kind === 'group'"
+            class="span-kind badge-group"
+          >GROUP</span>
+          <span
+            v-else-if="row.kind === 'agent'"
+            class="span-kind badge-agent"
+          >AGENT</span>
+          <span
+            v-else-if="row.kind === 'tool' || row.kind === 'round'"
+            class="span-kind"
+            :class="`badge-${row.badge || (row.kind === 'round' ? 'llm' : 'internal')}`"
+          >{{ badgeLabel(row.badge || (row.kind === 'round' ? 'llm' : 'internal')) }}</span>
           <span class="span-label">{{ row.label }}</span>
           <span class="span-parallel" v-if="row.parallel">∥ 并行</span>
           <span class="span-tokens" v-if="row.tokens">{{ row.tokens }} tok</span>
@@ -312,6 +446,11 @@ async function copyText(text?: string) {
         <div class="detail-head">
           <span class="span-dot" :class="statusClass(selected.status)"></span>
           <h4>{{ selected.label }}</h4>
+          <span
+            v-if="selected.badge"
+            class="span-kind"
+            :class="`badge-${selected.badge}`"
+          >{{ badgeLabel(selected.badge) }}</span>
           <span class="detail-duration">{{ fmtMs(selected.durationMs) }}</span>
         </div>
 
@@ -339,6 +478,9 @@ async function copyText(text?: string) {
           <div class="detail-grid">
             <div v-if="selected.round.tokens"><em>Tokens</em><strong>{{ selected.round.tokens }}</strong></div>
             <div v-if="selected.durationMs"><em>耗时</em><strong>{{ fmtMs(selected.durationMs) }}</strong></div>
+            <div v-if="selected.tool?.origin || selected.tool?.category"><em>来源</em><strong>{{ selected.tool?.origin || selected.tool?.category }}</strong></div>
+            <div v-if="selected.tool?.mcpServer"><em>MCP</em><strong>{{ selected.tool.mcpServer }}</strong></div>
+            <div v-if="selected.tool?.skillId"><em>Skill</em><strong>{{ selected.tool.skillId }}{{ selected.tool.skillVersion ? '@' + selected.tool.skillVersion : '' }}</strong></div>
           </div>
           <div class="detail-block warning" v-if="selected.round.error">
             <div class="detail-block-head"><span>错误</span></div>
@@ -386,6 +528,40 @@ async function copyText(text?: string) {
 }
 .trace-summary-item { display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 600; }
 .trace-summary-item em { font-style: normal; font-size: 11px; color: var(--color-text-secondary); font-weight: 500; }
+
+.trace-history {
+  border: 1px solid #fde68a; border-radius: var(--radius-md);
+  background: #fffbeb; padding: 8px 12px;
+}
+.history-toggle {
+  border: none; background: none; cursor: pointer; font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 8px; color: #92400e; padding: 0;
+}
+.history-tag {
+  padding: 1px 6px; border-radius: 4px; background: #fef3c7; color: #b45309;
+  font-size: 10px; font-weight: 700;
+}
+.history-list { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.history-card {
+  padding: 8px 10px; border-radius: 8px; background: #fff; border: 1px solid #fde68a;
+}
+.history-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.history-badge {
+  padding: 1px 6px; border-radius: 4px; background: #fee2e2; color: #b91c1c;
+  font-size: 10px; font-weight: 700;
+}
+.history-code { font-family: ui-monospace, monospace; color: #9a3412; }
+.history-retry { font-size: 10px; color: #047857; font-weight: 600; }
+.history-msg { margin: 6px 0 4px; font-size: 12px; color: #78350f; }
+.history-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: #a16207; }
+
+.trace-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter-chip {
+  border: 1px solid var(--color-border-light); background: var(--color-surface);
+  border-radius: 999px; padding: 3px 10px; font-size: 11px; font-weight: 600;
+  cursor: pointer; color: var(--color-text-secondary);
+}
+.filter-chip.active { border-color: var(--color-primary); color: var(--color-primary); background: var(--color-primary-light, #eef2ff); }
 
 .trace-route {
   padding: 14px; border: 1px solid var(--color-border-light);
@@ -435,8 +611,16 @@ async function copyText(text?: string) {
 .span-dot.is-failed { background: var(--color-danger); }
 .span-dot.is-running { background: var(--color-warning); animation: span-pulse 1.2s infinite; }
 @keyframes span-pulse { 50% { opacity: .35; } }
-.span-kind { flex-shrink: 0; padding: 1px 5px; border-radius: 4px; background: #fef3c7; color: #b45309; font-size: 9px; font-weight: 700; }
-.span-kind.llm { background: #dbeafe; color: #1d4ed8; }
+.span-kind { flex-shrink: 0; padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 700; }
+.badge-llm { background: #dbeafe; color: #1d4ed8; }
+.badge-mcp { background: #dcfce7; color: #15803d; }
+.badge-skill { background: #f3e8ff; color: #7e22ce; }
+.badge-sandbox { background: #ffedd5; color: #c2410c; }
+.badge-internal { background: #f1f5f9; color: #475569; }
+.badge-gateway { background: #e0e7ff; color: #4338ca; }
+.badge-tool { background: #fef3c7; color: #b45309; }
+.badge-group { background: #ecfdf5; color: #047857; }
+.badge-agent { background: #e0e7ff; color: #4338ca; }
 .span-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .depth-0 .span-label { font-weight: 600; }
 .span-parallel { flex-shrink: 0; font-size: 10px; color: var(--color-primary); font-weight: 600; }

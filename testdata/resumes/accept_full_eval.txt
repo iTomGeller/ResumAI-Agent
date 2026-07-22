@@ -1,0 +1,31 @@
+张伟
+高级 Java / AI Agent 工程师
+邮箱：zhangwei@example.com | GitHub：github.com/zhangwei-agent
+手机：13800001111
+
+技能
+Java, Spring Boot, Spring Cloud, MySQL, Redis, Kafka, Docker, Kubernetes,
+Python, LangChain, LangGraph, LLM, RAG, Milvus, Neo4j, Vue, Prometheus, Grafana
+
+工作经历
+2022.03 - 至今 某云科技 高级后端 / Agent 平台工程师
+- 负责企业级 Agent Runtime，设计带预算控制与死循环防护的 harness
+- 落地 Hybrid RAG（BM25 + 向量 RRF），召回准确率提升 18%
+- 主导 DeepSeek / 百炼 Embedding 接入与可观测性（Langfuse OTel）
+
+2020.01 - 2022.02 某互联网公司 Java 后端工程师
+- 负责订单与库存微服务，QPS 峰值 2 万，P99 < 80ms
+- 建设 Redis 缓存与 Kafka 异步削峰
+
+项目经历
+1. ResumAI Agent Runtime
+职责：Coordinator 动态规划、MCP Registry（Exa/Firecrawl/Context7）、Sandbox 隔离工具
+技术：Java Spring Boot, Python FastAPI, Milvus, Redis, Docker
+结果：完整评估 P95 从 70s 降到 35s 内，报告结构化契约成功率 >95%
+
+2. 智能招聘知识库
+职责：chunk 320/60、hybrid RRF 0.7/0.3、Bailian text-embedding-v3
+结果：knowledge precision@5 提升至 0.66，JD MRR=1.0
+
+教育
+2016 - 2020 某大学 计算机科学与技术 本科

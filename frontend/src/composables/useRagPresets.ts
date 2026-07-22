@@ -67,9 +67,9 @@ export function defaultRagOptions(): RagOptions {
     rrfK: 60,
     rerankerEnabled: false,
     rerankerModel: 'none',
-    chunkSize: 400,
-    chunkOverlap: 80,
-    embeddingProvider: 'local',
+    chunkSize: 320,
+    chunkOverlap: 60,
+    embeddingProvider: 'bailian',
     generation: { temperature: 0.4, topP: 0.9, maxTokens: 1200 },
     presetName: 'balanced',
   };

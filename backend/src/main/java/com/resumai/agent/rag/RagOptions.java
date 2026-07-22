@@ -38,9 +38,9 @@ public record RagOptions(
                 60,
                 false,
                 "none",
-                400,
-                80,
-                "local",
+                320,
+                60,
+                "bailian",
                 Generation.defaults(),
                 "balanced"
         );

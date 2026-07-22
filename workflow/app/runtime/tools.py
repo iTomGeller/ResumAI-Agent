@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 CACHEABLE_TOOLS = {"parse_resume", "check_timeline", "calculate_jd_coverage",
                    "resume_lint", "jd_requirements_extract"}
 
+# OpenTelemetry GenAI / MCP semantic conventions (development schema).
+OTEL_GENAI_SCHEMA = "https://opentelemetry.io/schemas/1.28.0"
+MCP_PROTOCOL_VERSION = "2024-11-05"
+
 
 @dataclass(frozen=True)
 class ToolDefinition:
@@ -34,7 +38,11 @@ class ToolDefinition:
     side_effect_level: str = "read_only"  # read_only / internal_write / external
     network_policy: str = "internal"      # none / internal / gateway
     required_secrets: tuple = ()
-    kind: str = "internal"                # internal / sandbox / gateway
+    kind: str = "internal"                # internal / sandbox / gateway / mcp
+    mcp_server: Optional[str] = None
+    protocol_version: Optional[str] = None
+    skill_id: Optional[str] = None
+    skill_version: Optional[str] = None
 
 
 @dataclass
@@ -123,7 +131,8 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
             "url": {"type": "string"},
             "maxLength": {"type": "integer"}}, "required": ["url"]},
         ANY_OBJECT, timeout_seconds=40.0, max_retries=0,
-        network_policy="gateway", kind="mcp"))
+        network_policy="gateway", kind="mcp",
+        mcp_server="fetch", protocol_version=MCP_PROTOCOL_VERSION))
 
     # ---- sandbox tools (fixed allowlist, executed in ephemeral docker) ----
     sandbox_schemas: Dict[str, Dict[str, Any]] = {
@@ -178,18 +187,83 @@ class ToolExecutor:
         self.definitions = build_tool_definitions()
         self.signature_counts: Dict[str, int] = {}
         self.call_log: List[ToolCallResult] = []
+        self.mcp_registry: Any = None
+
+    def attach_mcp(self, registry: Any) -> int:
+        """Register AVAILABLE MCP tools from a probed McpRegistry."""
+        if registry is None:
+            return 0
+        return int(registry.register_into(self) or 0)
+
+    def _tool_event_meta(self, defn: ToolDefinition) -> Dict[str, Any]:
+        """Contract fields for Trace / Langfuse (kind, origin, MCP, skill)."""
+        meta: Dict[str, Any] = {
+            "kind": defn.kind,
+            "origin": defn.kind,
+        }
+        if defn.mcp_server:
+            meta["mcpServer"] = defn.mcp_server
+        if defn.protocol_version or defn.kind == "mcp":
+            meta["protocolVersion"] = defn.protocol_version or MCP_PROTOCOL_VERSION
+        skill_id = defn.skill_id or self.run_context.get("skillId")
+        skill_version = defn.skill_version or self.run_context.get("skillVersion")
+        if skill_id:
+            meta["skillId"] = skill_id
+        if skill_version:
+            meta["skillVersion"] = skill_version
+        sandbox_id = self.run_context.get("sandboxExecutionId")
+        if sandbox_id and defn.kind == "sandbox":
+            meta["sandboxExecutionId"] = sandbox_id
+        return meta
 
     def catalog_for(self, tool_names: List[str]) -> List[Dict[str, Any]]:
         catalog = []
         for name in tool_names:
             defn = self.definitions.get(name)
             if defn:
-                catalog.append({
+                entry = {
                     "name": defn.name,
                     "description": defn.description,
                     "inputSchema": defn.input_schema,
-                })
+                    "kind": defn.kind,
+                }
+                if defn.mcp_server:
+                    entry["mcpServer"] = defn.mcp_server
+                if defn.protocol_version:
+                    entry["protocolVersion"] = defn.protocol_version
+                catalog.append(entry)
         return catalog
+
+    def catalog_for_agent(self, agent_id: str, tool_names: List[str]) -> List[Dict[str, Any]]:
+        """Merge static agent tools with live MCP route (ReportAgent: no public MCP)."""
+        names = list(tool_names or [])
+        if agent_id == "ReportAgent":
+            names = [n for n in names
+                     if not str(n).startswith(("exa.", "firecrawl.", "fetch.", "context7."))
+                     and n != "mcp_fetch_url"]
+            return self.catalog_for(names)
+        if self.mcp_registry is not None:
+            for extra in self.mcp_registry.tools_for_agent(agent_id):
+                if extra not in names:
+                    names.append(extra)
+            # Drop MCP tools that are not AVAILABLE / not routed for this agent.
+            routed = set(self.mcp_registry.tools_for_agent(agent_id))
+            filtered = []
+            for name in names:
+                defn = self.definitions.get(name)
+                if defn is None:
+                    continue
+                if defn.kind == "mcp" and name not in routed and name not in (tool_names or []):
+                    # Allow definition-listed MCP only when registry says AVAILABLE.
+                    info = self.mcp_registry.tools.get(name)
+                    health = self.mcp_registry.health.get(info.server) if info else None
+                    if name == "mcp_fetch_url":
+                        health = self.mcp_registry.health.get("fetch")
+                    if not health or health.status != "AVAILABLE":
+                        continue
+                filtered.append(name)
+            names = filtered
+        return self.catalog_for(names)
 
     @staticmethod
     def signature(tool: str, args: Dict[str, Any]) -> str:
@@ -228,15 +302,20 @@ class ToolExecutor:
         tool_call_id = f"tc-{uuid.uuid4().hex[:16]}"
         self.budget.tool_calls += 1
         public_args = {k: v for k, v in args.items() if k != "_rewrite"}
-        await self.emitter.emit("tool.started", agent_id=agent_id, tool_name=tool, payload={
+        meta = self._tool_event_meta(defn)
+        started_payload = {
             "toolCallId": tool_call_id,
             "arguments": _preview_args(public_args),
             "idempotencyKey": signature,
             "sideEffectLevel": defn.side_effect_level,
             "retryCount": 0,
             "rewriteEnabled": bool(args.get("_rewrite")),
-        })
+            **meta,
+        }
+        await self.emitter.emit("tool.started", agent_id=agent_id, tool_name=tool,
+                                payload=started_payload)
         started = time.monotonic()
+        otel_span = _start_tool_span(defn, tool, tool_call_id)
 
         # Deterministic tools: content-hash cache (30d) — repeat evaluations
         # of the same resume/JD skip the sandbox/local execution entirely.
@@ -257,7 +336,9 @@ class ToolExecutor:
                                             "cacheHit": True,
                                             "arguments": _preview_args(public_args),
                                             "resultPreview": _preview(cached),
+                                            **meta,
                                         })
+                _end_tool_span(otel_span, "SUCCEEDED", duration_ms)
                 return call
         retries = 0
         max_retries = defn.max_retries if (defn.idempotent and defn.side_effect_level == "read_only") else 0
@@ -266,7 +347,8 @@ class ToolExecutor:
             try:
                 timeout = min(defn.timeout_seconds, self.tool_timeout_seconds) \
                     if defn.kind != "sandbox" else defn.timeout_seconds
-                raw = await asyncio.wait_for(self._dispatch(defn, args), timeout=timeout)
+                raw = await asyncio.wait_for(
+                    self._dispatch(defn, args, agent_id=agent_id), timeout=timeout)
                 result = self._normalize_result(raw)
                 try:
                     if isinstance(result, dict):
@@ -287,12 +369,16 @@ class ToolExecutor:
                                             "retryCount": retries,
                                             "arguments": _preview_args(args),
                                             "resultPreview": _preview(result),
+                                            **meta,
                                         })
+                _end_tool_span(otel_span, "SUCCEEDED", duration_ms)
                 return call
             except asyncio.CancelledError:
                 await self.emitter.emit("tool.failed", agent_id=agent_id, tool_name=tool,
                                         payload={"toolCallId": tool_call_id,
-                                                 "error": "cancelled"})
+                                                 "error": "cancelled", **meta})
+                _end_tool_span(otel_span, "CANCELLED",
+                               int((time.monotonic() - started) * 1000))
                 raise
             except asyncio.TimeoutError:
                 last_error = f"TIMEOUT after {defn.timeout_seconds}s"
@@ -306,7 +392,8 @@ class ToolExecutor:
                 await self.emitter.emit("tool.progress", agent_id=agent_id, tool_name=tool,
                                         payload={"toolCallId": tool_call_id,
                                                  "progress": f"retry {retries}",
-                                                 "error": (last_error or "")[:200]})
+                                                 "error": (last_error or "")[:200],
+                                                 **meta})
                 await asyncio.sleep(0.8 * retries)
 
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -316,14 +403,21 @@ class ToolExecutor:
         await self.emitter.emit("tool.failed", agent_id=agent_id, tool_name=tool, payload={
             "toolCallId": tool_call_id, "error": (last_error or "")[:300],
             "arguments": _preview_args(args),
-            "durationMs": duration_ms, "retryCount": retries})
+            "durationMs": duration_ms, "retryCount": retries, **meta})
+        _end_tool_span(otel_span, "FAILED", duration_ms, last_error)
         return call
 
-    async def _dispatch(self, defn: ToolDefinition, args: Dict[str, Any]) -> Any:
+    async def _dispatch(self, defn: ToolDefinition, args: Dict[str, Any],
+                        agent_id: str = "") -> Any:
         rewrite = bool(args.pop("_rewrite", False))
         if defn.kind == "sandbox":
             return await self.sandbox.invoke(defn.name, args)
         if defn.kind == "mcp":
+            if agent_id == "ReportAgent":
+                raise ToolValidationError(
+                    "ReportAgent 不得直接调用公网 MCP，只消费已校准 evidence")
+            if self.mcp_registry is not None:
+                return await self.mcp_registry.call(defn.name, args)
             from app.runtime import mcp_client
 
             if defn.name == "mcp_fetch_url":
@@ -388,23 +482,34 @@ class ToolExecutor:
         top_k = int(args.get("topK") or 5)
         queries = await self._rewrite_queries(query) if rewrite else [query]
 
-        async def one(q: str) -> Any:
+        async def one(q: str, *, use_rerank: bool = False) -> Any:
             if defn.name == "resume_semantic_search":
                 return await gateway.java_resume_search(
                     query=q, top_k=top_k,
                     resume_text=str(args.get("resumeText") or ""),
                     jd_requirements=str(self.run_context.get("jobDescription") or "")[:2000],
                     strategy="hybrid")
-            return await gateway.java_knowledge_search(query=q, top_k=top_k)
+            # EXP-4: default no LLM rerank; only agentic second round may enable.
+            return await gateway.java_knowledge_search(
+                query=q, top_k=top_k, rerank=use_rerank)
 
         if len(queries) == 1:
-            result = await one(queries[0])
+            result = await one(queries[0], use_rerank=False)
             result = self._normalize_result(result)
             if isinstance(result, dict):
                 result.setdefault("queriesUsed", queries)
+                # Agentic second round: rewrite path + low confidence → rerank.
+                if (rewrite and defn.name == "knowledge_search"
+                        and self._retrieval_low_confidence(result)):
+                    reranked = await one(queries[0], use_rerank=True)
+                    reranked = self._normalize_result(reranked)
+                    if isinstance(reranked, dict):
+                        reranked.setdefault("queriesUsed", queries)
+                        reranked["agenticRerank"] = True
+                        return reranked
             return result
 
-        raws = await asyncio.gather(*(one(q) for q in queries),
+        raws = await asyncio.gather(*(one(q, use_rerank=False) for q in queries),
                                     return_exceptions=True)
         # RRF fusion across query variants, dedup by item identity.
         fused: Dict[str, Dict[str, Any]] = {}
@@ -434,12 +539,48 @@ class ToolExecutor:
                 scores[identity] = scores.get(identity, 0.0) + 1.0 / (60 + rank + 1)
         ranked = sorted(fused.items(), key=lambda kv: scores[kv[0]],
                         reverse=True)[:top_k]
-        return {
+        fused_result = {
             "success": True,
             "chunks": [item for _, item in ranked],
             "queriesUsed": queries,
             "fusion": "rrf_multi_query",
         }
+        # After multi-query fusion, still-low confidence → one LLM rerank pass.
+        if (rewrite and defn.name == "knowledge_search"
+                and self._retrieval_low_confidence(fused_result)):
+            reranked = await one(query, use_rerank=True)
+            reranked = self._normalize_result(reranked)
+            if isinstance(reranked, dict):
+                reranked.setdefault("queriesUsed", queries)
+                reranked["agenticRerank"] = True
+                reranked["fusion"] = "rrf_multi_query+llm_rerank"
+                return reranked
+        return fused_result
+
+    @staticmethod
+    def _retrieval_low_confidence(result: Dict[str, Any]) -> bool:
+        """Heuristic for EXP-4 agentic second-round rerank trigger."""
+        items = []
+        for field_name in ("chunks", "hits", "results", "items"):
+            if isinstance(result.get(field_name), list):
+                items = result[field_name]
+                break
+        if len(items) < 2:
+            return True
+        top_score = None
+        for item in items[:3]:
+            if not isinstance(item, dict):
+                continue
+            for key in ("score", "rrfScore", "similarity"):
+                if isinstance(item.get(key), (int, float)):
+                    top_score = float(item[key])
+                    break
+            if top_score is not None:
+                break
+        if top_score is None:
+            return len(items) < 3
+        # Scores from hybrid/RRF are typically 0-1; treat weak tops as low confidence.
+        return top_score < 0.35
 
     @staticmethod
     def _normalize_result(raw: Any) -> Any:
@@ -514,3 +655,34 @@ def _preview_args(args: Dict[str, Any]) -> Dict[str, Any]:
         else:
             out[key] = value
     return out
+
+
+def _start_tool_span(defn: ToolDefinition, tool: str, tool_call_id: str) -> Any:
+    """Start an OTel span with GenAI/MCP attributes; no-op when OTel disabled."""
+    try:
+        from app.runtime.otel_tracing import start_span
+    except Exception:  # noqa: BLE001
+        return None
+    attrs = {
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": tool,
+        "gen_ai.tool.call.id": tool_call_id,
+        "tool.kind": defn.kind,
+        "otel.schema_url": OTEL_GENAI_SCHEMA,
+    }
+    if defn.kind == "mcp":
+        attrs["mcp.method.name"] = "tools/call"
+        attrs["mcp.server.name"] = defn.mcp_server or "unknown"
+        attrs["mcp.protocol.version"] = defn.protocol_version or MCP_PROTOCOL_VERSION
+    return start_span(f"execute_tool {tool}", attrs)
+
+
+def _end_tool_span(span: Any, status: str, duration_ms: int,
+                   error: Optional[str] = None) -> None:
+    if span is None:
+        return
+    try:
+        from app.runtime.otel_tracing import end_span
+        end_span(span, status=status, duration_ms=duration_ms, error=error)
+    except Exception:  # noqa: BLE001
+        pass

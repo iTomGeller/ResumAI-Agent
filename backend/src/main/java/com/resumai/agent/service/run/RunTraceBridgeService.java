@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -23,16 +25,22 @@ import org.springframework.util.StringUtils;
 @Service
 public class RunTraceBridgeService {
 
+    private static final Set<String> CONTROL_PLANE_ERRORS = Set.of(
+            "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED", "START_STUCK");
+
     private final AgentRunMapper runMapper;
     private final RunEventService eventService;
     private final ObjectMapper objectMapper;
+    private final String langfusePublicUrl;
 
     public RunTraceBridgeService(AgentRunMapper runMapper,
                                  RunEventService eventService,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 @Value("${langfuse.public-url:}") String langfusePublicUrl) {
         this.runMapper = runMapper;
         this.eventService = eventService;
         this.objectMapper = objectMapper;
+        this.langfusePublicUrl = langfusePublicUrl;
     }
 
     /** Latest run whose traceId or bridged task trace matches. */
@@ -49,6 +57,36 @@ public class RunTraceBridgeService {
         return runMapper.selectOne(new QueryWrapper<AgentRun>()
                 .eq("trace_id", traceId)
                 .orderByDesc("created_at").last("limit 1"));
+    }
+
+    /** Prior attempts for the same source task / conversation trace. */
+    public List<AgentRun> listAttemptRuns(String traceId, String currentRunId) {
+        if (!StringUtils.hasText(traceId)) {
+            return List.of();
+        }
+        List<AgentRun> byTask = runMapper.selectList(new QueryWrapper<AgentRun>()
+                .eq("source_task_trace_id", traceId)
+                .orderByAsc("created_at")
+                .last("limit 50"));
+        List<AgentRun> byTrace = runMapper.selectList(new QueryWrapper<AgentRun>()
+                .eq("trace_id", traceId)
+                .orderByAsc("created_at")
+                .last("limit 50"));
+        Map<String, AgentRun> merged = new LinkedHashMap<>();
+        for (AgentRun run : byTask) {
+            merged.put(run.getRunId(), run);
+        }
+        for (AgentRun run : byTrace) {
+            merged.putIfAbsent(run.getRunId(), run);
+        }
+        List<AgentRun> out = new ArrayList<>();
+        for (AgentRun run : merged.values()) {
+            if (currentRunId != null && currentRunId.equals(run.getRunId())) {
+                continue;
+            }
+            out.add(run);
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------
@@ -187,18 +225,19 @@ public class RunTraceBridgeService {
         tree.put("architecture", "Coordinator 动态规划 + 并行 Specialist");
         if (run == null) {
             tree.put("executionTree", List.of());
+            tree.put("historicalAttempts", List.of());
+            tree.put("langfuseTraceUrl", buildLangfuseTraceUrl(traceId));
+            tree.put("langfuseTraceId", traceId);
             return tree;
         }
+        // Current attempt only — prior control-plane failures go to historicalAttempts.
         List<RunEvent> events = eventService.listSince(run.getRunId(), 0, 2000);
 
-        // phase = position of the agent's parallel group in the coordinator plan
         Map<String, Integer> phaseOf = new LinkedHashMap<>();
         List<List<String>> groups = List.of();
         String planReason = "";
         int memoryHits = 0;
         List<Object> memoryTop = new ArrayList<>();
-        // tool.started carries the arguments; correlate them onto the
-        // completed/failed rounds via toolCallId so the UI can show inputs.
         Map<String, Object> argsByToolCall = new LinkedHashMap<>();
         for (RunEvent event : events) {
             String type = event.getEventType();
@@ -276,6 +315,7 @@ public class RunTraceBridgeService {
                     round.put("roundNum", rounds.get(agent).size() + 1);
                     round.put("type", "generation");
                     round.put("title", "LLM 生成");
+                    round.put("category", "llm");
                     round.put("tokens", prompt + completion);
                     round.put("durationMs", longOf(payload.get("durationMs")));
                     round.put("model", payload.getOrDefault("model", ""));
@@ -285,6 +325,7 @@ public class RunTraceBridgeService {
                     Map<String, Object> round = new LinkedHashMap<>();
                     round.put("roundNum", rounds.get(agent).size() + 1);
                     round.put("type", "generation");
+                    round.put("category", "llm");
                     round.put("title", "llm.failed".equals(event.getEventType())
                             ? "LLM 失败" : "LLM 重试");
                     round.put("error", payload.getOrDefault("error", ""));
@@ -300,7 +341,30 @@ public class RunTraceBridgeService {
                     String toolCallId = String.valueOf(payload.getOrDefault("toolCallId", ""));
                     tool.put("toolCallId", toolCallId);
                     tool.put("name", event.getToolName());
-                    tool.put("category", "tool");
+                    String kind = stringOf(payload.get("kind"));
+                    if (!StringUtils.hasText(kind)) {
+                        kind = stringOf(payload.get("origin"));
+                    }
+                    if (!StringUtils.hasText(kind)) {
+                        kind = inferKind(event.getToolName(), event.getEventType());
+                    }
+                    tool.put("category", kind);
+                    tool.put("origin", payload.getOrDefault("origin", kind));
+                    if (payload.get("mcpServer") != null) {
+                        tool.put("mcpServer", payload.get("mcpServer"));
+                    }
+                    if (payload.get("protocolVersion") != null) {
+                        tool.put("protocolVersion", payload.get("protocolVersion"));
+                    }
+                    if (payload.get("skillId") != null) {
+                        tool.put("skillId", payload.get("skillId"));
+                    }
+                    if (payload.get("skillVersion") != null) {
+                        tool.put("skillVersion", payload.get("skillVersion"));
+                    }
+                    if (payload.get("sandboxExecutionId") != null) {
+                        tool.put("sandboxExecutionId", payload.get("sandboxExecutionId"));
+                    }
                     tool.put("status", "tool.completed".equals(event.getEventType())
                             ? "SUCCESS" : "FAILED");
                     tool.put("durationMs", longOf(payload.get("durationMs")));
@@ -315,6 +379,7 @@ public class RunTraceBridgeService {
                             "resultPreview", payload.getOrDefault("error", "")), 800));
                     tool.put("output", preview(payload.getOrDefault(
                             "resultPreview", payload.getOrDefault("error", "")), 1600));
+                    round.put("category", kind);
                     round.put("toolCalls", List.of(tool));
                     rounds.get(agent).add(round);
                 }
@@ -342,7 +407,8 @@ public class RunTraceBridgeService {
         tree.put("runId", run.getRunId());
         tree.put("runStatus", run.getStatus());
         tree.put("policyId", run.getPolicyId());
-        // The "动态路由决策" card reads this structure (route decision view).
+        tree.put("attemptNo", (run.getRetryCount() != null ? run.getRetryCount() : 0) + 1);
+
         List<String> planned = new ArrayList<>(nodes.keySet());
         Map<String, Object> route = new LinkedHashMap<>();
         route.put("routeMode", planReason.startsWith("rule_based")
@@ -364,7 +430,93 @@ public class RunTraceBridgeService {
         tree.put("harnessPlan", harnessPlan);
         tree.put("memoryHits", memoryHits);
         tree.put("memoryTop", memoryTop);
+
+        tree.put("historicalAttempts", buildHistoricalAttempts(traceId, run.getRunId()));
+        String otelTraceId = run.getTraceId() != null ? run.getTraceId() : traceId;
+        tree.put("langfuseTraceId", otelTraceId);
+        tree.put("langfuseTraceUrl", buildLangfuseTraceUrl(otelTraceId));
         return tree;
+    }
+
+    private List<Map<String, Object>> buildHistoricalAttempts(String traceId, String currentRunId) {
+        List<Map<String, Object>> attempts = new ArrayList<>();
+        for (AgentRun prior : listAttemptRuns(traceId, currentRunId)) {
+            String errorCode = prior.getErrorCode() != null ? prior.getErrorCode() : "";
+            boolean controlPlane = CONTROL_PLANE_ERRORS.contains(errorCode)
+                    || "CONTROL_PLANE".equalsIgnoreCase(errorCode);
+            // Prefer surfacing control-plane failures; also keep other failed attempts.
+            if (!controlPlane && !isFailedAttempt(prior)) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("runId", prior.getRunId());
+            row.put("status", prior.getStatus());
+            row.put("errorCode", errorCode);
+            row.put("errorMessage", prior.getErrorMessage());
+            row.put("attemptNo", (prior.getRetryCount() != null ? prior.getRetryCount() : 0) + 1);
+            row.put("category", "CONTROL_PLANE");
+            row.put("retryable", CONTROL_PLANE_ERRORS.contains(errorCode));
+            row.put("controlPlaneStage", stageForError(errorCode));
+            row.put("finishedAt", prior.getFinishedAt() != null
+                    ? String.valueOf(prior.getFinishedAt()) : null);
+            row.put("createdAt", prior.getCreatedAt() != null
+                    ? String.valueOf(prior.getCreatedAt()) : null);
+            attempts.add(row);
+        }
+        return attempts;
+    }
+
+    private static boolean isFailedAttempt(AgentRun run) {
+        String status = run.getStatus();
+        return "FAILED".equals(status) || "TIMED_OUT".equals(status) || "CANCELLED".equals(status);
+    }
+
+    private static String stageForError(String errorCode) {
+        if (errorCode == null || errorCode.isBlank()) {
+            return "unknown";
+        }
+        return switch (errorCode) {
+            case "RUNTIME_START_FAILED", "START_STUCK" -> "start";
+            case "ORPHANED_ON_RESTART" -> "restart_recovery";
+            default -> "control_plane";
+        };
+    }
+
+    private String buildLangfuseTraceUrl(String traceId) {
+        if (!StringUtils.hasText(traceId)) {
+            return "";
+        }
+        if (StringUtils.hasText(langfusePublicUrl)) {
+            String base = langfusePublicUrl.endsWith("/")
+                    ? langfusePublicUrl.substring(0, langfusePublicUrl.length() - 1)
+                    : langfusePublicUrl;
+            return base + "/project/resumai-project/traces/" + traceId;
+        }
+        return "";
+    }
+
+    private static String inferKind(String toolName, String eventType) {
+        if (eventType != null && eventType.startsWith("sandbox.")) {
+            return "sandbox";
+        }
+        if (toolName == null) {
+            return "internal";
+        }
+        if (toolName.startsWith("mcp_") || toolName.contains(".")) {
+            return "mcp";
+        }
+        if ("execute_skill".equals(toolName) || "list_skills".equals(toolName)) {
+            return "skill";
+        }
+        if (Set.of("parse_resume", "check_timeline", "calculate_jd_coverage",
+                "locate_evidence", "verify_report_evidence", "resume_lint",
+                "validate_report_schema", "evaluate_policy_output").contains(toolName)) {
+            return "sandbox";
+        }
+        if ("external_profile_lookup".equals(toolName)) {
+            return "gateway";
+        }
+        return "internal";
     }
 
     // ------------------------------------------------------------------
@@ -434,6 +586,14 @@ public class RunTraceBridgeService {
         } catch (Exception e) {
             return String.valueOf(value);
         }
+    }
+
+    private static String stringOf(Object value) {
+        if (value == null) {
+            return "";
+        }
+        String text = String.valueOf(value).trim();
+        return "null".equalsIgnoreCase(text) ? "" : text;
     }
 
     private static Long longOf(Object value) {

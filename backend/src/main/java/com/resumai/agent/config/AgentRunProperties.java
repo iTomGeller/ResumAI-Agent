@@ -34,6 +34,13 @@ public class AgentRunProperties {
     /** How long PAUSING may wait for the snapshot callback before reverting (s). */
     private int pauseGraceSeconds = 120;
 
+    /**
+     * After restart, STARTING / RUNNING without a live runtime may be
+     * re-dispatched or resumed within this grace window; past grace with no
+     * runtime and no checkpoint becomes ORPHANED_ON_RESTART.
+     */
+    private int startGraceSeconds = 90;
+
     /** Worker identity for diagnostics. */
     private String workerId = "backend-1";
 
@@ -107,6 +114,14 @@ public class AgentRunProperties {
 
     public void setPauseGraceSeconds(int pauseGraceSeconds) {
         this.pauseGraceSeconds = pauseGraceSeconds;
+    }
+
+    public int getStartGraceSeconds() {
+        return startGraceSeconds;
+    }
+
+    public void setStartGraceSeconds(int startGraceSeconds) {
+        this.startGraceSeconds = startGraceSeconds;
     }
 
     public String getWorkerId() {

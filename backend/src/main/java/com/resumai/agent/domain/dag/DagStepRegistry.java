@@ -77,7 +77,7 @@ public final class DagStepRegistry {
             StepDefinition.of("rag_retrieve",
                     List.of("jd_requirements"),
                     "证据已融合", "evidence", 12,
-                    "融合多源证据", "HybridRagStrategy / MilvusSearch + Neo4jTraversal", "BOTH"),
+                    "融合多源证据", "HybridRagStrategy / MilvusSearch + BM25", "BOTH"),
             StepDefinition.of("llm_complete", List.of("rag_retrieve"), "AI 已评估", "evaluate", 13,
                     "AI生成评估报告", "DeepSeekChatModel / ChatCompletion", "BOTH"),
             StepDefinition.of("quality_check", List.of("llm_complete"), "质量已校验", "quality", 14,

@@ -15,6 +15,7 @@ RUN_EVENT_TYPES = {
     "agent.selected", "agent.started", "agent.progress", "agent.completed", "agent.failed",
     "llm.started", "llm.retrying", "llm.completed", "llm.failed",
     "tool.started", "tool.progress", "tool.completed", "tool.failed",
+    "skill.selected", "skill.started", "skill.completed", "skill.failed",
     "sandbox.started", "sandbox.progress", "sandbox.completed", "sandbox.failed",
     "context.compacted",
     "run.cancelling", "run.cancelled", "run.completed", "run.failed", "run.timed_out",

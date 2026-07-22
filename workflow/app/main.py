@@ -17,6 +17,15 @@ app = FastAPI(title="ResumAI Agent Runtime", version="2.0.0")
 app.include_router(agent_runtime_router)
 
 
+@app.on_event("startup")
+async def startup() -> None:
+    try:
+        from app.runtime.otel_tracing import init_otel
+        init_otel()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("otel init skipped: %s", exc)
+
+
 @app.middleware("http")
 async def require_internal_token(request: Request, call_next):
     """Protect the Docker-internal control plane with the configured shared token."""
@@ -84,6 +93,26 @@ async def resolve_conversation_turn(request: ConversationTurnRequest) -> Convers
         traceId=request.traceId,
         revision=request.revision,
     )
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    """Warm skills + MCP health probe so the first run sees a real catalog."""
+    try:
+        from app.runtime.skills import default_skill_manager
+        count = default_skill_manager.reload()
+        logger.info("skills ready: %d from %s", count, default_skill_manager.root)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("skills reload failed: %s", exc)
+    try:
+        from app.runtime.mcp_registry import get_mcp_registry
+        registry = await get_mcp_registry(probe=True)
+        snap = registry.status_snapshot()
+        logger.info("MCP health: %s tools=%s",
+                    {k: v.get("status") for k, v in (snap.get("servers") or {}).items()},
+                    len(snap.get("availableTools") or []))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MCP probe at startup failed (catalog empty until retry): %s", exc)
 
 
 @app.on_event("shutdown")

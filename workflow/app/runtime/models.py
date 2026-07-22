@@ -147,6 +147,26 @@ class AgentDecision(BaseModel):
     done: bool = False
 
 
+class ReportDimension(BaseModel):
+    name: str
+    score: Optional[int] = None
+    rationale: str = ""
+
+
+class StructuredReport(BaseModel):
+    """Contract for ReportAgent structured output (Markdown is rendered offline)."""
+
+    recommendation: str
+    dimensions: List[ReportDimension] = Field(default_factory=list)
+    strengths: List[str] = Field(default_factory=list)
+    risks: List[str] = Field(default_factory=list)
+    interviewQuestions: List[str] = Field(default_factory=list)
+    dataQuality: str = "SUFFICIENT"
+    missingEvidence: List[str] = Field(default_factory=list)
+    overallScore: Optional[int] = None
+    summary: str = ""
+
+
 class AgentOutput(BaseModel):
     """Structured contribution one agent writes to the shared blackboard."""
 

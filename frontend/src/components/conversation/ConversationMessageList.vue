@@ -84,10 +84,10 @@ watch(() => props.messages.length, async () => {
   padding: 24px;
   text-align: center;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: 14px;
 }
 
-.conversation-empty strong { color: var(--color-text); font-size: 13px; }
+.conversation-empty strong { color: var(--color-text); font-size: 14px; }
 
 .conversation-message { margin-bottom: 14px; }
 .conversation-message:last-child { margin-bottom: 0; }
@@ -98,10 +98,10 @@ watch(() => props.messages.length, async () => {
   gap: 6px;
   margin-bottom: 4px;
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
-.conversation-message header strong { color: var(--color-text-secondary); font-size: 11px; }
+.conversation-message header strong { color: var(--color-text-secondary); font-size: 12px; }
 .conversation-message time { margin-left: auto; }
 
 .conversation-message p {
@@ -112,7 +112,7 @@ watch(() => props.messages.length, async () => {
   border-radius: 4px 12px 12px 12px;
   background: var(--color-surface);
   color: var(--color-text);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

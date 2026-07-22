@@ -1,0 +1,16 @@
+{
+  "traceId": "trace-49327349-6ff5-494d-b0e3-c2aff7199bca",
+  "status": "SUCCESS",
+  "overallScore": 4,
+  "recommendation": "NEED_MANUAL_REVIEW",
+  "durationMs": 14220,
+  "matchedJdTitle": "高级 Java / AI Agent 平台工程师",
+  "topJdMatchesCount": 4,
+  "dimensions": 4,
+  "strengths": 0,
+  "risks": 3,
+  "interviewQuestions": 3,
+  "dataQuality": "PARTIAL",
+  "fullReportLen": 597,
+  "errorCode": null
+}

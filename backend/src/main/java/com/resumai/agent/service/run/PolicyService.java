@@ -96,6 +96,10 @@ public class PolicyService {
         if (candidates.isEmpty()) {
             throw new IllegalStateException("no ACTIVE policy bundles configured");
         }
+        candidates = filterForTask(candidates, taskCategory, context);
+        if (candidates.isEmpty()) {
+            candidates = listActiveBundles();
+        }
         Map<String, PolicyStatisticsRow> stats = statsFor(taskCategory);
         Selection selection = choose(candidates, stats, taskCategory);
         PolicySelectionRow row = new PolicySelectionRow();
@@ -110,6 +114,56 @@ public class PolicyService {
         log.info("policy selected run={} category={} policy={} mode={}",
                 runId, taskCategory, selection.bundle().getPolicyId(), selection.mode());
         return selection;
+    }
+
+    /**
+     * Full evaluation with a real resume cannot use ultra-thin budgets: dynamic
+     * planner needs Parser+JD+Specialists+Evidence+Report. Policies with
+     * maxLlmCalls &lt; 10 are excluded for full_evaluation when resumeChars&gt;=400.
+     */
+    private List<PolicyBundleRow> filterForTask(List<PolicyBundleRow> candidates,
+                                                String taskCategory,
+                                                Map<String, Object> context) {
+        int resumeChars = 0;
+        if (context != null && context.get("resumeLength") instanceof Number n) {
+            resumeChars = n.intValue();
+        }
+        boolean fullEval = taskCategory != null && (
+                taskCategory.toLowerCase().contains("full")
+                        || "TECH".equalsIgnoreCase(taskCategory)
+                        || "PRODUCT".equalsIgnoreCase(taskCategory)
+                        || "full_evaluation".equalsIgnoreCase(String.valueOf(
+                        context != null ? context.get("goalCategory") : "")));
+        // Heuristic: non-trivial resumes need enough LLM budget for Report.
+        if (resumeChars < 400 && !fullEval) {
+            return candidates;
+        }
+        List<PolicyBundleRow> filtered = new ArrayList<>();
+        for (PolicyBundleRow candidate : candidates) {
+            int maxLlm = readMaxLlmCalls(candidate);
+            if (maxLlm > 0 && maxLlm < 10) {
+                log.debug("skipping thin policy {} maxLlmCalls={} for resumeChars={}",
+                        candidate.getPolicyId(), maxLlm, resumeChars);
+                continue;
+            }
+            filtered.add(candidate);
+        }
+        return filtered.isEmpty() ? candidates : filtered;
+    }
+
+    private int readMaxLlmCalls(PolicyBundleRow bundle) {
+        try {
+            if (bundle.getConfig() == null || bundle.getConfig().isBlank()) {
+                return 0;
+            }
+            var node = objectMapper.readTree(bundle.getConfig());
+            if (node.has("maxLlmCalls") && node.get("maxLlmCalls").canConvertToInt()) {
+                return node.get("maxLlmCalls").asInt();
+            }
+        } catch (Exception ignored) {
+            // best-effort filter
+        }
+        return 0;
     }
 
     private Selection choose(List<PolicyBundleRow> candidates,

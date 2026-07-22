@@ -343,7 +343,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
   ('low_cost', '低成本策略', '最小 Agent 组合与预算，快速回答',
    JSON_OBJECT(
      'agentOrder', JSON_ARRAY('TechAgent','ReportAgent'),
-     'maxAgentCount', 4, 'maxLlmCalls', 6, 'maxIterationsPerAgent', 1,
+     'maxAgentCount', 6, 'maxLlmCalls', 12, 'maxIterationsPerAgent', 1,
      'toolBudget', JSON_OBJECT('maxToolCallsPerRun', 8, 'maxToolCallsPerAgent', 3),
      'contextBudget', JSON_OBJECT('modelWindow', 65536, 'systemBudget', 1800, 'policyBudget', 240, 'skillBudget', 700, 'recentMessageBudget', 1600, 'memoryBudget', 800, 'toolResultBudget', 2000, 'reservedOutputBudget', 1600, 'compactAtRatio', 0.8),
      'memoryRetrieval', JSON_OBJECT('topK', 3, 'minConfidence', 0.5),

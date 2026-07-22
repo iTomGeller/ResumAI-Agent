@@ -16,5 +16,6 @@ RUN sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g; s|ht
 COPY --from=builder /workspace/target/*.jar /app/resumai-agent-backend.jar
 COPY src/main/resources/skills/ /app/skills/
 COPY src/main/resources/mcp-servers.json /app/mcp-servers.json
+COPY src/main/resources/mcp-servers.json /app/config/mcp-servers.json
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "/app/resumai-agent-backend.jar"]

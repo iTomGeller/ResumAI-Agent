@@ -12,6 +12,8 @@ const props = defineProps<{
   overallScore?: number | null;
   recommendation?: string | null;
   runId?: string | null;
+  width?: number;
+  fullscreen?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -19,7 +21,35 @@ const emit = defineEmits<{
   controlTurn: [response: ConversationTurnResponse];
   selectRevision: [traceId: string];
   statusChange: [response: TaskControlResponse];
+  'update:width': [width: number];
+  'update:fullscreen': [fullscreen: boolean];
 }>();
+
+const panelWidth = computed(() => Math.min(720, Math.max(320, props.width ?? 420)));
+const isFullscreen = computed(() => !!props.fullscreen);
+const resizing = ref(false);
+
+function toggleFullscreen() {
+  emit('update:fullscreen', !isFullscreen.value);
+}
+
+function onResizeStart(event: PointerEvent) {
+  if (isFullscreen.value) return;
+  resizing.value = true;
+  const startX = event.clientX;
+  const startWidth = panelWidth.value;
+  const onMove = (e: PointerEvent) => {
+    const next = Math.min(720, Math.max(320, startWidth + (startX - e.clientX)));
+    emit('update:width', next);
+  };
+  const onUp = () => {
+    resizing.value = false;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+}
 
 const draft = ref('');
 const queueMode = ref<'collect' | 'interrupt'>('collect');
@@ -231,13 +261,29 @@ function friendlyError(raw: string): string {
 </script>
 
 <template>
-  <aside class="conversation-panel" aria-label="候选人持续会话">
+  <aside
+    class="conversation-panel"
+    :class="{ fullscreen: isFullscreen, resizing }"
+    :style="isFullscreen ? undefined : { width: panelWidth + 'px' }"
+    aria-label="候选人持续会话"
+  >
+    <div
+      v-if="!isFullscreen"
+      class="conversation-resizer"
+      title="拖动调整宽度"
+      @pointerdown.prevent="onResizeStart"
+    ></div>
     <header class="conversation-panel-head">
       <div>
         <span class="conversation-eyebrow">持续会话</span>
         <h3>评估 Copilot</h3>
       </div>
-      <button type="button" class="conversation-refresh" :disabled="loading" title="刷新会话" @click="loadConversation(conversationId || traceId)">↻</button>
+      <div class="conversation-head-actions">
+        <button type="button" class="conversation-refresh" :title="isFullscreen ? '退出全屏' : '全屏'" @click="toggleFullscreen">
+          {{ isFullscreen ? '⧉' : '⛶' }}
+        </button>
+        <button type="button" class="conversation-refresh" :disabled="loading" title="刷新会话" @click="loadConversation(conversationId || traceId)">↻</button>
+      </div>
     </header>
 
     <div class="conversation-run-state">
@@ -387,11 +433,38 @@ function friendlyError(raw: string): string {
   position: sticky;
   top: 18px;
   align-self: start;
+  width: 420px;
+  max-width: 100%;
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
   box-shadow: var(--shadow-md);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.conversation-panel.fullscreen {
+  position: fixed;
+  inset: 12px;
+  z-index: 1200;
+  width: auto !important;
+  max-width: none;
+  border-radius: 14px;
+}
+
+.conversation-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.conversation-resizer:hover,
+.conversation-panel.resizing .conversation-resizer {
+  background: rgba(37, 99, 235, 0.25);
 }
 
 .conversation-panel-head {
@@ -401,15 +474,17 @@ function friendlyError(raw: string): string {
   padding: 14px;
 }
 
+.conversation-head-actions { display: flex; gap: 6px; }
+
 .conversation-eyebrow {
   color: var(--color-primary);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.conversation-panel-head h3 { margin-top: 1px; font-size: 14px; }
+.conversation-panel-head h3 { margin-top: 1px; font-size: 16px; }
 
 .conversation-refresh {
   width: 28px;
@@ -425,7 +500,7 @@ function friendlyError(raw: string): string {
   gap: 7px;
   padding: 0 14px 10px;
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .conversation-status {
@@ -434,6 +509,7 @@ function friendlyError(raw: string): string {
   background: var(--color-bg);
   color: var(--color-text-secondary);
   font-weight: 600;
+  font-size: 12px;
 }
 
 .conversation-status[data-status="RUNNING"],
@@ -452,19 +528,19 @@ function friendlyError(raw: string): string {
 }
 .result-line { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
 .result-score { font-size: 22px; font-weight: 700; color: var(--color-primary); }
-.result-score em { font-style: normal; font-size: 11px; color: var(--color-text-secondary); margin-left: 2px; }
+.result-score em { font-style: normal; font-size: 12px; color: var(--color-text-secondary); margin-left: 2px; }
 .result-recommendation {
-  padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
   background: var(--color-success-light); color: var(--color-success);
 }
-.result-hint { font-size: 12px; color: var(--color-text-secondary); }
+.result-hint { font-size: 14px; color: var(--color-text-secondary); }
 .result-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .result-retry {
   border: 1px solid var(--color-primary); background: none; color: var(--color-primary);
-  border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  border-radius: 8px; padding: 4px 10px; font-size: 13px; cursor: pointer;
 }
 .result-retry:disabled { opacity: .6; cursor: default; }
-.result-tip { font-size: 11px; color: var(--color-text-secondary); }
+.result-tip { font-size: 12px; color: var(--color-text-secondary); }
 
 /* Plan 确认卡 */
 .plan-approval-card {
@@ -475,23 +551,23 @@ function friendlyError(raw: string): string {
   background: var(--color-primary-light, #eef2ff);
 }
 .plan-approval-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
-.plan-approval-head strong { font-size: 13px; }
-.plan-approval-head span { font-size: 11px; color: var(--color-text-secondary); }
+.plan-approval-head strong { font-size: 14px; }
+.plan-approval-head span { font-size: 12px; color: var(--color-text-secondary); }
 .plan-approval-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .plan-step {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 3px 8px; border-radius: 999px; border: 1px solid var(--color-border);
-  background: var(--color-surface); font-size: 12px; cursor: pointer;
+  background: var(--color-surface); font-size: 13px; cursor: pointer;
 }
 .plan-step.off { opacity: .45; text-decoration: line-through; }
 .plan-step input { margin: 0; }
 .plan-approval-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .plan-approve {
   border: none; border-radius: 8px; padding: 6px 14px;
-  background: var(--color-primary); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+  background: var(--color-primary); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 .plan-approve:disabled { opacity: .6; cursor: default; }
-.plan-tip { font-size: 11px; color: var(--color-text-secondary); }
+.plan-tip { font-size: 12px; color: var(--color-text-secondary); }
 .conversation-status[data-status="CANCELLED"],
 .conversation-status[data-status="FAILED"] { background: var(--color-danger-light); color: var(--color-danger); }
 .conversation-status[data-status="SUPERSEDED"] { background: #e2e8f0; color: #475569; }
@@ -511,7 +587,7 @@ function friendlyError(raw: string): string {
   border-radius: 7px;
   background: var(--color-surface);
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -525,7 +601,7 @@ function friendlyError(raw: string): string {
   border-radius: 7px;
   background: var(--color-bg);
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -540,7 +616,7 @@ function friendlyError(raw: string): string {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-bg);
-  font-size: 10px;
+  font-size: 13px;
 }
 .run-monitor[data-active="true"] { border-color: var(--color-primary); }
 .run-monitor-row {
@@ -561,7 +637,7 @@ function friendlyError(raw: string): string {
   border-radius: 6px;
   background: var(--color-surface);
   color: var(--color-danger);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
 }
 .run-error { color: var(--color-danger); }
@@ -570,7 +646,7 @@ function friendlyError(raw: string): string {
   border: 1px solid var(--color-border);
   border-radius: 6px;
   background: var(--color-surface);
-  font-size: 10px;
+  font-size: 12px;
 }
 .conversation-status[data-status="WAITING_LLM"],
 .conversation-status[data-status="WAITING_TOOL"],
@@ -592,7 +668,7 @@ function friendlyError(raw: string): string {
   border: 1px solid var(--color-border);
   border-radius: 7px;
   color: var(--color-text-secondary);
-  font-size: 9px;
+  font-size: 12px;
   cursor: pointer;
 }
 .queue-mode-picker label.active { border-color: var(--color-primary); color: var(--color-primary); }
@@ -605,7 +681,7 @@ function friendlyError(raw: string): string {
   border-radius: 7px;
   background: var(--color-surface);
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -618,7 +694,7 @@ function friendlyError(raw: string): string {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-surface);
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.5;
 }
 .conversation-composer textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08); }
@@ -631,13 +707,13 @@ function friendlyError(raw: string): string {
   margin-top: 7px;
 }
 
-.conversation-composer-foot span { color: var(--color-text-muted); font-size: 9px; }
+.conversation-composer-foot span { color: var(--color-text-muted); font-size: 12px; }
 .conversation-composer-foot button {
   padding: 6px 12px;
   border-radius: 7px;
   background: var(--color-primary);
   color: white;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 600;
 }
 </style>

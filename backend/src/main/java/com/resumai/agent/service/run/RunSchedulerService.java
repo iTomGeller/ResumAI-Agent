@@ -6,7 +6,9 @@ import com.resumai.agent.domain.enums.RunStatus;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -18,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 /**
  * Dispatcher + watchdog for conversational runs.
@@ -42,6 +45,8 @@ public class RunSchedulerService {
     private ScheduledExecutorService scheduler;
     private ExecutorService startPool;
     private volatile boolean running = true;
+    /** When true, no new QUEUED→STARTING transitions (deploy drain). */
+    private volatile boolean draining = false;
 
     public RunSchedulerService(RunQueueService queueService,
                                RunLifecycleService lifecycleService,
@@ -89,9 +94,19 @@ public class RunSchedulerService {
 
     /** Manual kick (after enqueue or run completion) to reduce dispatch latency. */
     public void kick() {
-        if (scheduler != null && running) {
+        if (scheduler != null && running && !draining) {
             scheduler.execute(this::safeDispatch);
         }
+    }
+
+    /** Stop accepting new starts (safe deploy drain). */
+    public void setDraining(boolean draining) {
+        this.draining = draining;
+        log.info("scheduler draining={}", draining);
+    }
+
+    public boolean isDraining() {
+        return draining;
     }
 
     private void safeDispatch() {
@@ -103,7 +118,7 @@ public class RunSchedulerService {
     }
 
     void dispatchOnce() {
-        if (!running) {
+        if (!running || draining) {
             return;
         }
         List<AgentRun> queued = queueService.listQueuedGlobal(32);
@@ -183,7 +198,8 @@ public class RunSchedulerService {
                 continue;
             }
             if (RunStatus.STARTING.name().equals(run.getStatus())
-                    && RunLifecycleService.secondsSince(run.getUpdatedAt()) > 180) {
+                    && RunLifecycleService.secondsSince(run.getUpdatedAt())
+                    > properties.getStartGraceSeconds()) {
                 log.warn("run stuck in STARTING, failing run={}", run.getRunId());
                 lifecycleService.forceTerminal(run, RunStatus.FAILED,
                         "START_STUCK", "启动阶段卡死，已失败");
@@ -208,21 +224,22 @@ public class RunSchedulerService {
     }
 
     private void kickIfBacklog() {
-        if (!queueService.listQueuedGlobal(1).isEmpty()
+        if (!draining
+                && !queueService.listQueuedGlobal(1).isEmpty()
                 && permitService.availableGlobalPermits() > 0) {
             kick();
         }
     }
 
     /**
-     * Startup recovery: no RUNNING row may stay stuck forever after a crash.
-     * If the runtime still knows the run it keeps going (events continue);
-     * otherwise the run is closed as FAILED and its permits are released
-     * (stale permits also expire with their lease).
+     * Startup recovery: re-dispatch STARTING within grace; resume
+     * RUNNING/WAITING_* that have a checkpoint; only mark ORPHANED when past
+     * grace and neither the runtime nor a snapshot can continue the work.
      */
     void recoverAfterRestart() {
         List<AgentRun> actives = lifecycleService.listByStatuses(
                 List.copyOf(RunStatus.ACTIVE), 500);
+        int grace = properties.getStartGraceSeconds();
         for (AgentRun run : actives) {
             Optional<Map<String, Object>> live = runtimeClient.getRun(run.getRunId());
             boolean runtimeActive = live.isPresent()
@@ -234,17 +251,103 @@ public class RunSchedulerService {
             }
             if (RunStatus.PAUSING.name().equals(run.getStatus())
                     && run.getExecutionSnapshot() != null) {
-                // snapshot already landed before the crash — settle as PAUSED
                 lifecycleService.settlePausedAfterRestart(run.getRunId());
                 continue;
             }
-            log.warn("orphaned run after restart run={} status={}, closing as FAILED",
-                    run.getRunId(), run.getStatus());
-            lifecycleService.forceTerminal(run, RunStatus.FAILED,
-                    "ORPHANED_ON_RESTART", "服务重启后运行状态无法恢复，已标记失败；可重新发起分析");
+
+            long ageSec = RunLifecycleService.secondsSince(run.getUpdatedAt());
+            boolean withinGrace = ageSec <= grace;
+            boolean hasCheckpoint = StringUtils.hasText(run.getExecutionSnapshot());
+
+            if (RunStatus.STARTING.name().equals(run.getStatus()) && withinGrace) {
+                log.info("re-dispatching STARTING run after restart run={} ageSec={}",
+                        run.getRunId(), ageSec);
+                String runId = run.getRunId();
+                if (startPool != null) {
+                    startPool.submit(() -> {
+                        try {
+                            lifecycleService.startRun(runId);
+                        } catch (Exception e) {
+                            log.warn("restart re-dispatch failed run={}: {}",
+                                    runId, e.getMessage());
+                        }
+                    });
+                } else {
+                    try {
+                        lifecycleService.startRun(runId);
+                    } catch (Exception e) {
+                        log.warn("restart re-dispatch failed run={}: {}",
+                                runId, e.getMessage());
+                    }
+                }
+                continue;
+            }
+
+            if (isResumableActive(run.getStatus()) && hasCheckpoint) {
+                log.info("resuming checkpointed run after restart run={} status={}",
+                        run.getRunId(), run.getStatus());
+                try {
+                    lifecycleService.resumeAfterRestart(run.getRunId());
+                } catch (Exception e) {
+                    log.warn("restart resume failed run={}: {}", run.getRunId(), e.getMessage());
+                    if (!withinGrace) {
+                        lifecycleService.forceTerminal(run, RunStatus.FAILED,
+                                "ORPHANED_ON_RESTART",
+                                "服务重启后恢复失败，已标记失败；可重新发起分析");
+                    }
+                }
+                continue;
+            }
+
+            if (!withinGrace && !hasCheckpoint) {
+                log.warn("orphaned run after restart run={} status={}, closing as FAILED",
+                        run.getRunId(), run.getStatus());
+                lifecycleService.forceTerminal(run, RunStatus.FAILED,
+                        "ORPHANED_ON_RESTART",
+                        "服务重启后运行状态无法恢复，已标记失败；可重新发起分析");
+            } else {
+                log.info("keeping run pending recovery run={} status={} ageSec={} checkpoint={}",
+                        run.getRunId(), run.getStatus(), ageSec, hasCheckpoint);
+            }
         }
         // PAUSED runs survive restarts by design: their snapshot lives in
         // MySQL and resume re-dispatches to any live runtime instance.
+    }
+
+    private static boolean isResumableActive(String status) {
+        return RunStatus.RUNNING.name().equals(status)
+                || RunStatus.WAITING_LLM.name().equals(status)
+                || RunStatus.WAITING_TOOL.name().equals(status)
+                || RunStatus.WAITING_SANDBOX.name().equals(status)
+                || RunStatus.RESUMING.name().equals(status);
+    }
+
+    /** Snapshot used by safe-deploy drain wait loop. */
+    public Map<String, Object> activeRunsSnapshot() {
+        List<AgentRun> active = lifecycleService.listByStatuses(
+                List.copyOf(RunStatus.ACTIVE), 500);
+        List<Map<String, Object>> runs = new ArrayList<>();
+        int withCheckpoint = 0;
+        for (AgentRun run : active) {
+            boolean checkpoint = StringUtils.hasText(run.getExecutionSnapshot());
+            if (checkpoint) {
+                withCheckpoint++;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("runId", run.getRunId());
+            row.put("status", run.getStatus());
+            row.put("hasCheckpoint", checkpoint);
+            row.put("updatedAt", String.valueOf(run.getUpdatedAt()));
+            runs.add(row);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("draining", draining);
+        out.put("activeCount", active.size());
+        out.put("checkpointedCount", withCheckpoint);
+        out.put("readyToRestart", active.isEmpty()
+                || withCheckpoint == active.size());
+        out.put("runs", runs);
+        return out;
     }
 
     private Thread daemon(Runnable r, String name) {

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     workflow_internal_token: str = "change-me"
 
     skills_path: str = "/app/skills"
+    mcp_config_path: str = ""  # empty → resolve via mcp_registry fallbacks
 
     # Redis semantic cache (parse_resume / JD analysis / coordinator plans).
     redis_url: str = "redis://:@resumai-redis:6379/1"
