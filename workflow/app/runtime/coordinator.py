@@ -75,8 +75,8 @@ REPLAN_TRIGGERS = {
 }
 
 # Soft preference for simple runTypes: still artifact-planned, but skip LLM refine.
+# Full evaluations use LLM-based planning to produce dynamic agent selection.
 SIMPLE_RULE_TYPES = {
-    "full_evaluation", "jd_evaluation", "backend_eval", "agent_eval",
     "timeline_check", "risk_check", "evidence_check", "tech_match",
     "project_analysis", "project_rewrite", "resume_optimize",
     "interview_questions", "followup",
@@ -230,6 +230,12 @@ class Coordinator:
             or bool(artifacts.get("jdRequirements") or shared.get("jdRequirements"))
         has_external_urls = bool(_URL_HINT.search(text))
         present = self._present_artifacts(artifacts, shared)
+        is_rich_resume = len(text) > 2000 and has_projects and has_timeline
+        has_github = bool(re.search(r"github\.com/\w+", text, re.I))
+        has_publications = bool(re.search(
+            r"(论文|paper|publish|arxiv|conference|journal)", text, re.I))
+        is_senior = bool(re.search(
+            r"(高级|资深|senior|lead|architect|principal|staff|\d{2,}\s*年)", text, re.I))
         return {
             "has_projects": has_projects,
             "has_timeline": has_timeline,
@@ -237,6 +243,10 @@ class Coordinator:
             "has_jd_or_match": has_jd or bool(text.strip()),
             "has_jd_requirements": "jd_requirements" in present or has_jd,
             "has_external_urls": has_external_urls,
+            "has_github": has_github,
+            "has_publications": has_publications,
+            "is_rich_resume": is_rich_resume,
+            "is_senior": is_senior,
             "evidence_enabled": bool(self.policy.evidenceVerification.enabled),
             "needs_parse": "resume_facts" not in present and bool(text.strip()),
         }
@@ -389,25 +399,36 @@ class Coordinator:
 
         from app.runtime import cache
 
-        cache_key = cache.content_key(
-            "plan", run_type, self.policy.policyId, (user_message or "")[:200],
-            ",".join(base["plan"]))
-        cached = await cache.get_json(cache_key)
-        if isinstance(cached, dict) and cached.get("plan"):
-            return self._finalize(
-                [str(a) for a in cached["plan"]],
-                str(cached.get("reason", "cached")) + " (cached)",
-                selected_because=cached.get("selectedBecause") or base.get("selectedBecause"),
-                skipped_because=cached.get("skippedBecause") or base.get("skippedBecause"),
-                artifact_edges=cached.get("artifactEdges") or base.get("artifactEdges"),
-                goal_artifacts=base.get("goalArtifacts"),
-                optional_artifacts=base.get("optionalArtifacts"))
+        signals = self.inspect_signals(
+            resume_text=resume_text, job_description=job_description,
+            artifacts=artifacts, shared=shared)
+
+        # Full evaluations: NEVER cache plans — each candidate deserves a
+        # fresh, signal-driven plan. Only cache simple/lightweight run types.
+        use_cache = run_type not in FULL_EVAL_TYPES
+        cache_key = None
+        if use_cache:
+            cache_key = cache.content_key(
+                "plan", run_type, self.policy.policyId, (user_message or "")[:200],
+                ",".join(base["plan"]),
+                str(sorted((k, v) for k, v in signals.items() if v)))
+            cached = await cache.get_json(cache_key)
+            if isinstance(cached, dict) and cached.get("plan"):
+                return self._finalize(
+                    [str(a) for a in cached["plan"]],
+                    str(cached.get("reason", "cached")) + " (cached)",
+                    selected_because=cached.get("selectedBecause") or base.get("selectedBecause"),
+                    skipped_because=cached.get("skippedBecause") or base.get("skippedBecause"),
+                    artifact_edges=cached.get("artifactEdges") or base.get("artifactEdges"),
+                    goal_artifacts=base.get("goalArtifacts"),
+                    optional_artifacts=base.get("optionalArtifacts"))
 
         refined = await self._refine(
             base["plan"], run_type=run_type, user_message=user_message,
             conversation_summary=conversation_summary, shared_digest=shared_digest,
             failure_notes=failure_notes, memory_notes=memory_notes,
-            goal_artifacts=list(base.get("goalArtifacts") or []))
+            goal_artifacts=list(base.get("goalArtifacts") or []),
+            signals=signals)
         if not refined["plan"]:
             fallback = self.base_plan(
                 run_type, has_resume_facts=False, needs_parse=needs_parse)
@@ -418,7 +439,7 @@ class Coordinator:
                 artifact_edges=base.get("artifactEdges") or [],
                 goal_artifacts=base.get("goalArtifacts"),
                 optional_artifacts=base.get("optionalArtifacts"))
-        if not refined["reason"].startswith("rule_based(llm-error"):
+        if use_cache and cache_key and not refined["reason"].startswith("rule_based(llm-error"):
             await cache.set_json(cache_key, {
                 "plan": refined["plan"], "reason": refined["reason"],
                 "selectedBecause": base.get("selectedBecause"),
@@ -573,23 +594,49 @@ class Coordinator:
                       user_message: str, conversation_summary: str,
                       shared_digest: str, failure_notes: List[str],
                       memory_notes: List[str],
-                      goal_artifacts: Optional[List[str]] = None) -> Dict[str, Any]:
+                      goal_artifacts: Optional[List[str]] = None,
+                      signals: Optional[Dict[str, bool]] = None) -> Dict[str, Any]:
+        sig = signals or {}
+        signal_lines = []
+        if sig.get("is_rich_resume"):
+            signal_lines.append("简历丰富（>2000字，有项目+时间线），建议完整Agent覆盖")
+        if sig.get("has_github"):
+            signal_lines.append("有 GitHub 链接，EvidenceAgent 应使用 MCP 工具验证代码贡献")
+        if sig.get("has_publications"):
+            signal_lines.append("有论文/出版物，TechAgent 应深入评估学术能力")
+        if sig.get("is_senior"):
+            signal_lines.append("资深候选人，RiskAgent 需关注管理经验和架构能力的证据")
+        if not sig.get("has_projects"):
+            signal_lines.append("无明显项目经历，跳过 ProjectAgent")
+        if not sig.get("has_timeline"):
+            signal_lines.append("无清晰时间线，RiskAgent 可降低优先级")
+        if sig.get("has_external_urls"):
+            signal_lines.append("有外部链接，EvidenceAgent 应优先验证可公开验证的声明")
+
         prompt_user = (
             f"任务类别: {run_type}\n用户问题: {user_message[:600]}\n"
             f"会话摘要: {(conversation_summary or '')[:400]}\n"
             f"共享状态摘要: {shared_digest[:800]}\n"
+            f"候选人信号:\n" + "\n".join(f"  - {s}" for s in signal_lines) + "\n"
             f"历史失败提示: {'; '.join(failure_notes[:3]) or '无'}\n"
             f"相关记忆: {'; '.join(memory_notes[:3]) or '无'}\n"
             f"可用 Agent 能力目录:\n{self.capability_catalog()}\n"
             f"产物规划基线: {base_plan}\n"
             f"必选 goal artifacts: {goal_artifacts or []}\n"
             f"预算: 最多 {self.policy.maxAgentCount} 个 Agent, "
-            f"{self.policy.maxLlmCalls} 次 LLM 调用\n"
-            "只允许使用目录中的 Agent，必须满足 requires_artifacts / 依赖，"
-            "可以增加或重排可选 Agent，但不得删除 goal artifact 的唯一生产者，"
-            "没有项目不要选 ProjectAgent，没有时间线不要选 RiskAgent，"
-            "最后一个必须是唯一的 terminal Agent。如基线已合理请原样返回。"
-            "输出 JSON {\"plan\": [...], \"reason\": \"...\"}")
+            f"{self.policy.maxLlmCalls} 次 LLM 调用\n\n"
+            "你是动态规划 Coordinator。根据候选人特征做出差异化决策：\n"
+            "1. 丰富简历（>2000字+项目+多年经验）：完整流水线+深度验证\n"
+            "2. 薄简历（<800字/应届/缺少项目）：精简路径，跳过ProjectAgent\n"
+            "3. 有GitHub/外部URL：EvidenceAgent必含+MCP工具优先\n"
+            "4. 有论文/出版物：TechAgent需深入学术评估\n"
+            "5. 资深候选人（10年+/总监级）：RiskAgent重点关注管理&架构证据\n"
+            "6. 跨领域转型：增加JDAnalysisAgent权重,评估能力迁移\n\n"
+            "关键约束：\n"
+            "- 不得删除goal artifact的唯一生产者\n"
+            "- 最后一个必须是唯一terminal Agent\n"
+            "- 你的计划必须体现此候选人的独特性,不是固定模板\n"
+            "输出 JSON {\"plan\": [...], \"reason\": \"基于[具体信号]选择了[具体策略]\"}")
         try:
             from app.runtime.prompts import default_prompt_manager
 

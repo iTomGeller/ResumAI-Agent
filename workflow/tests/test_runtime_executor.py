@@ -46,7 +46,8 @@ class FakeLlm:
         self.fail_agents = set(fail_agents)
 
     async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
-                   temperature=0.2, json_mode=True, tools=None, tool_choice=None):
+                   temperature=0.2, json_mode=True, tools=None, tool_choice=None,
+                   use_quality=False):
         self.calls.append({"agent": agent_id, "purpose": purpose,
                            "forcedFunction": bool(tools and tool_choice)})
         if self.delay:
@@ -235,7 +236,8 @@ def test_enable_rewrite_flag_reaches_dispatch():
 
     class RewriteLlm(FakeLlm):
         async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
-                       temperature=0.2, json_mode=True, tools=None, tool_choice=None):
+                       temperature=0.2, json_mode=True, tools=None, tool_choice=None,
+                       use_quality=False):
             self.calls.append({"agent": agent_id, "purpose": purpose})
             if purpose == "query_rewrite":
                 return json.dumps({"queries": ["Kafka 消息队列经验", "异步解耦实践"]})

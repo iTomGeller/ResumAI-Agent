@@ -8,7 +8,8 @@ class Settings(BaseSettings):
 
     deepseek_api_key: str = ""
     deepseek_api_url: str = "https://api.deepseek.com/v1"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_quality_model: str = "deepseek-v4-pro"
 
     java_backend_url: str = "http://ai-resume-backend:8080"
     workflow_internal_token: str = "change-me"

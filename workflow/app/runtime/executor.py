@@ -1149,6 +1149,16 @@ class RunExecutor:
                         self.state.put_artifact("resumeFacts", facts)
                 elif tool == "jd_match_search":
                     self._store_jd_match_artifacts(call.result)
+                elif tool == "mcp_fetch_url":
+                    existing = self.state.artifact("mcpEvidence") or []
+                    existing.append({"tool": tool, "result": call.result,
+                                     "url": (args or {}).get("url", "")})
+                    self.state.put_artifact("mcpEvidence", existing)
+                elif tool.startswith("exa."):
+                    existing = self.state.artifact("mcpEvidence") or []
+                    existing.append({"tool": tool, "result": call.result,
+                                     "query": (args or {}).get("query", "")})
+                    self.state.put_artifact("mcpEvidence", existing)
 
         # Performance fast-path: high-quality deterministic parse → skip LLM.
         if definition.agent_id == "ResumeParserAgent":
@@ -1239,12 +1249,14 @@ class RunExecutor:
                         messages, agent_id=agent_id,
                         purpose=definition.output_type, max_tokens=4096,
                         tools=[EMIT_REPORT_TOOL],
-                        tool_choice=FORCE_EMIT_DECISION)
+                        tool_choice=FORCE_EMIT_DECISION,
+                        use_quality=True)
                 except LlmError as exc:
                     if exc.code in ("PROMPT_OR_SCHEMA_ERROR", "EMPTY_FUNCTION_ARGS"):
                         raw = await self.llm.chat(
                             messages, agent_id=agent_id,
-                            purpose=definition.output_type, max_tokens=4096)
+                            purpose=definition.output_type, max_tokens=4096,
+                            use_quality=True)
                     else:
                         raise
             elif is_terminal:
@@ -1528,8 +1540,87 @@ class RunExecutor:
             requestedNextAction=None,
             summary=summary[:500])
 
+    def _has_mcp_tool(self, tool_name: str) -> bool:
+        """Check if an MCP tool is available (registered and server healthy)."""
+        if tool_name in self.tools.definitions:
+            defn = self.tools.definitions[tool_name]
+            if defn.kind == "mcp":
+                return True
+            return True
+        if self.tools.mcp_registry is not None:
+            return tool_name in self.tools.mcp_registry.tools
+        return False
+
+    def _extract_candidate_urls(self, resume_text: str) -> List[str]:
+        """Extract verifiable candidate URLs from resume (GitHub, LinkedIn, blog, portfolio)."""
+        import re as _re
+        url_pattern = _re.compile(
+            r'https?://(?:github\.com|linkedin\.com|gitee\.com|'
+            r'blog\.\w+|[\w-]+\.github\.io|portfolio|[\w-]+\.vercel\.app)'
+            r'[^\s\)\]<>\"\']*', _re.IGNORECASE)
+        urls = url_pattern.findall(resume_text or "")
+        seen = set()
+        unique = []
+        for u in urls:
+            u_clean = u.rstrip(".,;:)")
+            if u_clean not in seen:
+                seen.add(u_clean)
+                unique.append(u_clean)
+        return unique
+
+    def _build_evidence_search_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
+        """Build a search query for external evidence verification."""
+        facts = artifacts.get("resumeFacts") or {}
+        name = ""
+        company = ""
+        if isinstance(facts, dict):
+            experiences = facts.get("experiences") or []
+            if experiences and isinstance(experiences, list):
+                exp = experiences[0] if experiences else {}
+                if isinstance(exp, dict):
+                    company = exp.get("company") or ""
+                    name = facts.get("name") or ""
+        if not name:
+            lines = (resume or "").strip().split("\n")[:5]
+            for line in lines:
+                clean = line.strip()
+                if 2 <= len(clean) <= 6 and not any(c in clean for c in "：:·|"):
+                    name = clean
+                    break
+        if name and company:
+            return f"{name} {company} 工程师"
+        elif name:
+            return f"{name} 技术 GitHub"
+        return ""
+
+    def _build_project_search_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
+        """Build a search query for project verification."""
+        facts = artifacts.get("resumeFacts") or {}
+        if isinstance(facts, dict):
+            projects = facts.get("projects") or []
+            if projects and isinstance(projects, list):
+                proj = projects[0] if projects else {}
+                if isinstance(proj, dict):
+                    proj_name = proj.get("name") or proj.get("title") or ""
+                    tech = proj.get("techStack") or proj.get("tech") or ""
+                    if proj_name and len(proj_name) > 3:
+                        query = proj_name
+                        if isinstance(tech, list):
+                            query += " " + " ".join(tech[:2])
+                        elif isinstance(tech, str):
+                            query += " " + tech[:30]
+                        return query.strip()
+        candidate_urls = self._extract_candidate_urls(resume)
+        if candidate_urls:
+            import re as _re
+            gh_match = _re.search(r"github\.com/([^/\s]+)", " ".join(candidate_urls))
+            if gh_match:
+                return f"github {gh_match.group(1)} projects"
+        return ""
+
     def _maybe_skip_evidence_llm(self, tool_results_block: str) -> Optional[AgentOutput]:
-        """Skip Evidence LLM when deterministic verify is clean and support is high."""
+        """Skip Evidence LLM when deterministic verify is clean and support is high.
+        Never skip when MCP tools produced results (external verification happened)."""
         support = self.state.evidence_support_ratio()
         conflicts = self.state.artifact("conflicts") or []
         if conflicts:
@@ -1537,6 +1628,10 @@ class RunExecutor:
         if support is None or support < 0.85:
             return None
         if "verify_report_evidence" not in tool_results_block:
+            return None
+        if "mcp_fetch_url" in tool_results_block:
+            return None
+        if "exa.web_search_exa" in tool_results_block:
             return None
         summary = f"确定性核验通过：支持率 {support:.2f}，无冲突，跳过 Evidence LLM"
         return AgentOutput(
@@ -2090,6 +2185,31 @@ class RunExecutor:
                                "jdText": (artifacts.get("effectiveJd")
                                           or request.jobDescription or ""),
                                "claims": claims}))
+            candidate_urls = self._extract_candidate_urls(resume)
+            has_mcp_fetch = self._has_mcp_tool("mcp_fetch_url")
+            has_exa = self._has_mcp_tool("exa.web_search_exa")
+            if candidate_urls and has_mcp_fetch:
+                for url in candidate_urls[:2]:
+                    steps.append(("mcp_fetch_url", {"url": url, "maxLength": 4000}))
+            if has_exa:
+                search_query = self._build_evidence_search_query(resume, artifacts)
+                if search_query:
+                    steps.append(("exa.web_search_exa",
+                                  {"query": search_query, "numResults": 3,
+                                   "type": "neural"}))
+        elif definition.agent_id == "ProjectAgent" and resume:
+            has_exa = self._has_mcp_tool("exa.web_search_exa")
+            has_mcp_fetch = self._has_mcp_tool("mcp_fetch_url")
+            if has_exa:
+                project_query = self._build_project_search_query(resume, artifacts)
+                if project_query:
+                    steps.append(("exa.web_search_exa",
+                                  {"query": project_query, "numResults": 3,
+                                   "type": "neural"}))
+            candidate_urls = self._extract_candidate_urls(resume)
+            if candidate_urls and has_mcp_fetch:
+                for url in candidate_urls[:1]:
+                    steps.append(("mcp_fetch_url", {"url": url, "maxLength": 5000}))
         elif definition.agent_id == "ResumeOptimizeAgent" and resume:
             steps.append(("resume_lint", {"resumeText": resume}))
         # Copilot 对话式 RAG：followup/quick_answer 只有 ReportAgent，回答前
@@ -2240,21 +2360,75 @@ class RunExecutor:
 
     async def _write_memories(self, summary: str) -> None:
         try:
-            await self.memory.write(
-                type_="CONVERSATION", owner_scope="CONVERSATION",
-                content=f"会话摘要更新: {summary[:600]}",
-                structured={"factKey": f"summary:{self.request.conversationId}"},
-                source="system_rule", confidence=0.8)
-            unsupported = [c for c in (self.state.artifact("conflicts") or [])
-                           if isinstance(c, dict) and c.get("type") == "unsupported_claim"]
-            # unsupported claims already live in the shared-state snapshot;
-            # a separate short-term WORKING memory row duplicated it (removed).
+            arts = self.state.artifacts()
+            final_report = arts.get("finalReport") or {}
+
+            # 1) EPISODIC: candidate profile facts (reusable on re-evaluation)
+            if isinstance(final_report, dict) and final_report.get("recommendation"):
+                rec = final_report["recommendation"]
+                dims = final_report.get("dimensions") or []
+                dim_summary = "; ".join(
+                    f"{d.get('name','?')}={d.get('score','?')}" for d in dims[:4]
+                    if isinstance(d, dict))
+                strengths = final_report.get("strengths") or []
+                risks = final_report.get("risks") or []
+                risk_summary = "; ".join(
+                    r.get("claim", "")[:60] for r in risks[:3]
+                    if isinstance(r, dict))
+                candidate_id = self.request.conversationId or "unknown"
+
+                await self.memory.write(
+                    type_="EPISODIC", owner_scope="CONVERSATION",
+                    content=(f"候选人评估结论: 推荐={rec}. "
+                             f"维度评分: {dim_summary}. "
+                             f"优势: {'; '.join(s[:40] for s in strengths[:3])}. "
+                             f"风险: {risk_summary}"),
+                    structured={
+                        "factKey": f"evaluation_result:{candidate_id}",
+                        "recommendation": rec,
+                        "dimensions": dims[:4],
+                        "riskCount": len(risks),
+                        "dataQuality": final_report.get("dataQuality"),
+                    },
+                    source="evaluation_result", confidence=0.9)
+
+            # 2) EPISODIC: key technical findings (for cross-candidate comparison)
+            tech_findings = arts.get("technicalFindings") or []
+            if tech_findings and isinstance(tech_findings, list):
+                tech_claims = [f.get("text", "")[:60] for f in tech_findings[:5]
+                               if isinstance(f, dict) and f.get("text")]
+                if tech_claims:
+                    await self.memory.write(
+                        type_="EPISODIC", owner_scope="CONVERSATION",
+                        content=f"技术发现: {'; '.join(tech_claims)}",
+                        structured={"factKey": "tech_findings",
+                                    "claims": tech_claims},
+                        source="evaluation_result", confidence=0.85)
+
+            # 3) EPISODIC: verified risks (for re-evaluation awareness)
+            risks_found = arts.get("risks") or []
+            if risks_found and isinstance(risks_found, list):
+                verified_risks = [r for r in risks_found
+                                  if isinstance(r, dict) and r.get("severity") in ("HIGH", "MEDIUM")]
+                if verified_risks:
+                    await self.memory.write(
+                        type_="EPISODIC", owner_scope="CONVERSATION",
+                        content=(f"已识别风险({len(verified_risks)}项): " +
+                                 "; ".join(r.get("claim", "")[:50] for r in verified_risks[:4])),
+                        structured={"factKey": "identified_risks",
+                                    "risks": [{"claim": r.get("claim"),
+                                               "severity": r.get("severity")}
+                                              for r in verified_risks[:4]]},
+                        source="evaluation_result", confidence=0.85)
+
+            # 4) User preferences (unchanged)
             for preference in self._explicit_preferences():
                 await self.memory.write(
                     type_="PREFERENCE", owner_scope="USER",
                     content=f"{preference['kind']}: {preference['text']}",
                     structured=preference,
                     source="user_explicit", confidence=0.9)
+
         except Exception as exc:  # noqa: BLE001
             logger.info("memory write-back skipped: %s", exc)
 

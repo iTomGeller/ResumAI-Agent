@@ -127,9 +127,10 @@
   },
   "agentToolRouting": {
     "JDAnalysisAgent": ["firecrawl.firecrawl_scrape", "firecrawl.firecrawl_search", "firecrawl.firecrawl_map", "context7.resolve-library-id", "context7.query-docs"],
-    "TechAgent": ["context7.resolve-library-id", "context7.query-docs"],
+    "TechAgent": ["context7.resolve-library-id", "context7.query-docs", "exa.web_search_exa"],
     "ProjectAgent": ["exa.web_search_exa", "exa.web_fetch_exa", "firecrawl.firecrawl_scrape", "firecrawl.firecrawl_search", "firecrawl.firecrawl_map", "mcp_fetch_url", "fetch.fetch"],
-    "EvidenceAgent": [],
+    "EvidenceAgent": ["exa.web_search_exa", "exa.web_fetch_exa", "mcp_fetch_url", "fetch.fetch", "firecrawl.firecrawl_scrape"],
+    "RiskAgent": ["exa.web_search_exa", "mcp_fetch_url", "fetch.fetch"],
     "ReportAgent": [],
     "InterviewQuestionAgent": ["context7.resolve-library-id", "context7.query-docs"]
   }

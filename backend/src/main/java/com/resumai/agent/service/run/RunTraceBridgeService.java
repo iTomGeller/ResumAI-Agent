@@ -396,6 +396,27 @@ public class RunTraceBridgeService {
                     round.put("toolCalls", List.of(tool));
                     rounds.get(agent).add(round);
                 }
+                case "skill.selected", "skill.applied" -> {
+                    Map<String, Object> round = new LinkedHashMap<>();
+                    round.put("roundNum", rounds.get(agent).size() + 1);
+                    round.put("type", "skill");
+                    round.put("title", "[Skill] " + payload.getOrDefault("skillId", event.getToolName())
+                            + "@" + payload.getOrDefault("skillVersion", "v1"));
+                    round.put("hasToolCalls", true);
+                    round.put("category", "skill");
+                    Map<String, Object> tool = new LinkedHashMap<>();
+                    tool.put("name", "skill:" + payload.getOrDefault("skillId", event.getToolName()));
+                    tool.put("category", "skill");
+                    tool.put("origin", "skill_manager");
+                    tool.put("skillId", payload.getOrDefault("skillId", ""));
+                    tool.put("skillVersion", payload.getOrDefault("skillVersion", ""));
+                    tool.put("skillHash", payload.getOrDefault("skillHash", ""));
+                    tool.put("status", "SUCCESS");
+                    tool.put("result", "injected=true trigger=" + payload.getOrDefault("triggerReason", "policy_match")
+                            + " agent=" + payload.getOrDefault("agentId", agent));
+                    round.put("toolCalls", List.of(tool));
+                    rounds.get(agent).add(round);
+                }
                 default -> {
                     // progress/queued events do not create rounds
                 }

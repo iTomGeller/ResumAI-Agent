@@ -69,7 +69,8 @@ services:
     environment:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_QUALITY_MODEL: ${DEEPSEEK_QUALITY_MODEL:-deepseek-v4-pro}
       JAVA_BACKEND_URL: http://ai-resume-backend:8080
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
@@ -159,7 +160,7 @@ services:
       JAVA_BACKEND_URL: http://ai-resume-backend:8080
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
     depends_on:
       resumai-sandbox-manager:
         condition: service_started

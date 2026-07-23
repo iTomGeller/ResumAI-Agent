@@ -77,10 +77,39 @@ def _local_answer(
 
     lowered = content.lower()
     if any(k in lowered for k in ("结论", "分数", "推荐", "怎么样", "进度", "到哪")):
+        report = snapshot.get("structuredReport") or snapshot.get("report") or {}
+        if isinstance(report, dict) and report.get("recommendation"):
+            rec = report["recommendation"]
+            dims = report.get("dimensions") or []
+            risks = report.get("risks") or []
+            strengths = report.get("strengths") or []
+            rec_label = {"HIRE": "推荐录用", "INTERVIEW_RECOMMEND": "建议面试",
+                         "NEED_MANUAL_REVIEW": "需人工复审",
+                         "NOT_RECOMMEND": "不推荐"}.get(rec, rec)
+            dim_text = "、".join(
+                f"{d.get('name', '?')}{d.get('score', '?')}分" for d in dims[:4]
+                if isinstance(d, dict))
+            strength_text = "；".join(s[:30] for s in strengths[:2]) if strengths else "暂无"
+            risk_text = "；".join(
+                r.get("claim", "")[:30] for r in risks[:2]
+                if isinstance(r, dict)) if risks else "暂无明显风险"
+            answer = (
+                f"综合评估结论：**{rec_label}**。\n"
+                f"维度评分：{dim_text or '评估中'}。\n"
+                f"核心优势：{strength_text}。\n"
+                f"主要风险：{risk_text}。\n"
+                f"详细证据和面试追问见决策报告页。")
+            return CopilotAnswer(
+                turnId=request.turnId,
+                answer=answer,
+                citations=[SourceRef(sourceType="REPORT", sourceId="structured",
+                                     quote=f"recommendation={rec}")],
+                actions=[CopilotAction(type="OPEN_REPORT", label="查看完整报告")],
+                suggestions=["为什么给这个分数？", "主要风险详情", "面试该问什么？"],
+            )
         summary = str(snapshot.get("summary") or "").strip()
-        if summary:
+        if summary and "目标" not in summary[:20]:
             compact = re.sub(r"\s+", " ", summary)
-            # Collapse pathological repeated summaries into one sentence.
             first_sentence = re.split(r"[。！？.!?]", compact, maxsplit=1)[0].strip()
             if first_sentence:
                 compact = first_sentence + "。"
@@ -88,14 +117,15 @@ def _local_answer(
                 compact = compact[:160] + "…"
             return CopilotAnswer(
                 turnId=request.turnId,
-                answer=f"基于当前会话摘要：{compact} 完整决策报告请在报告页查看，聊天不会复述整份报告。",
-                citations=[SourceRef(sourceType="SESSION", sourceId="summary", quote=compact[:200])],
+                answer=f"当前评估状态：{compact}",
+                citations=[SourceRef(sourceType="SESSION", sourceId="summary",
+                                     quote=compact[:200])],
                 actions=[CopilotAction(type="OPEN_REPORT", label="打开决策报告")],
                 suggestions=["为什么给这个分数？", "主要风险是什么？"],
             )
         return CopilotAnswer(
             turnId=request.turnId,
-            answer="当前还没有可用的评估摘要。发起完整评估后，可在决策报告页查看证据化结论。",
+            answer="当前还没有可用的评估结果。发起完整评估后，可在决策报告页查看证据化结论。",
             actions=[CopilotAction(type="START_EVALUATION", label="发起完整评估")],
             suggestions=["完整评估这份简历", "先核对 JD 缺口"],
         )

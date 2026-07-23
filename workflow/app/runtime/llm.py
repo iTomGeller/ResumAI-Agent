@@ -64,9 +64,10 @@ class CircuitBreaker:
 _shared_breaker = CircuitBreaker()
 
 
-# DeepSeek pricing (CNY per 1M tokens, cache-miss) used for the cost budget axis.
-PRICE_PROMPT_CNY_PER_M = 2.0
-PRICE_COMPLETION_CNY_PER_M = 8.0
+# DeepSeek V4 pricing (CNY per 1M tokens, cache-miss).
+# V4-Flash: $0.14/$0.28 per 1M → ~1.0/2.0 CNY; V4-Pro: $0.435/$0.87 → ~3.1/6.3 CNY
+PRICE_PROMPT_CNY_PER_M = 1.0
+PRICE_COMPLETION_CNY_PER_M = 2.0
 
 
 class ResilientLlmClient:
@@ -93,15 +94,17 @@ class ResilientLlmClient:
         self.max_total_tokens = max_total_tokens
         self.breaker = breaker or _shared_breaker
         self.base_url = normalized_deepseek_base_url()
-        self.model = settings.deepseek_model or "deepseek-chat"
-        self.fallback_model = os.getenv("DEEPSEEK_FALLBACK_MODEL", "").strip() or None
+        self.model = settings.deepseek_model or "deepseek-v4-flash"
+        self.quality_model = settings.deepseek_quality_model or "deepseek-v4-pro"
+        self.fallback_model = os.getenv("DEEPSEEK_FALLBACK_MODEL", "").strip() or self.model
         self.api_key = settings.deepseek_api_key
 
     async def chat(self, messages: List[Dict[str, str]], *, agent_id: str,
                    purpose: str = "", max_tokens: int = 2048,
                    temperature: float = 0.2, json_mode: bool = True,
                    tools: Optional[List[Dict[str, Any]]] = None,
-                   tool_choice: Optional[Dict[str, Any]] = None) -> str:
+                   tool_choice: Optional[Dict[str, Any]] = None,
+                   use_quality: bool = False) -> str:
         """When ``tools``/``tool_choice`` force a function call, the returned
         string is the function's arguments JSON — provider-side schema
         enforcement, one layer stronger than json_object mode."""
@@ -119,14 +122,15 @@ class ResilientLlmClient:
             raise LlmError("CIRCUIT_OPEN", "LLM circuit breaker open", False)
 
         self.budget.llm_calls += 1
+        model = self.quality_model if use_quality else self.model
         await self.emitter.emit("llm.started", agent_id=agent_id, payload={
-            "model": self.model, "purpose": purpose, "callIndex": self.budget.llm_calls})
+            "model": model, "purpose": purpose, "callIndex": self.budget.llm_calls,
+            "useQuality": use_quality})
 
         attempts = 0
         max_retries = 2
         delay = 1.5
         last_error: Optional[Exception] = None
-        model = self.model
         effective_max_tokens = max_tokens
         forcing_function = bool(tools and tool_choice)
         while attempts <= max_retries:

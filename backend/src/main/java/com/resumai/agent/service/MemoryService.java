@@ -399,6 +399,7 @@ public class MemoryService {
      *       business artifacts (resumeFacts / findings / report / coverage).</li>
      * </ul>
      */
+    @SuppressWarnings("unchecked")
     public void writeRunEpisode(AgentRun run, String terminalStatus) {
         String status = terminalStatus == null ? "" : terminalStatus.trim().toUpperCase(Locale.ROOT);
         if ("FAILED".equals(status) || "TIMED_OUT".equals(status)) {
@@ -409,22 +410,72 @@ public class MemoryService {
             archiveRunWorkingMemory(run.getRunId());
             return;
         }
+
+        Map<String, Object> artifacts = extractArtifacts(run.getSharedState());
+        Map<String, Object> finalReport = artifacts.get("finalReport") instanceof Map<?, ?>
+                ? (Map<String, Object>) artifacts.get("finalReport") : Map.of();
+
+        String recommendation = String.valueOf(finalReport.getOrDefault("recommendation", ""));
+        List<?> dimensions = finalReport.get("dimensions") instanceof List<?> dims ? dims : List.of();
+        List<?> strengths = finalReport.get("strengths") instanceof List<?> s ? s : List.of();
+        List<?> risks = finalReport.get("risks") instanceof List<?> r ? r : List.of();
+        List<?> interviewProbes = finalReport.get("interviewProbes") instanceof List<?> q ? q : List.of();
+
+        StringBuilder dimText = new StringBuilder();
+        for (Object d : dimensions) {
+            if (d instanceof Map<?, ?> dim) {
+                dimText.append(dim.getOrDefault("name", "?")).append("=")
+                       .append(dim.getOrDefault("score", "?")).append("; ");
+            }
+        }
+        StringBuilder riskText = new StringBuilder();
+        for (Object r : risks) {
+            if (r instanceof Map<?, ?> risk) {
+                riskText.append(risk.getOrDefault("claim", "")).append("(")
+                        .append(risk.getOrDefault("severity", "")).append("); ");
+            }
+        }
+
         Map<String, Object> structured = new LinkedHashMap<>();
         structured.put("runId", run.getRunId());
-        structured.put("policyId", run.getPolicyId());
+        structured.put("recommendation", recommendation);
+        structured.put("dimensions", dimensions.stream().limit(5).toList());
+        structured.put("riskCount", risks.size());
+        structured.put("interviewProbeCount", interviewProbes.size());
         structured.put("runType", run.getRunType());
         structured.put("status", terminalStatus);
-        structured.put("promptVersions", readJson(run.getPromptVersions()));
-        structured.put("skillVersions", readJson(run.getSkillVersions()));
-        structured.put("metrics", readJson(run.getMetrics()));
-        String content = "历史执行: 问题=" + trim(run.getUserMessage(), 200)
-                + " | 策略=" + run.getPolicyId()
-                + " | 类别=" + run.getRunType()
-                + " | 结果=" + terminalStatus;
+
+        String content;
+        if (StringUtils.hasText(recommendation)) {
+            content = "候选人评估结论: 推荐=" + recommendation
+                    + " | 维度: " + trim(dimText.toString(), 200)
+                    + " | 优势: " + trim(strengths.stream().limit(3)
+                        .map(Object::toString).reduce("", (a, b) -> a + b + "; "), 150)
+                    + " | 风险(" + risks.size() + "): " + trim(riskText.toString(), 150)
+                    + " | 面试问题数: " + interviewProbes.size();
+        } else {
+            content = "评估执行: 类别=" + run.getRunType()
+                    + " | 结果=" + terminalStatus
+                    + " | 维度: " + trim(dimText.toString(), 200);
+        }
+
         write(new WriteRequest("EPISODIC", "CONVERSATION", run.getUserId(),
                 run.getConversationId(), run.getRunId(), content, structured,
-                "system_rule", "episodic:" + run.getRunId(), 0.8, "NORMAL", 90));
+                "evaluation_result", "episodic:" + run.getRunId(), 0.85, "NORMAL", 90));
         archiveRunWorkingMemory(run.getRunId());
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractArtifacts(String sharedStateJson) {
+        if (!StringUtils.hasText(sharedStateJson)) return Map.of();
+        try {
+            Map<String, Object> state = objectMapper.readValue(sharedStateJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            Object arts = state.get("artifacts");
+            return arts instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of();
+        } catch (Exception e) {
+            return Map.of();
+        }
     }
 
     /** @deprecated Prefer {@link #writeRunEpisode}; kept for call-site compat. */
