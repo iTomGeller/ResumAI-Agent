@@ -1149,7 +1149,7 @@ class RunExecutor:
                         self.state.put_artifact("resumeFacts", facts)
                 elif tool == "jd_match_search":
                     self._store_jd_match_artifacts(call.result)
-                elif tool == "mcp_fetch_url":
+                elif tool in ("mcp_fetch_url", "fetch.fetch"):
                     existing = self.state.artifact("mcpEvidence") or []
                     existing.append({"tool": tool, "result": call.result,
                                      "url": (args or {}).get("url", "")})
@@ -1629,7 +1629,7 @@ class RunExecutor:
             return None
         if "verify_report_evidence" not in tool_results_block:
             return None
-        if "mcp_fetch_url" in tool_results_block:
+        if "mcp_fetch_url" in tool_results_block or "fetch.fetch" in tool_results_block:
             return None
         if "exa.web_search_exa" in tool_results_block:
             return None
@@ -2186,11 +2186,12 @@ class RunExecutor:
                                           or request.jobDescription or ""),
                                "claims": claims}))
             candidate_urls = self._extract_candidate_urls(resume)
-            has_mcp_fetch = self._has_mcp_tool("mcp_fetch_url")
+            has_mcp_fetch = self._has_mcp_tool("fetch.fetch") or self._has_mcp_tool("mcp_fetch_url")
+            fetch_tool_name = "fetch.fetch" if self._has_mcp_tool("fetch.fetch") else "mcp_fetch_url"
             has_exa = self._has_mcp_tool("exa.web_search_exa")
             if candidate_urls and has_mcp_fetch:
                 for url in candidate_urls[:2]:
-                    steps.append(("mcp_fetch_url", {"url": url, "maxLength": 4000}))
+                    steps.append((fetch_tool_name, {"url": url, "maxLength": 4000}))
             if has_exa:
                 search_query = self._build_evidence_search_query(resume, artifacts)
                 if search_query:
@@ -2199,7 +2200,8 @@ class RunExecutor:
                                    "type": "neural"}))
         elif definition.agent_id == "ProjectAgent" and resume:
             has_exa = self._has_mcp_tool("exa.web_search_exa")
-            has_mcp_fetch = self._has_mcp_tool("mcp_fetch_url")
+            has_mcp_fetch = self._has_mcp_tool("fetch.fetch") or self._has_mcp_tool("mcp_fetch_url")
+            fetch_tool_name = "fetch.fetch" if self._has_mcp_tool("fetch.fetch") else "mcp_fetch_url"
             if has_exa:
                 project_query = self._build_project_search_query(resume, artifacts)
                 if project_query:
@@ -2209,7 +2211,7 @@ class RunExecutor:
             candidate_urls = self._extract_candidate_urls(resume)
             if candidate_urls and has_mcp_fetch:
                 for url in candidate_urls[:1]:
-                    steps.append(("mcp_fetch_url", {"url": url, "maxLength": 5000}))
+                    steps.append((fetch_tool_name, {"url": url, "maxLength": 5000}))
         elif definition.agent_id == "ResumeOptimizeAgent" and resume:
             steps.append(("resume_lint", {"resumeText": resume}))
         # Copilot 对话式 RAG：followup/quick_answer 只有 ReportAgent，回答前
