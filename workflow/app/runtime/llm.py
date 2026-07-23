@@ -197,8 +197,16 @@ class ResilientLlmClient:
                 self.breaker.record_failure()
                 if attempts > max_retries:
                     break
+            retry_reason = "UNKNOWN"
+            if isinstance(last_error, LlmError):
+                retry_reason = last_error.code
+            elif isinstance(last_error, httpx.TimeoutException):
+                retry_reason = "READ_TIMEOUT"
+            elif isinstance(last_error, httpx.TransportError):
+                retry_reason = "CONNECT_TIMEOUT"
             await self.emitter.emit("llm.retrying", agent_id=agent_id, payload={
                 "attempt": attempts, "maxRetries": max_retries,
+                "reason": retry_reason,
                 "error": str(last_error)[:200]})
             await asyncio.sleep(delay + random.uniform(0, 0.6))
             delay = min(delay * 2, 12.0)

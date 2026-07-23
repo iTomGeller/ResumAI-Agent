@@ -757,6 +757,20 @@ const jobDescriptionPages = computed(() => splitTextPages(jobDraft.description |
 
 const jdMatchCards = computed(() => activeTask.value?.topJdMatches ?? []);
 
+/** Extract JD dimension from structured report for "当前评估岗位" display */
+const currentJdDimension = computed(() => {
+  const sr = activeTask.value?.structuredReport;
+  if (!sr?.dimensions) return null;
+  return sr.dimensions.find(d =>
+    /jd|岗位|匹配/i.test(d.name || '')
+  ) || null;
+});
+
+/** Missing evidence from structured report (JD gaps) */
+const currentJdGaps = computed(() => {
+  return activeTask.value?.structuredReport?.missingEvidence ?? [];
+});
+
 type JdMatchRow = NonNullable<TaskResponse['topJdMatches']>[number];
 
 /** 业务匹配分：优先 matchScore，其次维度均分，最后兼容旧 score（非 RRF） */
@@ -1388,9 +1402,9 @@ const jdMatchEmptyHint = computed(() => {
   }
   if (task.topJdMatches && task.topJdMatches.length) return '';
   if (task.matchedJdTitle || task.jdMatchScore != null) {
-    return 'hybrid 未返回 Top 列表：已有主匹配岗位，但 topJdMatches 为空。';
+    return '已有主匹配岗位信息，但岗位库未返回额外相似推荐。';
   }
-  return '未命中：岗位库检索未返回匹配，或 hybrid 未返回 topJdMatches。';
+  return '岗位库当前无可用相似岗位推荐。可能原因：岗位库为空、无岗位超过匹配阈值、或未建立向量索引。';
 });
 
 watch(copilotFullscreen, (full) => {
@@ -3674,9 +3688,39 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               </div>
             </div>
           </div>
-          <div v-else class="empty-state">
-            <p>{{ jdMatchEmptyHint }}</p>
-            <p class="text-muted text-sm">有 topJdMatches 时会展示 Top 岗位、匹配依据与能力缺口；空态可能是未命中、待评估，或 hybrid 未返回列表。</p>
+          <div v-else>
+            <!-- 当前评估 JD 覆盖分析（来自报告维度） -->
+            <div v-if="currentJdDimension" class="card" style="padding:var(--space-xl);margin-bottom:var(--space-lg)">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-lg)">
+                <h3 style="font-size:15px;font-weight:600">当前评估岗位 · JD 覆盖</h3>
+                <span class="badge" :class="currentJdDimension.score != null && currentJdDimension.score >= 70 ? 'badge-success' : currentJdDimension.score != null && currentJdDimension.score >= 50 ? 'badge-warning' : 'badge-danger'">
+                  {{ currentJdDimension.score ?? '—' }} 分
+                </span>
+              </div>
+              <p v-if="activeTask?.jobCategory" style="font-size:13px;color:var(--color-text-secondary);margin-bottom:8px">
+                岗位类型：{{ activeTask.jobCategory }}
+              </p>
+              <p v-if="currentJdDimension.rationale" style="font-size:13px;line-height:1.6;margin-bottom:12px">
+                {{ currentJdDimension.rationale }}
+              </p>
+              <div v-if="currentJdDimension.evidenceRefs?.length" class="jd-reasons" style="margin-top:8px">
+                <h4>匹配证据</h4>
+                <ul>
+                  <li v-for="(ev, evi) in currentJdDimension.evidenceRefs.slice(0, 6)" :key="evi">
+                    <span class="text-muted text-sm">[{{ ev.sourceType }}]</span> {{ ev.quote }}
+                  </li>
+                </ul>
+              </div>
+              <div v-if="currentJdGaps.length" class="jd-gaps" style="margin-top:12px">
+                <h4>证据缺口</h4>
+                <ul><li v-for="(g, gi) in currentJdGaps.slice(0, 8)" :key="gi">{{ g }}</li></ul>
+              </div>
+            </div>
+            <!-- 岗位库推荐区域为空时 -->
+            <div class="card" style="padding:var(--space-lg)">
+              <h4 style="font-size:14px;font-weight:600;margin-bottom:8px">岗位库相似推荐</h4>
+              <p class="text-muted text-sm" style="margin:0">{{ jdMatchEmptyHint || '岗位库暂无相似岗位推荐。当岗位库中有可用岗位且候选人简历与岗位匹配度超过阈值时，此处将展示推荐结果。' }}</p>
+            </div>
           </div>
         </div>
 

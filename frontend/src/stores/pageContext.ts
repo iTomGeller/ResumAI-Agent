@@ -64,7 +64,7 @@ export const usePageContextStore = defineStore('pageContext', {
     jobId: undefined,
     knowledgeDocId: undefined,
     refs: [],
-    copilotOpen: true,
+    copilotOpen: false,
     copilotWidth: Number(localStorage.getItem('resumai.copilotWidth') || 420),
     copilotFullscreen: false,
   }),
@@ -98,6 +98,8 @@ export const usePageContextStore = defineStore('pageContext', {
         this.syncRefs();
         return;
       }
+      const isNewCandidate = (payload.traceId && payload.traceId !== this.traceId)
+        || (payload.conversationId && payload.conversationId !== this.conversationId);
       this.conversationId = payload.conversationId || payload.traceId || this.conversationId;
       this.traceId = payload.traceId || this.traceId;
       this.revisionNo = payload.revisionNo;
@@ -106,6 +108,7 @@ export const usePageContextStore = defineStore('pageContext', {
       this.overallScore = payload.overallScore ?? null;
       this.recommendation = payload.recommendation ?? null;
       this.candidateId = payload.candidateId || payload.conversationId || payload.traceId;
+      if (isNewCandidate) this.copilotOpen = false;
       this.syncRefs();
     },
     setJob(jobId?: string) {
