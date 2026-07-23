@@ -654,9 +654,10 @@ class Coordinator:
             return {"plan": plan,
                     "reason": str(parsed.get("reason", "llm_refined"))[:200]}
         except Exception as exc:  # noqa: BLE001 - planning must not kill the run
-            logger.info("coordinator refine failed, using artifact plan: %s", exc)
+            code = getattr(exc, "code", type(exc).__name__)
+            logger.warning("coordinator refine failed (%s), using artifact plan: %s", code, exc)
             return {"plan": base_plan,
-                    "reason": f"rule_based(llm-error:{type(exc).__name__})"}
+                    "reason": f"artifact_planned(refine_skipped:{code})"}
 
     def _protect_required_producers(self, refined: List[str], base: List[str],
                                     goal_artifacts: List[str]) -> List[str]:

@@ -108,21 +108,27 @@ def _local_answer(
                 suggestions=["为什么给这个分数？", "主要风险详情", "面试该问什么？"],
             )
         summary = str(snapshot.get("summary") or "").strip()
-        if summary and "目标" not in summary[:20]:
-            compact = re.sub(r"\s+", " ", summary)
-            first_sentence = re.split(r"[。！？.!?]", compact, maxsplit=1)[0].strip()
-            if first_sentence:
-                compact = first_sentence + "。"
-            if len(compact) > 160:
-                compact = compact[:160] + "…"
-            return CopilotAnswer(
-                turnId=request.turnId,
-                answer=f"当前评估状态：{compact}",
-                citations=[SourceRef(sourceType="SESSION", sourceId="summary",
-                                     quote=compact[:200])],
-                actions=[CopilotAction(type="OPEN_REPORT", label="打开决策报告")],
-                suggestions=["为什么给这个分数？", "主要风险是什么？"],
-            )
+        if summary:
+            lines = summary.split("\n")
+            useful_parts = []
+            for line in lines:
+                line = line.strip()
+                if line.startswith("目标:") or line.startswith("目标："):
+                    continue
+                if line:
+                    useful_parts.append(line)
+            if useful_parts:
+                compact = "；".join(useful_parts)
+                if len(compact) > 200:
+                    compact = compact[:200] + "…"
+                return CopilotAnswer(
+                    turnId=request.turnId,
+                    answer=f"评估进行中，当前已有信息：{compact}\n完整结论请等待评估完成后在决策报告页查看。",
+                    citations=[SourceRef(sourceType="SESSION", sourceId="summary",
+                                         quote=compact[:200])],
+                    actions=[CopilotAction(type="OPEN_REPORT", label="打开决策报告")],
+                    suggestions=["为什么给这个分数？", "主要风险是什么？"],
+                )
         return CopilotAnswer(
             turnId=request.turnId,
             answer="当前还没有可用的评估结果。发起完整评估后，可在决策报告页查看证据化结论。",
