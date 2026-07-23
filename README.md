@@ -23,7 +23,7 @@
 - **动态多 Agent**：Coordinator 按问题类型、共享状态与失败记忆动态规划 Agent 流水线；Tech/Project/Risk 三个 specialist 并行执行，Evidence 核验，Report 显式收尾。
 - **可暂停恢复**：PAUSE 在 Agent 组边界保存 RunExecutionSnapshot（MySQL），RESUME 用同一 runId/traceId/revision 恢复，绝不重跑已完成的非幂等动作。
 - **证据不造假**：结论必须可定位到简历/JD/工具结果；无证据结论进入 conflicts 并标记不确定；降级结果永远显式标注 `PARTIAL_SUCCESS`，不伪装完整成功。
-- **策略可学习**：PolicyBundle 控制 Agent 组合与预算，epsilon-greedy/Thompson 按 HR 反馈与真实 E2E Benchmark 的 Reward 持续选择更优策略（Agent 外层学习，非模型权重训练）。
+- **策略可学习**：Policy Optimization Lab（无 GPU）— 生产 `ONLINE_SELECTION` 仅用 champion；bandit 探索只在 shadow/lab；`OFFLINE_SEARCH` 为有界配置进化（非完整 GEPA）；`MODEL_WEIGHTS` unchanged。
 
 ## 架构
 
@@ -129,7 +129,7 @@ scripts/ecs_safe_deploy.sh        ECS 安全部署（备份、构建、卷校验
 
 ## 明确边界
 
-- 策略学习是 **Agent 外层** PolicyBundle 选择（epsilon-greedy/Thompson + 真实 Reward），不训练任何模型权重，不是 RLHF/PPO/GRPO。
+- 策略学习是 **Policy Optimization Lab（无 GPU）**：生产 champion-only；shadow/lab 才做 bandit；离线为有界配置进化（非完整 GEPA）；不训练任何模型权重，不是 RLHF/PPO/GRPO。
 - `PARTIAL_SUCCESS` 表示存在明确降级（如某个 Agent 失败后基于剩余结果作答），不能当作完整成功展示；缺少模型凭据时失败关闭。
 - Sandbox 只运行固定白名单的简历分析工具，不是任意代码执行平台。
 - 当前是单机 Docker Compose 形态，适合演示与中小规模验证；多副本、跨区容灾与密钥托管属于后续生产化工作。

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import ConversationPanel from './components/conversation/ConversationPanel.vue';
+import SystemCopilot from './components/conversation/SystemCopilot.vue';
 import TraceView from './components/trace/TraceView.vue';
 import OpsPanel from './components/ops/OpsPanel.vue';
 import { splitTextPages, usePagination } from './composables/usePagination';
 import { buildQuery, useServerPagination, type PageResult } from './composables/useServerPagination';
 import type { ConversationTurnResponse, TaskControlResponse } from './composables/useConversation';
+import { usePageContextStore } from './stores/pageContext';
 import {
   applyBusinessControls,
   applyPreset,
@@ -58,7 +59,10 @@ interface TaskResponse {
     jdId: string;
     title: string;
     category: string;
-    score: number;
+    /** @deprecated 兼容旧字段，等同 matchScore */
+    score?: number;
+    /** 业务维度匹配分 0-1 */
+    matchScore?: number;
     matchReasons?: string[];
     gaps?: string[];
     interviewChecks?: string[];
@@ -66,6 +70,20 @@ interface TaskResponse {
     experienceMatchScore?: number;
     projectMatchScore?: number;
     riskPenalty?: number;
+    retrievalScore?: number;
+    vectorScore?: number;
+    bm25Score?: number;
+    rrfScore?: number;
+    provenance?: {
+      documentId?: string;
+      chunkId?: string;
+      version?: string;
+      createdAt?: string;
+      updatedAt?: string;
+      charStart?: number;
+      charEnd?: number;
+      contentHash?: string;
+    };
   }>;
   aiRecommendation?: string;
   decisionRationale?: string;
@@ -81,11 +99,75 @@ interface TaskResponse {
   structuredReport?: {
     overallScore?: number;
     recommendation?: string;
-    dimensions?: Array<{ name: string; score?: number; rationale?: string }>;
+    dataQuality?: string;
+    summary?: string;
+    dimensions?: Array<{
+      name: string;
+      score?: number | null;
+      status?: string;
+      evidenceCoverage?: number;
+      rationale?: string;
+      evidenceRefs?: Array<{
+        sourceType: string;
+        sourceId: string;
+        quote: string;
+        lineStart?: number;
+        lineEnd?: number;
+        uri?: string;
+      }>;
+    }>;
     strengths?: string[];
-    risks?: string[];
-    interviewQuestions?: string[];
+    risks?: Array<string | {
+      id?: string;
+      category?: string;
+      severity?: string;
+      claim: string;
+      impact?: string;
+      verificationPlan?: string;
+      evidenceRefs?: Array<{ sourceType: string; quote: string; lineStart?: number; lineEnd?: number }>;
+    }>;
+    interviewQuestions?: Array<string | {
+      id?: string;
+      priority?: string;
+      question: string;
+      objective?: string;
+      triggeredBy?: string;
+      goodSignals?: string[];
+      redFlags?: string[];
+      followUps?: string[];
+      scoreRubric?: string;
+      evidenceRefs?: Array<{ sourceType: string; quote: string; lineStart?: number }>;
+    }>;
+    interviewProbes?: Array<{
+      id?: string;
+      priority?: string;
+      question: string;
+      objective?: string;
+      triggeredBy?: string;
+      goodSignals?: string[];
+      redFlags?: string[];
+      followUps?: string[];
+      scoreRubric?: string;
+      evidenceRefs?: Array<{ sourceType: string; quote: string; lineStart?: number }>;
+    }>;
+    systemWarnings?: Array<{
+      code: string;
+      stage?: string;
+      retryable?: boolean;
+      message: string;
+    }>;
+    missingEvidence?: string[];
   };
+  candidateId?: number | null;
+  applicationId?: number | null;
+  evaluationState?: 'NOT_STARTED' | 'RUNNING' | 'COMPLETED' | 'SYSTEM_FAILED' | string;
+  systemError?: {
+    code?: string;
+    stage?: string;
+    retryable?: boolean;
+    message?: string;
+    runId?: string;
+  } | null;
 }
 
 interface TraceEvent {
@@ -193,6 +275,46 @@ interface Metrics {
   totalTokenCost: number;
   modeDurationMs: Record<string, number>;
   agentDurationMs: Record<string, number>;
+  /** 去重候选人数（candidate_profile），不是评估任务数 */
+  uniqueCandidates?: number;
+}
+
+interface HrDashboardResponse {
+  uniqueCandidates: number;
+  newThisWeek: number;
+  pendingScreening: number;
+  pendingReview: number;
+  interviewStage: number;
+  offersPending: number;
+  dataCoverage: {
+    activeTasks?: number;
+    linkedTasks: number;
+    unlinkedTasks: number;
+    skippedTasks?: number;
+    verifiedProfiles?: number;
+    legacyUnverifiedProfiles?: number;
+    linkRatio: number;
+    mode: 'LEGACY_TASKS' | 'DUAL' | 'CANDIDATE_ONLY' | string;
+  };
+  nextActions?: Array<{ kind: string; title: string; href: string; count: number }>;
+}
+
+interface CandidateListItem {
+  id: number;
+  displayName?: string;
+  email?: string;
+  phone?: string;
+  identitySource?: string;
+  applicationCount?: number;
+  assessmentCount?: number;
+  latestStage?: string;
+  latestOwnerHrId?: string;
+  latestScore?: number | null;
+  latestRecommendation?: string;
+  latestJobCategory?: string;
+  latestTraceId?: string;
+  createTime?: string;
+  updateTime?: string;
 }
 
 
@@ -271,6 +393,7 @@ const KB_INDEX_STATUSES = ['pending', 'indexing', 'ready', 'failed', 'degraded']
 const KB_FALLBACK_CHAIN = ['vector', 'hybrid', 'lexical', 'none'] as const;
 
 const appView = ref<ViewName>('dashboard');
+const pageContext = usePageContextStore();
 const detailTab = ref<DetailTab>('report');
 const detailLoading = ref(false);
 const detailLoadError = ref('');
@@ -289,6 +412,7 @@ const taskStageHints = ref<Record<string, string>>({});
 const tasks = ref<TaskResponse[]>([]);
 const traces = ref<TraceEvent[]>([]);
 const metrics = ref<Metrics | null>(null);
+const hrDashboard = ref<HrDashboardResponse | null>(null);
 const feedbacks = ref<FeedbackResponse[]>([]);
 const activeTraceId = ref('');
 const agentExecutionTree = ref<any>(null);
@@ -316,8 +440,14 @@ const knowledgeUploadTags = ref<string[]>(['interview', 'rubric']);
 const knowledgeSearchQuery = ref('');
 const knowledgeSearchLoading = ref(false);
 const knowledgeSearchResult = ref<any>(null);
-const copilotWidth = ref(Number(localStorage.getItem('resumai.copilotWidth') || 420));
-const copilotFullscreen = ref(false);
+const copilotWidth = computed({
+  get: () => pageContext.copilotWidth,
+  set: (width: number) => pageContext.setCopilotWidth(width),
+});
+const copilotFullscreen = computed({
+  get: () => pageContext.copilotFullscreen,
+  set: (full: boolean) => pageContext.setCopilotFullscreen(full),
+});
 const ragPreviewText = ref('');
 const ragPreviewResult = ref<any[]>([]);
 const ragCompareResult = ref<Record<string, any>>({});
@@ -398,13 +528,14 @@ const displayReport = computed(() => {
         risks.length ? `关键风险：\n${risks.map((r) => `- ${stripMarkdown(r)}`).join('\n')}` : '',
         questions.length ? `面试追问：\n${questions.map((q) => `- ${stripMarkdown(q)}`).join('\n')}` : '',
       ].filter(Boolean).join('\n\n'));
+  const structured = task?.structuredReport && Object.keys(task.structuredReport).length
+    ? task.structuredReport : null;
   const summaryLine = stripMarkdown(
-    task?.riskSummary
+    structured?.summary
+      || task?.riskSummary
       || fullText.split('\n').find((line) => line.trim().length > 10)
       || '报告结果缺失：请检查 ReportAgent 最终输出和 workflow result summary。'
   );
-  const structured = task?.structuredReport && Object.keys(task.structuredReport).length
-    ? task.structuredReport : null;
   return { fullText, summaryLine, missing: !fullText.trim(), structured };
 });
 
@@ -466,19 +597,112 @@ function extractReportBullets(source: string, headings: string[], limit = 8): st
 const richReportSections = computed(() => {
   const fullText = displayReport.value.fullText;
   const task = activeTask.value;
+  const structured = displayReport.value.structured;
   const strengths = filterRichBullets(task?.strengths || []);
-  const risks = filterRichBullets(task?.risks || []);
-  const questions = filterRichBullets(task?.interviewQuestions || []);
+
+  type RiskView = {
+    key: string;
+    claim: string;
+    severity?: string;
+    impact?: string;
+    verificationPlan?: string;
+    evidence: string[];
+  };
+  const structuredRisks: RiskView[] = [];
+  for (const [idx, risk] of (structured?.risks || []).entries()) {
+    if (typeof risk === 'string') {
+      const claim = stripMarkdown(risk).trim();
+      if (claim && !isGenericReportPlaceholder(claim)) {
+        structuredRisks.push({ key: `s-${idx}`, claim, evidence: [] });
+      }
+      continue;
+    }
+    const claim = stripMarkdown(risk?.claim || '').trim();
+    if (!claim || isGenericReportPlaceholder(claim)) continue;
+    structuredRisks.push({
+      key: risk.id || `r-${idx}`,
+      claim,
+      severity: risk.severity,
+      impact: risk.impact,
+      verificationPlan: risk.verificationPlan,
+      evidence: (risk.evidenceRefs || [])
+        .map((ref) => stripMarkdown(ref.quote || '').trim())
+        .filter(Boolean)
+        .slice(0, 3),
+    });
+  }
+  const fallbackRisks = filterRichBullets(task?.risks || []);
+  const risks: RiskView[] = structuredRisks.length
+    ? structuredRisks
+    : fallbackRisks.length
+      ? fallbackRisks.map((claim, i) => ({ key: `f-${i}`, claim, evidence: [] }))
+      : extractReportBullets(fullText, ['关键风险', '风险评估', '需验证风险', '主要风险'], 6)
+        .map((claim, i) => ({ key: `t-${i}`, claim, evidence: [] }));
+
+  type ProbeView = {
+    key: string;
+    question: string;
+    objective?: string;
+    scoreRubric?: string;
+    goodSignals: string[];
+    redFlags: string[];
+    followUps: string[];
+    evidence: string[];
+  };
+  const structuredProbes: ProbeView[] = [];
+  const probeSource = structured?.interviewProbes?.length
+    ? structured.interviewProbes
+    : (structured?.interviewQuestions || []);
+  for (const [idx, probe] of probeSource.entries()) {
+    if (typeof probe === 'string') {
+      const question = stripMarkdown(probe).trim();
+      if (question && !isGenericReportPlaceholder(question)) {
+        structuredProbes.push({
+          key: `ps-${idx}`, question, goodSignals: [], redFlags: [], followUps: [], evidence: [],
+        });
+      }
+      continue;
+    }
+    const question = stripMarkdown(probe?.question || '').trim();
+    if (!question || isGenericReportPlaceholder(question)) continue;
+    structuredProbes.push({
+      key: probe.id || `p-${idx}`,
+      question,
+      objective: probe.objective,
+      scoreRubric: probe.scoreRubric ? stripMarkdown(probe.scoreRubric).trim() : undefined,
+      goodSignals: (probe.goodSignals || []).map((s) => stripMarkdown(s).trim()).filter(Boolean),
+      redFlags: (probe.redFlags || []).map((s) => stripMarkdown(s).trim()).filter(Boolean),
+      followUps: (probe.followUps || []).map((s) => stripMarkdown(s).trim()).filter(Boolean),
+      evidence: (probe.evidenceRefs || [])
+        .map((ref) => stripMarkdown(ref.quote || '').trim())
+        .filter(Boolean)
+        .slice(0, 2),
+    });
+  }
+  const fallbackQuestions = filterRichBullets(task?.interviewQuestions || []);
+  const probes: ProbeView[] = structuredProbes.length
+    ? structuredProbes
+    : fallbackQuestions.length
+      ? fallbackQuestions.map((question, i) => ({
+        key: `fq-${i}`, question, goodSignals: [], redFlags: [], followUps: [], evidence: [],
+      }))
+      : extractReportBullets(fullText, ['面试追问', '追问建议', '面试验证', '建议验证点'], 10)
+        .map((question, i) => ({
+          key: `tq-${i}`, question, goodSignals: [], redFlags: [], followUps: [], evidence: [],
+        }));
+
+  const decisionRecommendation = structured?.recommendation || task?.recommendation || '';
+  const overallFromStructured = structured?.overallScore;
   return {
     strengths: strengths.length
       ? strengths
       : extractReportBullets(fullText, ['核心优势', '关键优势', '候选人亮点', '优势'], 8),
-    risks: risks.length
-      ? risks
-      : extractReportBullets(fullText, ['关键风险', '风险评估', '需验证风险', '主要风险'], 6),
-    questions: questions.length
-      ? questions
-      : extractReportBullets(fullText, ['面试追问', '追问建议', '面试验证', '建议验证点'], 10),
+    risks,
+    probes,
+    systemWarnings: structured?.systemWarnings || [],
+    decisionRecommendation,
+    dataQuality: structured?.dataQuality || '',
+    overallScore: overallFromStructured ?? task?.overallScore ?? null,
   };
 });
 
@@ -496,12 +720,32 @@ const resumeSourceHint = computed(() => {
 
 const langfuseTraceUrl = computed(() => {
   const url = agentExecutionTree.value?.langfuseTraceUrl;
-  if (typeof url === 'string' && url.startsWith('http')) return url;
-  const traceId = agentExecutionTree.value?.langfuseTraceId || activeTraceId.value;
-  if (typeof url === 'string' && url.startsWith('/') && traceId) {
-    return `${window.location.origin}${url}`;
-  }
+  if (typeof url === 'string' && /^https?:\/\//i.test(url)) return url;
   return '';
+});
+
+const langfuseStatus = computed(() => {
+  const tree = agentExecutionTree.value || {};
+  return String(tree.langfuseStatus || '').toUpperCase();
+});
+
+const langfuseStatusHint = computed(() => {
+  const reason = agentExecutionTree.value?.langfuseStatusReason;
+  if (typeof reason === 'string' && reason.trim()) return reason.trim();
+  const status = langfuseStatus.value;
+  if (status === 'DISABLED') {
+    return 'Langfuse 未配置：需同时设置 LANGFUSE_OTEL_ENDPOINT、LANGFUSE_PUBLIC_KEY、LANGFUSE_SECRET_KEY。';
+  }
+  if (status === 'AUTH_REQUIRED') {
+    return 'Langfuse 认证未配置：已有 endpoint 但缺少 key，exporter 已停用以避免 401。';
+  }
+  if (status === 'AUTH_FAILED') {
+    return 'Langfuse 认证失败：请检查 PUBLIC/SECRET key。';
+  }
+  if (status === 'UNREACHABLE') {
+    return 'Langfuse 不可达：请检查容器与网络连通性。';
+  }
+  return 'Langfuse 外链不可用：请配置有效的 LANGFUSE_PUBLIC_URL（http/https）。';
 });
 const selectedJob = computed(() => jobs.value.find((j) => j.id === selectedJobId.value) ?? jobs.value[0]);
 const runningTasks = computed(() => tasks.value.filter((t) => ['RUNNING', 'RESUMING'].includes(resolveQueueStatus(t))));
@@ -513,6 +757,24 @@ const jobDescriptionPages = computed(() => splitTextPages(jobDraft.description |
 
 const jdMatchCards = computed(() => activeTask.value?.topJdMatches ?? []);
 
+type JdMatchRow = NonNullable<TaskResponse['topJdMatches']>[number];
+
+/** 业务匹配分：优先 matchScore，其次维度均分，最后兼容旧 score（非 RRF） */
+function jdBusinessMatchScore(m?: Partial<JdMatchRow> | null): number {
+  if (!m) return 0;
+  if (m.matchScore != null && Number.isFinite(m.matchScore)) return m.matchScore;
+  const dims = [m.skillMatchScore, m.experienceMatchScore, m.projectMatchScore]
+    .filter((v): v is number => v != null && Number.isFinite(v));
+  if (dims.length) return dims.reduce((a, b) => a + b, 0) / dims.length;
+  if (m.score != null && Number.isFinite(m.score)) return m.score;
+  return 0;
+}
+
+function hasRetrievalExplain(m?: JdMatchRow | null): boolean {
+  if (!m) return false;
+  return m.rrfScore != null || m.vectorScore != null || m.bm25Score != null || m.retrievalScore != null;
+}
+
 /** 口径：分母 = 已完成任务数；分子 = jdMatchScore >= 0.5 的已完成任务数；无已完成任务返回 null（展示 "-"） */
 const jdMatchSuccessRate = computed<number | null>(() => {
   const done = completedTasks.value;
@@ -522,7 +784,23 @@ const jdMatchSuccessRate = computed<number | null>(() => {
 });
 
 function isPositiveRecommendation(rec?: string): boolean {
-  return rec === 'RECOMMEND' || rec === 'STRONG_RECOMMEND';
+  return rec === 'RECOMMEND'
+    || rec === 'STRONG_RECOMMEND'
+    || rec === 'HIRE'
+    || rec === 'INTERVIEW_RECOMMEND';
+}
+
+function decisionCardTone(rec?: string): 'strong' | 'recommend' | 'review' {
+  if (rec === 'HIRE' || rec === 'STRONG_RECOMMEND') return 'strong';
+  if (rec === 'INTERVIEW_RECOMMEND' || rec === 'RECOMMEND') return 'recommend';
+  return 'review';
+}
+
+function dataQualityLabel(quality?: string): string {
+  if (quality === 'INSUFFICIENT') return '证据不足';
+  if (quality === 'PARTIAL') return '部分证据';
+  if (quality === 'SUFFICIENT') return '证据充分';
+  return '';
 }
 
 const pendingReviewTasks = computed(() =>
@@ -620,16 +898,51 @@ const matchRate = computed(() => {
     return Math.round(activeTask.value.jdMatchScore * 100);
   }
   const top = activeTask.value?.topJdMatches?.[0];
-  return top ? Math.round(top.score * 100) : 0;
+  return top ? Math.round(jdBusinessMatchScore(top) * 100) : 0;
 });
 
 const recommendationLabel = computed(() => {
-  const r = activeTask.value?.recommendation || '';
-  if (r === 'STRONG_RECOMMEND') return '强烈推荐面试';
-  if (r === 'RECOMMEND') return '推荐面试';
+  if (activeTask.value?.evaluationState === 'SYSTEM_FAILED') {
+    return '系统失败，尚未评估';
+  }
+  const r = richReportSections.value.decisionRecommendation
+    || activeTask.value?.recommendation
+    || '';
+  if (!r) return '尚未形成招聘结论';
+  if (r === 'HIRE' || r === 'STRONG_RECOMMEND') return '建议录用';
+  if (r === 'INTERVIEW_RECOMMEND' || r === 'RECOMMEND') return '推荐面试';
   if (r === 'NOT_RECOMMEND') return '不推荐';
   return '需要人工复核';
 });
+
+function openOpsForRun(runId?: string | null) {
+  appView.value = 'ops';
+  pageContext.setWorkspace('ops');
+  pageContext.setRun(runId || null);
+  if (runId) {
+    history.replaceState(null, '', `#/dev/ops?tab=runs&runId=${encodeURIComponent(runId)}`);
+  } else {
+    history.replaceState(null, '', '#/dev/ops?tab=runs');
+  }
+}
+
+async function retryFailedTask(traceId: string, runId?: string | null) {
+  try {
+    if (runId) {
+      const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/retry`, { method: 'POST' });
+      if (res.ok) {
+        successMessage.value = '已从断点重新入队';
+        await openTaskDetail(traceId, 'trace');
+        return;
+      }
+    }
+    // Fallback: reopen detail so the user can retry from ops if the API is unavailable.
+    errorMessage.value = '自动重试失败，请从运维页手动重试';
+    openOpsForRun(runId);
+  } catch (e: any) {
+    errorMessage.value = e?.message || '重试失败';
+  }
+}
 
 const recommendedCount = computed(() =>
   metrics.value?.recommendedTasks ?? tasks.value.filter(t => t.status === 'SUCCESS' && isPositiveRecommendation(t.recommendation)).length
@@ -641,6 +954,31 @@ const metricsCompletedCount = computed(() =>
   metrics.value?.completedTasks ?? metrics.value?.successTasks ?? completedTasks.value.length
 );
 const metricsTotalCount = computed(() => metrics.value?.totalTasks ?? tasks.value.length);
+/** 候选人 KPI：优先 HR dashboard，其次 metrics.uniqueCandidates，不用任务数冒充 */
+const uniqueCandidateCount = computed(() => {
+  if (hrDashboard.value?.uniqueCandidates != null) return hrDashboard.value.uniqueCandidates;
+  if (metrics.value?.uniqueCandidates != null) return metrics.value.uniqueCandidates;
+  if (candidateListMode.value === 'candidates') return candidateServerPag.total.value;
+  return null;
+});
+const hrKpiAvailable = computed(() => hrDashboard.value != null);
+const dataCoverage = computed(() => hrDashboard.value?.dataCoverage ?? null);
+const showDataCoverageBanner = computed(() => {
+  const cov = dataCoverage.value;
+  return !!cov && cov.mode !== 'CANDIDATE_ONLY';
+});
+const migrationHint = computed(() => {
+  const cov = dataCoverage.value;
+  if (!cov || cov.unlinkedTasks <= 0) return '';
+  if ((uniqueCandidateCount.value ?? 0) === 0 && candidateListMode.value === 'candidates') {
+    return `候选人列表为空，但仍有 ${cov.unlinkedTasks} 条评估未迁移到候选人域。请在开发者控制台执行候选人回填。`;
+  }
+  if (cov.mode === 'DUAL' || cov.mode === 'LEGACY_TASKS') {
+    return `数据迁移进行中：已关联 ${cov.linkedTasks} / 未迁移 ${cov.unlinkedTasks}（覆盖率 ${Math.round((cov.linkRatio || 0) * 100)}%）`;
+  }
+  return '';
+});
+const candidateListMode = ref<'candidates' | 'tasks'>('tasks');
 const passRate = computed(() => {
   const done = metricsCompletedCount.value;
   if (!done) return 0;
@@ -652,10 +990,24 @@ const avgEvalTime = computed(() => {
   const avg = finished.reduce((s, t) => s + (t.durationMs || 0), 0) / finished.length;
   return (avg / 1000).toFixed(1) + 's';
 });
-const scoreBand90 = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) >= 90).length);
-const scoreBand80 = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) >= 80 && (t.overallScore || 0) < 90).length);
-const scoreBand70 = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) >= 70 && (t.overallScore || 0) < 80).length);
-const scoreBandLow = computed(() => completedTasks.value.filter(t => (t.overallScore || 0) < 70).length);
+/** 仅统计有有效分数的任务；null/缺失不得用 || 0 落入 &lt;70 桶 */
+const scoredCompletedTasks = computed(() =>
+  completedTasks.value.filter((t) => t.overallScore != null && Number.isFinite(t.overallScore))
+);
+const scoredCompletedCount = computed(() => scoredCompletedTasks.value.length);
+const unscoredCompletedCount = computed(() =>
+  Math.max(0, completedTasks.value.length - scoredCompletedCount.value)
+);
+const scoreBand90 = computed(() => scoredCompletedTasks.value.filter((t) => (t.overallScore as number) >= 90).length);
+const scoreBand80 = computed(() => scoredCompletedTasks.value.filter((t) => {
+  const s = t.overallScore as number;
+  return s >= 80 && s < 90;
+}).length);
+const scoreBand70 = computed(() => scoredCompletedTasks.value.filter((t) => {
+  const s = t.overallScore as number;
+  return s >= 70 && s < 80;
+}).length);
+const scoreBandLow = computed(() => scoredCompletedTasks.value.filter((t) => (t.overallScore as number) < 70).length);
 const validFeedbacks = computed(() => {
   const taskTraceIds = new Set(tasks.value.map(t => t.traceId));
   return feedbacks.value.filter(f => taskTraceIds.has(f.traceId) && f.humanComment && !f.humanComment.includes('验证反馈'));
@@ -773,7 +1125,7 @@ onBeforeUnmount(() => { eventSource?.close(); pollTimers.forEach((t) => clearTim
 async function refreshAll() {
   refreshing.value = true;
   try {
-    await Promise.allSettled([loadTasks(), loadMetrics(), loadFeedbacks(), loadCandidateList(), loadJobList(), loadTaskQueueStatus()]);
+    await Promise.allSettled([loadTasks(), loadMetrics(), loadHrDashboard(), loadFeedbacks(), loadCandidateList(), loadJobList(), loadTaskQueueStatus()]);
     await refreshRunningStages();
     if (activeTraceId.value) {
       await Promise.allSettled([loadTraces(activeTraceId.value)]);
@@ -952,27 +1304,59 @@ function indexStatusLabel(status?: string) {
 
 function chunkMetaEntries(chunk: any): Array<{ key: string; value: string }> {
   const meta = chunk?.metadata && typeof chunk.metadata === 'object' ? chunk.metadata : {};
+  const provenance = chunk?.provenance && typeof chunk.provenance === 'object' ? chunk.provenance : {};
   const preferred = [
-    'docId', 'chunkIndex', 'source', 'embeddingProvider', 'indexVersion',
+    'documentId', 'docId', 'chunkId', 'chunkIndex', 'version', 'createdAt', 'updatedAt',
+    'charStart', 'charEnd', 'contentHash', 'vectorScore', 'bm25Score', 'rrfScore',
+    'retrievalScore', 'finalScore', 'rank', 'source', 'embeddingProvider', 'indexVersion',
     'fallbackStage', 'indexStatus', 'embeddingStatus', 'tags',
   ];
-  const keys = [...preferred, ...Object.keys(meta).filter((k) => !preferred.includes(k))];
   const flat: Record<string, unknown> = {
+    documentId: chunk?.documentId ?? provenance.documentId ?? meta.documentId ?? chunk?.docId ?? meta.docId,
     docId: chunk?.docId ?? meta.docId,
+    chunkId: chunk?.chunkId ?? provenance.chunkId ?? meta.chunkId,
     chunkIndex: chunk?.chunkIndex ?? meta.chunkIndex,
+    version: chunk?.version ?? provenance.version ?? meta.version ?? chunk?.indexVersion,
+    createdAt: chunk?.createdAt ?? provenance.createdAt ?? meta.createdAt,
+    updatedAt: chunk?.updatedAt ?? provenance.updatedAt ?? meta.updatedAt,
+    charStart: chunk?.charStart ?? provenance.charStart ?? meta.charStart,
+    charEnd: chunk?.charEnd ?? provenance.charEnd ?? meta.charEnd,
+    contentHash: chunk?.contentHash ?? provenance.contentHash ?? meta.contentHash,
+    vectorScore: chunk?.vectorScore,
+    bm25Score: chunk?.bm25Score,
+    rrfScore: chunk?.rrfScore,
+    retrievalScore: chunk?.retrievalScore,
+    finalScore: chunk?.finalScore,
+    rank: chunk?.rank,
     source: chunk?.source ?? meta.source,
     embeddingProvider: chunk?.embeddingProvider ?? meta.embeddingProvider,
     indexVersion: chunk?.indexVersion ?? meta.indexVersion,
     fallbackStage: chunk?.fallbackStage ?? meta.fallbackStage,
     indexStatus: chunk?.indexStatus ?? meta.indexStatus,
     ...meta,
+    ...provenance,
   };
+  const keys = [...preferred, ...Object.keys(flat).filter((k) => !preferred.includes(k))];
   return keys
     .filter((k) => flat[k] != null && flat[k] !== '')
     .map((k) => ({
       key: k,
-      value: Array.isArray(flat[k]) ? (flat[k] as unknown[]).join(', ') : String(flat[k]),
+      value: typeof flat[k] === 'number'
+        ? (Number.isInteger(flat[k]) ? String(flat[k]) : Number(flat[k]).toFixed(4))
+        : Array.isArray(flat[k]) ? (flat[k] as unknown[]).join(', ') : String(flat[k]),
     }));
+}
+
+function chunkScoreSummary(chunk: any): string {
+  const parts: string[] = [];
+  if (chunk?.rrfScore != null) parts.push(`RRF ${Number(chunk.rrfScore).toFixed(4)}`);
+  if (chunk?.vectorScore != null) parts.push(`向量 ${Number(chunk.vectorScore).toFixed(3)}`);
+  if (chunk?.bm25Score != null) parts.push(`BM25 ${Number(chunk.bm25Score).toFixed(3)}`);
+  if (chunk?.rank != null) parts.push(`#${chunk.rank}`);
+  if (chunk?.charStart != null && chunk?.charEnd != null) {
+    parts.push(`offset ${chunk.charStart}-${chunk.charEnd}`);
+  }
+  return parts.join(' · ');
 }
 
 async function runKnowledgeSearch() {
@@ -1009,14 +1393,44 @@ const jdMatchEmptyHint = computed(() => {
   return '未命中：岗位库检索未返回匹配，或 hybrid 未返回 topJdMatches。';
 });
 
-function onCopilotWidth(width: number) {
-  copilotWidth.value = width;
-  localStorage.setItem('resumai.copilotWidth', String(width));
-}
-
 watch(copilotFullscreen, (full) => {
   document.body.classList.toggle('copilot-fullscreen-lock', full);
 });
+
+watch(appView, (view) => {
+  pageContext.setWorkspace(view);
+  if (view === 'knowledge' && activeKnowledgeDoc.value?.docId) {
+    pageContext.setKnowledge(activeKnowledgeDoc.value.docId);
+  } else if (view !== 'knowledge') {
+    pageContext.setKnowledge(undefined);
+  }
+}, { immediate: true });
+
+watch(activeTask, (task) => {
+  // Keep last candidate conversation sticky so Copilot stays usable on
+  // dashboard / ops / knowledge views after leaving detail.
+  if (!task) return;
+  pageContext.setCandidate({
+    conversationId: task.conversationId || task.traceId,
+    traceId: task.traceId,
+    revisionNo: task.revisionNo,
+    runId: task.workflowRunId,
+    taskStatus: task.status || resolveQueueStatus(task),
+    overallScore: task.overallScore,
+    recommendation: task.recommendation,
+    candidateId: task.conversationId || task.traceId,
+  });
+}, { immediate: true });
+
+watch(activeKnowledgeDoc, (doc) => {
+  if (appView.value === 'knowledge') {
+    pageContext.setKnowledge(doc?.docId);
+  }
+});
+
+watch(selectedJobId, (jobId) => {
+  pageContext.setJob(jobId || undefined);
+}, { immediate: true });
 
 async function openRagPanel(tab: 'knowledge' | 'business' | 'compare' | 'expert' = 'business') {
   ragDrawerTab.value = tab;
@@ -1161,6 +1575,43 @@ async function loadTaskQueueStatus() {
 async function loadCandidateList() {
   candidatePagination.loading.value = true;
   try {
+    const candidateQ = buildQuery({
+      keyword: candidateSearch.value.trim() || undefined,
+      page: candidatePagination.page.value,
+      pageSize: candidatePagination.pageSize.value,
+    });
+    const candidateRes = await fetch(`/api/candidates${candidateQ}`);
+    if (candidateRes.ok) {
+      const page = (await candidateRes.json()) as PageResult<CandidateListItem>;
+      candidateListMode.value = 'candidates';
+      candidateListItems.value = page.items.map((c) => ({
+        id: c.id,
+        traceId: c.latestTraceId || `candidate-${c.id}`,
+        fileName: c.displayName || c.email || c.phone || `候选人 #${c.id}`,
+        jobCategory: c.latestJobCategory || '-',
+        executionMode: '',
+        status: c.latestStage || (c.assessmentCount ? 'SUCCESS' : 'NEW'),
+        overallScore: c.latestScore ?? null,
+        recommendation: c.latestRecommendation || '',
+        durationMs: 0,
+        tokenCost: 0,
+        strengths: [],
+        risks: [],
+        interviewQuestions: [],
+        summary: [
+          c.email,
+          c.phone,
+          c.assessmentCount != null ? `评估 ${c.assessmentCount} 次` : '',
+          c.applicationCount != null ? `申请 ${c.applicationCount}` : '',
+        ].filter(Boolean).join(' · '),
+        queue: c.latestOwnerHrId ? { uploadedBy: c.latestOwnerHrId } : undefined,
+        matchedJdTitle: c.latestJobCategory,
+      }));
+      candidatePagination.total.value = page.total;
+      return;
+    }
+
+    candidateListMode.value = 'tasks';
     const q = buildQuery({
       keyword: candidateSearch.value.trim() || undefined,
       status: statusFilter.value,
@@ -1248,6 +1699,17 @@ async function loadMetrics() {
   if (r.ok) metrics.value = (await r.json()) as Metrics;
 }
 
+async function loadHrDashboard() {
+  try {
+    const r = await fetch('/api/hr/dashboard');
+    if (r.ok) {
+      hrDashboard.value = (await r.json()) as HrDashboardResponse;
+    }
+  } catch {
+    // 后端未就绪时保留旧 metrics KPI
+  }
+}
+
 async function loadFeedbacks() {
   const q = buildQuery({ page: 1, pageSize: 200 });
   const r = await fetch(`/api/feedback${q}`);
@@ -1315,6 +1777,9 @@ async function loadTraces(traceId: string) {
 }
 
 function selectTask(task: TaskResponse) {
+  if (!task.traceId || task.traceId.startsWith('candidate-')) {
+    return;
+  }
   void openTaskDetail(task.traceId, 'report');
 }
 
@@ -1443,9 +1908,10 @@ function stripMarkdown(text?: string): string {
 
 function aiRecommendationText(rec?: string): string {
   if (!rec) return '未生成';
-  if (rec === 'STRONG_RECOMMEND') return '强烈推荐面试';
-  if (rec === 'RECOMMEND') return '推荐面试';
+  if (rec === 'HIRE' || rec === 'STRONG_RECOMMEND') return '建议录用';
+  if (rec === 'INTERVIEW_RECOMMEND' || rec === 'RECOMMEND') return '推荐面试';
   if (rec === 'NOT_RECOMMEND') return '不推荐';
+  if (rec === 'NEED_MANUAL_REVIEW') return '需要人工复核';
   return '需要人工复核';
 }
 
@@ -1471,9 +1937,10 @@ function candidateReviewHint(task: TaskResponse): string {
 }
 
 function recommendationShort(rec: string): string {
-  if (rec === 'STRONG_RECOMMEND') return '强烈推荐';
-  if (rec === 'RECOMMEND') return '推荐';
+  if (rec === 'HIRE' || rec === 'STRONG_RECOMMEND') return '建议录用';
+  if (rec === 'INTERVIEW_RECOMMEND' || rec === 'RECOMMEND') return '推荐';
   if (rec === 'NOT_RECOMMEND') return '不推荐';
+  if (rec === 'NEED_MANUAL_REVIEW') return '需复核';
   return '需复核';
 }
 
@@ -1558,7 +2025,7 @@ function syncHash() {
   } else if (appView.value === 'knowledge') {
     history.replaceState(null, '', '#/knowledge');
   } else if (appView.value === 'ops') {
-    history.replaceState(null, '', '#/ops');
+    history.replaceState(null, '', '#/dev/ops');
   } else if (appView.value === 'positions') {
     history.replaceState(null, '', '#/positions');
   } else if (appView.value === 'analytics') {
@@ -1585,7 +2052,16 @@ async function restoreFromHash() {
     appView.value = 'knowledge';
     await loadKnowledgeBase();
   }
-  else if (hash.startsWith('#/ops')) appView.value = 'ops';
+  else if (hash.startsWith('#/dev/ops') || hash.startsWith('#/ops') || hash === '#/dev' || hash.startsWith('#/dev/')) {
+    appView.value = 'ops';
+    try {
+      const query = hash.includes('?') ? new URLSearchParams(hash.slice(hash.indexOf('?') + 1)) : null;
+      const runId = query?.get('runId');
+      pageContext.setRun(runId || null);
+    } catch {
+      /* ignore malformed hash query */
+    }
+  }
   else if (hash.startsWith('#/positions')) appView.value = 'positions';
   else if (hash.startsWith('#/analytics')) appView.value = 'analytics';
   else appView.value = 'dashboard';
@@ -1908,6 +2384,14 @@ async function refreshRunningStages() {
 }
 
 function taskStatusLabel(task: TaskResponse): string {
+  if (candidateListMode.value === 'candidates') {
+    const stage = (task.status || '').toUpperCase();
+    const labels: Record<string, string> = {
+      NEW: '新建', SCREENING: '筛选中', INTERVIEW: '面试', OFFER: 'Offer',
+      REJECTED: '已拒绝', HIRED: '已录用', SUCCESS: '已评估',
+    };
+    return labels[stage] || stage || '—';
+  }
   const qs = resolveQueueStatus(task);
   if (qs === 'PAUSING' || qs === 'PAUSED' || qs === 'RESUMING' || qs === 'SUPERSEDED' || qs === 'CANCELLED') return statusText(qs);
   if (qs === 'QUEUED') return '排队中';
@@ -2181,6 +2665,7 @@ function statusText(status?: string) {
   if (status === 'SUPERSEDED') return '已被新版本替代';
   if (status === 'FAILED') return '失败';
   if (status === 'CANCELLED') return '已取消';
+  if (status === 'WAITING_SANDBOX') return '工具执行中';
   return '等待中';
 }
 
@@ -2289,6 +2774,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
       </div>
 
       <nav class="side-nav">
+        <div class="nav-section-label">招聘工作台</div>
         <button :class="{ active: appView === 'dashboard' }" @click="appView = 'dashboard'; clearNotices()">
           <span class="nav-icon">◇</span> 总览
         </button>
@@ -2301,11 +2787,12 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         <button :class="{ active: appView === 'knowledge' }" @click="appView = 'knowledge'; clearNotices(); loadKnowledgeBase()">
           <span class="nav-icon">▣</span> 知识库
         </button>
-        <button :class="{ active: appView === 'ops' }" @click="appView = 'ops'; clearNotices()">
-          <span class="nav-icon">⚙</span> Agent Ops
-        </button>
         <button :class="{ active: appView === 'analytics' }" @click="appView = 'analytics'; clearNotices()">
           <span class="nav-icon">◈</span> 招聘洞察
+        </button>
+        <div class="nav-section-label">开发者</div>
+        <button :class="{ active: appView === 'ops' }" @click="appView = 'ops'; clearNotices()" title="#/dev/ops">
+          <span class="nav-icon">⚙</span> Runtime Ops
         </button>
       </nav>
 
@@ -2316,7 +2803,11 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
     </aside>
 
     <!-- MAIN -->
-    <main class="main-content">
+    <main
+      class="main-content"
+      :class="{ 'has-global-copilot': pageContext.copilotOpen && !pageContext.copilotFullscreen }"
+      :style="pageContext.copilotOpen && !pageContext.copilotFullscreen ? { '--copilot-width': pageContext.copilotWidth + 'px' } : undefined"
+    >
       <p v-if="errorMessage" class="notice error" @click="errorMessage = ''">{{ errorMessage }}</p>
       <p v-if="successMessage" class="notice success" @click="successMessage = ''">{{ successMessage }}</p>
       <p v-if="backgroundUploadNotice" class="notice info" @click="backgroundUploadNotice = ''">{{ backgroundUploadNotice }}</p>
@@ -2337,23 +2828,37 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         </div>
 
         <div class="kpi-grid">
-          <div class="kpi-card"><span class="kpi-label">候选人</span><div class="kpi-value">{{ metrics?.totalTasks ?? '-' }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">排队中</span><div class="kpi-value">{{ metrics?.queuedTasks ?? taskQueueStatus?.queued ?? queuedTasksCount }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">评估中</span><div class="kpi-value">{{ taskQueueStatus?.running ?? metrics?.runningTasks ?? runningTasks.length }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">已完成</span><div class="kpi-value">{{ metrics?.completedTasks ?? metrics?.successTasks ?? completedTasks.length }}</div></div>
-          <div class="kpi-card"><span class="kpi-label">平均分</span><div class="kpi-value">{{ metrics?.averageScore?.toFixed(1) ?? '-' }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">候选人</span><div class="kpi-value">{{ uniqueCandidateCount ?? '-' }}</div></div>
+          <template v-if="hrKpiAvailable">
+            <div class="kpi-card"><span class="kpi-label">待筛选</span><div class="kpi-value">{{ hrDashboard?.pendingScreening ?? 0 }}</div></div>
+            <div class="kpi-card"><span class="kpi-label">待复核</span><div class="kpi-value">{{ hrDashboard?.pendingReview ?? 0 }}</div></div>
+            <div class="kpi-card"><span class="kpi-label">面试中</span><div class="kpi-value">{{ hrDashboard?.interviewStage ?? 0 }}</div></div>
+            <div class="kpi-card"><span class="kpi-label">待 Offer</span><div class="kpi-value">{{ hrDashboard?.offersPending ?? 0 }}</div></div>
+          </template>
+          <template v-else>
+            <div class="kpi-card"><span class="kpi-label">排队中</span><div class="kpi-value">{{ metrics?.queuedTasks ?? taskQueueStatus?.queued ?? queuedTasksCount }}</div></div>
+            <div class="kpi-card"><span class="kpi-label">评估中</span><div class="kpi-value">{{ taskQueueStatus?.running ?? metrics?.runningTasks ?? runningTasks.length }}</div></div>
+            <div class="kpi-card"><span class="kpi-label">已完成</span><div class="kpi-value">{{ metrics?.completedTasks ?? metrics?.successTasks ?? completedTasks.length }}</div></div>
+            <div class="kpi-card"><span class="kpi-label">平均分</span><div class="kpi-value">{{ metrics?.averageScore?.toFixed(1) ?? '-' }}</div></div>
+          </template>
         </div>
+
+        <p v-if="showDataCoverageBanner" class="notice warning data-coverage-banner">
+          {{ migrationHint || `候选人域覆盖率 ${Math.round((dataCoverage?.linkRatio || 0) * 100)}%，未迁移评估 ${dataCoverage?.unlinkedTasks ?? 0} 条` }}
+          <button class="btn btn-ghost btn-sm" style="margin-left:8px" @click="openOpsForRun()">打开开发者控制台</button>
+        </p>
 
         <div class="card system-status-card">
           <span class="status-dot" :class="{ online: healthStatus === 'UP' && embeddingHealth.operational !== false }"></span>
           <span class="text-muted text-sm">系统状态：{{ systemStatusLine }}</span>
         </div>
 
-        <div v-if="taskQueueStatus" class="card queue-status-panel">
-          <div class="card-header">
-            <h2>异步队列状态</h2>
-            <span class="text-muted text-sm">Worker {{ taskQueueStatus.activeWorkers }}/{{ taskQueueStatus.workerCapacity }} · 利用率 {{ Math.round((taskQueueStatus.workerUtilization || 0) * 100) }}%</span>
-          </div>
+        <!-- Worker / Stream Pending 等为运行时调试指标，不对 HR 主视图展示；见 #/dev/ops -->
+        <details v-if="taskQueueStatus" class="card queue-status-panel developer-only-panel">
+          <summary class="card-header developer-only-summary">
+            <h2>开发者 · 异步队列</h2>
+            <span class="text-muted text-sm">Worker / Stream Pending · 仅调试用</span>
+          </summary>
           <div class="kpi-grid queue-kpi-grid">
             <div class="kpi-card"><span class="kpi-label">排队</span><div class="kpi-value">{{ taskQueueStatus.queued }}</div></div>
             <div class="kpi-card"><span class="kpi-label">运行中</span><div class="kpi-value">{{ taskQueueStatus.running }}</div></div>
@@ -2361,6 +2866,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             <div class="kpi-card"><span class="kpi-label">待重试</span><div class="kpi-value">{{ taskQueueStatus.retrying }}</div></div>
             <div class="kpi-card"><span class="kpi-label">最长等待</span><div class="kpi-value">{{ taskQueueStatus.oldestWaitSeconds }}s</div></div>
             <div class="kpi-card"><span class="kpi-label">Stream Pending</span><div class="kpi-value">{{ taskQueueStatus.pendingMessages }}</div></div>
+            <div class="kpi-card"><span class="kpi-label">Worker</span><div class="kpi-value">{{ taskQueueStatus.activeWorkers }}/{{ taskQueueStatus.workerCapacity }}</div></div>
             <div class="kpi-card"><span class="kpi-label">近期失败</span><div class="kpi-value">{{ taskQueueStatus.failed }}</div></div>
           </div>
           <details v-if="taskQueueStatus.recentFailures?.length" class="queue-fail-details">
@@ -2369,7 +2875,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <li v-for="(failure, fi) in taskQueueStatus.recentFailures.slice(0, 2)" :key="fi">{{ truncateText(failure, 80) }}</li>
             </ul>
           </details>
-        </div>
+        </details>
 
         <div class="card">
           <div class="card-header">
@@ -2495,7 +3001,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
       <!-- ========== CANDIDATES LIST ========== -->
       <section v-if="appView === 'candidates'">
         <div class="page-header">
-          <div><h1>候选人</h1><p>查看所有评估任务，点击进入详情</p></div>
+          <div><h1>候选人</h1><p>{{ candidateListMode === 'candidates' ? '按候选人去重展示，一人一行' : '查看所有评估任务，点击进入详情' }}</p></div>
           <div class="header-actions">
             <button class="btn btn-ghost" :disabled="refreshing" @click="refreshAll">刷新</button>
             <button class="btn btn-primary" @click="showUploadModal = true">上传简历</button>
@@ -2558,10 +3064,10 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <option value="duration_asc">耗时从低到高</option>
             </select>
             <span class="text-muted text-sm" style="margin-left:auto">共 {{ candidatePagination.total }} 条</span>
-            <button class="btn btn-ghost btn-sm" @click="toggleBatchSelect">{{ batchSelectMode ? '取消选择' : '批量操作' }}</button>
+            <button class="btn btn-ghost btn-sm" v-if="candidateListMode !== 'candidates'" @click="toggleBatchSelect">{{ batchSelectMode ? '取消选择' : '批量操作' }}</button>
           </div>
 
-          <div v-if="batchSelectMode" class="batch-toolbar">
+          <div v-if="batchSelectMode && candidateListMode !== 'candidates'" class="batch-toolbar">
             <button class="btn btn-ghost btn-sm" @click="selectAllVisible">全选本页</button>
             <span class="text-muted text-sm">已选 {{ selectedForDelete.size }} 条</span>
             <button class="btn btn-danger btn-sm" :disabled="!selectedForDelete.size" @click="batchDelete">批量删除</button>
@@ -2572,13 +3078,13 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <tr>
                 <th v-if="batchSelectMode" class="col-check"></th>
                 <th>候选人</th>
-                <th class="col-status">状态</th>
+                <th class="col-status">{{ candidateListMode === 'candidates' ? '阶段' : '状态' }}</th>
                 <th class="col-category">岗位</th>
                 <th class="col-score">评分</th>
                 <th class="col-rec">推荐</th>
                 <th class="col-summary">摘要</th>
-                <th class="col-duration">耗时</th>
-                <th class="col-actions">操作</th>
+                <th class="col-duration" v-if="candidateListMode !== 'candidates'">耗时</th>
+                <th class="col-actions" v-if="candidateListMode !== 'candidates'">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -2594,9 +3100,9 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                 <td>{{ displayJobCategory(task.jobCategory) }}</td>
                 <td><strong>{{ task.overallScore ?? '-' }}</strong></td>
                 <td><span class="badge" :class="isPositiveRecommendation(task.recommendation) ? 'badge-success' : task.recommendation === 'NOT_RECOMMEND' ? 'badge-danger' : 'badge-warning'">{{ recommendationShort(task.recommendation || '') }}</span></td>
-                <td class="text-muted text-sm truncate">{{ candidateReviewHint(task) }}</td>
-                <td class="text-muted">{{ formatDuration(task.durationMs) }}</td>
-                <td class="col-actions"><button class="btn-icon-danger" aria-label="删除该评估记录" title="删除该评估记录" @click.stop="confirmDeleteTask(task.traceId)">✕</button></td>
+                <td class="text-muted text-sm truncate">{{ candidateListMode === 'candidates' ? (task.summary || candidateReviewHint(task)) : candidateReviewHint(task) }}</td>
+                <td class="text-muted" v-if="candidateListMode !== 'candidates'">{{ formatDuration(task.durationMs) }}</td>
+                <td class="col-actions" v-if="candidateListMode !== 'candidates'"><button class="btn-icon-danger" aria-label="删除该评估记录" title="删除该评估记录" @click.stop="confirmDeleteTask(task.traceId)">✕</button></td>
               </tr>
             </tbody>
           </table>
@@ -2617,7 +3123,10 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
           <div v-else-if="!tasksLoaded" class="empty-state"><p>加载评估记录中...</p></div>
           <div v-else-if="tasksError && !tasks.length" class="empty-state"><p>加载记录失败，请刷新重试</p></div>
-          <div v-else class="empty-state"><p>暂无候选人数据</p></div>
+          <div v-else class="empty-state">
+            <p>暂无候选人数据</p>
+            <p v-if="migrationHint" class="text-muted text-sm" style="margin-top:8px">{{ migrationHint }}</p>
+          </div>
         </div>
       </section>
 
@@ -2719,10 +3228,13 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <span class="rag-chip readonly">stage={{ knowledgeSearchResult.fallbackStage }}</span>
               <span class="rag-chip readonly">{{ knowledgeSearchResult.strategy }}</span>
               <span class="text-muted text-xs">lex {{ knowledgeSearchResult.lexicalHits }} · vec {{ knowledgeSearchResult.vectorHits }}</span>
+              <span v-if="knowledgeSearchResult.latencyMs != null" class="text-muted text-xs">{{ knowledgeSearchResult.latencyMs }}ms</span>
+              <span v-if="knowledgeSearchResult.queryId" class="text-muted text-xs">{{ knowledgeSearchResult.queryId }}</span>
             </div>
             <ul class="knowledge-list">
               <li v-for="chunk in (knowledgeSearchResult.chunks || []).slice(0, 5)" :key="chunk.chunkId">
                 <strong>{{ chunk.sectionPath || chunk.chunkId }}</strong>
+                <p v-if="chunkScoreSummary(chunk)" class="text-muted text-xs" style="margin:4px 0">{{ chunkScoreSummary(chunk) }}</p>
                 <div class="kb-meta-grid">
                   <span v-for="m in chunkMetaEntries(chunk)" :key="m.key"><em>{{ m.key }}</em>{{ m.value }}</span>
                 </div>
@@ -2784,6 +3296,12 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <ul class="knowledge-list">
                 <li v-for="chunk in (activeKnowledgeDoc.chunks || [])" :key="chunk.chunkId">
                   <strong>{{ chunk.sectionPath || chunk.chunkId }}</strong>
+                  <p v-if="chunkScoreSummary(chunk) || chunk.createdAt || chunk.charStart != null" class="text-muted text-xs" style="margin:4px 0">
+                    <template v-if="chunk.createdAt">created {{ String(chunk.createdAt).slice(0, 19).replace('T', ' ') }}</template>
+                    <template v-if="chunk.charStart != null && chunk.charEnd != null"> · offset {{ chunk.charStart }}-{{ chunk.charEnd }}</template>
+                    <template v-if="chunk.version"> · v={{ chunk.version }}</template>
+                    <template v-if="chunk.contentHash"> · hash {{ chunk.contentHash }}</template>
+                  </p>
                   <div class="kb-meta-grid">
                     <span v-for="m in chunkMetaEntries(chunk)" :key="m.key"><em>{{ m.key }}</em>{{ m.value }}</span>
                   </div>
@@ -2882,19 +3400,58 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         <!-- Report Tab -->
         <div v-if="detailTab === 'report'" class="report-content">
           <div v-if="activeRagFallback" class="notice warning rag-report-hint">{{ activeRagFallback }}</div>
-          <div class="hr-decision-card" :class="activeTask.recommendation === 'STRONG_RECOMMEND' ? 'strong' : activeTask.recommendation === 'RECOMMEND' ? 'recommend' : 'review'">
+          <div
+            v-if="activeTask.evaluationState === 'SYSTEM_FAILED'"
+            class="hr-decision-card system-failure-card"
+          >
+            <div class="hr-decision-header">
+              <span class="hr-decision-badge">系统失败，尚未评估</span>
+              <span class="hr-decision-score" v-if="activeTask.systemError?.stage">
+                阶段 {{ activeTask.systemError.stage }}
+              </span>
+            </div>
+            <p class="hr-decision-summary">
+              {{ activeTask.systemError?.message || activeTask.summary || '控制面启动失败，尚未形成招聘结论。' }}
+            </p>
+            <p class="text-muted text-sm mt-sm" v-if="activeTask.systemError?.code">
+              错误码：{{ activeTask.systemError.code }}
+              <span v-if="activeTask.systemError.retryable"> · 可重试</span>
+              <span v-if="activeTask.systemError.runId"> · run {{ activeTask.systemError.runId }}</span>
+            </p>
+            <div class="pagination-actions" style="margin-top: 12px; gap: 8px;">
+              <button
+                class="btn btn-primary btn-sm"
+                v-if="activeTask.systemError?.retryable"
+                @click="retryFailedTask(activeTask.traceId, activeTask.systemError?.runId)"
+              >
+                重试评估
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
+                @click="openOpsForRun(activeTask.systemError?.runId)"
+              >
+                打开运维页
+              </button>
+            </div>
+          </div>
+          <div
+            v-else
+            class="hr-decision-card"
+            :class="decisionCardTone(richReportSections.decisionRecommendation || activeTask.recommendation)"
+          >
             <div class="hr-decision-header">
               <span class="hr-decision-badge">{{ recommendationLabel }}</span>
-              <span class="hr-decision-score" v-if="activeTask.overallScore != null">综合评分 {{ activeTask.overallScore }}</span>
+              <span class="hr-decision-score" v-if="richReportSections.overallScore != null">综合评分 {{ richReportSections.overallScore }}</span>
+              <span class="hr-decision-score" v-if="richReportSections.dataQuality" style="margin-left: 8px;">{{ dataQualityLabel(richReportSections.dataQuality) }}</span>
               <span class="hr-decision-score" v-if="activeTask.jdMatchScore" style="margin-left: 8px; color: var(--color-text-light);">JD 匹配 {{ Math.round(activeTask.jdMatchScore * 100) }}%</span>
             </div>
-            <div class="hr-decision-meta" v-if="activeTask.aiRecommendation && activeTask.aiRecommendation !== activeTask.recommendation">
+            <div class="hr-decision-meta" v-if="activeTask.aiRecommendation && activeTask.aiRecommendation !== (richReportSections.decisionRecommendation || activeTask.recommendation)">
               <span>AI 建议：{{ aiRecommendationText(activeTask.aiRecommendation) }}</span>
               <span>系统决策：{{ recommendationLabel }}</span>
               <span v-if="activeTask.decisionRationale">降级原因：{{ stripMarkdown(activeTask.decisionRationale) }}</span>
             </div>
             <p class="hr-decision-summary">{{ displayReport.summaryLine }}</p>
-            <p class="text-muted text-sm mt-sm">注：综合评分代表候选人整体技术素质，JD 匹配度代表与当前具体岗位的贴合程度。</p>
+            <p class="text-muted text-sm mt-sm">注：综合评分仅在 ≥3 个核心维度有证据时计算；未评估维度显示为「未评估」而非 0 分。系统/数据问题见下方系统告警，不计入候选人风险。</p>
           </div>
 
           <div v-if="activeTask.matchedJdTitle" class="jd-match-card">
@@ -2906,7 +3463,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             <div v-if="activeTask.topJdMatches && activeTask.topJdMatches.length > 1" class="jd-match-alts">
               <span class="text-muted" style="font-size:11px">其他候选岗位：</span>
               <span v-for="(m, mi) in listPreview('jd-alts', activeTask.topJdMatches.slice(1), 4)" :key="mi" class="jd-alt-chip">
-                {{ m.title }} ({{ Math.round(m.score * 100) }}%)
+                {{ m.title }} ({{ Math.round(jdBusinessMatchScore(m) * 100) }}%)
               </span>
               <button
                 v-if="listHasMore(activeTask.topJdMatches.slice(1), 4)"
@@ -2927,17 +3484,41 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             </div>
             <div class="hr-evidence-card risk" v-if="richReportSections.risks.length">
               <h3>需验证风险</h3>
-              <ul><li v-for="r in listPreview('report-risks', richReportSections.risks)" :key="r">{{ stripMarkdown(r) }}</li></ul>
+              <ul class="structured-risk-list">
+                <li v-for="r in listPreview('report-risks', richReportSections.risks)" :key="r.key" class="structured-risk-item">
+                  <div class="structured-risk-head">
+                    <span v-if="r.severity" class="severity-chip" :data-sev="r.severity">{{ r.severity }}</span>
+                    <strong>{{ r.claim }}</strong>
+                  </div>
+                  <p v-if="r.impact" class="text-muted text-xs">影响：{{ r.impact }}</p>
+                  <p v-if="r.verificationPlan" class="text-muted text-xs">核实：{{ r.verificationPlan }}</p>
+                  <ul v-if="r.evidence.length" class="evidence-quote-list">
+                    <li v-for="(ev, ei) in r.evidence" :key="ei">「{{ ev }}」</li>
+                  </ul>
+                </li>
+              </ul>
               <button v-if="listHasMore(richReportSections.risks)" class="btn btn-ghost btn-sm show-more-btn" @click="toggleList('report-risks')">
                 {{ expandedListKeys['report-risks'] ? '收起' : `展开全部 (${richReportSections.risks.length})` }}
               </button>
             </div>
-            <div class="hr-evidence-card" v-if="richReportSections.questions.length">
+            <div class="hr-evidence-card" v-if="richReportSections.probes.length">
               <h3>面试追问清单</h3>
-              <div v-if="richReportSections.questions.length < 5" class="trace-health-warning">追问不足 5 条，需要检查 ReportAgent 是否覆盖具体项目、技术栈和 JD 缺口。</div>
-              <ol><li v-for="q in listPreview('report-interview', richReportSections.questions)" :key="q" class="interview-question-item">{{ stripMarkdown(q) }}</li></ol>
-              <button v-if="listHasMore(richReportSections.questions)" class="btn btn-ghost btn-sm show-more-btn" @click="toggleList('report-interview')">
-                {{ expandedListKeys['report-interview'] ? '收起' : `展开全部 (${richReportSections.questions.length})` }}
+              <div v-if="richReportSections.probes.length < 5" class="trace-health-warning">追问不足 5 条，需要检查 ReportAgent 是否覆盖具体项目、技术栈和 JD 缺口。</div>
+              <ol class="structured-probe-list">
+                <li v-for="q in listPreview('report-interview', richReportSections.probes)" :key="q.key" class="interview-question-item structured-probe-item">
+                  <strong>{{ q.question }}</strong>
+                  <p v-if="q.objective" class="text-muted text-xs">考察点：{{ q.objective }}</p>
+                  <p v-if="q.scoreRubric" class="text-muted text-xs">评分量表：{{ q.scoreRubric }}</p>
+                  <p v-if="q.goodSignals.length" class="text-xs probe-signal good">好信号：{{ q.goodSignals.join('；') }}</p>
+                  <p v-if="q.redFlags.length" class="text-xs probe-signal bad">红旗：{{ q.redFlags.join('；') }}</p>
+                  <p v-if="q.followUps.length" class="text-muted text-xs">追问：{{ q.followUps.join('；') }}</p>
+                  <ul v-if="q.evidence.length" class="evidence-quote-list">
+                    <li v-for="(ev, ei) in q.evidence" :key="ei">「{{ ev }}」</li>
+                  </ul>
+                </li>
+              </ol>
+              <button v-if="listHasMore(richReportSections.probes)" class="btn btn-ghost btn-sm show-more-btn" @click="toggleList('report-interview')">
+                {{ expandedListKeys['report-interview'] ? '收起' : `展开全部 (${richReportSections.probes.length})` }}
               </button>
             </div>
           </div>
@@ -2947,12 +3528,31 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <div v-for="dim in displayReport.structured.dimensions" :key="dim.name" class="dimension-item">
                 <div class="dimension-head">
                   <strong>{{ dim.name }}</strong>
-                  <span class="dimension-score" :class="{ low: (dim.score ?? 100) < 60, mid: (dim.score ?? 100) >= 60 && (dim.score ?? 100) < 75 }">{{ dim.score ?? '-' }}</span>
+                  <span class="dimension-score" :class="{ low: (dim.score ?? 100) < 60, mid: (dim.score ?? 100) >= 60 && (dim.score ?? 100) < 75, unasessed: dim.status === 'UNASSESSED' || dim.score == null }">
+                    {{ dim.status === 'UNASSESSED' || dim.score == null ? '未评估' : dim.score }}
+                  </span>
                 </div>
-                <div class="dimension-bar"><div class="dimension-bar-fill" :style="{ width: `${Math.min(dim.score ?? 0, 100)}%` }"></div></div>
+                <div class="dimension-bar" v-if="dim.score != null">
+                  <div class="dimension-bar-fill" :style="{ width: `${Math.min(dim.score, 100)}%` }"></div>
+                </div>
+                <p v-if="dim.status && dim.status !== 'ASSESSED'" class="text-muted text-xs">状态：{{ dim.status }} · 证据覆盖 {{ Math.round((dim.evidenceCoverage || 0) * 100) }}%</p>
                 <p v-if="dim.rationale" class="text-muted text-xs">{{ dim.rationale }}</p>
+                <ul v-if="dim.evidenceRefs?.length" class="evidence-quote-list">
+                  <li v-for="(ref, ri) in dim.evidenceRefs.slice(0, 2)" :key="ri">[{{ ref.sourceType }}] 「{{ ref.quote }}」</li>
+                </ul>
               </div>
             </div>
+          </div>
+          <div class="hr-evidence-card system-warning-card" v-if="richReportSections.systemWarnings.length">
+            <h3>系统告警</h3>
+            <ul>
+              <li v-for="(w, wi) in richReportSections.systemWarnings" :key="wi">
+                <strong>{{ w.code }}</strong>
+                <span v-if="w.stage" class="text-muted"> @{{ w.stage }}</span>
+                — {{ w.message }}
+                <span class="text-muted text-xs">（{{ w.retryable ? '可重试' : '不可重试' }}）</span>
+              </li>
+            </ul>
           </div>
           <div class="report-raw-md" v-if="displayReport.fullText">
             <h3>完整 AI 评估报告</h3>
@@ -2966,6 +3566,18 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
         <!-- Trace Tab: two-pane span tree + detail (Langfuse-style) -->
         <div v-if="detailTab === 'trace'" class="trace-link-panel">
+          <div
+            v-if="activeTask.evaluationState === 'SYSTEM_FAILED' && activeTask.systemError"
+            class="notice warning rag-report-hint"
+            style="margin-bottom: 12px;"
+          >
+            <strong>{{ activeTask.systemError.code || 'SYSTEM_FAILED' }}</strong>
+            <span v-if="activeTask.systemError.stage"> @{{ activeTask.systemError.stage }}</span>
+            — {{ activeTask.systemError.message || '控制面失败，尚未产生执行 span。' }}
+            <button class="btn btn-ghost btn-sm" style="margin-left: 8px;" @click="openOpsForRun(activeTask.systemError.runId)">
+              打开运维
+            </button>
+          </div>
           <div class="trace-explain-banner">
             这不是聊天记录，而是 AI 工作流审计链路：左侧是执行 span 树（规划 → 并行组 → Agent → 轮次/工具），点任意一行在右侧查看入参、出参与耗时。
           </div>
@@ -2977,7 +3589,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             </p>
             <a v-if="langfuseTraceUrl" :href="langfuseTraceUrl" target="_blank" class="langfuse-link">打开 Langfuse Trace</a>
             <div v-else class="trace-health-warning">
-              Langfuse 外链暂不可用：请检查 langfuse 容器、LANGFUSE_PUBLIC_URL 和 workflow 到 langfuse-web 的内部连通性。
+              {{ langfuseStatusHint }}
             </div>
           </div>
         </div>
@@ -3007,7 +3619,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
               <div class="jd-top-header">
                 <span class="jd-top-rank">#{{ jdMatchDisplayRank(idx) }}</span>
                 <strong>{{ m.title }}</strong>
-                <span class="jd-match-score">{{ Math.round(m.score * 100) }}%</span>
+                <span class="jd-match-score">{{ Math.round(jdBusinessMatchScore(m) * 100) }}%</span>
               </div>
               <p class="text-muted text-sm">{{ m.category }}</p>
               <div v-if="m.skillMatchScore != null" class="jd-dimension-grid">
@@ -3015,6 +3627,22 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                 <span>经验 {{ Math.round((m.experienceMatchScore || 0) * 100) }}%</span>
                 <span>项目 {{ Math.round((m.projectMatchScore || 0) * 100) }}%</span>
                 <span v-if="m.riskPenalty">风险惩罚 {{ Math.round((m.riskPenalty || 0) * 100) }}%</span>
+              </div>
+              <div v-if="hasRetrievalExplain(m) || m.provenance" class="jd-reasons">
+                <details>
+                  <summary class="text-muted text-sm">召回解释（开发者 · 非业务匹配分）</summary>
+                  <ul>
+                    <li v-if="m.rrfScore != null">RRF {{ m.rrfScore.toFixed(4) }}</li>
+                    <li v-if="m.vectorScore != null">向量 {{ m.vectorScore.toFixed(4) }}</li>
+                    <li v-if="m.bm25Score != null">BM25 {{ m.bm25Score.toFixed(4) }}</li>
+                    <li v-else-if="m.retrievalScore != null && m.rrfScore == null">召回 {{ m.retrievalScore.toFixed(4) }}</li>
+                    <li v-if="m.provenance?.documentId" class="text-muted">
+                      provenance {{ m.provenance.documentId }}
+                      <template v-if="m.provenance.version"> · v{{ m.provenance.version }}</template>
+                      <template v-if="m.provenance.updatedAt"> · {{ String(m.provenance.updatedAt).slice(0, 16).replace('T', ' ') }}</template>
+                    </li>
+                  </ul>
+                </details>
               </div>
               <div v-if="m.matchReasons?.length" class="jd-reasons">
                 <h4>匹配依据</h4>
@@ -3074,23 +3702,6 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
         </div>
           </div>
-          <ConversationPanel
-            :conversation-id="activeTask.conversationId || activeTask.traceId"
-            :trace-id="activeTask.traceId"
-            :revision-no="activeTask.revisionNo"
-            :task-status="activeTask.status || resolveQueueStatus(activeTask)"
-            :overall-score="activeTask.overallScore"
-            :recommendation="activeTask.recommendation"
-            :run-id="activeTask.workflowRunId"
-            :width="copilotWidth"
-            :fullscreen="copilotFullscreen"
-            @update:width="onCopilotWidth"
-            @update:fullscreen="copilotFullscreen = $event"
-            @revision-created="handleConversationRevisionCreated"
-            @control-turn="handleConversationControlTurn"
-            @select-revision="handleConversationRevisionSelect"
-            @status-change="handleConversationStatusChange"
-          />
         </div>
       </section>
 
@@ -3101,7 +3712,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
         </div>
 
         <div class="kpi-grid">
-          <div class="kpi-card"><span class="kpi-label">总候选人</span><div class="kpi-value">{{ metrics?.totalTasks ?? '-' }}</div></div>
+          <div class="kpi-card"><span class="kpi-label">总候选人</span><div class="kpi-value">{{ uniqueCandidateCount ?? '-' }}</div></div>
           <div class="kpi-card"><span class="kpi-label">推荐面试</span><div class="kpi-value">{{ recommendedCount }}</div></div>
           <div class="kpi-card"><span class="kpi-label">通过率</span><div class="kpi-value">{{ metricsTotalCount >= 3 ? passRate + '%' : (recommendedCount + '/' + metricsCompletedCount) }}</div></div>
           <div class="kpi-card"><span class="kpi-label">JD 匹配成功率</span><div class="kpi-value">{{ jdMatchSuccessRate != null ? jdMatchSuccessRate + '%' : '-' }}</div><span class="kpi-hint" v-if="jdMatchSuccessRate == null">暂无已完成任务</span><span class="kpi-hint" v-else-if="metricsCompletedCount < 3">样本不足 ({{ metricsCompletedCount }})</span></div>
@@ -3133,29 +3744,30 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
           <div class="analytics-card">
             <h3>评分分布</h3>
-            <div v-if="completedTasks.length" style="display:flex;flex-direction:column;gap:8px;margin-top:var(--space-md)">
+            <div v-if="scoredCompletedCount" style="display:flex;flex-direction:column;gap:8px;margin-top:var(--space-md)">
               <div style="display:flex;align-items:center;gap:8px;font-size:12px">
                 <span style="width:60px">90+ 分</span>
-                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBand90 / Math.max(1, completedTasks.length) * 100) + '%', height: '100%', background: 'var(--color-success)', borderRadius: '3px' }"></div></div>
+                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBand90 / Math.max(1, scoredCompletedCount) * 100) + '%', height: '100%', background: 'var(--color-success)', borderRadius: '3px' }"></div></div>
                 <span style="width:24px;text-align:right;font-weight:600">{{ scoreBand90 }}</span>
               </div>
               <div style="display:flex;align-items:center;gap:8px;font-size:12px">
                 <span style="width:60px">80-89 分</span>
-                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBand80 / Math.max(1, completedTasks.length) * 100) + '%', height: '100%', background: '#34d399', borderRadius: '3px' }"></div></div>
+                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBand80 / Math.max(1, scoredCompletedCount) * 100) + '%', height: '100%', background: '#34d399', borderRadius: '3px' }"></div></div>
                 <span style="width:24px;text-align:right;font-weight:600">{{ scoreBand80 }}</span>
               </div>
               <div style="display:flex;align-items:center;gap:8px;font-size:12px">
                 <span style="width:60px">70-79 分</span>
-                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBand70 / Math.max(1, completedTasks.length) * 100) + '%', height: '100%', background: 'var(--color-warning)', borderRadius: '3px' }"></div></div>
+                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBand70 / Math.max(1, scoredCompletedCount) * 100) + '%', height: '100%', background: 'var(--color-warning)', borderRadius: '3px' }"></div></div>
                 <span style="width:24px;text-align:right;font-weight:600">{{ scoreBand70 }}</span>
               </div>
               <div style="display:flex;align-items:center;gap:8px;font-size:12px">
                 <span style="width:60px">&lt;70 分</span>
-                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBandLow / Math.max(1, completedTasks.length) * 100) + '%', height: '100%', background: 'var(--color-danger)', borderRadius: '3px' }"></div></div>
+                <div style="flex:1;height:20px;background:var(--color-border-light);border-radius:3px;overflow:hidden"><div :style="{ width: (scoreBandLow / Math.max(1, scoredCompletedCount) * 100) + '%', height: '100%', background: 'var(--color-danger)', borderRadius: '3px' }"></div></div>
                 <span style="width:24px;text-align:right;font-weight:600">{{ scoreBandLow }}</span>
               </div>
+              <p v-if="unscoredCompletedCount" class="text-muted text-xs">另有 {{ unscoredCompletedCount }} 条已完成但无综合分（未计入分桶；平均分见服务端 metrics）</p>
             </div>
-            <p v-else class="text-muted text-sm">暂无完成的评估</p>
+            <p v-else class="text-muted text-sm">暂无带有效评分的已完成评估</p>
           </div>
 
           <div class="analytics-card">
@@ -3421,7 +4033,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                     <p class="text-muted text-xs">耗时 {{ ragCompareResult[variant.name].metricsMs }}ms</p>
                     <ul>
                       <li v-for="(c, ci) in (ragCompareResult[variant.name].candidates || []).slice(0, 3)" :key="ci">
-                        Top{{ Number(ci) + 1 }}: {{ c.title }} · {{ Math.round((c.score || 0) * 100) }}%
+                        Top{{ Number(ci) + 1 }}: {{ c.title }} · {{ Math.round(jdBusinessMatchScore(c) * 100) }}%
                       </li>
                     </ul>
                     <button class="btn btn-ghost btn-sm" @click="applyRagPreset(ragPresets.find(p => p.id === variant.presetId)!)">用这个</button>
@@ -3455,12 +4067,21 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
                 <button class="btn btn-ghost btn-sm" @click="applyRagPreset(ragPresets.find(p => p.id === 'balanced') || { id: 'balanced', name: '平衡推荐', icon: '⭐', description: '', tagline: '', options: defaultRagOptions() })">恢复推荐配置</button>
               </div>
               <ul v-if="ragPreviewResult.length" class="rag-preview-list">
-                <li v-for="(c, i) in ragPreviewResult.slice(0, 5)" :key="i">{{ c.title }} · {{ Math.round((c.score || 0) * 100) }}%</li>
+                <li v-for="(c, i) in ragPreviewResult.slice(0, 5)" :key="i">{{ c.title }} · {{ Math.round(jdBusinessMatchScore(c) * 100) }}%</li>
               </ul>
             </div>
           </div>
         </aside>
       </div>
     </main>
+
+    <SystemCopilot
+      class="app-system-copilot"
+      :class="{ 'with-detail-pad': appView === 'detail' && pageContext.copilotOpen && !pageContext.copilotFullscreen }"
+      @revision-created="handleConversationRevisionCreated"
+      @control-turn="handleConversationControlTurn"
+      @select-revision="handleConversationRevisionSelect"
+      @status-change="handleConversationStatusChange"
+    />
   </div>
 </template>

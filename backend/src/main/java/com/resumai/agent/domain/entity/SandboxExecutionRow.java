@@ -32,6 +32,16 @@ public class SandboxExecutionRow {
     @TableField("status")
     private String status;
 
+    /** POLICY_EVOLUTION / BENCHMARK / REPLAY / LEGACY_CANDIDATE_EVALUATION */
+    @TableField("purpose")
+    private String purpose;
+
+    @TableField("experiment_id")
+    private String experimentId;
+
+    @TableField("trial_id")
+    private String trialId;
+
     @TableField("exit_code")
     private Integer exitCode;
 

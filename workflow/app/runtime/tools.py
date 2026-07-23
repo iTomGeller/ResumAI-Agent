@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from app.runtime import cache, gateway
+from app.runtime.builtin_tools import BUILTIN_TOOLS, BuiltinToolRegistry
 from app.runtime.events import RuntimeEmitter
 from app.runtime.models import BudgetExceeded, RunBudget
-from app.runtime.sandbox import SANDBOX_TOOLS, SandboxClient, SandboxUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,12 @@ class ToolDefinition:
     side_effect_level: str = "read_only"  # read_only / internal_write / external
     network_policy: str = "internal"      # none / internal / gateway
     required_secrets: tuple = ()
-    kind: str = "internal"                # internal / sandbox / gateway / mcp
+    kind: str = "internal"                # internal / builtin / retrieval / mcp / gateway
     mcp_server: Optional[str] = None
     protocol_version: Optional[str] = None
     skill_id: Optional[str] = None
     skill_version: Optional[str] = None
+    execution_backend: str = "in_process"  # in_process / java_http / mcp_http / mcp_stdio
 
 
 @dataclass
@@ -134,8 +135,8 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
         network_policy="gateway", kind="mcp",
         mcp_server="fetch", protocol_version=MCP_PROTOCOL_VERSION))
 
-    # ---- sandbox tools (fixed allowlist, executed in ephemeral docker) ----
-    sandbox_schemas: Dict[str, Dict[str, Any]] = {
+    # ---- builtin tools (deterministic in-process kernels) ----
+    builtin_schemas: Dict[str, Dict[str, Any]] = {
         "parse_resume": {"type": "object", "properties": {
             "resumeText": {"type": "string"}, "resumeBase64": {"type": "string"},
             "filename": {"type": "string"}}},
@@ -158,11 +159,12 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
             "mustFind": {"type": "array"}, "mustNotClaim": {"type": "array"}},
             "required": ["answer"]},
     }
-    for tool_name in SANDBOX_TOOLS:
+    for tool_name in BUILTIN_TOOLS:
         add(ToolDefinition(
-            tool_name, f"Sandbox 工具 {tool_name}（无网络、只读根文件系统、非 root）",
-            sandbox_schemas.get(tool_name, ANY_OBJECT), SUCCESS_SCHEMA,
-            timeout_seconds=90.0, max_retries=0, network_policy="none", kind="sandbox"))
+            tool_name, f"Builtin 工具 {tool_name}（进程内确定性、无网络）",
+            builtin_schemas.get(tool_name, ANY_OBJECT), SUCCESS_SCHEMA,
+            timeout_seconds=30.0, max_retries=0, network_policy="none",
+            kind="builtin", execution_backend="in_process"))
     return definitions
 
 
@@ -172,12 +174,12 @@ class ToolExecutor:
     signature accounting for the loop guard."""
 
     def __init__(self, emitter: RuntimeEmitter, budget: RunBudget,
-                 sandbox: SandboxClient, *, max_tool_calls_run: int,
+                 builtin_tools: BuiltinToolRegistry, *, max_tool_calls_run: int,
                  tool_timeout_seconds: float, run_context: Dict[str, Any],
                  llm: Any = None) -> None:
         self.emitter = emitter
         self.budget = budget
-        self.sandbox = sandbox
+        self.builtin_tools = builtin_tools
         self.max_tool_calls_run = max_tool_calls_run
         self.tool_timeout_seconds = tool_timeout_seconds
         self.run_context = run_context
@@ -200,6 +202,7 @@ class ToolExecutor:
         meta: Dict[str, Any] = {
             "kind": defn.kind,
             "origin": defn.kind,
+            "executionBackend": defn.execution_backend,
         }
         if defn.mcp_server:
             meta["mcpServer"] = defn.mcp_server
@@ -211,9 +214,6 @@ class ToolExecutor:
             meta["skillId"] = skill_id
         if skill_version:
             meta["skillVersion"] = skill_version
-        sandbox_id = self.run_context.get("sandboxExecutionId")
-        if sandbox_id and defn.kind == "sandbox":
-            meta["sandboxExecutionId"] = sandbox_id
         return meta
 
     def catalog_for(self, tool_names: List[str]) -> List[Dict[str, Any]]:
@@ -318,7 +318,7 @@ class ToolExecutor:
         otel_span = _start_tool_span(defn, tool, tool_call_id)
 
         # Deterministic tools: content-hash cache (30d) — repeat evaluations
-        # of the same resume/JD skip the sandbox/local execution entirely.
+        # of the same resume/JD skip builtin re-execution entirely.
         cache_key = None
         if tool in CACHEABLE_TOOLS:
             cache_key = cache.content_key("tool", tool, json.dumps(
@@ -345,8 +345,7 @@ class ToolExecutor:
         last_error: Optional[str] = None
         while retries <= max_retries:
             try:
-                timeout = min(defn.timeout_seconds, self.tool_timeout_seconds) \
-                    if defn.kind != "sandbox" else defn.timeout_seconds
+                timeout = min(defn.timeout_seconds, self.tool_timeout_seconds)
                 raw = await asyncio.wait_for(
                     self._dispatch(defn, args, agent_id=agent_id), timeout=timeout)
                 result = self._normalize_result(raw)
@@ -382,9 +381,6 @@ class ToolExecutor:
                 raise
             except asyncio.TimeoutError:
                 last_error = f"TIMEOUT after {defn.timeout_seconds}s"
-            except SandboxUnavailable as exc:
-                last_error = f"SANDBOX: {exc}"
-                break  # sandbox errors are not retried here
             except Exception as exc:  # noqa: BLE001 - tool boundary
                 last_error = f"{type(exc).__name__}: {exc}"
             retries += 1
@@ -410,8 +406,8 @@ class ToolExecutor:
     async def _dispatch(self, defn: ToolDefinition, args: Dict[str, Any],
                         agent_id: str = "") -> Any:
         rewrite = bool(args.pop("_rewrite", False))
-        if defn.kind == "sandbox":
-            return await self.sandbox.invoke(defn.name, args)
+        if defn.kind == "builtin":
+            return await self.builtin_tools.invoke(defn.name, args)
         if defn.kind == "mcp":
             if agent_id == "ReportAgent":
                 raise ToolValidationError(
@@ -571,7 +567,7 @@ class ToolExecutor:
         for item in items[:3]:
             if not isinstance(item, dict):
                 continue
-            for key in ("score", "rrfScore", "similarity"):
+            for key in ("vectorScore", "bm25Score", "retrievalScore", "similarity", "rrfScore", "matchScore", "score"):
                 if isinstance(item.get(key), (int, float)):
                     top_score = float(item[key])
                     break

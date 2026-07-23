@@ -118,6 +118,19 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   padding: 0 var(--space-sm);
 }
 
+.side-nav .nav-section-label {
+  margin: var(--space-md) var(--space-md) var(--space-xs);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.side-nav .nav-section-label:first-child {
+  margin-top: var(--space-xs);
+}
+
 .side-nav button {
   display: flex;
   align-items: center;
@@ -300,6 +313,29 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .queue-status-panel {
   margin-bottom: var(--space-xl);
+}
+
+.queue-status-panel.developer-only-panel {
+  border-style: dashed;
+  opacity: 0.92;
+}
+
+.developer-only-summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.developer-only-summary::-webkit-details-marker {
+  display: none;
+}
+
+.developer-only-panel > .kpi-grid,
+.developer-only-panel > .queue-fail-details {
+  margin-top: var(--space-md);
 }
 
 .queue-status-panel.compact {
@@ -622,7 +658,7 @@ select.form-input { appearance: auto; }
 
 .candidate-detail-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--copilot-width, 420px);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: var(--space-xl);
 }
@@ -640,9 +676,17 @@ select.form-input { appearance: auto; }
   min-width: 0;
 }
 
+.main-content.has-global-copilot {
+  padding-right: calc(var(--copilot-width, 420px) + 28px);
+}
+
 @media (max-width: 1080px) {
   .candidate-detail-workspace {
     grid-template-columns: 1fr;
+  }
+
+  .main-content.has-global-copilot {
+    padding-right: var(--space-xl);
   }
 }
 
@@ -924,6 +968,10 @@ body.copilot-fullscreen-lock {
 .hr-decision-card.strong { border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.06); }
 .hr-decision-card.recommend { border-color: rgba(79, 70, 229, 0.35); background: rgba(79, 70, 229, 0.05); }
 .hr-decision-card.review { border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.06); }
+.hr-decision-card.system-failure-card {
+  border-color: rgba(220, 38, 38, 0.4);
+  background: rgba(220, 38, 38, 0.06);
+}
 .hr-decision-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .hr-decision-badge { font-size: 14px; font-weight: 700; }
 .hr-decision-score { font-size: 13px; color: var(--color-text-secondary); }
@@ -1825,3 +1873,73 @@ body.copilot-fullscreen-lock {
   white-space: pre-line;
   line-height: 1.8;
 }
+
+.structured-risk-list,
+.structured-probe-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.structured-risk-item,
+.structured-probe-item {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--color-border-light, #eee);
+}
+
+.structured-risk-item:last-child,
+.structured-probe-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.structured-risk-head {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.severity-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.severity-chip[data-sev="HIGH"] {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.severity-chip[data-sev="MEDIUM"] {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.evidence-quote-list {
+  margin: 6px 0 0;
+  padding-left: 1rem;
+  color: var(--color-text-light, #6b7280);
+  font-size: 12px;
+}
+
+.probe-signal.good { color: #047857; }
+.probe-signal.bad { color: #b91c1c; }
+
+.dimension-score.unasessed {
+  color: var(--color-text-light, #6b7280);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.system-warning-card {
+  margin-top: var(--space-md);
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.04);
+}
+

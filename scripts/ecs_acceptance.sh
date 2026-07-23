@@ -19,8 +19,12 @@ echo
 
 check "health" bash -c "curl -fsS $BASE/api/health | grep -q UP"
 check "workflow ready" docker exec ai-resume-workflow curl -fsS http://127.0.0.1:8090/ready
-# sandbox manager image has no curl — probe with python (same as its compose healthcheck)
-check "sandbox health" docker exec resumai-sandbox-manager python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8070/health', timeout=4)"
+# Sandbox manager is policy-lab profile only — soft check.
+if docker ps --format '{{.Names}}' | grep -q '^resumai-sandbox-manager$'; then
+  check "sandbox health" docker exec resumai-sandbox-manager python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8070/health', timeout=4)"
+else
+  echo "SKIP: sandbox health (policy-lab profile not running)"
+fi
 
 # Volume integrity
 set -a; source "$SRC_DIR/.env"; set +a

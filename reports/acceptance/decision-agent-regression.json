@@ -1,0 +1,209 @@
+{
+  "baseUrl": "http://8.138.10.189",
+  "sourceTrace": "trace-8e182632-e64a-4e04-ab02-acf82cf1ed95",
+  "startedAt": "2026-07-22T12:48:52.277107+00:00",
+  "beforeOpsRuns": 1,
+  "traceId": "trace-b63894ca-29d5-411b-99e5-164405ead100",
+  "conversationId": "trace-b63894ca-29d5-411b-99e5-164405ead100",
+  "workflowRunId": "run-e347f219-ab01-456d-9564-d83e9818eff8",
+  "finalStatus": "PARTIAL_SUCCESS",
+  "evaluationState": "COMPLETED",
+  "experimentId": "pexp-f7cf7d4690c74750",
+  "experimentStatus": "PENDING",
+  "finishedAt": "2026-07-22T12:53:03.618809+00:00",
+  "passed": true,
+  "checks": [
+    {
+      "name": "health",
+      "ok": true,
+      "detail": {
+        "status": "UP",
+        "service": "resumai-agent-backend",
+        "time": "2026-07-22T20:48:58.812562502",
+        "embedding": {
+          "message": "向量检索：text-embedding-v3（bailian，1024 维）",
+          "provider": "bailian",
+          "operational": true
+        },
+        "langfuse": {
+          "enabled": false,
+          "status": "DISABLED",
+          "reason": "DISABLED: Langfuse not configured (endpoint + keys required)",
+          "endpoint": "",
+          "publicUrlConfigured": false,
+          "publicUrl": "",
+          "authConfigured": false,
+          "externalLinksEnabled": false,
+          "lastSuccessAt": null,
+          "lastErrorAt": null,
+          "lastError": null,
+          "lastProbedAt": null
+        }
+      }
+    },
+    {
+      "name": "source_pdf",
+      "ok": true,
+      "detail": "bytes=93706"
+    },
+    {
+      "name": "upload_auto",
+      "ok": true,
+      "detail": "QUEUED"
+    },
+    {
+      "name": "terminal_status",
+      "ok": true,
+      "detail": "PARTIAL_SUCCESS"
+    },
+    {
+      "name": "evaluation_state_completed",
+      "ok": true,
+      "detail": "COMPLETED"
+    },
+    {
+      "name": "system_error_none",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "recommendation_present",
+      "ok": true,
+      "detail": "NOT_RECOMMEND"
+    },
+    {
+      "name": "top_jd_matches_nonempty",
+      "ok": true,
+      "detail": "n=4"
+    },
+    {
+      "name": "match_score_gt_0_50",
+      "ok": true,
+      "detail": 0.6037142857142856
+    },
+    {
+      "name": "rrf_score_lt_0_05",
+      "ok": true,
+      "detail": 0.016393442622950817
+    },
+    {
+      "name": "jd_match_score_equals_best",
+      "ok": true,
+      "detail": {
+        "jdMatchScore": 0.604,
+        "best.matchScore": 0.6037142857142856
+      }
+    },
+    {
+      "name": "trace_has_run_start",
+      "ok": true,
+      "detail": "events=92"
+    },
+    {
+      "name": "trace_mentions_preflight",
+      "ok": true,
+      "detail": true,
+      "soft": true
+    },
+    {
+      "name": "no_sandbox_in_candidate_events",
+      "ok": true,
+      "detail": "hits=0"
+    },
+    {
+      "name": "conversation_id",
+      "ok": true,
+      "detail": "trace-b63894ca-29d5-411b-99e5-164405ead100"
+    },
+    {
+      "name": "copilot_disposition_direct_reply",
+      "ok": true,
+      "detail": "DIRECT_REPLY"
+    },
+    {
+      "name": "copilot_answer_is_2",
+      "ok": true,
+      "detail": "2"
+    },
+    {
+      "name": "copilot_no_new_runs",
+      "ok": true,
+      "detail": {
+        "before": 1,
+        "after": 1
+      }
+    },
+    {
+      "name": "workflow_run_id",
+      "ok": true,
+      "detail": "run-e347f219-ab01-456d-9564-d83e9818eff8"
+    },
+    {
+      "name": "ops_timeline_nonempty",
+      "ok": true,
+      "detail": "n=76"
+    },
+    {
+      "name": "ops_plan_goal_artifacts",
+      "ok": true,
+      "detail": [
+        "resume_facts",
+        "jd_requirements",
+        "technical_findings",
+        "project_findings",
+        "risks",
+        "evidence_ledger",
+        "final_report"
+      ]
+    },
+    {
+      "name": "ops_budget_actual",
+      "ok": true,
+      "detail": [
+        "planned",
+        "actualMetrics",
+        "llmCalls",
+        "toolCalls",
+        "promptTokens",
+        "completionTokens",
+        "cost"
+      ]
+    },
+    {
+      "name": "ops_artifacts_key",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "ops_timeline_outcomes",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "ops_entropy_tokens",
+      "ok": true,
+      "detail": [
+        "durationMs",
+        "retryCount",
+        "cacheHit",
+        "ignoredReason"
+      ]
+    },
+    {
+      "name": "policy_lab_create",
+      "ok": true,
+      "detail": "PENDING"
+    },
+    {
+      "name": "policy_lab_auto_promote_false",
+      "ok": true,
+      "detail": false
+    },
+    {
+      "name": "policy_lab_worker",
+      "ok": true,
+      "detail": "tolerated status=PENDING (worker may be down)",
+      "soft": true
+    }
+  ]
+}

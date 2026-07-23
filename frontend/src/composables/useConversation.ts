@@ -47,11 +47,22 @@ export interface ConversationTurnResponse {
   runId?: string | null;
   runStatus?: string | null;
   queuePosition?: number | null;
-  queueMode?: string | null;
   interruptedRunId?: string | null;
+  disposition?: string | null;
+  reason?: string | null;
+  turnId?: string | null;
+  citations?: Array<Record<string, unknown>>;
+  actions?: Array<Record<string, unknown>>;
+  suggestions?: string[];
 }
 
-export type QueueMode = 'collect' | 'interrupt';
+export type ContextRef =
+  | { type: 'candidate'; id: string; revision?: number }
+  | { type: 'application'; id: string }
+  | { type: 'job'; id: string; version?: number }
+  | { type: 'knowledge_document'; id: string; version?: number }
+  | { type: 'run'; id: string }
+  | { type: string; id: string; revision?: number; version?: number };
 
 export interface RunEventPayload {
   runId: string;
@@ -266,7 +277,8 @@ export function useConversation() {
         run.currentTool = undefined;
         break;
       case 'sandbox.started':
-        run.status = 'WAITING_SANDBOX';
+        // Candidate UI: avoid WAITING_SANDBOX jargon; treat as tool work.
+        run.status = 'WAITING_TOOL';
         break;
       case 'sandbox.completed':
       case 'sandbox.failed':
@@ -380,7 +392,7 @@ export function useConversation() {
   }
 
   async function sendMessage(content: string, expectedRevision?: number,
-                             queueMode: QueueMode = 'collect'): Promise<ConversationTurnResponse | null> {
+                             contextRefs: ContextRef[] = []): Promise<ConversationTurnResponse | null> {
     const trimmed = content.trim();
     if (!trimmed || !conversationId.value || sending.value) return null;
 
@@ -406,7 +418,7 @@ export function useConversation() {
           clientMessageId: messageId,
           content: trimmed,
           expectedRevision: activeRevision.value || expectedRevision || undefined,
-          queueMode,
+          contextRefs: contextRefs.length ? contextRefs : undefined,
         }),
       });
       if (!response.ok) throw new Error(await responseError(response));
@@ -437,7 +449,7 @@ export function useConversation() {
 
       // A side question may echo the existing trace. Only an explicit revision
       // creation is allowed to advance the conversation's active trace here.
-      if (turn.action === 'REVISION_CREATED') {
+      if (turn.action === 'REVISION_CREATED' || turn.action === 'RUN_SUPERSEDED') {
         activeTraceId.value = turn.activeTraceId;
         activeRevision.value = turn.activeRevision;
       }

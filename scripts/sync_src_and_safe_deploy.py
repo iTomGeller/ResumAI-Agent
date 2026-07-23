@@ -35,10 +35,12 @@ INCLUDE_PREFIXES = (
     "scripts/ecs_safe_deploy.sh",
     "scripts/seed_knowledge_base.py",
     "scripts/ecs_acceptance.sh",
+    "scripts/ecs_acceptance_decision_agent.py",
     "testdata/benchmark/",
     "docker-compose.prod.yml",
     "docker-compose.ecs.yml",
     "docs/WHY_UNIFIED_RUNTIME.md",
+    "sandbox/manager/",
 )
 EXCLUDE_PARTS = (
     "/__pycache__/",

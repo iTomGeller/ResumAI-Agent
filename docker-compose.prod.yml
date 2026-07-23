@@ -21,8 +21,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-resumai}
       SPRING_PROFILES_ACTIVE: prod
-      LANGFUSE_OTEL_ENDPOINT: ${LANGFUSE_OTEL_ENDPOINT:-http://langfuse-web:3000/api/public/otel}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://langfuse-web:3000/api/public/otel}
+      LANGFUSE_OTEL_ENDPOINT: ${LANGFUSE_OTEL_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-}
@@ -71,11 +71,6 @@ services:
       DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       JAVA_BACKEND_URL: http://ai-resume-backend:8080
-      SANDBOX_MANAGER_URL: http://resumai-sandbox-manager:8070
-      # Replay-only semantics: production runs use in-process deterministic
-      # tools regardless of this flag (isolatedSandbox=false per run); this
-      # flag only gates the Docker isolation path used by benchmark/evolution.
-      SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
       CACHE_ENABLED: ${CACHE_ENABLED:-true}
@@ -83,8 +78,8 @@ services:
       # EXP-7 replan sensitivity knob (default matches executor fallback)
       REPLAN_CONFIDENCE_THRESHOLD: ${REPLAN_CONFIDENCE_THRESHOLD:-0.55}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
-      LANGFUSE_OTEL_ENDPOINT: ${LANGFUSE_OTEL_ENDPOINT:-http://langfuse-web:3000/api/public/otel}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://langfuse-web:3000/api/public/otel}
+      LANGFUSE_OTEL_ENDPOINT: ${LANGFUSE_OTEL_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-}
@@ -114,12 +109,16 @@ services:
     networks:
       - resumai-net
 
+  # Policy Lab isolation only — not started with the default production stack.
+  # Enable with: docker compose --profile policy-lab up -d
   resumai-sandbox-manager:
     build:
       context: .
       dockerfile: sandbox/manager/Dockerfile
     container_name: resumai-sandbox-manager
+    profiles: ["policy-lab"]
     restart: unless-stopped
+    user: "1000:1000"
     environment:
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       JAVA_BACKEND_URL: http://ai-resume-backend:8080
@@ -132,8 +131,8 @@ services:
     expose:
       - "8070"
     volumes:
-      # The manager (not the sandboxes) needs the docker socket to create the
-      # ephemeral locked-down containers. It is never exposed publicly.
+      # ECS currently runs Docker as root. Prefer rootless when available:
+      #   /run/user/1000/docker.sock:/run/user/1000/docker.sock
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - resumai-net
@@ -143,6 +142,29 @@ services:
       timeout: 6s
       retries: 10
       start_period: 15s
+
+  # Runs PolicyExperimentRunner against /api/dev/policy-lab/* — no production
+  # MySQL / MinIO credentials injected.
+  policy-lab-worker:
+    build:
+      context: .
+      dockerfile: harness/Dockerfile.policy-lab
+    profiles: ["policy-lab"]
+    container_name: policy-lab-worker
+    restart: unless-stopped
+    environment:
+      WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
+      POLICY_LAB_REDIS_STREAM: policy-lab:experiments
+      SANDBOX_MANAGER_URL: http://resumai-sandbox-manager:8070
+      JAVA_BACKEND_URL: http://ai-resume-backend:8080
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+    depends_on:
+      resumai-sandbox-manager:
+        condition: service_started
+    networks:
+      - resumai-net
 
   resumai-sandbox-worker-image:
     # build-only pseudo service: `docker compose --profile build build`

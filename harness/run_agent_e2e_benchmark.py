@@ -184,17 +184,38 @@ def run_one(base: str, case: Dict[str, Any], policy_id: str, repeat: int,
             unsupported = sum(1 for c in claims if not c.get("verified"))
             result.unsupported_claim_rate = round(unsupported / len(claims), 4)
 
-        succeeded = 1.0 if result.status in ("SUCCEEDED", "PARTIAL_SUCCESS") else 0.0
-        support = float(result.evidence_support_ratio or 0)
-        coverage = float(result.jd_coverage or 0)
+        # PARTIAL_SUCCESS must not share SUCCEEDED's full success credit.
+        if result.status == "SUCCEEDED":
+            succeeded = 1.0
+        elif result.status == "PARTIAL_SUCCESS":
+            succeeded = 0.45
+        else:
+            succeeded = 0.0
+        # Missing evidence → 0 contribution (never treat undefined support as 1).
+        support = (float(result.evidence_support_ratio)
+                   if result.evidence_support_ratio is not None else 0.0)
+        coverage = float(result.jd_coverage) if result.jd_coverage is not None else 0.0
+        # Include timeline_hit / expectedRisk and unsupportedClaimRate when available.
+        timeline_term = 0.0
+        timeline_w = 0.0
+        if result.timeline_hit is not None:
+            timeline_term = 1.0 if result.timeline_hit else 0.0
+            timeline_w = 0.08
+        unsupported_term = 0.0
+        unsupported_w = 0.0
+        if result.unsupported_claim_rate is not None:
+            unsupported_term = 1.0 - float(result.unsupported_claim_rate)
+            unsupported_w = 0.08
         result.total_reward = round(
-            0.30 * result.recommendation_accuracy
-            + 0.15 * result.must_find_score
-            - 0.15 * result.violation_penalty
-            + 0.15 * support
-            + 0.10 * coverage
-            + 0.15 * succeeded
-            - 0.10 * min(1.0, result.latency_seconds / 180.0)
+            0.25 * result.recommendation_accuracy
+            + 0.12 * result.must_find_score
+            - 0.12 * result.violation_penalty
+            + 0.12 * support
+            + 0.08 * coverage
+            + 0.12 * succeeded
+            + timeline_w * timeline_term
+            + unsupported_w * unsupported_term
+            - 0.08 * min(1.0, result.latency_seconds / 180.0)
             - 0.05 * min(1.0, result.actual_cost_cny / 0.5), 4)
         return result
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:

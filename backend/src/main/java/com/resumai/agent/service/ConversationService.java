@@ -10,6 +10,10 @@ import com.resumai.agent.api.dto.TaskControlResponse;
 import com.resumai.agent.api.ApiConflictException;
 import com.resumai.agent.api.ApiNotFoundException;
 import com.resumai.agent.api.dto.TaskResponse;
+import com.resumai.agent.conversation.ConversationReplyService;
+import com.resumai.agent.conversation.TurnDecision;
+import com.resumai.agent.conversation.TurnDisposition;
+import com.resumai.agent.conversation.TurnPolicyService;
 import com.resumai.agent.dao.ConversationMessageMapper;
 import com.resumai.agent.dao.ConversationSessionMapper;
 import com.resumai.agent.dao.ResumeTaskMapper;
@@ -59,6 +63,9 @@ public class ConversationService {
     private final RunSchedulerService runSchedulerService;
     private final RunLifecycleService runLifecycleService;
     private final RunTypeClassifier runTypeClassifier;
+    private final TurnPolicyService turnPolicyService;
+    private final ConversationReplyService conversationReplyService;
+    private final ConversationTurnService conversationTurnService;
     private final RedissonClient redisson;
 
     public ConversationService(ConversationSessionMapper sessionMapper,
@@ -73,6 +80,9 @@ public class ConversationService {
                                RunSchedulerService runSchedulerService,
                                RunLifecycleService runLifecycleService,
                                RunTypeClassifier runTypeClassifier,
+                               TurnPolicyService turnPolicyService,
+                               ConversationReplyService conversationReplyService,
+                               ConversationTurnService conversationTurnService,
                                RedissonClient redisson) {
         this.sessionMapper = sessionMapper;
         this.messageMapper = messageMapper;
@@ -86,6 +96,9 @@ public class ConversationService {
         this.runSchedulerService = runSchedulerService;
         this.runLifecycleService = runLifecycleService;
         this.runTypeClassifier = runTypeClassifier;
+        this.turnPolicyService = turnPolicyService;
+        this.conversationReplyService = conversationReplyService;
+        this.conversationTurnService = conversationTurnService;
         this.redisson = redisson;
     }
 
@@ -271,29 +284,47 @@ public class ConversationService {
         ConversationIntentClassifier.Decision decision = classifier.classify(request.content());
         boolean agentRuntimeConversation = StringUtils.hasText(session.getResumeText());
         if (agentRuntimeConversation) {
-            return handleRuntimeTurn(session, request, decision, activeRevision);
+            return handleRuntimeTurn(session, request, activeRevision);
         }
         return handleLegacyTurn(session, request, decision, activeRevision);
     }
 
     /**
-     * Agent-runtime conversations: every substantive message becomes (or
-     * merges into) a queued run; control words map to run cancellation.
+     * Agent-runtime conversations: TurnPolicyService owns disposition.
+     * Ordinary chat → DIRECT_REPLY (CopilotAnswer), never an evaluation AgentRun.
      */
     private ConversationTurnResponse handleRuntimeTurn(ConversationSession session,
                                                        ConversationTurnRequest request,
-                                                       ConversationIntentClassifier.Decision decision,
                                                        int activeRevision) {
-        String queueMode = request.normalizedQueueMode();
-        // Explicit control: 停止/取消 cancels the active run instead of queueing.
-        if ("CONTROL_COMMAND".equals(decision.intent()) && "CANCEL".equals(decision.action())) {
-            saveMessage(
-                    session.getId(), request.clientMessageId(), "USER", decision.intent(),
-                    request.content(), activeRevision, null, queueMode,
-                    Map.of("control", "CANCEL"));
-            AgentRun active = runQueueService.findActiveRun(session.getId());
-            String message;
-            String interruptedRunId = null;
+        AgentRun active = runQueueService.findActiveRun(session.getId());
+        AgentRun pending = runQueueService.findPendingRun(session.getId());
+        TurnDecision decision = turnPolicyService.decide(session, active, pending, request.content());
+
+        return switch (decision.disposition()) {
+            case CONTROL -> handleControlDisposition(session, request, decision, activeRevision);
+            case DIRECT_REPLY -> handleDirectReply(session, request, decision, activeRevision, false);
+            case BACKGROUND_QUERY -> handleDirectReply(session, request, decision, activeRevision, true);
+            case MERGE_CONTEXT -> handleMergeContext(session, request, decision, activeRevision, pending);
+            case CREATE_REVISION -> handleEvaluationRevision(session, request, decision,
+                    activeRevision, false);
+            case SUPERSEDE_RUN -> handleEvaluationRevision(session, request, decision,
+                    activeRevision, true);
+        };
+    }
+
+    private ConversationTurnResponse handleControlDisposition(ConversationSession session,
+                                                              ConversationTurnRequest request,
+                                                              TurnDecision decision,
+                                                              int activeRevision) {
+        String action = StringUtils.hasText(decision.controlAction())
+                ? decision.controlAction() : "CANCEL";
+        saveMessage(session.getId(), request.clientMessageId(), "USER", decision.intent(),
+                request.content(), activeRevision, null, null,
+                Map.of("disposition", decision.disposition().name(), "control", action));
+        AgentRun active = runQueueService.findActiveRun(session.getId());
+        String message;
+        String interruptedRunId = null;
+        if ("CANCEL".equals(action)) {
             if (active != null) {
                 runLifecycleService.cancelActiveRun(active, "user_cancelled", "用户在对话中要求停止");
                 interruptedRunId = active.getRunId();
@@ -307,85 +338,189 @@ public class ConversationService {
                     message = "当前没有正在运行的任务。";
                 }
             }
+        } else if ("PAUSE".equals(action) && active != null) {
+            try {
+                runtimeClient.pauseRun(active.getRunId(), "user_paused");
+                interruptedRunId = active.getRunId();
+                message = "已请求暂停；当前节点结束后会在安全边界写入 checkpoint。";
+            } catch (Exception e) {
+                log.warn("pause via conversation failed run={}: {}", active.getRunId(), e.getMessage());
+                message = "暂停请求失败：" + e.getMessage();
+            }
+        } else if ("RESUME".equals(action) && active != null) {
+            message = "已请求从 checkpoint 继续当前任务。";
+            interruptedRunId = active.getRunId();
+        } else {
+            message = "当前没有可执行该控制指令的任务。";
+        }
+        ConversationTurnResponse response = new ConversationTurnResponse(
+                session.getId(), request.clientMessageId(), decision.intent(), false, false,
+                false, action, message, session.getActiveTraceId(), activeRevision, null,
+                List.of(), null, null, null, null, interruptedRunId,
+                decision.disposition().name(), decision.reason(), null,
+                List.of(), List.of(), List.of());
+        saveMessage(session.getId(), request.clientMessageId() + ":assistant", "ASSISTANT",
+                "CONTROL_COMMAND", message, activeRevision, interruptedRunId, null, response);
+        return response;
+    }
+
+    private ConversationTurnResponse handleDirectReply(ConversationSession session,
+                                                       ConversationTurnRequest request,
+                                                       TurnDecision decision,
+                                                       int activeRevision,
+                                                       boolean allowTools) {
+        // DIRECT_REPLY / BACKGROUND_QUERY always persist conversation_turn and
+        // never create agent_run (runId stays null).
+        var persistedTurn = conversationTurnService.start(
+                session.getId(),
+                request.clientMessageId(),
+                decision.disposition().name(),
+                decision.intent(),
+                request.content());
+
+        if (decision.needsConfirmation()) {
+            saveMessage(session.getId(), request.clientMessageId(), "USER", decision.intent(),
+                    request.content(), activeRevision, null, null,
+                    Map.of("needsConfirmation", true, "disposition", decision.disposition().name()));
+            String clarify = "你是想把当前主评估切换到这个方向，还是只想顺便比较一下？当前评估会继续运行。";
+            conversationTurnService.complete(persistedTurn.getTurnId(), clarify, List.of(), List.of());
             ConversationTurnResponse response = new ConversationTurnResponse(
-                    session.getId(), request.clientMessageId(), "CONTROL_COMMAND", false, false,
-                    false, "CANCEL", message, session.getActiveTraceId(), activeRevision, null,
-                    List.of(), null, null, null, queueMode, interruptedRunId);
+                    session.getId(), request.clientMessageId(), decision.intent(),
+                    false, true, true, "ASK_CONFIRMATION", clarify,
+                    session.getActiveTraceId(), activeRevision, null, List.of(),
+                    null, null, null, null, null,
+                    decision.disposition().name(), decision.reason(), persistedTurn.getTurnId(),
+                    List.of(), List.of(), List.of());
             saveMessage(session.getId(), request.clientMessageId() + ":assistant", "ASSISTANT",
-                    "CONTROL_COMMAND", message, activeRevision,
-                    interruptedRunId, queueMode, response);
+                    decision.intent(), clarify, activeRevision, null, null, response);
             return response;
         }
 
-        // Second pass: rules didn't recognize the message — one budgeted LLM
-        // classification instead of guessing. Low confidence => clarify.
-        if ("UNCLASSIFIED".equals(decision.intent())) {
-            decision = llmIntentSecondPass(session, request.content(), decision);
+        saveMessage(session.getId(), request.clientMessageId(), "USER", decision.intent(),
+                request.content(), activeRevision, null, null,
+                Map.of("disposition", decision.disposition().name(),
+                        "affectsEvaluation", false));
+
+        ConversationReplyService.CopilotReply reply;
+        try {
+            reply = conversationReplyService.reply(
+                    session, request, decision, allowTools, persistedTurn.getTurnId());
+            conversationTurnService.complete(
+                    persistedTurn.getTurnId(), reply.answer(), reply.citations(), reply.actions());
+        } catch (RuntimeException ex) {
+            conversationTurnService.fail(persistedTurn.getTurnId(), ex.getMessage());
+            throw ex;
         }
 
-        // Ambiguity gate (rules or LLM): confirm before burning run budget.
-        if (decision.needsConfirmation()) {
-            saveMessage(session.getId(), request.clientMessageId(), "USER", decision.intent(),
-                    request.content(), activeRevision, null, queueMode,
-                    Map.of("needsConfirmation", true));
-            ConversationTurnResponse clarify = new ConversationTurnResponse(
-                    session.getId(), request.clientMessageId(), decision.intent(),
-                    false, false, true, "ASK_CONFIRMATION",
-                    decision.defaultMessage(), session.getActiveTraceId(), activeRevision,
-                    null, List.of(), null, null, null, queueMode, null);
-            saveMessage(session.getId(), request.clientMessageId() + ":assistant", "ASSISTANT",
-                    decision.intent(), decision.defaultMessage(), activeRevision,
-                    null, queueMode, clarify);
-            return clarify;
-        }
+        ConversationTurnResponse response = new ConversationTurnResponse(
+                session.getId(), request.clientMessageId(), decision.intent(),
+                false, true, false,
+                allowTools ? "BACKGROUND_QUERY" : "DIRECT_REPLY",
+                reply.answer(), session.getActiveTraceId(), activeRevision, null, List.of(),
+                null, null, null, null, null,
+                decision.disposition().name(), decision.reason(), persistedTurn.getTurnId(),
+                reply.citations(), reply.actions(), reply.suggestions());
+        saveMessage(session.getId(), request.clientMessageId() + ":assistant", "ASSISTANT",
+                decision.intent(), reply.answer(), activeRevision, null, null, response);
+        return response;
+    }
 
+    private ConversationTurnResponse handleMergeContext(ConversationSession session,
+                                                        ConversationTurnRequest request,
+                                                        TurnDecision decision,
+                                                        int activeRevision,
+                                                        AgentRun pending) {
         ConversationMessage userMessage = saveMessage(
                 session.getId(), request.clientMessageId(), "USER", decision.intent(),
-                request.content(), activeRevision, null, queueMode,
-                Map.of("affectsEvaluation", decision.affectsEvaluation()));
+                request.content(), activeRevision, null, null,
+                Map.of("disposition", decision.disposition().name(), "merged", true));
 
-        int resultingRevision = activeRevision;
-        if (decision.affectsEvaluation()) {
-            resultingRevision = activeRevision + 1;
-            session.setActiveRevision(resultingRevision);
-            session.setCurrentGoal(trimTo(request.content(), 1900));
-            session.setUpdateTime(LocalDateTime.now());
-            writeSession(session);
-        }
-
-        String runType = runTypeClassifier.classify(request.content(), session.getJobCategory());
-        RunQueueService.SubmitResult submit = runQueueService.submit(
+        RunQueueService.SubmitResult submit = runQueueService.submitEvaluationRun(
                 session.getId(), session.getUserId(), session.getActiveTraceId(),
-                resultingRevision, runType, queueMode, request.content(), userMessage.getId(),
-                request.forcedPolicyId());
+                activeRevision,
+                evaluationRunType(request.content(), session.getJobCategory()),
+                false, request.content(), userMessage.getId());
+        runSchedulerService.kick();
+
+        AgentRun run = submit.run();
+        int queuePosition = runQueueService.queuePosition(run);
+        String receipt = submit.mergedIntoExisting()
+                ? "补充信息已自动合并进等待中的任务（Run " + shortId(run.getRunId()) + "）。"
+                : "补充信息已入队合并执行（Run " + shortId(run.getRunId()) + "）。";
+
+        ConversationTurnResponse response = new ConversationTurnResponse(
+                session.getId(), request.clientMessageId(), decision.intent(),
+                true, false, false, "RUN_MERGED", receipt,
+                session.getActiveTraceId(), activeRevision, null, List.of(),
+                run.getRunId(), run.getStatus(), queuePosition, null, null,
+                decision.disposition().name(), decision.reason(), null,
+                List.of(), List.of(Map.of("type", "UNDO_MERGE", "label", "撤销合并")),
+                List.of());
+        saveMessage(session.getId(), request.clientMessageId() + ":assistant", "ASSISTANT",
+                decision.intent(), receipt, activeRevision, run.getRunId(), null, response);
+        return response;
+    }
+
+    private ConversationTurnResponse handleEvaluationRevision(ConversationSession session,
+                                                              ConversationTurnRequest request,
+                                                              TurnDecision decision,
+                                                              int activeRevision,
+                                                              boolean supersede) {
+        ConversationMessage userMessage = saveMessage(
+                session.getId(), request.clientMessageId(), "USER", decision.intent(),
+                request.content(), activeRevision, null, null,
+                Map.of("disposition", decision.disposition().name(),
+                        "affectsEvaluation", true, "supersede", supersede));
+
+        int resultingRevision = activeRevision + 1;
+        session.setActiveRevision(resultingRevision);
+        session.setCurrentGoal(trimTo(request.content(), 1900));
+        session.setUpdateTime(LocalDateTime.now());
+        writeSession(session);
+
+        String runType = evaluationRunType(request.content(), session.getJobCategory());
+        RunQueueService.SubmitResult submit = runQueueService.submitEvaluationRun(
+                session.getId(), session.getUserId(), session.getActiveTraceId(),
+                resultingRevision, runType, supersede, request.content(), userMessage.getId());
         runSchedulerService.kick();
 
         AgentRun run = submit.run();
         int queuePosition = runQueueService.queuePosition(run);
         String receipt;
         if (submit.interruptedRun() != null) {
-            receipt = "已打断当前任务并基于最新指令重新分析（Run " + shortId(run.getRunId()) + "）。";
-        } else if (submit.mergedIntoExisting()) {
-            receipt = "补充信息已合并进等待中的任务（Run " + shortId(run.getRunId()) + "），当前排队第 "
-                    + queuePosition + " 位。";
+            receipt = "已自动替换当前评估并基于最新指令重新分析（Run " + shortId(run.getRunId()) + "）。";
         } else if (queuePosition > 1 || runQueueService.findActiveRun(session.getId()) != null) {
-            receipt = "请求已入队（Run " + shortId(run.getRunId()) + "，第 " + queuePosition
-                    + " 位），当前任务完成后自动执行。";
+            receipt = "已创建评估 revision v" + resultingRevision + "（Run "
+                    + shortId(run.getRunId()) + "，队列第 " + queuePosition + " 位）。";
         } else {
-            receipt = "已创建任务 Run " + shortId(run.getRunId()) + "，正在调度执行，进度会实时推送。";
+            receipt = "已创建评估 revision v" + resultingRevision + "（Run "
+                    + shortId(run.getRunId()) + "），正在调度执行。";
         }
 
         ConversationTurnResponse response = new ConversationTurnResponse(
                 session.getId(), request.clientMessageId(), decision.intent(),
-                decision.affectsEvaluation(), false, false,
-                submit.interruptedRun() != null ? "RUN_INTERRUPTED"
-                        : submit.mergedIntoExisting() ? "RUN_MERGED" : "RUN_QUEUED",
-                receipt, session.getActiveTraceId(), resultingRevision, null, List.of(),
-                run.getRunId(), run.getStatus(), queuePosition, queueMode,
-                submit.interruptedRun() != null ? submit.interruptedRun().getRunId() : null);
+                true, false, false,
+                supersede ? "RUN_SUPERSEDED" : "REVISION_CREATED",
+                receipt, session.getActiveTraceId(), resultingRevision, null,
+                decision.invalidatedArtifacts(),
+                run.getRunId(), run.getStatus(), queuePosition, null,
+                submit.interruptedRun() != null ? submit.interruptedRun().getRunId() : null,
+                decision.disposition().name(), decision.reason(), null,
+                List.of(),
+                List.of(Map.of("type", "OPEN_REPORT", "label", "打开决策报告")),
+                List.of());
         saveMessage(session.getId(), request.clientMessageId() + ":assistant", "ASSISTANT",
-                decision.intent(), receipt, resultingRevision, run.getRunId(), queueMode, response);
+                decision.intent(), receipt, resultingRevision, run.getRunId(), null, response);
         return response;
+    }
+
+    /** Only evaluation dispositions may classify a multi-agent run type. */
+    private String evaluationRunType(String content, String jobCategory) {
+        String runType = runTypeClassifier.classify(content, jobCategory);
+        if ("quick_answer".equals(runType)) {
+            return "full_evaluation";
+        }
+        return runType;
     }
 
     /** Legacy trace-driven conversations keep the original side-quest/revision flow. */

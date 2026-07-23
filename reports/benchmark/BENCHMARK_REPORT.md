@@ -19,4 +19,4 @@
 
 - 所有指标来自真实 Sandbox 工具回放与 `evaluate_policy_output` 评估器。
 - Expected Answer 从未注入 Agent/Tool Context。
-- 策略学习描述为：基于反馈的 Agent 外层策略学习（epsilon-greedy），非 PPO/GRPO。
+- 策略学习描述为：Policy Optimization Lab（无 GPU）— 生产 champion-only；shadow/lab bandit；有界配置进化（非完整 GEPA）；MODEL_WEIGHTS unchanged。

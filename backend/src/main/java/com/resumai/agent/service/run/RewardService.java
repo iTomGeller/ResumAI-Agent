@@ -21,6 +21,9 @@ import org.springframework.util.StringUtils;
  * [0,1] feeds policy statistics. Sources: HR feedback (quality-heavy),
  * benchmark evaluators (objective) and run completion (efficiency-only,
  * low weight so unreviewed runs still teach cost/latency differences).
+ *
+ * <p>PARTIAL_SUCCESS is not treated as SUCCEEDED. Missing evidence support
+ * must not default to 1 / rating — it contributes 0 and is flagged undefined.
  */
 @Service
 public class RewardService {
@@ -54,8 +57,23 @@ public class RewardService {
         components.put("llmCost", clamp01(1.0 - llmCalls / 20.0));
         components.put("toolCost", clamp01(1.0 - toolCalls / 30.0));
         components.put("latency", clamp01(1.0 - latencySeconds / 900.0));
-        components.put("failure", success ? 1.0 : 0.0);
-        components.put("timeout", "TIMED_OUT".equals(run.getStatus()) ? 0.0 : 1.0);
+        // PARTIAL_SUCCESS must not share SUCCEEDED's full success credit.
+        String status = run.getStatus() != null ? run.getStatus() : "";
+        double failureScore;
+        if ("SUCCEEDED".equals(status) || "SUCCESS".equals(status)) {
+            failureScore = 1.0;
+        } else if ("PARTIAL_SUCCESS".equals(status)) {
+            failureScore = 0.45;
+        } else {
+            failureScore = success ? 1.0 : 0.0;
+        }
+        components.put("failure", failureScore);
+        components.put("partialSuccess", "PARTIAL_SUCCESS".equals(status) ? 1.0 : 0.0);
+        components.put("timeout", "TIMED_OUT".equals(status) ? 0.0 : 1.0);
+        putOptionalMetric(components, metrics, "evidenceSupportRatio");
+        putOptionalMetric(components, metrics, "unsupportedClaimRate");
+        putOptionalMetric(components, metrics, "timelineHit");
+        putOptionalMetric(components, metrics, "expectedRiskRecall");
         double total = 0.15 * components.get("llmCost")
                 + 0.10 * components.get("toolCost")
                 + 0.15 * components.get("latency")
@@ -93,21 +111,43 @@ public class RewardService {
                 ? (structured.path("riskJudgementCorrect").asBoolean() ? 1.0 : 0.0)
                 : rating01);
         JsonNode metrics = readJson(run.getMetrics());
-        components.put("evidenceSupportRatio", metrics.path("evidenceSupportRatio").asDouble(rating01));
-        components.put("jdCoverage", metrics.path("jdCoverage").asDouble(rating01));
+        // Never default missing evidence support to rating (was optimistic ≈1).
+        putOptionalMetric(components, metrics, "evidenceSupportRatio");
+        putOptionalMetric(components, metrics, "jdCoverage");
+        putOptionalMetric(components, metrics, "unsupportedClaimRate");
+        putOptionalMetric(components, metrics, "timelineHit");
+        putOptionalMetric(components, metrics, "expectedRiskRecall");
         components.put("llmCost", clamp01(1.0 - metrics.path("llmCalls").asDouble(0) / 20.0));
         components.put("latency", clamp01(1.0 - metrics.path("latencySeconds").asDouble(0) / 900.0));
 
-        double total = 0.22 * components.get("hrAcceptance")
-                + 0.14 * components.get("recommendationAgreement")
-                + 0.10 * components.get("scoreDelta")
-                + 0.10 * components.get("missedEvidence")
-                + 0.12 * components.get("unsupportedClaims")
-                + 0.08 * components.get("riskAccuracy")
-                + 0.10 * components.get("evidenceSupportRatio")
-                + 0.06 * components.get("jdCoverage")
+        String status = run.getStatus() != null ? run.getStatus() : "";
+        if ("PARTIAL_SUCCESS".equals(status)) {
+            components.put("partialSuccessPenalty", 0.45);
+        } else {
+            components.put("partialSuccessPenalty", 1.0);
+        }
+
+        double evidenceSupport = components.getOrDefault("evidenceSupportRatio", 0.0);
+        double jdCoverage = components.getOrDefault("jdCoverage", 0.0);
+        double unsupportedRateTerm = components.containsKey("unsupportedClaimRate")
+                ? (1.0 - components.get("unsupportedClaimRate"))
+                : components.get("unsupportedClaims");
+        double timelineTerm = components.getOrDefault("timelineHit",
+                components.getOrDefault("expectedRiskRecall", 0.5));
+
+        double total = 0.20 * components.get("hrAcceptance")
+                + 0.12 * components.get("recommendationAgreement")
+                + 0.08 * components.get("scoreDelta")
+                + 0.08 * components.get("missedEvidence")
+                + 0.10 * components.get("unsupportedClaims")
+                + 0.06 * unsupportedRateTerm
+                + 0.07 * components.get("riskAccuracy")
+                + 0.06 * timelineTerm
+                + 0.08 * evidenceSupport
+                + 0.05 * jdCoverage
                 + 0.04 * components.get("llmCost")
-                + 0.04 * components.get("latency");
+                + 0.03 * components.get("latency")
+                + 0.03 * components.get("partialSuccessPenalty");
         persist(run, "FEEDBACK", feedbackId, total, components);
         return total;
     }
@@ -125,6 +165,28 @@ public class RewardService {
         row.setCreateTime(LocalDateTime.now());
         rewardMapper.insert(row);
         policyService.recordReward(policyId, taskCategory, clamp01(total));
+    }
+
+    /**
+     * Read an optional numeric metric. Missing / null → not put as optimistic 1;
+     * callers treat absence as 0 contribution via {@code getOrDefault(..., 0)}.
+     * Also records {@code <name>Defined}=0|1 for audit.
+     */
+    private void putOptionalMetric(Map<String, Double> components, JsonNode metrics, String name) {
+        JsonNode node = metrics != null ? metrics.get(name) : null;
+        if (node != null && !node.isNull() && node.isNumber()) {
+            components.put(name, clamp01(node.asDouble()));
+            components.put(name + "Defined", 1.0);
+        } else if (node != null && !node.isNull() && node.isBoolean()) {
+            components.put(name, node.asBoolean() ? 1.0 : 0.0);
+            components.put(name + "Defined", 1.0);
+        } else {
+            components.put(name + "Defined", 0.0);
+            // Explicit 0 so weighted totals never inherit rating/prior as "perfect support".
+            if ("evidenceSupportRatio".equals(name)) {
+                components.put(name, 0.0);
+            }
+        }
     }
 
     private void persist(AgentRun run, String source, Long feedbackId,

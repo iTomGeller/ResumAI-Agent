@@ -29,8 +29,9 @@ TASK_PIPELINES: Dict[str, List[str]] = {
                      "RiskAgent", "EvidenceAgent", "ReportAgent"],
     "agent_eval": ["JDAnalysisAgent", "TechAgent", "ProjectAgent",
                    "RiskAgent", "EvidenceAgent", "ReportAgent"],
+    # followup remains a lightweight evaluation refinement — chat uses
+    # /conversation/reply (CopilotAnswer), never this pipeline.
     "followup": ["ReportAgent"],
-    "quick_answer": ["ReportAgent"],
 }
 
 # Goal → required terminal artifacts. Planner backward-chains from these.
@@ -62,10 +63,12 @@ GOAL_ARTIFACTS: Dict[str, List[str]] = {
     "resume_optimize": ["resume_facts", "project_findings", "rewrite"],
     "interview_questions": ["resume_facts", "risks", "interview_questions"],
     "followup": ["final_report"],
-    "quick_answer": ["final_report"],
 }
 
 TERMINAL_AGENTS = {"ReportAgent", "ResumeOptimizeAgent", "InterviewQuestionAgent"}
+FULL_EVAL_TYPES = {
+    "full_evaluation", "jd_evaluation", "backend_eval", "agent_eval",
+}
 REPLAN_TRIGGERS = {
     "missing_required_artifact", "tool_failed", "new_conflict",
     "handoff_requested", "group_failure", "low_confidence",
@@ -75,7 +78,7 @@ REPLAN_TRIGGERS = {
 SIMPLE_RULE_TYPES = {
     "timeline_check", "risk_check", "evidence_check", "tech_match",
     "project_analysis", "project_rewrite", "resume_optimize",
-    "interview_questions", "followup", "quick_answer",
+    "interview_questions", "followup",
 }
 
 # Soft dependency edges used for topo + parallel grouping (artifact edges are
@@ -135,15 +138,49 @@ class Coordinator:
             plan.insert(0, "ResumeParserAgent")
         if not self.policy.evidenceVerification.enabled:
             plan = [a for a in plan if a != "EvidenceAgent"]
-        if self.policy.agentOrder:
-            allowed = set(self.policy.agentOrder) | {"ResumeParserAgent"} | TERMINAL_AGENTS
-            plan = [a for a in plan if a in allowed]
+        # agentOrder only affects ordering preference — never strips required producers.
         plan = [a for a in plan if self.registry.known(a)]
         plan = plan[: max(1, self.policy.maxAgentCount)]
         if not any(a in TERMINAL_AGENTS for a in plan):
             plan.append("ReportAgent")
         return plan
 
+    def resolve_goal_artifacts(self, run_type: str, *,
+                               signals: Optional[Dict[str, bool]] = None
+                               ) -> Tuple[List[str], List[str]]:
+        """Return (required, optional) goal artifacts for this run/policy."""
+        signals = signals or {}
+        defaults = list(GOAL_ARTIFACTS.get(run_type, GOAL_ARTIFACTS["full_evaluation"]))
+        required = list(self.policy.requiredArtifacts) if self.policy.requiredArtifacts \
+            else list(defaults)
+        optional = list(self.policy.optionalArtifacts or [])
+        # Soften signal-gated artifacts into optional unless forced below.
+        if not signals.get("has_projects") and "project_findings" in required:
+            required = [a for a in required if a != "project_findings"]
+            if "project_findings" not in optional:
+                optional.append("project_findings")
+        if not signals.get("has_timeline") and "risks" in required:
+            required = [a for a in required if a != "risks"]
+            if "risks" not in optional:
+                optional.append("risks")
+        if not self.policy.evidenceVerification.enabled:
+            if "evidence_ledger" in required:
+                required = [a for a in required if a != "evidence_ledger"]
+            if "evidence_ledger" not in optional:
+                optional.append("evidence_ledger")
+        # Force required when gates demand producers.
+        if run_type in FULL_EVAL_TYPES and signals.get("has_projects"):
+            if "project_findings" not in required:
+                required.append("project_findings")
+            optional = [a for a in optional if a != "project_findings"]
+        if self.policy.evidenceVerification.enabled and "evidence_ledger" in defaults:
+            if "evidence_ledger" not in required:
+                required.append("evidence_ledger")
+            optional = [a for a in optional if a != "evidence_ledger"]
+        # De-dupe while preserving order.
+        required = list(dict.fromkeys(required))
+        optional = [a for a in dict.fromkeys(optional) if a not in required]
+        return required, optional
     def is_simple(self, run_type: str) -> bool:
         return run_type in SIMPLE_RULE_TYPES
 
@@ -168,20 +205,28 @@ class Coordinator:
         """Deterministic feature gates used by optional_when + skip reasons."""
         artifacts = artifacts or {}
         shared = shared or {}
-        resume_facts = shared.get("resumeFacts") or {}
+        # Canonical store first; legacy top-level as fallback.
+        # Defensive: specialists may have emitted resumeFacts as a fact-list;
+        # never call .get on a non-dict (Evidence/Report production crash).
+        resume_raw = artifacts.get("resumeFacts") or shared.get("resumeFacts") or {}
+        resume_facts = resume_raw if isinstance(resume_raw, dict) else {}
         parsed = artifacts.get("parsedResume") if isinstance(artifacts.get("parsedResume"), dict) \
             else {}
         projects = (resume_facts.get("projects") or parsed.get("projects")
-                    or parsed.get("project_names") or [])
+                    or parsed.get("project_names") or parsed.get("projectNames") or [])
         experiences = (resume_facts.get("experiences") or parsed.get("experiences")
                        or parsed.get("timeline") or [])
+        if not projects and isinstance(resume_raw, list):
+            projects = resume_raw
+        if not experiences and isinstance(resume_raw, list):
+            experiences = resume_raw
         text = resume_text or ""
         has_projects = bool(projects) or bool(_PROJECT_HINT.search(text))
         has_timeline = bool(experiences) or bool(_TIMELINE_HINT.search(text))
         has_jd = bool((job_description or "").strip()) \
             or bool(artifacts.get("effectiveJd")) \
             or bool(artifacts.get("jdMatches")) \
-            or bool(shared.get("jdRequirements"))
+            or bool(artifacts.get("jdRequirements") or shared.get("jdRequirements"))
         has_external_urls = bool(_URL_HINT.search(text))
         present = self._present_artifacts(artifacts, shared)
         return {
@@ -201,12 +246,12 @@ class Coordinator:
                             shared: Optional[Dict[str, Any]] = None
                             ) -> Dict[str, Any]:
         """GOAL_ARTIFACTS → backward-chain → topo → parallel groups."""
-        goal = list(GOAL_ARTIFACTS.get(run_type, GOAL_ARTIFACTS["full_evaluation"]))
         signals = self.inspect_signals(
             resume_text=resume_text, job_description=job_description,
             artifacts=artifacts, shared=shared)
         if needs_parse or signals["needs_parse"]:
             signals = {**signals, "needs_parse": True}
+        goal, optional_goal = self.resolve_goal_artifacts(run_type, signals=signals)
         present = self._present_artifacts(artifacts or {}, shared or {})
         selected: List[str] = []
         selected_because: Dict[str, str] = {}
@@ -226,8 +271,11 @@ class Coordinator:
             missing = [a for a in goal if a not in present]
 
         # Soft-skip optional agents before chaining so we don't pull them in.
+        forced_agents = self._forced_agents(run_type, signals, goal)
         for definition in self.registry.list_enabled():
             if definition.agent_id == "CoordinatorAgent":
+                continue
+            if definition.agent_id in forced_agents:
                 continue
             skip = self._optional_skip_reason(definition, signals)
             if skip:
@@ -246,21 +294,32 @@ class Coordinator:
                 continue
             # Prefer lowest cost among producers not already skipped.
             candidates = [p for p in producers
-                          if p.agent_id not in skipped_because]
+                          if p.agent_id not in skipped_because
+                          or p.agent_id in forced_agents]
             if not candidates:
-                continue
+                # Required goal with only skipped producers: force cheapest.
+                if artifact in goal and producers:
+                    chosen = sorted(producers, key=lambda d: _cost_rank(d.cost_hint))[0]
+                    skipped_because.pop(chosen.agent_id, None)
+                    candidates = [chosen]
+                else:
+                    continue
             chosen = sorted(candidates, key=lambda d: _cost_rank(d.cost_hint))[0]
             if chosen.agent_id not in selected:
-                # Soft requires: only schedule producers whose optional gate passes.
-                skip = self._optional_skip_reason(chosen, signals)
-                if skip:
-                    skipped_because[chosen.agent_id] = skip
-                    # If a goal artifact becomes unreachable, drop it rather than
-                    # forcing an optional agent (e.g. no projects → no Project).
-                    if artifact in goal:
-                        goal = [g for g in goal if g != artifact]
-                        missing = [m for m in missing if m != artifact]
-                    continue
+                # Soft requires: only schedule producers whose optional gate passes
+                # unless the agent is forced for this run.
+                if chosen.agent_id not in forced_agents:
+                    skip = self._optional_skip_reason(chosen, signals)
+                    if skip:
+                        skipped_because[chosen.agent_id] = skip
+                        # Optional goal artifacts may be dropped; required stay.
+                        if artifact in optional_goal and artifact not in goal:
+                            continue
+                        if artifact in goal:
+                            # Keep chasing via force path below rather than drop.
+                            skipped_because.pop(chosen.agent_id, None)
+                        else:
+                            continue
                 selected.append(chosen.agent_id)
                 selected_because[chosen.agent_id] = f"产出缺失产物 {artifact}"
                 for produced in chosen.produces_artifacts:
@@ -273,23 +332,27 @@ class Coordinator:
                         artifact_edges.append({
                             "from": "*", "artifact": req, "to": chosen.agent_id})
 
-        # Evidence soft-requires: when evidence is off, map final_report deps down.
+        # Evidence soft-requires: when evidence is off, drop EvidenceAgent.
         if not self.policy.evidenceVerification.enabled:
             selected = [a for a in selected if a != "EvidenceAgent"]
             skipped_because.setdefault(
                 "EvidenceAgent", "策略关闭证据核验")
+        else:
+            # Evidence enabled → force EvidenceAgent for goals that need ledger.
+            if "evidence_ledger" in goal and "EvidenceAgent" not in selected:
+                selected.append("EvidenceAgent")
+                selected_because["EvidenceAgent"] = "证据核验启用，强制 EvidenceAgent"
+                skipped_because.pop("EvidenceAgent", None)
 
-        # Policy agentOrder filter.
-        if self.policy.agentOrder:
-            allowed = set(self.policy.agentOrder) | {"ResumeParserAgent"} | TERMINAL_AGENTS
-            trimmed = []
-            for agent in selected:
-                if agent in allowed:
-                    trimmed.append(agent)
-                else:
-                    skipped_because.setdefault(agent, "不在策略 agentOrder 内")
-            selected = trimmed
+        # Full evaluation with projects → force ProjectAgent.
+        if "ProjectAgent" in forced_agents and "ProjectAgent" not in selected:
+            selected.append("ProjectAgent")
+            selected_because["ProjectAgent"] = "full evaluation 存在项目，强制 ProjectAgent"
+            skipped_because.pop("ProjectAgent", None)
 
+        # agentOrder is ordering preference only — never an allowlist that
+        # strips required producers (e.g. low_cost agentOrder must not remove
+        # ProjectAgent / EvidenceAgent when they are required for the goal).
         selected = [a for a in selected if self.registry.known(a)]
         if not selected:
             # Absolute last resort.
@@ -304,9 +367,9 @@ class Coordinator:
             selected_because=selected_because,
             skipped_because=skipped_because,
             artifact_edges=artifact_edges,
-            goal_artifacts=goal)
+            goal_artifacts=goal,
+            optional_artifacts=optional_goal)
         return finalized
-
     async def plan(self, *, run_type: str, user_message: str,
                    conversation_summary: str, shared_digest: str,
                    failure_notes: List[str], memory_notes: List[str],
@@ -336,12 +399,14 @@ class Coordinator:
                 selected_because=cached.get("selectedBecause") or base.get("selectedBecause"),
                 skipped_because=cached.get("skippedBecause") or base.get("skippedBecause"),
                 artifact_edges=cached.get("artifactEdges") or base.get("artifactEdges"),
-                goal_artifacts=base.get("goalArtifacts"))
+                goal_artifacts=base.get("goalArtifacts"),
+                optional_artifacts=base.get("optionalArtifacts"))
 
         refined = await self._refine(
             base["plan"], run_type=run_type, user_message=user_message,
             conversation_summary=conversation_summary, shared_digest=shared_digest,
-            failure_notes=failure_notes, memory_notes=memory_notes)
+            failure_notes=failure_notes, memory_notes=memory_notes,
+            goal_artifacts=list(base.get("goalArtifacts") or []))
         if not refined["plan"]:
             fallback = self.base_plan(
                 run_type, has_resume_facts=False, needs_parse=needs_parse)
@@ -350,7 +415,8 @@ class Coordinator:
                 selected_because={a: "planner+LLM 均失败" for a in fallback},
                 skipped_because=base.get("skippedBecause") or {},
                 artifact_edges=base.get("artifactEdges") or [],
-                goal_artifacts=base.get("goalArtifacts"))
+                goal_artifacts=base.get("goalArtifacts"),
+                optional_artifacts=base.get("optionalArtifacts"))
         if not refined["reason"].startswith("rule_based(llm-error"):
             await cache.set_json(cache_key, {
                 "plan": refined["plan"], "reason": refined["reason"],
@@ -363,15 +429,37 @@ class Coordinator:
             selected_because=base.get("selectedBecause"),
             skipped_because=base.get("skippedBecause"),
             artifact_edges=base.get("artifactEdges"),
-            goal_artifacts=base.get("goalArtifacts"))
+            goal_artifacts=base.get("goalArtifacts"),
+            optional_artifacts=base.get("optionalArtifacts"))
 
     def _finalize(self, plan: List[str], reason: str,
                   selected_because: Optional[Dict[str, str]] = None,
                   skipped_because: Optional[Dict[str, str]] = None,
                   artifact_edges: Optional[List[Dict[str, str]]] = None,
-                  goal_artifacts: Optional[List[str]] = None) -> Dict[str, Any]:
+                  goal_artifacts: Optional[List[str]] = None,
+                  optional_artifacts: Optional[List[str]] = None) -> Dict[str, Any]:
         ordered = self._order_by_dependencies(plan)
         ordered = self._ensure_unique_terminal(ordered)
+        # Plan-time closure: ensure every required goal artifact has a producer
+        # still in the plan (or mark it missing — never silently drop).
+        goal = list(goal_artifacts or [])
+        missing_producers = self._missing_goal_producers(ordered, goal)
+        if missing_producers:
+            repaired = list(ordered)
+            for artifact, producer_id in missing_producers.items():
+                if producer_id and producer_id not in repaired:
+                    if repaired and repaired[-1] in TERMINAL_AGENTS:
+                        repaired.insert(-1, producer_id)
+                    else:
+                        repaired.append(producer_id)
+                    if selected_because is not None:
+                        selected_because[producer_id] = (
+                            f"closure 补齐 goal artifact {artifact} 的唯一生产者")
+            ordered = self._ensure_unique_terminal(self._order_by_dependencies(repaired))
+        still_missing = [
+            a for a in goal
+            if a not in self._producible_artifacts(ordered)
+        ]
         groups = self._parallel_groups(ordered)
         terminal = next((a for a in reversed(ordered) if a in TERMINAL_AGENTS),
                         "ReportAgent")
@@ -388,9 +476,11 @@ class Coordinator:
                 a: reason for a in ordered},
             "skippedBecause": skipped_because or {},
             "artifactEdges": artifact_edges or [],
-            "goalArtifacts": goal_artifacts or [],
+            "goalArtifacts": goal,
+            "optionalArtifacts": list(optional_artifacts or []),
+            "missingGoalArtifacts": still_missing,
+            "planClosureOk": not still_missing,
         }
-
     def _budget_plan(self, ordered: List[str], terminal: str) -> Dict[str, Dict[str, int]]:
         """Plan-time budget allocation: the terminal agent gets a guaranteed
         floor of 2 LLM calls so specialists can never starve the report; the
@@ -412,25 +502,43 @@ class Coordinator:
 
     def _order_by_dependencies(self, plan: List[str]) -> List[str]:
         """Stable topological pass: an agent is scheduled only after every
-        planned dependency; unknown agents are dropped."""
+        planned dependency; unknown agents are dropped.
+
+        ``policy.agentOrder`` is a soft preference among ready agents — never
+        an allowlist that removes required producers from the plan.
+        """
         plan = [a for a in dict.fromkeys(plan) if self.registry.known(a)]
+        order_rank = {name: i for i, name in enumerate(self.policy.agentOrder or [])}
         placed: List[str] = []
         remaining = list(plan)
         stall_guard = 0
         while remaining and stall_guard <= len(plan) * 2:
             stall_guard += 1
-            progressed = False
-            for agent in list(remaining):
+            ready = []
+            for agent in remaining:
                 deps = [d for d in AGENT_DEPENDENCIES.get(agent, []) if d in plan]
                 if all(d in placed for d in deps):
-                    placed.append(agent)
-                    remaining.remove(agent)
-                    progressed = True
-            if not progressed:
+                    ready.append(agent)
+            if not ready:
                 placed.extend(remaining)  # cycle fallback: keep original order
                 break
+            ready.sort(key=lambda a: (order_rank.get(a, 10_000), remaining.index(a)))
+            chosen = ready[0]
+            placed.append(chosen)
+            remaining.remove(chosen)
         return self._ensure_unique_terminal(placed[: max(1, self.policy.maxAgentCount) + 1])
 
+    def _prefer_agent_order(self, plan: List[str]) -> List[str]:
+        """Documentation helper / tests: soft preference without dropping agents.
+        Runtime ordering uses agentOrder ranks inside ``_order_by_dependencies``.
+        """
+        if not self.policy.agentOrder:
+            return plan
+        body = [a for a in plan if a not in TERMINAL_AGENTS]
+        terminals = [a for a in plan if a in TERMINAL_AGENTS]
+        preferred = [a for a in self.policy.agentOrder if a in body]
+        rest = [a for a in body if a not in preferred]
+        return preferred + rest + terminals    @staticmethod
     @staticmethod
     def _ensure_unique_terminal(plan: List[str]) -> List[str]:
         """Exactly one of Report/Optimize/Interview closes the plan."""
@@ -463,7 +571,8 @@ class Coordinator:
     async def _refine(self, base_plan: List[str], *, run_type: str,
                       user_message: str, conversation_summary: str,
                       shared_digest: str, failure_notes: List[str],
-                      memory_notes: List[str]) -> Dict[str, Any]:
+                      memory_notes: List[str],
+                      goal_artifacts: Optional[List[str]] = None) -> Dict[str, Any]:
         prompt_user = (
             f"任务类别: {run_type}\n用户问题: {user_message[:600]}\n"
             f"会话摘要: {(conversation_summary or '')[:400]}\n"
@@ -472,9 +581,11 @@ class Coordinator:
             f"相关记忆: {'; '.join(memory_notes[:3]) or '无'}\n"
             f"可用 Agent 能力目录:\n{self.capability_catalog()}\n"
             f"产物规划基线: {base_plan}\n"
+            f"必选 goal artifacts: {goal_artifacts or []}\n"
             f"预算: 最多 {self.policy.maxAgentCount} 个 Agent, "
             f"{self.policy.maxLlmCalls} 次 LLM 调用\n"
             "只允许使用目录中的 Agent，必须满足 requires_artifacts / 依赖，"
+            "可以增加或重排可选 Agent，但不得删除 goal artifact 的唯一生产者，"
             "没有项目不要选 ProjectAgent，没有时间线不要选 RiskAgent，"
             "最后一个必须是唯一的 terminal Agent。如基线已合理请原样返回。"
             "输出 JSON {\"plan\": [...], \"reason\": \"...\"}")
@@ -490,12 +601,69 @@ class Coordinator:
             plan = [str(a) for a in parsed.get("plan", []) if self.registry.known(str(a))]
             if not plan:
                 return {"plan": base_plan, "reason": "rule_based(llm-empty)"}
+            plan = self._protect_required_producers(
+                plan, base_plan, goal_artifacts or [])
             return {"plan": plan,
                     "reason": str(parsed.get("reason", "llm_refined"))[:200]}
         except Exception as exc:  # noqa: BLE001 - planning must not kill the run
             logger.info("coordinator refine failed, using artifact plan: %s", exc)
             return {"plan": base_plan,
                     "reason": f"rule_based(llm-error:{type(exc).__name__})"}
+
+    def _protect_required_producers(self, refined: List[str], base: List[str],
+                                    goal_artifacts: List[str]) -> List[str]:
+        """LLM refine may add/reorder optional agents, but must not remove the
+        sole producer of any required goal artifact that was in the base plan."""
+        result = [a for a in dict.fromkeys(refined) if self.registry.known(a)]
+        for artifact in goal_artifacts:
+            producers = {p.agent_id for p in self.registry.producers_of(artifact)}
+            if not producers:
+                continue
+            base_hits = [a for a in base if a in producers]
+            refined_hits = [a for a in result if a in producers]
+            if base_hits and not refined_hits:
+                # Restore the sole (or first) producer from the base plan.
+                restore = base_hits[0]
+                if result and result[-1] in TERMINAL_AGENTS:
+                    result.insert(-1, restore)
+                else:
+                    result.append(restore)
+                logger.info(
+                    "refine restored sole producer %s for goal artifact %s",
+                    restore, artifact)
+        return result
+
+    @staticmethod
+    def _forced_agents(run_type: str, signals: Dict[str, bool],
+                       goal: List[str]) -> Set[str]:
+        forced: Set[str] = set()
+        if run_type in FULL_EVAL_TYPES and signals.get("has_projects") \
+                and "project_findings" in goal:
+            forced.add("ProjectAgent")
+        if signals.get("evidence_enabled") and "evidence_ledger" in goal:
+            forced.add("EvidenceAgent")
+        return forced
+
+    def _producible_artifacts(self, plan: List[str]) -> Set[str]:
+        present: Set[str] = set()
+        for agent_id in plan:
+            if not self.registry.known(agent_id):
+                continue
+            for art in self.registry.get(agent_id).produces_artifacts:
+                present.add(art)
+        return present
+
+    def _missing_goal_producers(self, plan: List[str],
+                                goal_artifacts: List[str]) -> Dict[str, str]:
+        """Map missing required artifacts → a producer id to insert (if any)."""
+        producible = self._producible_artifacts(plan)
+        missing: Dict[str, str] = {}
+        for artifact in goal_artifacts:
+            if artifact in producible:
+                continue
+            producers = self.registry.producers_of(artifact)
+            missing[artifact] = producers[0].agent_id if producers else ""
+        return missing
 
     def replan_after_failure(self, remaining: List[str], failed_agent: str) -> List[str]:
         """Failure handling: keep partial results, drop the failed step,
@@ -597,29 +765,29 @@ class Coordinator:
     def _present_artifacts(artifacts: Dict[str, Any],
                            shared: Dict[str, Any]) -> Set[str]:
         present: Set[str] = set()
+        # Prefer canonical artifacts; fall back to legacy top-level mirrors.
+        store = artifacts if isinstance(artifacts, dict) else {}
+        legacy = shared if isinstance(shared, dict) else {}
         mapping = {
             "parsedResume": "parsed_resume",
+            "resumeFacts": "resume_facts",
             "jdCoverage": "technical_findings",
             "timelineCheck": "risks",
             "effectiveJd": "jd_requirements",
             "jdMatches": "jd_requirements",
+            "jdRequirements": "jd_requirements",
+            "technicalFindings": "technical_findings",
+            "projectFindings": "project_findings",
+            "risks": "risks",
+            "evidence": "evidence_ledger",
             "finalReport": "final_report",
         }
         for key, artifact in mapping.items():
-            if artifacts.get(key):
+            value = store.get(key)
+            if value is None or value == {} or value == []:
+                value = legacy.get(key)
+            if value:
                 present.add(artifact)
-        if shared.get("resumeFacts"):
-            present.add("resume_facts")
-        if shared.get("jdRequirements"):
-            present.add("jd_requirements")
-        if shared.get("technicalFindings"):
-            present.add("technical_findings")
-        if shared.get("projectFindings"):
-            present.add("project_findings")
-        if shared.get("risks"):
-            present.add("risks")
-        if shared.get("evidence"):
-            present.add("evidence_ledger")
         return present
 
     @staticmethod

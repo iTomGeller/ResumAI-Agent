@@ -142,6 +142,57 @@ public class AgentRuntimeClient {
         }
     }
 
+    /**
+     * Live Python MCP registry + SkillManager snapshot for Agent Ops.
+     * Never invent status from config description text.
+     */
+    @SuppressWarnings("unchecked")
+    public Optional<Map<String, Object>> getOpsRuntime(boolean forceProbe) {
+        try {
+            String path = "/internal/ops/runtime" + (forceProbe ? "?probe=true" : "");
+            HttpRequest request = builder(path)
+                    .timeout(forceProbe ? Duration.ofSeconds(45) : Duration.ofSeconds(8))
+                    .GET()
+                    .build();
+            HttpResponse<String> response =
+                    httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 400) {
+                throw new IllegalStateException("HTTP " + response.statusCode()
+                        + " " + trim(response.body()));
+            }
+            return Optional.of(objectMapper.readValue(response.body(), Map.class));
+        } catch (Exception e) {
+            log.info("ops runtime snapshot unavailable: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Short Copilot reply path — never starts an evaluation AgentRun /
+     * ReportAgent / StructuredReport.
+     */
+    @SuppressWarnings("unchecked")
+    public Optional<Map<String, Object>> replyConversation(Map<String, ?> body) {
+        try {
+            String json = objectMapper.writeValueAsString(body);
+            HttpRequest request = builder("/conversation/reply")
+                    .timeout(Duration.ofSeconds(45))
+                    .header("Content-Type", "application/json; charset=UTF-8")
+                    .POST(HttpRequest.BodyPublishers.ofString(json))
+                    .build();
+            HttpResponse<String> response =
+                    httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 400) {
+                throw new IllegalStateException("HTTP " + response.statusCode());
+            }
+            return Optional.of(objectMapper.readValue(response.body(), Map.class));
+        } catch (Exception e) {
+            log.info("conversation reply unavailable, using local CopilotAnswer: {}",
+                    e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     private void postWithRetry(String path, Map<String, ?> body, Duration timeout, int maxRetries)
             throws Exception {
         Exception last = null;

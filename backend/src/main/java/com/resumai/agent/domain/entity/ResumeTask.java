@@ -126,6 +126,26 @@ public class ResumeTask {
     @TableField("candidate_name")
     private String candidateName;
 
+    /** 关联候选人档案。 */
+    @TableField("candidate_id")
+    private Long candidateId;
+
+    /** 关联投递申请。 */
+    @TableField("application_id")
+    private Long applicationId;
+
+    /** 数据来源：USER_UPLOAD/BENCHMARK/ACCEPTANCE/SYSTEM。 */
+    @TableField("data_origin")
+    private String dataOrigin;
+
+    /** 候选人关联状态：LINKED/SKIPPED/FAILED/PENDING。 */
+    @TableField("candidate_link_status")
+    private String candidateLinkStatus;
+
+    /** 关联/跳过原因。 */
+    @TableField("candidate_link_reason")
+    private String candidateLinkReason;
+
     /** 简历文件名（列表展示）。 */
     @TableField("file_name")
     private String fileName;

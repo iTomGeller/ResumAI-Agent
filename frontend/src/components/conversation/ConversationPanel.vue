@@ -12,6 +12,7 @@ const props = defineProps<{
   overallScore?: number | null;
   recommendation?: string | null;
   runId?: string | null;
+  extraContextRefs?: Array<{ type: string; id: string; revision?: number; version?: number }>;
   width?: number;
   fullscreen?: boolean;
 }>();
@@ -52,7 +53,6 @@ function onResizeStart(event: PointerEvent) {
 }
 
 const draft = ref('');
-const queueMode = ref<'collect' | 'interrupt'>('collect');
 const feedbackSent = ref<Record<string, boolean>>({});
 const {
   activeTraceId,
@@ -75,13 +75,47 @@ const {
   reset,
 } = useConversation();
 
+const contextRefs = computed(() => {
+  const refs: Array<{ type: string; id: string; revision?: number; version?: number }> = [];
+  const seen = new Set<string>();
+  const push = (ref: { type: string; id: string; revision?: number; version?: number }) => {
+    if (!ref?.type || !ref?.id) return;
+    const key = `${ref.type}:${ref.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    refs.push(ref);
+  };
+  if (props.conversationId) {
+    push({ type: 'candidate', id: props.conversationId, revision: props.revisionNo });
+  }
+  if (props.traceId) {
+    push({ type: 'application', id: props.traceId });
+  }
+  if (props.runId) {
+    push({ type: 'run', id: props.runId });
+  }
+  for (const ref of props.extraContextRefs || []) {
+    push(ref);
+  }
+  return refs;
+});
+
+const dispositionLabels: Record<string, string> = {
+  DIRECT_REPLY: '直接回复',
+  BACKGROUND_QUERY: '证据查询',
+  MERGE_CONTEXT: '已合并补充',
+  CREATE_REVISION: '创建 revision',
+  SUPERSEDE_RUN: '替换当前任务',
+  CONTROL: '运行控制',
+};
+
 const runStatusLabels: Record<string, string> = {
   QUEUED: '排队中',
   STARTING: '启动中',
   RUNNING: '分析中',
   WAITING_LLM: '模型生成中',
   WAITING_TOOL: '工具执行中',
-  WAITING_SANDBOX: 'Sandbox 执行中',
+  WAITING_SANDBOX: '工具执行中',
   CANCELLING: '取消中',
   CANCELLED: '已取消',
   SUCCEEDED: '已完成',
@@ -175,12 +209,6 @@ async function approvePlan() {
   }
 }
 
-async function reanalyze() {
-  const lastUser = [...messages.value].reverse().find((m) => m.role === 'USER');
-  if (!lastUser) return;
-  await sendMessage(`重新分析：${lastUser.content}`, props.revisionNo, 'interrupt');
-}
-
 async function sendRunFeedback(runId: string, positive: boolean) {
   const result = await submitRunFeedback(runId, {
     ratingScore: positive ? 5 : 2,
@@ -227,11 +255,11 @@ watch(() => props.conversationId || props.traceId, (id) => {
 async function submitMessage() {
   const content = draft.value.trim();
   if (!content) return;
-  const response = await sendMessage(content, props.revisionNo, queueMode.value);
+  const response = await sendMessage(content, props.revisionNo, contextRefs.value);
   if (!response) return;
   draft.value = '';
-  queueMode.value = 'collect';
-  if (response.action === 'REVISION_CREATED' && response.activeTraceId) {
+  if ((response.action === 'REVISION_CREATED' || response.action === 'RUN_SUPERSEDED')
+      && response.activeTraceId) {
     emit('revisionCreated', response);
   } else if (['PAUSE', 'RESUME', 'CANCEL'].includes(response.action)) {
     emit('controlTurn', response);
@@ -265,7 +293,7 @@ function friendlyError(raw: string): string {
     class="conversation-panel"
     :class="{ fullscreen: isFullscreen, resizing }"
     :style="isFullscreen ? undefined : { width: panelWidth + 'px' }"
-    aria-label="候选人持续会话"
+    aria-label="系统 Copilot"
   >
     <div
       v-if="!isFullscreen"
@@ -275,8 +303,8 @@ function friendlyError(raw: string): string {
     ></div>
     <header class="conversation-panel-head">
       <div>
-        <span class="conversation-eyebrow">持续会话</span>
-        <h3>评估 Copilot</h3>
+        <span class="conversation-eyebrow">系统 Copilot</span>
+        <h3>评估助手</h3>
       </div>
       <div class="conversation-head-actions">
         <button type="button" class="conversation-refresh" :title="isFullscreen ? '退出全屏' : '全屏'" @click="toggleFullscreen">
@@ -379,11 +407,15 @@ function friendlyError(raw: string): string {
 
     <ConversationMessageList :messages="messages" :loading="loading" />
 
+    <div v-if="lastTurn?.disposition" class="conversation-notice is-info">
+      {{ dispositionLabels[lastTurn.disposition] || lastTurn.disposition }}
+      <span v-if="lastTurn.reason"> · {{ lastTurn.reason }}</span>
+    </div>
     <div v-if="lastTurn?.answerThenResume" class="conversation-notice is-info">
       独立问题已处理，原评估继续运行，trace 未切换。
     </div>
-    <div v-else-if="lastTurn?.action === 'REVISION_CREATED'" class="conversation-notice is-success">
-      已创建 v{{ lastTurn.activeRevision }}；仅重跑受影响节点。
+    <div v-else-if="lastTurn?.action === 'REVISION_CREATED' || lastTurn?.action === 'RUN_SUPERSEDED'" class="conversation-notice is-success">
+      已创建 v{{ lastTurn.activeRevision }}；系统已自动处理，无需选择打断模式。
     </div>
     <div v-if="lastTurn?.needsConfirmation" class="conversation-notice is-warning">
       这条消息存在目标歧义，请在对话中明确是“只比较”还是“改为新目标重新评估”。
@@ -394,33 +426,27 @@ function friendlyError(raw: string): string {
     <div v-if="error" class="conversation-error" role="alert">{{ friendlyError(error) }}</div>
 
     <form class="conversation-composer" @submit.prevent="submitMessage">
-      <div v-if="runActive" class="queue-mode-picker">
-        <label :class="{ active: queueMode === 'collect' }">
-          <input v-model="queueMode" type="radio" value="collect" />
-          补充信息（当前任务完成后合并执行）
-        </label>
-        <label :class="{ active: queueMode === 'interrupt' }">
-          <input v-model="queueMode" type="radio" value="interrupt" />
-          打断重来（取消当前任务）
-        </label>
+      <div v-if="contextRefs.length" class="context-chip-list" aria-label="当前上下文">
+        <span v-for="ref in contextRefs" :key="`${ref.type}:${ref.id}`" class="context-chip">
+          {{ ref.type }}{{ ref.revision != null ? ` v${ref.revision}` : '' }}
+        </span>
       </div>
       <textarea
         v-model="draft"
         rows="3"
         :disabled="sending"
-        placeholder="问评估依据，或明确说“改投…重新评估”创建新 revision"
+        placeholder="问评估依据或闲聊；改岗位/补事实系统会自动处理。停止请点下方按钮或说“停止”"
         @keydown="onComposerKeydown"
       />
       <div class="conversation-composer-foot">
         <span>Ctrl / ⌘ + Enter 发送</span>
         <div class="composer-actions">
           <button
-            v-if="messages.length"
+            v-if="runActive"
             type="button"
-            class="composer-secondary"
-            :disabled="sending"
-            @click="reanalyze"
-          >重新分析</button>
+            class="run-stop"
+            @click="stopGeneration"
+          >停止生成</button>
           <button type="submit" :disabled="sending || !draft.trim()">{{ sending ? '发送中…' : '发送' }}</button>
         </div>
       </div>
@@ -658,21 +684,22 @@ function friendlyError(raw: string): string {
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 .queue-mode-picker {
+  display: none;
+}
+.context-chip-list {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-bottom: 7px;
 }
-.queue-mode-picker label {
-  flex: 1;
-  padding: 5px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  cursor: pointer;
+.context-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 600;
 }
-.queue-mode-picker label.active { border-color: var(--color-primary); color: var(--color-primary); }
-.queue-mode-picker input { margin-right: 4px; }
 
 .composer-actions { display: flex; gap: 6px; }
 .composer-secondary {

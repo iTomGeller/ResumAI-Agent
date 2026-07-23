@@ -37,8 +37,10 @@ A：Tool Call/Result 按 toolCallId 一一配对校验（孤儿 call 或孤儿 r
 Token 估算区分中英文并用真实 API usage 在线校准。
 
 ## Q8：策略学习是训练大模型吗？
-A：不是。是 Agent 外层 PolicyBundle 的 epsilon-greedy/Thompson 选择，基于
-HR 反馈与真实 E2E Benchmark 的 Reward。Benchmark 分两层：Contract（离线确定
+A：不是。是 Policy Optimization Lab（无 GPU）：生产决策 champion-only
+（ONLINE_SELECTION）；epsilon-greedy/Thompson 只在 shadow/lab；离线
+OFFLINE_SEARCH 是有界配置进化（非完整 GEPA）；MODEL_WEIGHTS unchanged。
+基于 HR 反馈与真实 E2E Benchmark 的 Reward。Benchmark 分两层：Contract（离线确定
 性回归，不出质量结论）与 Real E2E（真实 LLM/Token/Sandbox，唯一能选 Champion）。
 
 ## Q9：Benchmark 怎么防标签泄漏？

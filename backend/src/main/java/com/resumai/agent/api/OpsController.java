@@ -1,112 +1,172 @@
 package com.resumai.agent.api;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.resumai.agent.ai.SkillDescriptor;
-import com.resumai.agent.ai.SkillProvider;
-import com.resumai.agent.dao.MemoryEntryMapper;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpOpsResponse;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryOpsResponse;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RunDebugDetailResponse;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RunDebugSummary;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.SkillOpsResponse;
+import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.dao.PolicyRewardMapper;
 import com.resumai.agent.dao.SandboxExecutionMapper;
-import com.resumai.agent.domain.entity.MemoryEntryRow;
 import com.resumai.agent.domain.entity.PolicyBundleRow;
 import com.resumai.agent.domain.entity.PolicyRewardRow;
 import com.resumai.agent.domain.entity.PolicyStatisticsRow;
 import com.resumai.agent.domain.entity.SandboxExecutionRow;
-import com.resumai.agent.service.AgentMemoryService;
+import com.resumai.agent.service.ops.OpsDebugService;
+import com.resumai.agent.service.run.AgentRuntimeClient;
 import com.resumai.agent.service.run.PolicyService;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Read-only Agent Ops surfaces: Memory / Sandbox / policy learning / MCP / Skills.
+ * Agent Ops = run-centric Debug Console.
+ * MCP/Skills status comes from the Python runtime registry, not config text inference.
+ * Sandbox surfaces are Policy Lab only — never candidate evaluation.
+ * Typed drilldown also lives under /api/dev/* and shares {@link OpsDebugService}.
  */
 @RestController
 @RequestMapping("/api/ops")
 public class OpsController {
 
-    private final MemoryEntryMapper memoryEntryMapper;
-    private final AgentMemoryService agentMemoryService;
+    private final OpsDebugService opsDebugService;
     private final SandboxExecutionMapper sandboxExecutionMapper;
     private final PolicyService policyService;
     private final PolicyRewardMapper policyRewardMapper;
-    private final SkillProvider skillProvider;
-    private final ObjectMapper objectMapper;
+    private final AgentRuntimeClient runtimeClient;
+    private final LangfuseHealthService langfuseHealth;
 
-    public OpsController(MemoryEntryMapper memoryEntryMapper,
-                         AgentMemoryService agentMemoryService,
+    public OpsController(OpsDebugService opsDebugService,
                          SandboxExecutionMapper sandboxExecutionMapper,
                          PolicyService policyService,
                          PolicyRewardMapper policyRewardMapper,
-                         SkillProvider skillProvider,
-                         ObjectMapper objectMapper) {
-        this.memoryEntryMapper = memoryEntryMapper;
-        this.agentMemoryService = agentMemoryService;
+                         AgentRuntimeClient runtimeClient,
+                         LangfuseHealthService langfuseHealth) {
+        this.opsDebugService = opsDebugService;
         this.sandboxExecutionMapper = sandboxExecutionMapper;
         this.policyService = policyService;
         this.policyRewardMapper = policyRewardMapper;
-        this.skillProvider = skillProvider;
-        this.objectMapper = objectMapper;
+        this.runtimeClient = runtimeClient;
+        this.langfuseHealth = langfuseHealth;
     }
 
+    /** Lightweight shell — tab panels load their own paginated endpoints. */
     @GetMapping
     public Map<String, Object> overview() {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("panels", List.of("memory", "sandbox", "policy", "mcp", "skills"));
-        body.put("memory", memory(40));
-        body.put("sandbox", sandbox(40));
-        body.put("policy", policyLearning(40));
-        body.put("mcp", mcp());
-        body.put("skills", skills());
+        body.put("panels", List.of(
+                "runs", "memory", "policyLab", "mcp", "skills", "observability"));
+        body.put("role", "developer_console");
+        body.put("description", "Run-centric Debug Console：按 run 下钻 MCP/Skills/Memory；Sandbox 仅属 Policy Lab");
+        body.put("runtimeReady", runtimeClient.isReady());
+        body.put("recentRuns", runs(null, null, null, null, 20).get("items"));
+        body.put("observability", Map.of("langfuse", langfuseHealth.snapshot()));
+        return body;
+    }
+
+    @GetMapping("/runs")
+    public Map<String, Object> runs(@RequestParam(required = false) String traceId,
+                                    @RequestParam(required = false) String runId,
+                                    @RequestParam(required = false) String conversationId,
+                                    @RequestParam(required = false) String status,
+                                    @RequestParam(defaultValue = "40") int limit) {
+        List<RunDebugSummary> items = opsDebugService.listRuns(
+                traceId, runId, conversationId, status, limit);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("count", items.size());
+        body.put("items", items);
+        return body;
+    }
+
+    @GetMapping("/runs/{runId}")
+    public Map<String, Object> runDetail(@PathVariable String runId,
+                                         @RequestParam(defaultValue = "80") int eventLimit) {
+        RunDebugDetailResponse detail = opsDebugService.runDetail(runId, eventLimit, null);
+        if (detail == null) {
+            throw new ApiNotFoundException("Run 不存在：" + runId);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("run", detail.run());
+        body.put("correlation", detail.correlation());
+        body.put("plan", detail.plan());
+        body.put("budget", detail.budget());
+        body.put("artifacts", detail.artifacts());
+        body.put("skillVersions", detail.run().skillVersions());
+        body.put("promptVersions", detail.run().promptVersions());
+        body.put("metrics", detail.run().metrics());
+        body.put("skillsSelected", detail.skills());
+        body.put("skills", detail.skills());
+        body.put("mcpCalls", detail.mcpCalls());
+        body.put("errors", detail.errors());
+        body.put("memory", detail.memory());
+        body.put("observability", detail.observability());
+        body.put("timeline", detail.timeline());
+        body.put("eventCount", detail.timeline().size());
+        body.put("events", detail.timeline());
+        body.put("truncated", detail.truncated());
+        body.put("nextSeq", detail.nextSeq());
+        return body;
+    }
+
+    @GetMapping("/observability")
+    public Map<String, Object> observability() {
+        langfuseHealth.refreshProbe();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("langfuse", langfuseHealth.snapshot());
         return body;
     }
 
     @GetMapping("/memory")
-    public Map<String, Object> memory(@RequestParam(defaultValue = "50") int limit) {
-        int cap = Math.max(1, Math.min(limit, 200));
-        List<MemoryEntryRow> entries = memoryEntryMapper.selectList(new QueryWrapper<MemoryEntryRow>()
-                .orderByDesc("update_time")
-                .last("limit " + cap));
-        List<Map<String, Object>> preferences = new ArrayList<>();
-        List<Map<String, Object>> summaries = new ArrayList<>();
-        List<Map<String, Object>> hits = new ArrayList<>();
-        Map<String, Long> byType = new LinkedHashMap<>();
-        for (MemoryEntryRow row : entries) {
-            Map<String, Object> item = memoryItem(row);
-            String type = row.getType() == null ? "UNKNOWN" : row.getType();
-            byType.merge(type, 1L, Long::sum);
-            if ("PREFERENCE".equalsIgnoreCase(type)) {
-                preferences.add(item);
-            } else if ("CONVERSATION".equalsIgnoreCase(type) || "EPISODIC".equalsIgnoreCase(type)) {
-                summaries.add(item);
-            } else {
-                hits.add(item);
-            }
-        }
+    public Map<String, Object> memory(@RequestParam(defaultValue = "50") int limit,
+                                      @RequestParam(required = false) String scope,
+                                      @RequestParam(required = false) String source,
+                                      @RequestParam(required = false) String runId,
+                                      @RequestParam(required = false) String decision,
+                                      @RequestParam(defaultValue = "false") boolean includeBenchmark,
+                                      @RequestParam(defaultValue = "false") boolean includeControlFailure) {
+        MemoryOpsResponse resp = opsDebugService.memory(
+                limit, scope, source, runId, decision, includeBenchmark, includeControlFailure);
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("count", entries.size());
-        body.put("byType", byType);
-        body.put("preferences", preferences);
-        body.put("summaries", summaries);
-        body.put("hits", hits);
-        body.put("fileStore", agentMemoryService.overview());
+        body.put("count", resp.count());
+        body.put("skipped", resp.skipped());
+        body.put("byType", resp.byType());
+        body.put("byScope", resp.byScope());
+        body.put("bySource", resp.bySource());
+        body.put("entries", resp.entries());
+        body.put("usage", resp.usage());
+        body.put("preferences", resp.entries().stream()
+                .filter(e -> "PREFERENCE".equalsIgnoreCase(String.valueOf(e.get("type"))))
+                .toList());
+        body.put("summaries", resp.entries().stream()
+                .filter(e -> {
+                    String t = String.valueOf(e.get("type"));
+                    return "CONVERSATION".equalsIgnoreCase(t) || "EPISODIC".equalsIgnoreCase(t);
+                })
+                .toList());
+        body.put("hits", resp.entries().stream()
+                .filter(e -> {
+                    String t = String.valueOf(e.get("type"));
+                    return !"PREFERENCE".equalsIgnoreCase(t)
+                            && !"CONVERSATION".equalsIgnoreCase(t)
+                            && !"EPISODIC".equalsIgnoreCase(t);
+                })
+                .toList());
+        body.put("defaults", resp.defaults());
+        body.put("fileStore", resp.fileStore());
         return body;
     }
 
-    @GetMapping("/sandbox")
-    public Map<String, Object> sandbox(@RequestParam(defaultValue = "50") int limit) {
+    /**
+     * Policy Lab sandbox executions — purpose taken from row when present.
+     */
+    @GetMapping({"/sandbox", "/policy-lab"})
+    public Map<String, Object> policyLabSandbox(@RequestParam(defaultValue = "50") int limit) {
         int cap = Math.max(1, Math.min(limit, 200));
         List<SandboxExecutionRow> rows = sandboxExecutionMapper.selectList(
                 new QueryWrapper<SandboxExecutionRow>().orderByDesc("create_time").last("limit " + cap));
@@ -122,6 +182,9 @@ public class OpsController {
             item.put("durationMs", row.getDurationMs());
             item.put("error", row.getError());
             item.put("isolationMode", isolationMode(row));
+            item.put("purpose", opsDebugService.sandboxPurpose(row.getPurpose()));
+            item.put("experimentId", row.getExperimentId());
+            item.put("trialId", row.getTrialId());
             item.put("createTime", row.getCreateTime());
             item.put("finishedAt", row.getFinishedAt());
             item.put("stdoutTail", truncate(row.getStdoutTail(), 240));
@@ -133,6 +196,15 @@ public class OpsController {
             byStatus.merge(String.valueOf(exec.getOrDefault("status", "UNKNOWN")), 1L, Long::sum);
         }
         Map<String, Object> body = new LinkedHashMap<>();
+        body.put("label", "Policy Optimization Lab（无 GPU）");
+        body.put("purpose", "SANDBOX");
+        body.put("axes", Map.of(
+                "ONLINE_SELECTION", "champion-only production / shadow bandit",
+                "OFFLINE_SEARCH", "reflective evolutionary search (bounded, not full GEPA)",
+                "MODEL_WEIGHTS", "unchanged",
+                "SANDBOX", "experiment isolation"));
+        body.put("candidateEvaluation", false);
+        body.put("disclaimer", "SANDBOX 仅服务 Policy Optimization Lab / benchmark / replay，不属于候选人评估路径。");
         body.put("count", executions.size());
         body.put("byStatus", byStatus);
         body.put("isolationModes", List.of("docker_isolated", "local_fallback", "unknown"));
@@ -140,7 +212,7 @@ public class OpsController {
         return body;
     }
 
-    @GetMapping("/policy")
+    @GetMapping({"/policy", "/policies"})
     public Map<String, Object> policyLearning(@RequestParam(defaultValue = "50") int limit) {
         int cap = Math.max(1, Math.min(limit, 200));
         List<PolicyBundleRow> bundles = policyService.listActiveBundles();
@@ -156,13 +228,22 @@ public class OpsController {
             item.put("source", row.getSource());
             item.put("feedbackId", row.getFeedbackId());
             item.put("totalReward", row.getTotalReward());
-            item.put("components", parseJson(row.getComponents()));
+            item.put("components", opsDebugService.parseJson(row.getComponents()));
             item.put("createTime", row.getCreateTime());
             return item;
         }).toList();
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("mode", "rule_reward_no_gpu");
-        body.put("description", "无 GPU RL：基于 feedback/reward 表的规则加权与策略统计可视化");
+        body.put("mode", "policy_optimization_lab_no_gpu");
+        body.put("label", "Policy Optimization Lab（无 GPU）");
+        body.put("description",
+                "Policy Optimization Lab（无 GPU）：ONLINE_SELECTION 生产仅 champion；"
+                        + "bandit 探索仅 shadow/lab；OFFLINE_SEARCH 为有界配置进化（非完整 GEPA）；"
+                        + "MODEL_WEIGHTS unchanged。");
+        body.put("axes", Map.of(
+                "ONLINE_SELECTION", "champion-only production / shadow bandit",
+                "OFFLINE_SEARCH", "reflective evolutionary search (bounded, not full GEPA)",
+                "MODEL_WEIGHTS", "unchanged",
+                "SANDBOX", "experiment isolation"));
         body.put("bundles", bundles.stream().map(b -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("policyId", b.getPolicyId());
@@ -181,79 +262,59 @@ public class OpsController {
     }
 
     @GetMapping("/mcp")
-    public Map<String, Object> mcp() {
-        JsonNode root = loadMcpConfig();
-        List<Map<String, Object>> servers = new ArrayList<>();
-        appendMcpServers(servers, root.path("mcpServers"), false);
-        appendMcpServers(servers, root.path("optionalMcpServers"), true);
+    public Map<String, Object> mcp(@RequestParam(defaultValue = "false") boolean probe,
+                                   @RequestParam(defaultValue = "40") int recentLimit,
+                                   @RequestParam(required = false) String runId,
+                                   @RequestParam(required = false) String server,
+                                   @RequestParam(required = false) String outcome) {
+        McpOpsResponse resp = opsDebugService.mcp(probe, runId, server, outcome, recentLimit);
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("evidencePolicy", root.path("evidencePolicy"));
-        body.put("servers", servers);
-        body.put("statusEnum", List.of("AVAILABLE", "RATE_LIMITED", "AUTH_REQUIRED", "DOWN"));
+        body.put("statusEnum", resp.statusEnum());
+        body.put("source", resp.inventory().source());
+        body.put("probed", resp.inventory().probed());
+        body.put("lastProbeAt", resp.inventory().lastProbeAt());
+        body.put("availableTools", resp.inventory().availableTools());
+        body.put("toolCount", resp.inventory().toolCount());
+        body.put("configPath", resp.inventory().configPath());
+        body.put("servers", resp.inventory().servers());
+        body.put("runtimeReachable", resp.inventory().runtimeReachable());
+        if (resp.inventory().runtimeError() != null) {
+            body.put("runtimeError", resp.inventory().runtimeError());
+        }
+        body.put("inventory", resp.inventory());
+        body.put("invocations", resp.invocations());
+        body.put("recentCalls", resp.invocations().items());
+        body.put("note", resp.note());
         return body;
     }
 
     @GetMapping("/skills")
-    public Map<String, Object> skills() {
-        List<Map<String, Object>> items = new ArrayList<>();
-        List<Map<String, Object>> triggerMatrix = new ArrayList<>();
-        for (SkillDescriptor skill : skillProvider.listInstalled()) {
-            String hash = skillHash(skill);
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("name", skill.name());
-            item.put("description", skill.description());
-            item.put("allowedTools", skill.allowedTools());
-            item.put("metadata", skill.metadata());
-            item.put("directory", skill.directory() == null ? null : skill.directory().toString());
-            item.put("version", skill.metadata().getOrDefault("version", "1"));
-            item.put("hash", hash);
-            item.put("manifest", Map.of(
-                    "name", skill.name(),
-                    "description", skill.description(),
-                    "allowedTools", skill.allowedTools(),
-                    "metadata", skill.metadata()));
-            items.add(item);
-
-            Map<String, Object> trigger = new LinkedHashMap<>();
-            trigger.put("skill", skill.name());
-            trigger.put("triggers", parseTriggers(skill.metadata()));
-            trigger.put("agents", parseListMeta(skill.metadata(), "agents", "agent"));
-            trigger.put("phases", parseListMeta(skill.metadata(), "phases", "phase"));
-            trigger.put("tools", skill.allowedTools());
-            triggerMatrix.add(trigger);
-        }
+    public Map<String, Object> skills(@RequestParam(defaultValue = "false") boolean includeDeprecated,
+                                      @RequestParam(defaultValue = "60") int recentLimit) {
+        SkillOpsResponse resp = opsDebugService.skills(includeDeprecated, recentLimit);
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("count", items.size());
-        body.put("skills", items);
-        body.put("triggerMatrix", triggerMatrix);
-        body.put("advertisedTools", List.of("load_skill", "execute_skill", "read_skill_resource"));
+        body.put("source", resp.source());
+        body.put("root", resp.root());
+        body.put("count", resp.count());
+        body.put("activeCount", resp.activeCount());
+        body.put("deprecatedCount", resp.deprecatedCount());
+        body.put("advertisedTools", resp.advertisedTools());
+        body.put("skills", resp.skills());
+        body.put("runtimeReachable", resp.runtimeReachable());
+        if (resp.runtimeError() != null) {
+            body.put("runtimeError", resp.runtimeError());
+        }
+        body.put("selectedApplied", resp.selectedApplied());
+        body.put("usageBySkill", resp.usageBySkill());
+        body.put("note", resp.note());
         return body;
-    }
-
-    private Map<String, Object> memoryItem(MemoryEntryRow row) {
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("memoryId", row.getMemoryId());
-        item.put("type", row.getType());
-        item.put("ownerScope", row.getOwnerScope());
-        item.put("userId", row.getUserId());
-        item.put("conversationId", row.getConversationId());
-        item.put("runId", row.getRunId());
-        item.put("content", truncate(row.getContent(), 320));
-        item.put("source", row.getSource());
-        item.put("sourceId", row.getSourceId());
-        item.put("confidence", row.getConfidence());
-        item.put("status", row.getStatus());
-        item.put("version", row.getVersion());
-        item.put("updateTime", row.getUpdateTime());
-        item.put("createTime", row.getCreateTime());
-        return item;
     }
 
     private String isolationMode(SandboxExecutionRow row) {
         if (row.getContainerId() != null && !row.getContainerId().isBlank()) {
             return "docker_isolated";
         }
-        String status = row.getStatus() == null ? "" : row.getStatus().toLowerCase(Locale.ROOT);
+        String status = row.getStatus() == null ? "" : row.getStatus().toLowerCase();
         if (status.contains("local") || status.contains("fallback")) {
             return "local_fallback";
         }
@@ -261,139 +322,10 @@ public class OpsController {
                 ? "local_fallback" : "unknown";
     }
 
-    private void appendMcpServers(List<Map<String, Object>> out, JsonNode node, boolean optional) {
-        if (node == null || !node.isObject()) {
-            return;
-        }
-        node.fields().forEachRemaining(entry -> {
-            JsonNode cfg = entry.getValue();
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("name", entry.getKey());
-            item.put("optional", optional);
-            item.put("enabled", cfg.path("enabled").asBoolean(false));
-            item.put("default", cfg.path("default").asBoolean(false));
-            item.put("transport", textOrNull(cfg, "transport"));
-            item.put("url", textOrNull(cfg, "url"));
-            item.put("command", textOrNull(cfg, "command"));
-            item.put("description", textOrNull(cfg, "description"));
-            item.put("requiredEnv", readStringArray(cfg.path("requiredEnv")));
-            item.put("optionalEnv", readStringArray(cfg.path("optionalEnv")));
-            item.put("tools", inferMcpTools(cfg));
-            item.put("status", resolveMcpStatus(cfg, optional));
-            out.add(item);
-        });
-    }
-
-    private String resolveMcpStatus(JsonNode cfg, boolean optional) {
-        boolean enabled = cfg.path("enabled").asBoolean(false);
-        List<String> required = readStringArray(cfg.path("requiredEnv"));
-        boolean missingAuth = required.stream().anyMatch(env -> {
-            String value = System.getenv(env);
-            return value == null || value.isBlank();
-        });
-        if (!enabled) {
-            return missingAuth && !required.isEmpty() ? "AUTH_REQUIRED" : "DOWN";
-        }
-        if (missingAuth) {
-            return "AUTH_REQUIRED";
-        }
-        String desc = cfg.path("description").asText("").toLowerCase(Locale.ROOT);
-        if (desc.contains("rate limit") || desc.contains("rate-limited")) {
-            return "RATE_LIMITED";
-        }
-        if (optional && !cfg.path("default").asBoolean(false)) {
-            return "AVAILABLE";
-        }
-        return "AVAILABLE";
-    }
-
-    private List<String> inferMcpTools(JsonNode cfg) {
-        String url = cfg.path("url").asText("");
-        int idx = url.indexOf("tools=");
-        if (idx >= 0) {
-            String tools = url.substring(idx + 6);
-            int amp = tools.indexOf('&');
-            if (amp >= 0) tools = tools.substring(0, amp);
-            return List.of(tools.split(","));
-        }
-        String name = cfg.path("description").asText("");
-        if (name.toLowerCase(Locale.ROOT).contains("search")) {
-            return List.of("search");
-        }
-        return List.of();
-    }
-
-    private List<String> parseTriggers(Map<String, String> metadata) {
-        if (metadata == null) return List.of();
-        for (String key : List.of("triggers", "trigger", "when")) {
-            if (metadata.containsKey(key)) {
-                return splitCsv(metadata.get(key));
-            }
-        }
-        return List.of("on_demand");
-    }
-
-    private List<String> parseListMeta(Map<String, String> metadata, String primary, String secondary) {
-        if (metadata == null) return List.of();
-        if (metadata.containsKey(primary)) return splitCsv(metadata.get(primary));
-        if (metadata.containsKey(secondary)) return splitCsv(metadata.get(secondary));
-        return List.of();
-    }
-
-    private List<String> splitCsv(String raw) {
-        if (raw == null || raw.isBlank()) return List.of();
-        List<String> out = new ArrayList<>();
-        for (String part : raw.split("[,;|/]+")) {
-            String trimmed = part.trim();
-            if (!trimmed.isEmpty()) out.add(trimmed);
-        }
-        return out;
-    }
-
-    private String skillHash(SkillDescriptor skill) {
-        try {
-            Path skillMd = skill.directory().resolve("SKILL.md");
-            byte[] bytes = Files.readAllBytes(skillMd);
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(bytes)).substring(0, 12);
-        } catch (Exception e) {
-            return "unknown";
-        }
-    }
-
-    private JsonNode loadMcpConfig() {
-        try {
-            return objectMapper.readTree(new ClassPathResource("mcp-servers.json").getInputStream());
-        } catch (Exception e) {
-            return objectMapper.createObjectNode();
-        }
-    }
-
-    private Object parseJson(String raw) {
-        if (raw == null || raw.isBlank()) return Map.of();
-        try {
-            return objectMapper.readTree(raw);
-        } catch (Exception e) {
-            return raw;
-        }
-    }
-
-    private List<String> readStringArray(JsonNode node) {
-        if (node == null || !node.isArray()) return List.of();
-        List<String> out = new ArrayList<>();
-        node.forEach(n -> {
-            if (n.isTextual()) out.add(n.asText());
-        });
-        return out;
-    }
-
-    private String textOrNull(JsonNode node, String field) {
-        JsonNode value = node.path(field);
-        return value.isMissingNode() || value.isNull() || value.asText().isBlank() ? null : value.asText();
-    }
-
     private String truncate(String value, int max) {
-        if (value == null) return null;
+        if (value == null) {
+            return null;
+        }
         String normalized = value.replaceAll("\\s+", " ").trim();
         return normalized.length() <= max ? normalized : normalized.substring(0, max) + "…";
     }

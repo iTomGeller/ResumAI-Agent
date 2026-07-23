@@ -26,16 +26,20 @@ class SandboxUnavailable(RuntimeError):
 
 
 class SandboxClient:
-    """Client for the internal sandbox manager. Only the fixed allow-listed
-    tools can run; images/volumes/commands are never caller-controlled. On
-    cancellation the manager is asked to destroy the sandbox immediately."""
+    """Policy Lab only. Candidate evaluation must never import this class."""
 
     def __init__(self, emitter: RuntimeEmitter, run_id: str, conversation_id: str,
-                 timeout_seconds: int = 90) -> None:
+                 timeout_seconds: int = 90, *,
+                 purpose: str = "POLICY_EVOLUTION",
+                 experiment_id: str = "",
+                 trial_id: str = "") -> None:
         self.emitter = emitter
         self.run_id = run_id
         self.conversation_id = conversation_id
         self.timeout_seconds = timeout_seconds
+        self.purpose = purpose
+        self.experiment_id = experiment_id
+        self.trial_id = trial_id
         self.base_url = os.getenv(
             "SANDBOX_MANAGER_URL", "http://resumai-sandbox-manager:8070").rstrip("/")
         self.enabled = os.getenv("SANDBOX_ENABLED", "true").lower() != "false"
@@ -51,15 +55,24 @@ class SandboxClient:
             raise ValueError(f"tool not in sandbox allowlist: {tool}")
         if not self.enabled:
             raise SandboxUnavailable("sandbox disabled by configuration")
+        if self.purpose.upper() in {"CANDIDATE_EVALUATION", "LEGACY_CANDIDATE_EVALUATION"}:
+            raise SandboxUnavailable("candidate evaluation is forbidden in Policy Lab sandbox")
+        if not self.experiment_id or not self.trial_id:
+            raise SandboxUnavailable("experimentId and trialId are required for sandbox invoke")
         sandbox_id = f"sbx-{uuid.uuid4().hex[:16]}"
         await self.emitter.emit("sandbox.started", tool_name=tool, payload={
-            "sandboxId": sandbox_id, "tool": tool})
+            "sandboxId": sandbox_id, "tool": tool,
+            "purpose": self.purpose, "experimentId": self.experiment_id,
+            "trialId": self.trial_id})
         started = time.monotonic()
         try:
             payload = {
                 "sandboxId": sandbox_id,
                 "runId": self.run_id,
                 "conversationId": self.conversation_id,
+                "purpose": self.purpose,
+                "experimentId": self.experiment_id,
+                "trialId": self.trial_id,
                 "tool": tool,
                 "args": args,
                 "timeoutSeconds": self.timeout_seconds,
@@ -101,23 +114,3 @@ class SandboxClient:
                     json={"reason": "run_cancelled"}, headers=self._headers())
         except Exception as exc:  # noqa: BLE001 - best effort during teardown
             logger.info("sandbox cancel notify failed %s: %s", sandbox_id, exc)
-
-
-class LocalSandboxFallback:
-    """In-process execution of the deterministic resume tools.
-
-    This is the DEFAULT path for normal user requests: the tools are pure
-    stdlib functions with no side effects, so a per-call Docker container
-    adds seconds of latency without any security benefit. The isolated
-    Docker worker (SandboxClient) is reserved for policy replay / benchmark
-    environments where hard isolation and resource metering are the point.
-    """
-
-    def __init__(self) -> None:
-        from app.runtime import sandbox_tools_local
-        self._impl = sandbox_tools_local
-
-    async def invoke(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        if tool not in SANDBOX_TOOLS:
-            raise ValueError(f"tool not in sandbox allowlist: {tool}")
-        return self._impl.run_tool(tool, args)

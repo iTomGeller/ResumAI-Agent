@@ -7,6 +7,7 @@ import com.resumai.agent.domain.entity.ContextSnapshotRow;
 import com.resumai.agent.domain.entity.SandboxExecutionRow;
 import com.resumai.agent.service.InternalWorkflowService;
 import com.resumai.agent.service.MemoryService;
+import com.resumai.agent.service.RunMemoryUsageService;
 import com.resumai.agent.service.run.RunLifecycleService;
 import com.resumai.agent.service.run.RunSchedulerService;
 import java.time.LocalDateTime;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -34,6 +36,7 @@ public class AgentRunInternalController {
     private final RunLifecycleService lifecycleService;
     private final RunSchedulerService schedulerService;
     private final MemoryService memoryService;
+    private final RunMemoryUsageService runMemoryUsageService;
     private final ContextSnapshotMapper contextSnapshotMapper;
     private final SandboxExecutionMapper sandboxExecutionMapper;
     private final ObjectMapper objectMapper;
@@ -42,6 +45,7 @@ public class AgentRunInternalController {
                                       RunLifecycleService lifecycleService,
                                       RunSchedulerService schedulerService,
                                       MemoryService memoryService,
+                                      RunMemoryUsageService runMemoryUsageService,
                                       ContextSnapshotMapper contextSnapshotMapper,
                                       SandboxExecutionMapper sandboxExecutionMapper,
                                       ObjectMapper objectMapper) {
@@ -49,6 +53,7 @@ public class AgentRunInternalController {
         this.lifecycleService = lifecycleService;
         this.schedulerService = schedulerService;
         this.memoryService = memoryService;
+        this.runMemoryUsageService = runMemoryUsageService;
         this.contextSnapshotMapper = contextSnapshotMapper;
         this.sandboxExecutionMapper = sandboxExecutionMapper;
         this.objectMapper = objectMapper;
@@ -142,7 +147,8 @@ public class AgentRunInternalController {
 
     public record MemorySearchRequest(String query, List<String> types, String userId,
                                       String conversationId, String runId, Integer topK,
-                                      Double minConfidence, String channel) {
+                                      Double minConfidence, String channel,
+                                      String consumerAgent, Boolean includeBenchmarkSources) {
     }
 
     @PostMapping("/memory/search")
@@ -152,8 +158,21 @@ public class AgentRunInternalController {
         List<Map<String, Object>> hits = memoryService.search(new MemoryService.SearchRequest(
                 request.query(), request.types(), request.userId(), request.conversationId(),
                 request.runId(), request.topK(), request.minConfidence(), false,
-                request.channel()));
+                request.channel(), request.consumerAgent(),
+                request.includeBenchmarkSources()));
         return Map.of("hits", hits, "hitCount", hits.size());
+    }
+
+    /**
+     * Persist USED/IGNORED memory decisions after agent retrieval for Ops drilldown.
+     */
+    @PostMapping("/{runId}/memory-usage")
+    public Map<String, Object> memoryUsage(@RequestHeader("X-Internal-Token") String token,
+                                           @PathVariable String runId,
+                                           @RequestBody Map<String, Object> body) {
+        authorize(token);
+        int written = runMemoryUsageService.recordUsageFromPayload(runId, body);
+        return Map.of("status", "OK", "written", written);
     }
 
     // ------------------------------------------------------------------
@@ -188,6 +207,7 @@ public class AgentRunInternalController {
 
     public record SandboxExecutionRequest(String sandboxId, String runId, String conversationId,
                                           String toolName, String containerId, String status,
+                                          String purpose, String experimentId, String trialId,
                                           Integer exitCode, Long durationMs, String stdoutTail,
                                           String stderrTail, String error, String expireAt) {
     }
@@ -206,6 +226,15 @@ public class AgentRunInternalController {
         row.setToolName(request.toolName());
         row.setContainerId(request.containerId());
         row.setStatus(request.status());
+        if (request.purpose() != null && !request.purpose().isBlank()) {
+            row.setPurpose(request.purpose());
+        }
+        if (request.experimentId() != null) {
+            row.setExperimentId(request.experimentId());
+        }
+        if (request.trialId() != null) {
+            row.setTrialId(request.trialId());
+        }
         row.setExitCode(request.exitCode());
         row.setDurationMs(request.durationMs());
         row.setStdoutTail(trim(request.stdoutTail(), 3900));

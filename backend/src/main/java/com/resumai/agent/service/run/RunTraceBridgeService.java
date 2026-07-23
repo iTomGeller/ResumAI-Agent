@@ -3,6 +3,7 @@ package com.resumai.agent.service.run;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.api.dto.TraceEventResponse;
+import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.dao.AgentRunMapper;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.RunEvent;
@@ -12,7 +13,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -31,16 +31,16 @@ public class RunTraceBridgeService {
     private final AgentRunMapper runMapper;
     private final RunEventService eventService;
     private final ObjectMapper objectMapper;
-    private final String langfusePublicUrl;
+    private final LangfuseHealthService langfuseHealth;
 
     public RunTraceBridgeService(AgentRunMapper runMapper,
                                  RunEventService eventService,
                                  ObjectMapper objectMapper,
-                                 @Value("${langfuse.public-url:}") String langfusePublicUrl) {
+                                 LangfuseHealthService langfuseHealth) {
         this.runMapper = runMapper;
         this.eventService = eventService;
         this.objectMapper = objectMapper;
-        this.langfusePublicUrl = langfusePublicUrl;
+        this.langfuseHealth = langfuseHealth;
     }
 
     /** Latest run whose traceId or bridged task trace matches. */
@@ -177,8 +177,22 @@ public class RunTraceBridgeService {
                 detail = String.valueOf(payload.getOrDefault("error", ""));
                 status = "FAILED";
             }
+            case "skill.selected", "skill.applied" -> {
+                title = type.equals("skill.selected") ? "技能选定" : "技能已注入";
+                detail = "skill=" + payload.getOrDefault("skillId", event.getToolName())
+                        + "@" + payload.getOrDefault("skillVersion", "")
+                        + " reason=" + payload.getOrDefault("triggerReason", "");
+                status = "SUCCESS";
+            }
+            case "skill.started", "skill.completed" -> {
+                // Legacy fake tool lifecycle — treat as applied annotation.
+                title = "技能 " + payload.getOrDefault("skillId", event.getToolName());
+                detail = preview(payload, 300);
+                status = "SUCCESS";
+            }
             case "sandbox.started", "sandbox.completed", "sandbox.failed" -> {
-                title = "Sandbox " + event.getToolName();
+                // Candidate Trace must not present sandbox; keep for Policy Lab history only.
+                title = "PolicyLab " + event.getToolName();
                 detail = preview(payload, 300);
                 status = type.endsWith("failed") ? "FAILED" : "SUCCESS";
             }
@@ -226,8 +240,7 @@ public class RunTraceBridgeService {
         if (run == null) {
             tree.put("executionTree", List.of());
             tree.put("historicalAttempts", List.of());
-            tree.put("langfuseTraceUrl", buildLangfuseTraceUrl(traceId));
-            tree.put("langfuseTraceId", traceId);
+            tree.putAll(langfuseHealth.linkMeta(traceId));
             return tree;
         }
         // Current attempt only — prior control-plane failures go to historicalAttempts.
@@ -433,8 +446,7 @@ public class RunTraceBridgeService {
 
         tree.put("historicalAttempts", buildHistoricalAttempts(traceId, run.getRunId()));
         String otelTraceId = run.getTraceId() != null ? run.getTraceId() : traceId;
-        tree.put("langfuseTraceId", otelTraceId);
-        tree.put("langfuseTraceUrl", buildLangfuseTraceUrl(otelTraceId));
+        tree.putAll(langfuseHealth.linkMeta(otelTraceId));
         return tree;
     }
 
@@ -482,41 +494,37 @@ public class RunTraceBridgeService {
         };
     }
 
-    private String buildLangfuseTraceUrl(String traceId) {
-        if (!StringUtils.hasText(traceId)) {
-            return "";
-        }
-        if (StringUtils.hasText(langfusePublicUrl)) {
-            String base = langfusePublicUrl.endsWith("/")
-                    ? langfusePublicUrl.substring(0, langfusePublicUrl.length() - 1)
-                    : langfusePublicUrl;
-            return base + "/project/resumai-project/traces/" + traceId;
-        }
-        return "";
-    }
-
     private static String inferKind(String toolName, String eventType) {
+        if (eventType != null && eventType.startsWith("skill.")) {
+            return "skill";
+        }
         if (eventType != null && eventType.startsWith("sandbox.")) {
-            return "sandbox";
+            // Policy Lab only — candidate UI remaps/hides this.
+            return "policy_lab";
         }
         if (toolName == null) {
-            return "internal";
+            return "builtin";
         }
         if (toolName.startsWith("mcp_") || toolName.contains(".")) {
             return "mcp";
         }
-        if ("execute_skill".equals(toolName) || "list_skills".equals(toolName)) {
+        if ("execute_skill".equals(toolName) || "list_skills".equals(toolName)
+                || "load_skill".equals(toolName)) {
             return "skill";
         }
         if (Set.of("parse_resume", "check_timeline", "calculate_jd_coverage",
                 "locate_evidence", "verify_report_evidence", "resume_lint",
                 "validate_report_schema", "evaluate_policy_output").contains(toolName)) {
-            return "sandbox";
+            return "builtin";
+        }
+        if (Set.of("knowledge_search", "resume_semantic_search", "jd_match_search")
+                .contains(toolName)) {
+            return "retrieval";
         }
         if ("external_profile_lookup".equals(toolName)) {
-            return "gateway";
+            return "external";
         }
-        return "internal";
+        return "builtin";
     }
 
     // ------------------------------------------------------------------
@@ -539,8 +547,14 @@ public class RunTraceBridgeService {
         if (type.startsWith("llm.")) {
             return "LLM_GENERATION";
         }
-        if (type.startsWith("tool.") || type.startsWith("sandbox.")) {
+        if (type.startsWith("skill.")) {
+            return "SKILL_LIFECYCLE";
+        }
+        if (type.startsWith("tool.")) {
             return "LLM_TOOL_CALL";
+        }
+        if (type.startsWith("sandbox.")) {
+            return "POLICY_LAB";
         }
         if (type.startsWith("agent.")) {
             return "AGENT_EXECUTION";

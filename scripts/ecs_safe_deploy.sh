@@ -132,9 +132,13 @@ drain_api() {
 if docker ps --format '{{.Names}}' | grep -q '^ai-resume-backend$'; then
   log "enable scheduler drain before rebuild/restart"
   drain_api POST /drain '{"enabled":true}' >/tmp/resumai-drain.json || log "WARN: drain call failed"
-  DRAIN_WAIT_SEC="${DRAIN_WAIT_SEC:-90}"
+  DRAIN_WAIT_SEC="${DRAIN_WAIT_SEC:-15}"
   for ((i=0; i<DRAIN_WAIT_SEC; i+=3)); do
     snap="$(drain_api GET /active 2>/dev/null || echo '')"
+    if [[ -z "$snap" ]]; then
+      log "drain probe unavailable — skip wait (backend down)"
+      break
+    fi
     echo "$snap" > /tmp/resumai-active.json || true
     ready="$(python3 - <<'PY' 2>/dev/null || echo 0
 import json
@@ -211,14 +215,21 @@ log "prepare frontend ecs image context"
 mkdir -p "$SRC_DIR/frontend/.nginx-cache"
 # Dockerfile.ecs expects dist/ already built
 
-log "build sandbox worker image + manager + app images"
+log "build app images (sandbox manager is policy-lab profile only — not default prod)"
 cd "$SRC_DIR"
-$COMPOSE --profile build build resumai-sandbox-worker-image
-$COMPOSE build resumai-sandbox-manager ai-resume-workflow ai-resume-backend ai-resume-frontend
+# Optional: pin worker image for when --profile policy-lab is enabled later.
+$COMPOSE --profile build build resumai-sandbox-worker-image || \
+  log "WARN: sandbox worker image build skipped/failed (ok for candidate runtime)"
+$COMPOSE build ai-resume-workflow ai-resume-backend ai-resume-frontend
 
-log "bring up stack (volumes preserved; neo4j now optional under profile graph)"
+log "bring up stack (volumes preserved; neo4j optional under profile graph; sandbox under policy-lab)"
 $COMPOSE up -d mysql redis minio etcd milvus prometheus grafana
-$COMPOSE up -d resumai-sandbox-manager ai-resume-workflow ai-resume-backend ai-resume-frontend
+$COMPOSE up -d ai-resume-workflow ai-resume-backend ai-resume-frontend
+# Stop leftover sandbox manager if previous deploy started it without profile.
+if docker ps --format '{{.Names}}' | grep -q '^resumai-sandbox-manager$'; then
+  log "stopping leftover sandbox manager (policy-lab profile only)"
+  docker stop resumai-sandbox-manager || true
+fi
 # Knowledge graph removed: stop a leftover neo4j container (volume untouched).
 if docker ps --format '{{.Names}}' | grep -q '^resumai-neo4j$'; then
   log "stopping legacy neo4j container (volume preserved)"
@@ -284,10 +295,16 @@ python3 "$SRC_DIR/scripts/seed_knowledge_base.py" --base http://127.0.0.1 || \
 curl -fsS -X POST http://127.0.0.1/api/rag/knowledge-base/reindex || \
   log "WARN: kb reindex endpoint unavailable (vector store may be lexical-only)"
 
-log "install nightly policy-evolution cron (idempotent)"
-CRON_LINE="0 3 * * * cd $SRC_DIR && WORKFLOW_INTERNAL_TOKEN=\$(grep '^WORKFLOW_INTERNAL_TOKEN=' .env | cut -d= -f2) DEEPSEEK_API_KEY=\$(grep '^DEEPSEEK_API_KEY=' .env | cut -d= -f2) python3 harness/evolve_policies.py --base http://127.0.0.1 --budget-cny 5 --out reports/evolution >> /var/log/resumai-evolution.log 2>&1"
-( crontab -l 2>/dev/null | grep -v 'evolve_policies.py' ; echo "$CRON_LINE" ) | crontab - || \
-  log "WARN: cron install failed"
+log "policy-lab cron: only when profile enabled; otherwise remove direct evolve cron"
+if docker ps --format '{{.Names}}' | grep -q '^policy-lab-worker$'; then
+  CRON_LINE="0 3 * * * curl -fsS -X POST http://127.0.0.1/api/dev/policy-lab/experiments -H 'Content-Type: application/json' -d '{\"kind\":\"OFFLINE_SEARCH\",\"basePolicyId\":\"balanced\",\"runType\":\"full_evaluation\",\"cohortKey\":\"nightly\",\"evalDataset\":\"gold\",\"gateDataset\":\"regression\",\"safetyDataset\":\"safety\",\"seeds\":[42],\"repeatsPerCase\":1,\"caseLimit\":3,\"budgetCny\":5,\"note\":\"nightly\"}' >> /var/log/resumai-evolution.log 2>&1"
+  ( crontab -l 2>/dev/null | grep -v 'evolve_policies.py' | grep -v 'policy-lab/experiments' ; echo "$CRON_LINE" ) | crontab - || \
+    log "WARN: policy-lab cron install failed"
+else
+  ( crontab -l 2>/dev/null | grep -v 'evolve_policies.py' | grep -v 'policy-lab/experiments' || true ) | crontab - || \
+    log "WARN: cron cleanup failed"
+  log "policy-lab profile not running — nightly auto-evolution cron removed"
+fi
 
 log "container status"
 $COMPOSE ps

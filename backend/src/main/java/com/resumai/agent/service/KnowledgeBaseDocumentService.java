@@ -3,6 +3,7 @@ package com.resumai.agent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.ai.DeepSeekClient;
+import com.resumai.agent.api.dto.RagProvenance;
 import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.config.EmbeddingProperties;
 import dev.langchain4j.data.document.Metadata;
@@ -18,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -238,6 +240,9 @@ public class KnowledgeBaseDocumentService {
 
     /** Search must not share the ingest/reindex monitor — vector index can take minutes. */
     public SearchResult searchDetailed(String query, int topK, boolean rerank) {
+        long started = System.currentTimeMillis();
+        String queryId = "kbq-" + UUID.randomUUID();
+        String retrievedAt = LocalDateTime.now().toString();
         int limit = Math.max(topK, 1);
         List<Map<String, Object>> lexical = lexicalSearch(query, Math.max(limit * 4, 20));
         List<Map<String, Object>> vector = vectorSearch(query, Math.max(limit * 4, 20));
@@ -250,11 +255,15 @@ public class KnowledgeBaseDocumentService {
             strategy = "hybrid_bm25_embedding";
             fallbackStage = "hybrid";
         } else if (!vector.isEmpty()) {
-            fused = vector.stream().limit(Math.max(limit * 2, 10)).toList();
+            fused = vector.stream().limit(Math.max(limit * 2, 10))
+                    .map(row -> preserveChannelScores(new LinkedHashMap<>(row), "vector"))
+                    .toList();
             strategy = "embedding_only";
             fallbackStage = "vector";
         } else if (!lexical.isEmpty()) {
-            fused = lexical.stream().limit(Math.max(limit * 2, 10)).toList();
+            fused = lexical.stream().limit(Math.max(limit * 2, 10))
+                    .map(row -> preserveChannelScores(new LinkedHashMap<>(row), "lexical"))
+                    .toList();
             strategy = vectorReady() ? "lexical_only" : "lexical_bm25_like";
             fallbackStage = "lexical";
         } else {
@@ -276,19 +285,38 @@ public class KnowledgeBaseDocumentService {
         final String resolvedStrategy = strategy;
         final String resolvedStage = fallbackStage;
         final String queryText = query == null ? "" : query;
-        List<Map<String, Object>> hits = fused.stream().limit(limit).map(row -> {
+        final boolean appliedRerank = rerankApplied;
+        List<Map<String, Object>> hits = new ArrayList<>();
+        int rank = 0;
+        for (Map<String, Object> row : fused) {
+            if (hits.size() >= limit) break;
+            rank++;
             Map<String, Object> copy = enrichChunk(row, null, resolvedStage);
             copy.put("strategy", resolvedStrategy);
             copy.put("query", queryText);
+            copy.put("queryId", queryId);
+            copy.put("rank", rank);
+            copy.put("retrievedAt", retrievedAt);
             copy.put("fallbackStage", resolvedStage);
             copy.put("fallbackUsed", "lexical".equals(resolvedStage) || "none".equals(resolvedStage));
             copy.put("enabled", true);
-            return copy;
-        }).toList();
+            if (appliedRerank && copy.get("rerankScore") == null) {
+                // listwise order only — expose inverse-rank as soft rerank score when LLM did not emit one
+                copy.put("rerankScore", 1.0 / rank);
+            }
+            Object finalScore = copy.get("rrfScore") != null ? copy.get("rrfScore")
+                    : (copy.get("vectorScore") != null ? copy.get("vectorScore") : copy.get("bm25Score"));
+            if (finalScore != null) {
+                copy.put("finalScore", finalScore);
+                copy.putIfAbsent("retrievalScore", finalScore);
+            }
+            hits.add(copy);
+        }
         markHits(hits);
+        long latencyMs = System.currentTimeMillis() - started;
         return new SearchResult(hits, resolvedStrategy, lexical.size(), vector.size(),
                 !lexical.isEmpty() && !vector.isEmpty() ? "rrf_k60" : "none",
-                rerankApplied, resolvedStage, FALLBACK_CHAIN);
+                rerankApplied, resolvedStage, FALLBACK_CHAIN, queryId, retrievedAt, latencyMs);
     }
 
     /**
@@ -397,6 +425,7 @@ public class KnowledgeBaseDocumentService {
         }
         Map<String, Object> doc = new LinkedHashMap<>();
         doc.put("docId", docId);
+        doc.put("documentId", docId);
         doc.put("title", StringUtils.hasText(title) ? title : docId);
         doc.put("docType", StringUtils.hasText(docType) ? docType : "general");
         doc.put("tags", splitTags(tags));
@@ -407,11 +436,13 @@ public class KnowledgeBaseDocumentService {
         doc.put("indexStatus", indexStatus);
         doc.put("embeddingProvider", embeddingProvider());
         doc.put("indexVersion", indexVersion());
+        doc.put("version", indexVersion());
         doc.put("chunkPolicy", Map.of("targetChunkChars", targetChunkChars, "overlapChars", overlapChars));
         doc.put("usageCount", 0);
         doc.put("lastHitAt", null);
         doc.put("createdAt", LocalDateTime.now().toString());
         doc.put("updatedAt", LocalDateTime.now().toString());
+        doc.put("parserVersion", "kb_chunk_v1");
         try {
             Files.writeString(kbRoot.resolve(docId + ".txt"), content, StandardCharsets.UTF_8);
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(
@@ -477,9 +508,16 @@ public class KnowledgeBaseDocumentService {
                 Map<String, String> meta = new LinkedHashMap<>();
                 meta.put("chunkId", stringValue(chunk.get("chunkId"), ""));
                 meta.put("docId", stringValue(chunk.get("docId"), ""));
+                meta.put("documentId", stringValue(chunk.get("documentId"),
+                        stringValue(chunk.get("docId"), "")));
                 meta.put("title", stringValue(chunk.get("title"), ""));
                 meta.put("docType", stringValue(chunk.get("docType"), "general"));
                 meta.put("sectionPath", stringValue(chunk.get("sectionPath"), ""));
+                meta.put("version", stringValue(chunk.get("version"), indexVersion()));
+                if (chunk.get("charStart") != null) meta.put("charStart", String.valueOf(chunk.get("charStart")));
+                if (chunk.get("charEnd") != null) meta.put("charEnd", String.valueOf(chunk.get("charEnd")));
+                if (chunk.get("contentHash") != null) meta.put("contentHash", String.valueOf(chunk.get("contentHash")));
+                if (chunk.get("createdAt") != null) meta.put("createdAt", String.valueOf(chunk.get("createdAt")));
                 segments.add(TextSegment.from(content, Metadata.from(meta)));
             }
             if (segments.isEmpty()) return 0;
@@ -514,9 +552,13 @@ public class KnowledgeBaseDocumentService {
                     if (score >= 0.12) {
                         Map<String, Object> row = new LinkedHashMap<>(chunk);
                         row.put("score", score);
+                        row.put("bm25Score", score);
+                        row.put("vectorScore", null);
+                        row.put("rrfScore", null);
                         row.put("channel", "lexical");
                         row.put("rerankReason", rerankReason(doc, chunk, terms));
                         row.put("topScore", score);
+                        attachDocTimestamps(row, doc);
                         scored.add(row);
                     }
                 }
@@ -542,6 +584,12 @@ public class KnowledgeBaseDocumentService {
                             .build());
             // Build a lookup of on-disk chunks for full payload.
             Map<String, Map<String, Object>> byChunkId = loadAllChunksById();
+            Map<String, Map<String, Object>> docsById = loadManifest().stream()
+                    .collect(Collectors.toMap(
+                            d -> stringValue(d.get("docId"), ""),
+                            d -> d,
+                            (a, b) -> a,
+                            LinkedHashMap::new));
             List<Map<String, Object>> hits = new ArrayList<>();
             for (EmbeddingMatch<TextSegment> match : result.matches()) {
                 TextSegment seg = match.embedded();
@@ -552,16 +600,33 @@ public class KnowledgeBaseDocumentService {
                 if (row.isEmpty()) {
                     row.put("chunkId", chunkId);
                     row.put("docId", seg.metadata().getString("docId"));
+                    row.put("documentId", firstNonBlank(
+                            seg.metadata().getString("documentId"),
+                            seg.metadata().getString("docId")));
                     row.put("title", seg.metadata().getString("title"));
                     row.put("docType", seg.metadata().getString("docType"));
                     row.put("sectionPath", seg.metadata().getString("sectionPath"));
                     row.put("content", seg.text());
                     row.put("contentPreview", preview(seg.text(), 220));
+                    String version = seg.metadata().getString("version");
+                    if (StringUtils.hasText(version)) row.put("version", version);
+                    Integer cs = intOrNull(seg.metadata().getString("charStart"));
+                    Integer ce = intOrNull(seg.metadata().getString("charEnd"));
+                    if (cs != null) row.put("charStart", cs);
+                    if (ce != null) row.put("charEnd", ce);
+                    String hash = seg.metadata().getString("contentHash");
+                    if (StringUtils.hasText(hash)) row.put("contentHash", hash);
+                    String created = seg.metadata().getString("createdAt");
+                    if (StringUtils.hasText(created)) row.put("createdAt", created);
                 }
                 row.put("score", match.score());
+                row.put("vectorScore", match.score());
+                row.put("bm25Score", null);
+                row.put("rrfScore", null);
                 row.put("channel", "vector");
                 row.put("topScore", match.score());
                 row.put("rerankReason", "vector cosine " + String.format("%.3f", match.score()));
+                attachDocTimestamps(row, docsById.get(stringValue(row.get("docId"), "")));
                 hits.add(row);
             }
             return hits;
@@ -576,29 +641,79 @@ public class KnowledgeBaseDocumentService {
                                               int topN) {
         Map<String, Double> scores = new HashMap<>();
         Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
+        Map<String, Double> bm25ById = new HashMap<>();
+        Map<String, Double> vectorById = new HashMap<>();
+        Map<String, Integer> bm25RankById = new HashMap<>();
+        Map<String, Integer> vectorRankById = new HashMap<>();
         for (int i = 0; i < lexical.size(); i++) {
             Map<String, Object> row = lexical.get(i);
             String id = stringValue(row.get("chunkId"), "lex-" + i);
             scores.merge(id, 1.0 / (RRF_K + i + 1), Double::sum);
             byId.putIfAbsent(id, row);
+            if (row.get("bm25Score") instanceof Number n) {
+                bm25ById.put(id, n.doubleValue());
+            } else if (row.get("score") instanceof Number n) {
+                bm25ById.put(id, n.doubleValue());
+            }
+            bm25RankById.put(id, i + 1);
         }
         for (int i = 0; i < vector.size(); i++) {
             Map<String, Object> row = vector.get(i);
             String id = stringValue(row.get("chunkId"), "vec-" + i);
             scores.merge(id, 1.0 / (RRF_K + i + 1), Double::sum);
             byId.putIfAbsent(id, row);
+            if (row.get("vectorScore") instanceof Number n) {
+                vectorById.put(id, n.doubleValue());
+            } else if (row.get("score") instanceof Number n) {
+                vectorById.put(id, n.doubleValue());
+            }
+            vectorRankById.put(id, i + 1);
         }
         return scores.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue(Comparator.reverseOrder()))
                 .limit(Math.max(topN, 1))
                 .map(e -> {
                     Map<String, Object> row = new LinkedHashMap<>(byId.get(e.getKey()));
-                    row.put("score", e.getValue());
+                    Double rrf = e.getValue();
+                    Double bm25 = bm25ById.get(e.getKey());
+                    Double vec = vectorById.get(e.getKey());
+                    row.put("score", rrf);
+                    row.put("rrfScore", rrf);
+                    row.put("retrievalScore", rrf);
+                    row.put("bm25Score", bm25);
+                    row.put("vectorScore", vec);
+                    row.put("bm25Rank", bm25RankById.get(e.getKey()));
+                    row.put("vectorRank", vectorRankById.get(e.getKey()));
                     row.put("channel", "rrf");
-                    row.put("topScore", e.getValue());
+                    row.put("topScore", rrf);
                     return row;
                 })
                 .toList();
+    }
+
+    private Map<String, Object> preserveChannelScores(Map<String, Object> row, String channel) {
+        if ("vector".equals(channel)) {
+            Object vs = row.get("vectorScore") != null ? row.get("vectorScore") : row.get("score");
+            row.put("vectorScore", vs);
+            row.putIfAbsent("retrievalScore", vs);
+            row.putIfAbsent("finalScore", vs);
+        } else if ("lexical".equals(channel)) {
+            Object bs = row.get("bm25Score") != null ? row.get("bm25Score") : row.get("score");
+            row.put("bm25Score", bs);
+            row.putIfAbsent("retrievalScore", bs);
+            row.putIfAbsent("finalScore", bs);
+        }
+        return row;
+    }
+
+    private void attachDocTimestamps(Map<String, Object> row, Map<String, Object> doc) {
+        if (doc == null) return;
+        row.putIfAbsent("createdAt", doc.get("createdAt"));
+        row.putIfAbsent("updatedAt", doc.get("updatedAt"));
+        if (doc.get("indexVersion") != null) {
+            row.putIfAbsent("version", doc.get("indexVersion"));
+            row.putIfAbsent("docVersion", doc.get("indexVersion"));
+        }
     }
 
     private List<Map<String, Object>> llmRerank(String query, List<Map<String, Object>> candidates) {
@@ -682,36 +797,85 @@ public class KnowledgeBaseDocumentService {
 
     private List<Map<String, Object>> chunkDocument(String docId, String title, String content,
                                                     String docType, String tags) {
-        List<String> blocks = splitIntoBlocks(content);
+        String normalized = content == null ? "" : content.replace('\u0000', ' ');
+        List<TextBlock> blocks = splitIntoBlocksWithOffsets(normalized);
+        String now = LocalDateTime.now().toString();
+        String version = indexVersion();
         List<Map<String, Object>> chunks = new ArrayList<>();
         for (int i = 0; i < blocks.size(); i++) {
-            String block = blocks.get(i);
+            TextBlock block = blocks.get(i);
+            String text = block.text();
+            String chunkId = docId + "#chunk-" + i;
+            String hash = sha256Short(text);
             Map<String, Object> chunk = new LinkedHashMap<>();
-            chunk.put("chunkId", docId + "#chunk-" + i);
+            chunk.put("chunkId", chunkId);
             chunk.put("docId", docId);
+            chunk.put("documentId", docId);
             chunk.put("title", title);
             chunk.put("docType", StringUtils.hasText(docType) ? docType : "general");
-            chunk.put("sectionPath", inferSection(block));
-            chunk.put("content", block);
-            chunk.put("contentPreview", preview(block, 220));
-            chunk.put("tokenEstimate", Math.max(1, block.length() / 2));
+            chunk.put("sectionPath", inferSection(text));
+            chunk.put("content", text);
+            chunk.put("contentPreview", preview(text, 220));
+            chunk.put("tokenEstimate", Math.max(1, text.length() / 2));
+            chunk.put("createdAt", now);
+            chunk.put("updatedAt", now);
+            chunk.put("version", version);
+            chunk.put("docVersion", version);
+            chunk.put("charStart", block.charStart());
+            chunk.put("charEnd", block.charEnd());
+            chunk.put("contentHash", hash);
             Map<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("docId", docId);
+            metadata.put("documentId", docId);
+            metadata.put("chunkId", chunkId);
             metadata.put("chunkIndex", i);
             metadata.put("tags", splitTags(tags));
             metadata.put("source", "self_service_upload");
             metadata.put("embeddingStatus", "pending");
             metadata.put("indexStatus", "pending");
             metadata.put("embeddingProvider", embeddingProvider());
-            metadata.put("indexVersion", indexVersion());
+            metadata.put("indexVersion", version);
+            metadata.put("version", version);
+            metadata.put("createdAt", now);
+            metadata.put("updatedAt", now);
+            metadata.put("charStart", block.charStart());
+            metadata.put("charEnd", block.charEnd());
+            metadata.put("contentHash", hash);
+            metadata.put("parserVersion", "kb_chunk_v1");
             metadata.put("fallbackStage", null);
             metadata.put("targetChunkChars", targetChunkChars);
             metadata.put("overlapChars", overlapChars);
             chunk.put("metadata", metadata);
+            chunk.put("provenance", RagProvenance.chunk(
+                    docId, chunkId, version, now, now,
+                    block.charStart(), block.charEnd(), hash).toMap());
             chunks.add(chunk);
         }
         return chunks;
     }
+
+    private List<TextBlock> splitIntoBlocksWithOffsets(String content) {
+        String normalized = content == null ? "" : content.trim();
+        if (!StringUtils.hasText(normalized)) return List.of();
+        List<String> texts = splitIntoBlocks(normalized);
+        List<TextBlock> blocks = new ArrayList<>();
+        int searchFrom = 0;
+        for (String text : texts) {
+            int idx = normalized.indexOf(text, searchFrom);
+            if (idx < 0) {
+                idx = searchFrom;
+                int end = Math.min(normalized.length(), searchFrom + text.length());
+                blocks.add(new TextBlock(text, idx, end));
+                searchFrom = end;
+            } else {
+                blocks.add(new TextBlock(text, idx, idx + text.length()));
+                searchFrom = idx + text.length();
+            }
+        }
+        return blocks;
+    }
+
+    private record TextBlock(String text, int charStart, int charEnd) {}
 
     private List<String> splitIntoBlocks(String content) {
         String normalized = content == null ? "" : content.replace('\u0000', ' ').trim();
@@ -874,11 +1038,15 @@ public class KnowledgeBaseDocumentService {
 
     private Map<String, Object> enrichDocument(Map<String, Object> doc) {
         Map<String, Object> copy = new LinkedHashMap<>(doc);
+        String docId = stringValue(doc.get("docId"), stringValue(doc.get("documentId"), ""));
         String indexStatus = normalizeIndexStatus(stringValue(doc.get("indexStatus"),
                 stringValue(doc.get("embeddingStatus"), "pending")));
+        copy.put("docId", docId);
+        copy.put("documentId", docId);
         copy.put("indexStatus", indexStatus);
         copy.putIfAbsent("embeddingProvider", embeddingProvider());
         copy.putIfAbsent("indexVersion", indexVersion());
+        copy.putIfAbsent("version", stringValue(doc.get("indexVersion"), indexVersion()));
         return copy;
     }
 
@@ -890,34 +1058,104 @@ public class KnowledgeBaseDocumentService {
         if (existing instanceof Map<?, ?> m) {
             m.forEach((k, v) -> meta.put(String.valueOf(k), v));
         }
-        String docId = stringValue(chunk.get("docId"), stringValue(meta.get("docId"), ""));
+        String docId = stringValue(chunk.get("docId"),
+                stringValue(chunk.get("documentId"), stringValue(meta.get("docId"), "")));
+        String chunkId = stringValue(chunk.get("chunkId"), stringValue(meta.get("chunkId"), ""));
         int chunkIndex = meta.containsKey("chunkIndex")
                 ? intValue(meta.get("chunkIndex"))
-                : parseChunkIndex(stringValue(chunk.get("chunkId"), ""));
+                : parseChunkIndex(chunkId);
         String indexStatus = normalizeIndexStatus(stringValue(
                 indexStatusHint != null ? indexStatusHint : meta.get("indexStatus"),
                 stringValue(meta.get("embeddingStatus"), "pending")));
+        String version = stringValue(chunk.get("version"),
+                stringValue(meta.get("version"),
+                        stringValue(chunk.get("indexVersion"),
+                                stringValue(meta.get("indexVersion"), indexVersion()))));
+        String createdAt = stringValue(chunk.get("createdAt"), stringValue(meta.get("createdAt"), null));
+        String updatedAt = stringValue(chunk.get("updatedAt"), stringValue(meta.get("updatedAt"), null));
+        Integer charStart = intOrNull(chunk.get("charStart") != null ? chunk.get("charStart") : meta.get("charStart"));
+        Integer charEnd = intOrNull(chunk.get("charEnd") != null ? chunk.get("charEnd") : meta.get("charEnd"));
+        String contentHash = stringValue(chunk.get("contentHash"), stringValue(meta.get("contentHash"), null));
+        if (contentHash == null && chunk.get("content") != null) {
+            contentHash = sha256Short(String.valueOf(chunk.get("content")));
+        }
+
         meta.put("docId", docId);
+        meta.put("documentId", docId);
+        meta.put("chunkId", chunkId);
         meta.put("chunkIndex", chunkIndex);
         meta.putIfAbsent("source", "self_service_upload");
         meta.put("embeddingProvider", embeddingProvider());
         meta.put("indexVersion", indexVersion());
+        meta.put("version", version);
         meta.put("indexStatus", indexStatus);
         meta.put("embeddingStatus", stringValue(meta.get("embeddingStatus"), indexStatus));
+        if (createdAt != null) meta.put("createdAt", createdAt);
+        if (updatedAt != null) meta.put("updatedAt", updatedAt);
+        if (charStart != null) meta.put("charStart", charStart);
+        if (charEnd != null) meta.put("charEnd", charEnd);
+        if (contentHash != null) meta.put("contentHash", contentHash);
         if (fallbackStage != null) {
             meta.put("fallbackStage", fallbackStage);
         }
+
         copy.put("docId", docId);
+        copy.put("documentId", docId);
+        copy.put("chunkId", chunkId);
         copy.put("chunkIndex", chunkIndex);
         copy.put("source", stringValue(meta.get("source"), "self_service_upload"));
         copy.put("embeddingProvider", embeddingProvider());
         copy.put("indexVersion", indexVersion());
+        copy.put("version", version);
         copy.put("indexStatus", indexStatus);
+        if (createdAt != null) copy.put("createdAt", createdAt);
+        if (updatedAt != null) copy.put("updatedAt", updatedAt);
+        if (charStart != null) copy.put("charStart", charStart);
+        if (charEnd != null) copy.put("charEnd", charEnd);
+        if (contentHash != null) copy.put("contentHash", contentHash);
         if (fallbackStage != null) {
             copy.put("fallbackStage", fallbackStage);
         }
+        // Preserve channel scores when present (do not collapse into a single score).
+        if (chunk.get("vectorScore") != null) copy.put("vectorScore", chunk.get("vectorScore"));
+        if (chunk.get("bm25Score") != null) copy.put("bm25Score", chunk.get("bm25Score"));
+        if (chunk.get("rrfScore") != null) copy.put("rrfScore", chunk.get("rrfScore"));
+        if (chunk.get("retrievalScore") != null) copy.put("retrievalScore", chunk.get("retrievalScore"));
+        if (chunk.get("finalScore") != null) copy.put("finalScore", chunk.get("finalScore"));
+        if (chunk.get("rerankScore") != null) copy.put("rerankScore", chunk.get("rerankScore"));
+        if (chunk.get("bm25Rank") != null) copy.put("bm25Rank", chunk.get("bm25Rank"));
+        if (chunk.get("vectorRank") != null) copy.put("vectorRank", chunk.get("vectorRank"));
+
+        RagProvenance provenance = RagProvenance.chunk(
+                docId, chunkId, version, createdAt, updatedAt, charStart, charEnd, contentHash);
+        copy.put("provenance", provenance.toMap());
+        copy.put("sourceRef", chunkId.isBlank() ? docId : chunkId);
         copy.put("metadata", meta);
         return copy;
+    }
+
+    private Integer intOrNull(Object value) {
+        if (value instanceof Number n) return n.intValue();
+        if (value == null) return null;
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private String sha256Short(String text) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] dig = md.digest((text == null ? "" : text).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 8; i++) {
+                sb.append(String.format("%02x", dig[i]));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString((text == null ? "" : text).hashCode());
+        }
     }
 
     private String normalizeIndexStatus(String raw) {
@@ -979,6 +1217,11 @@ public class KnowledgeBaseDocumentService {
         return java.util.Arrays.stream(tags.split("[,，;；\\s]+")).filter(StringUtils::hasText).distinct().toList();
     }
 
+    private String firstNonBlank(String a, String b) {
+        if (StringUtils.hasText(a)) return a;
+        return b;
+    }
+
     private String stringValue(Object value, String fallback) {
         return value == null ? fallback : String.valueOf(value);
     }
@@ -994,5 +1237,14 @@ public class KnowledgeBaseDocumentService {
     public record SearchResult(List<Map<String, Object>> chunks, String strategy,
                                int lexicalHits, int vectorHits, String fusion,
                                boolean rerankApplied, String fallbackStage,
-                               List<String> fallbackChain) {}
+                               List<String> fallbackChain,
+                               String queryId, String retrievedAt, Long latencyMs) {
+        public SearchResult(List<Map<String, Object>> chunks, String strategy,
+                            int lexicalHits, int vectorHits, String fusion,
+                            boolean rerankApplied, String fallbackStage,
+                            List<String> fallbackChain) {
+            this(chunks, strategy, lexicalHits, vectorHits, fusion, rerankApplied,
+                    fallbackStage, fallbackChain, null, null, null);
+        }
+    }
 }

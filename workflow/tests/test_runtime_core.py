@@ -30,6 +30,9 @@ def test_policy_bundle_parses_db_config():
         "agentOrder": ["TechAgent", "ReportAgent"],
         "maxAgentCount": 4,
         "maxLlmCalls": 6,
+        "supportedRunTypes": ["quick_answer", "followup", "tech_match"],
+        "requiredArtifacts": ["final_report"],
+        "optionalArtifacts": ["technical_findings"],
         "toolBudget": {"maxToolCallsPerRun": 8, "maxToolCallsPerAgent": 3},
         "evidenceVerification": {"enabled": False, "strict": False, "minSupportRatio": 0.3},
         "timeoutPolicy": {"runTimeoutSeconds": 480},
@@ -41,6 +44,9 @@ def test_policy_bundle_parses_db_config():
     assert bundle.evidenceVerification.enabled is False
     assert bundle.timeoutPolicy.runTimeoutSeconds == 480
     assert bundle.timeoutPolicy.llmTimeoutSeconds == 120  # default preserved
+    assert not bundle.supports_run_type("full_evaluation")
+    assert bundle.supports_run_type("quick_answer")
+    assert bundle.requiredArtifacts == ["final_report"]
 
 
 # ---------------- loop guard ----------------
@@ -112,6 +118,62 @@ def test_shared_state_appends_and_flags_conflicts():
     assert conflicts == ["resumeFacts.name"]
     assert state.data["conflicts"], "conflicting fact must be recorded, not overwritten"
     assert state.data["resumeFacts"]["name"] == "张三", "original value preserved"
+
+
+def test_resume_facts_list_does_not_clobber_dict():
+    """Regression: ProjectAgent fact-list must not replace parse dict.
+
+    Production run run-24c69602… crashed Evidence/Report with
+    AttributeError: 'list' object has no attribute 'get' because
+    inspect_signals assumed resumeFacts was always a dict.
+    """
+    state = SharedState()
+    state.apply_artifacts({
+        "resumeFacts": {
+            "skills": ["Java"],
+            "projects": [{"name": "ResumAI"}],
+            "experiences": [{"raw": "2025-2026"}],
+            "source": "parse_resume_fast_path",
+        }
+    }, by_agent="ResumeParserAgent")
+    conflicts = state.apply_output(_output(
+        "ProjectAgent", "resume_facts",
+        [{"fact": "会 Java", "detail": "简历原文", "source": "技能栏"}]))
+    assert "resumeFacts" in conflicts
+    facts = state.artifact("resumeFacts")
+    assert isinstance(facts, dict), f"expected dict, got {type(facts)}"
+    assert facts.get("source") == "parse_resume_fast_path"
+    assert facts.get("projects")
+    clash = [c for c in (state.artifact("conflicts") or [])
+             if isinstance(c, dict) and c.get("section") == "resumeFacts"]
+    assert clash and clash[-1].get("reason") == "dict_shaped_artifact_type_clash"
+
+
+def test_inspect_signals_tolerates_list_resume_facts():
+    from app.runtime.agents import default_agent_registry
+    from app.runtime.coordinator import Coordinator
+    from app.runtime.models import PolicyBundle
+
+    policy = PolicyBundle.from_config("balanced", {
+        "agentOrder": ["TechAgent", "EvidenceAgent", "ReportAgent"],
+        "maxAgentCount": 8,
+        "maxLlmCalls": 12,
+        "evidenceVerification": {"enabled": True},
+    })
+    coordinator = Coordinator(default_agent_registry, policy, None)
+    signals = coordinator.inspect_signals(
+        resume_text="项目经历：ResumAI Agent",
+        job_description="Java",
+        artifacts={
+            "resumeFacts": [
+                {"fact": "Java", "detail": "技能"},
+                {"fact": "项目", "detail": "ResumAI"},
+            ],
+            "parsedResume": {"success": True, "projectNames": ["ResumAI"]},
+        },
+        shared={})
+    assert signals["has_projects"] is True
+    assert isinstance(signals, dict)
 
 
 def test_shared_state_scoped_views():

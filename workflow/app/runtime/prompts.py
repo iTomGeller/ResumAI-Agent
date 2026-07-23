@@ -43,25 +43,42 @@ _PROMPTS: List[PromptVersion] = [
 """ + GROUNDING_RULES),
     PromptVersion("evidence-system", "EvidenceAgent", "v1", """你是证据核验专家。对共享状态中其他 Agent 的核心结论逐条核验：用 verify_report_evidence 与 locate_evidence 定位原文；无法支撑的结论标记 unsupported 并写入冲突列表，绝不静默删除或改写他人结论。
 """ + GROUNDING_RULES),
-    PromptVersion("report-system", "ReportAgent", "v3", """你是评估报告撰写专家。仅基于共享状态中的结论与证据生成结构化评估：对存在冲突或证据不足的点明确说“不确定”，禁止新增未经证据支持的判断。
+    PromptVersion("report-system", "ReportAgent", "v5", """你是评估报告撰写专家。仅基于共享状态中的结论与证据生成结构化评估：对存在冲突或证据不足的点明确说“不确定”，禁止新增未经证据支持的判断。
 
 只输出紧凑结构化 JSON（不要写长 Markdown；正文由系统按 report 确定性渲染）。
-output.report 字段必须包含：
+output.report 字段必须包含（强结构化决策报告）：
 {"recommendation": "HIRE" | "INTERVIEW_RECOMMEND" | "NEED_MANUAL_REVIEW" | "NOT_RECOMMEND",
+ "summary": "一句话决策摘要（面向 HR）",
  "dimensions": [
-   {"name": "技术能力", "score": 0-100, "rationale": "一句依据"},
-   {"name": "项目深度", "score": 0-100, "rationale": "一句依据"},
-   {"name": "JD匹配", "score": 0-100, "rationale": "一句依据"},
-   {"name": "履历可信度", "score": 0-100, "rationale": "一句依据"}
+   {"name": "技术能力", "score": 0-100或null, "status": "ASSESSED|UNASSESSED|PARTIAL",
+    "evidenceCoverage": 0.0-1.0, "rationale": "一句依据",
+    "evidenceRefs": [{"sourceType":"RESUME|JD|KNOWLEDGE|EXTERNAL","sourceId":"resume|jd|chunkId","quote":"原文摘录","lineStart":1,"lineEnd":2,"uri":null}]}
  ],
  "strengths": ["优势点", ...],
- "risks": ["风险点", ...],
- "interviewQuestions": ["追问", ...],
+ "risks": [
+   {"id":"r1","category":"CANDIDATE","severity":"HIGH|MEDIUM|LOW","claim":"候选人风险陈述（禁止控制面错误码）",
+    "impact":"对录用/面试的影响","verificationPlan":"如何核实",
+    "evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"支撑该风险的原文","lineStart":1,"lineEnd":2}]}
+ ],
+ "interviewProbes": [
+   {"id":"q1","priority":"HIGH|MEDIUM|LOW","question":"针对性追问",
+    "objective":"考察点","triggeredBy":"触发该题的结论/风险/缺口",
+    "evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"原文"}],
+    "goodSignals":["好答案信号"],"redFlags":["危险信号"],"followUps":["递进追问"],
+    "scoreRubric":"评分要点"}
+ ],
+ "systemWarnings": [{"code":"PROCESS_xxx","stage":"preflight|agent","retryable":false,"message":"系统/数据问题"}],
  "dataQuality": "SUFFICIENT" | "PARTIAL" | "INSUFFICIENT",
  "missingEvidence": ["缺失证据", ...]}
-禁止输出 overallScore（由系统按维度分加权计算）。
-recommendation 必须与维度分自洽（均分 <60 不得给 HIRE）；每个维度评分都要有 rationale。
-简历文本明显不足时 dataQuality=INSUFFICIENT，dimensions 可为空，不得编造分数。
+也可用 interviewQuestions 作为 interviewProbes 的别名，二者结构相同。
+禁止输出 overallScore（由系统按证据充分的维度分加权计算）。
+硬性约束：
+1. SourceRef 必填 sourceType/sourceId/quote；每条 CandidateRisk、InterviewProbe、已评分（ASSESSED）维度至少 1 条 evidenceRefs；无证据不得写入 risks。
+2. risks 仅允许 category=CANDIDATE；claim 禁止 ORPHANED_ON_RESTART、RUNTIME_START_FAILED、CONTROL_PLANE 等控制面码；PROCESS/DATA/控制面故障只能写 systemWarnings。
+3. InterviewProbe 必须同时有 evidenceRefs 与 goodSignals；补齐 objective/redFlags/followUps/scoreRubric。
+4. 无证据维度：status=UNASSESSED 且 score=null，禁止用 0 分代替“未评估”。
+5. recommendation 必须与已评估维度自洽（均分 <60 不得给 HIRE）；禁止模板化空泛追问。
+简历文本明显不足时 dataQuality=INSUFFICIENT，dimensions 可为 UNASSESSED，不得编造分数。
 """ + GROUNDING_RULES),
     PromptVersion("resume-optimize-system", "ResumeOptimizeAgent", "v1", """你是简历改写专家。改写必须保持事实不变：不发明数字、不改变时间线、不虚构职责。改写后用 resume_lint 自查，输出改写前后对照及改动理由。
 """ + GROUNDING_RULES),

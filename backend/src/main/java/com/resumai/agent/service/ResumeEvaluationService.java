@@ -14,6 +14,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import com.resumai.agent.config.AgentMetrics;
+import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.api.dto.DashboardMetricsResponse;
 import com.resumai.agent.api.dto.FeedbackRequest;
 import com.resumai.agent.api.dto.FeedbackResponse;
@@ -23,12 +24,14 @@ import com.resumai.agent.api.dto.TaskListItemResponse;
 import com.resumai.agent.api.dto.TaskQueueFields;
 import com.resumai.agent.api.dto.TraceEventResponse;
 import com.resumai.agent.dao.AgentExecutionTraceMapper;
+import com.resumai.agent.dao.AgentRunMapper;
 import com.resumai.agent.dao.ConversationSessionMapper;
 import com.resumai.agent.dao.DynamicSkillPromptMapper;
 import com.resumai.agent.dao.HumanFeedbackLogMapper;
 import com.resumai.agent.dao.MetaEvolutionHistoryMapper;
 import com.resumai.agent.dao.ResumeTaskMapper;
 import com.resumai.agent.dao.SystemOrchestrationRuleMapper;
+import com.resumai.agent.api.dto.TaskResponse.TaskSystemError;
 import com.resumai.agent.domain.entity.AgentExecutionTrace;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ConversationSession;
@@ -110,6 +113,7 @@ public class ResumeEvaluationService {
     private final SseTraceHub sseTraceHub;
     private final ResumeRagService resumeRagService;
     private final ResumeTaskMapper resumeTaskMapper;
+    private final AgentRunMapper agentRunMapper;
     private final AgentExecutionTraceMapper agentExecutionTraceMapper;
     private final HumanFeedbackLogMapper humanFeedbackLogMapper;
     private final MetaEvolutionHistoryMapper metaEvolutionHistoryMapper;
@@ -128,13 +132,13 @@ public class ResumeEvaluationService {
     private final RunSchedulerService runSchedulerService;
     private final RunLifecycleService runLifecycleService;
     private final ConversationSessionMapper conversationSessionMapper;
-
-    @Value("${langfuse.public-url:}")
-    private String langfusePublicUrl;
+    private final LangfuseHealthService langfuseHealth;
+    private final CandidateService candidateService;
 
     public ResumeEvaluationService(SseTraceHub sseTraceHub,
                                 ResumeRagService resumeRagService,
                                 ResumeTaskMapper resumeTaskMapper,
+                                AgentRunMapper agentRunMapper,
                                 AgentExecutionTraceMapper agentExecutionTraceMapper,
                                 HumanFeedbackLogMapper humanFeedbackLogMapper,
                                 MetaEvolutionHistoryMapper metaEvolutionHistoryMapper,
@@ -153,10 +157,13 @@ public class ResumeEvaluationService {
                                 RunQueueService runQueueService,
                                 @Lazy RunSchedulerService runSchedulerService,
                                 @Lazy RunLifecycleService runLifecycleService,
-                                ConversationSessionMapper conversationSessionMapper) {
+                                ConversationSessionMapper conversationSessionMapper,
+                                LangfuseHealthService langfuseHealth,
+                                CandidateService candidateService) {
         this.sseTraceHub = sseTraceHub;
         this.resumeRagService = resumeRagService;
         this.resumeTaskMapper = resumeTaskMapper;
+        this.agentRunMapper = agentRunMapper;
         this.agentExecutionTraceMapper = agentExecutionTraceMapper;
         this.humanFeedbackLogMapper = humanFeedbackLogMapper;
         this.metaEvolutionHistoryMapper = metaEvolutionHistoryMapper;
@@ -176,6 +183,8 @@ public class ResumeEvaluationService {
         this.runSchedulerService = runSchedulerService;
         this.runLifecycleService = runLifecycleService;
         this.conversationSessionMapper = conversationSessionMapper;
+        this.langfuseHealth = langfuseHealth;
+        this.candidateService = candidateService;
         agentMetrics.registerSseActiveSubscribersGauge(sseTraceHub::getActiveSubscriberCount);
         agentMetrics.registerTaskCacheSizeGauge(() -> tasks.size());
         agentMetrics.registerMilvusConnectionAliveGauge(() -> resumeRagService.isMilvusAvailable() ? 1 : 0);
@@ -221,7 +230,7 @@ public class ResumeEvaluationService {
                     cached.summary = row.getSummary();
                     cached.overallScore = row.getOverallScore();
                     cached.recommendation = StringUtils.hasText(row.getRecommendation())
-                            ? row.getRecommendation() : cached.recommendation;
+                            ? row.getRecommendation() : null;
                     cached.durationMs = row.getDurationMs() != null ? row.getDurationMs() : cached.durationMs;
                     cached.tokenCost = row.getTokenCost() != null ? row.getTokenCost() : cached.tokenCost;
                     cached.finishedAt = row.getFinishedAt() != null ? row.getFinishedAt() : now;
@@ -295,7 +304,7 @@ public class ResumeEvaluationService {
                 stringValue(payload.get("executionMode"), row.getExecutionMode()),
                 stringValue(payload.get("status"), row.getStatus()),
                 nullableInteger(payload.get("overallScore"), row.getOverallScore()),
-                stringValue(payload.get("recommendation"), "NEED_MANUAL_REVIEW"),
+                nullableString(payload.get("recommendation"), row.getRecommendation()),
                 stringValue(payload.get("summary"), ""),
                 longValue(payload.get("durationMs"), 0L),
                 intValue(payload.get("tokenCost"), 0),
@@ -326,7 +335,16 @@ public class ResumeEvaluationService {
         }
         applyQueueFieldsFromRow(task, row);
         applyRevisionFieldsFromRow(task, row);
+        applyCandidateFieldsFromRow(task, row);
         return task;
+    }
+
+    private void applyCandidateFieldsFromRow(MutableTask task, ResumeTask row) {
+        if (row == null) {
+            return;
+        }
+        task.candidateId = row.getCandidateId();
+        task.applicationId = row.getApplicationId();
     }
 
     private void applyQueueFieldsFromRow(MutableTask task, ResumeTask row) {
@@ -404,7 +422,7 @@ public class ResumeEvaluationService {
         if (precomputedJdMatches != null && !precomputedJdMatches.isEmpty()) {
             JdMatchResult best = precomputedJdMatches.get(0);
             matchedJdTitle = best.title();
-            jdMatchScore = best.score();
+            jdMatchScore = best.matchScore();
             jobCategory = StringUtils.hasText(best.category()) ? best.category() : jobCategory;
             String jdDesc = jdRagService.getJdDescription(best.jdId());
             if (StringUtils.hasText(jdDesc)) {
@@ -799,6 +817,7 @@ public class ResumeEvaluationService {
         );
         applyQueueFieldsFromRow(task, row);
         applyRevisionFieldsFromRow(task, row);
+        applyCandidateFieldsFromRow(task, row);
         tasks.put(traceId, task);
         traces.putIfAbsent(traceId, new ArrayList<>());
         return task;
@@ -993,6 +1012,26 @@ public class ResumeEvaluationService {
             entity.setQueuedAt(task.queuedAt);
             entity.setAttemptCount(task.attemptCount);
             applyListColumns(entity, task);
+            try {
+                CandidateService.CandidateLink link = candidateService.upsertOnTaskCreate(
+                        task.tenantId,
+                        task.resumeText,
+                        task.fileName,
+                        task.jobCategory,
+                        null,
+                        task.id,
+                        task.traceId);
+                entity.setCandidateId(link.candidateId());
+                entity.setApplicationId(link.applicationId());
+                entity.setDataOrigin("USER_UPLOAD");
+                entity.setCandidateLinkStatus("LINKED");
+                entity.setCandidateLinkReason("UPSERT_ON_CREATE");
+                if (StringUtils.hasText(link.displayName())) {
+                    entity.setCandidateName(link.displayName());
+                }
+            } catch (Exception e) {
+                log.warn("[eval] candidate upsert failed (trace={}): {}", task.traceId, e.getMessage());
+            }
             if (task.topJdMatches != null && !task.topJdMatches.isEmpty()) {
                 Map<String, Object> seed = new LinkedHashMap<>();
                 seed.put("topJdMatches", task.topJdMatches);
@@ -1050,6 +1089,19 @@ public class ResumeEvaluationService {
             entity.setFailReason("FAILED".equals(task.status) ? trim(task.summary, 500) : null);
             applyListColumns(entity, task);
             resumeTaskMapper.updateById(entity);
+            try {
+                ResumeTask linked = resumeTaskMapper.selectById(task.id);
+                if (linked != null && linked.getApplicationId() != null) {
+                    candidateService.syncApplicationFromTask(
+                            linked.getApplicationId(),
+                            task.id,
+                            task.traceId,
+                            task.overallScore,
+                            task.recommendation);
+                }
+            } catch (Exception e) {
+                log.debug("[eval] sync application skipped: {}", e.getMessage());
+            }
             if ("RUNNING".equals(task.status)) {
                 runtimeStateService.cacheRunningTask(toResponse(task));
             } else {
@@ -1374,19 +1426,8 @@ public class ResumeEvaluationService {
         // (TaskController) falls back to the unified run-event bridge.
         tree.put("executionTree", executionTree);
         tree.put("harnessPlan", extractHarnessPlan(deduped));
-        tree.put("langfuseTraceId", traceId);
-        tree.put("langfuseTraceUrl", buildLangfuseTraceUrl(traceId));
+        tree.putAll(langfuseHealth.linkMeta(traceId));
         return tree;
-    }
-
-    private String buildLangfuseTraceUrl(String traceId) {
-        if (StringUtils.hasText(langfusePublicUrl)) {
-            String base = langfusePublicUrl.endsWith("/")
-                    ? langfusePublicUrl.substring(0, langfusePublicUrl.length() - 1)
-                    : langfusePublicUrl;
-            return base + "/project/resumai-project/traces/" + traceId;
-        }
-        return "/langfuse/trace/" + traceId;
     }
 
     private List<AgentExecutionTrace> dedupeTracesByEventId(List<AgentExecutionTrace> traces) {
@@ -1766,24 +1807,24 @@ public class ResumeEvaluationService {
                 Map<String, Object> payload = objectMapper.readValue(row.getResultPayload(), new TypeReference<>() {});
                 return Optional.of(toResponse(hydrateTaskFromPayload(row, payload)));
             }
-            return Optional.of(new TaskResponse(
+            MutableTask stub = new MutableTask(
                     row.getId(), row.getTraceId(),
                     StringUtils.hasText(row.getFileName()) ? row.getFileName() : row.getCandidateName(),
                     row.getJobCategory(), row.getExecutionMode(), row.getStatus(),
                     row.getOverallScore(), row.getRecommendation(), row.getSummary(),
-                    row.getDurationMs(), row.getTokenCost(),
+                    row.getDurationMs() != null ? row.getDurationMs() : 0L,
+                    row.getTokenCost() != null ? row.getTokenCost() : 0,
                     row.getCreateTime(), row.getUpdateTime(),
                     List.of(), List.of(), List.of(), null,
+                    row.getResumeText(),
                     StringUtils.hasText(row.getResumeObjectKey()) || StringUtils.hasText(row.getFileUrl())
-                            ? "/api/tasks/" + row.getTraceId() + "/file" : null,
+                            ? row.getFileUrl() : null,
                     null, row.getMatchedJdTitle(), row.getJdMatchScore(), List.of(),
-                    null, null, null,
-                    buildQueueFields(row),
-                    StringUtils.hasText(row.getConversationId()) ? row.getConversationId() : row.getTraceId(),
-                    row.getRevisionNo() != null ? row.getRevisionNo() : 1,
-                    row.getWorkflowRunId(), row.getBaseWorkflowRunId(), row.getSupersedesTraceId(), row.getSupersededByTraceId(),
-                    row.getEvaluationBrief(), parseJsonStringList(row.getInvalidatedNodes()),
-                    null, Map.of()));
+                    null, null, null);
+            applyQueueFieldsFromRow(stub, row);
+            applyRevisionFieldsFromRow(stub, row);
+            applyCandidateFieldsFromRow(stub, row);
+            return Optional.of(toResponse(stub));
         } catch (Exception e) {
             log.warn("[eval] load task from db failed (trace={}): {}", traceId, e.getMessage());
             return Optional.empty();
@@ -2469,10 +2510,12 @@ public class ResumeEvaluationService {
         Map<String, Long> agentDuration = new LinkedHashMap<>();
         durationSum.forEach((agent, duration) ->
                 agentDuration.put(agent, duration / Math.max(1L, durationCount.getOrDefault(agent, 1L))));
+        int uniqueCandidates = candidateService.countUniqueCandidates();
         return new DashboardMetricsResponse(
                 total, running, success, failed,
                 queued, completed, recommended, manualReview,
-                avgDuration, avgScore, totalToken, modeDuration, agentDuration);
+                avgDuration, avgScore, totalToken, modeDuration, agentDuration,
+                uniqueCandidates);
     }
 
     private static int metricInt(Object value) {
@@ -2896,8 +2939,37 @@ public class ResumeEvaluationService {
         String resumeFileUrl = StringUtils.hasText(task.resumeFilePath) || StringUtils.hasText(task.resumeFileType)
                 ? "/api/tasks/" + task.traceId + "/file"
                 : null;
+        AgentRun linkedRun = resolveLinkedRun(task);
+        String evaluationState = resolveEvaluationState(task.status);
+        TaskSystemError systemError = null;
+        if ("SYSTEM_FAILED".equals(evaluationState) && linkedRun != null) {
+            String code = linkedRun.getErrorCode();
+            systemError = new TaskSystemError(
+                    code,
+                    stageForSystemError(code),
+                    isRetryableSystemError(code),
+                    linkedRun.getErrorMessage(),
+                    linkedRun.getRunId());
+        }
+        // Keep recommendation null for control-plane / terminal system failures.
+        // For business COMPLETED (SUCCESS/PARTIAL_SUCCESS), missing structured
+        // recommendation means the specialist pipeline ran but ReportAgent did
+        // not emit a contract — surface NEED_MANUAL_REVIEW (not a fake control-plane wrap).
+        String recommendation = null;
+        if (task.structuredReport != null
+                && task.structuredReport.get("recommendation") instanceof String structuredRec
+                && StringUtils.hasText(structuredRec)) {
+            recommendation = normalizeRecommendation(structuredRec, task.overallScore);
+        } else if (StringUtils.hasText(task.recommendation)
+                && !"SYSTEM_FAILED".equals(evaluationState)
+                && !"FAILED".equals(task.status)
+                && !"TIMED_OUT".equals(task.status)) {
+            recommendation = task.recommendation;
+        } else if ("COMPLETED".equals(evaluationState)) {
+            recommendation = "NEED_MANUAL_REVIEW";
+        }
         return new TaskResponse(task.id, task.traceId, task.fileName, task.jobCategory, task.executionMode, task.status,
-                task.overallScore, task.recommendation, task.summary, task.durationMs, task.tokenCost,
+                task.overallScore, recommendation, task.summary, task.durationMs, task.tokenCost,
                 task.createTime, task.updateTime, task.strengths, task.risks, task.interviewQuestions, task.resumeText,
                 resumeFileUrl, task.resumeFileType, task.matchedJdTitle, task.jdMatchScore, task.topJdMatches,
                 task.aiRecommendation, task.decisionRationale, task.riskSummary, buildQueueFields(task),
@@ -2905,7 +2977,73 @@ public class ResumeEvaluationService {
                 task.supersededByTraceId, task.evaluationBrief,
                 task.invalidatedNodes != null ? task.invalidatedNodes : List.of(),
                 task.finalReport,
-                task.structuredReport != null ? task.structuredReport : Map.of());
+                task.structuredReport != null ? task.structuredReport : Map.of(),
+                task.candidateId,
+                task.applicationId,
+                evaluationState,
+                systemError);
+    }
+
+    private AgentRun resolveLinkedRun(MutableTask task) {
+        if (task == null) {
+            return null;
+        }
+        try {
+            if (StringUtils.hasText(task.workflowRunId)) {
+                AgentRun byId = agentRunMapper.selectById(task.workflowRunId);
+                if (byId != null) {
+                    return byId;
+                }
+            }
+            if (StringUtils.hasText(task.traceId)) {
+                return agentRunMapper.selectOne(new QueryWrapper<AgentRun>()
+                        .eq("source_task_trace_id", task.traceId)
+                        .orderByDesc("created_at")
+                        .last("limit 1"));
+            }
+        } catch (Exception e) {
+            log.debug("[eval] linked run lookup failed trace={}: {}", task.traceId, e.getMessage());
+        }
+        return null;
+    }
+
+    private static String resolveEvaluationState(String status) {
+        if (!StringUtils.hasText(status)) {
+            return "NOT_STARTED";
+        }
+        return switch (status) {
+            case "SUCCESS", "PARTIAL_SUCCESS" -> "COMPLETED";
+            case "FAILED", "TIMED_OUT" -> "SYSTEM_FAILED";
+            case "QUEUED", "RUNNING", "STARTING", "PAUSING", "PAUSED", "RESUMING",
+                 "WAITING_LLM", "WAITING_TOOL", "WAITING_SANDBOX", "CANCELLING", "RETRYING" -> "RUNNING";
+            default -> "NOT_STARTED";
+        };
+    }
+
+    private static String stageForSystemError(String errorCode) {
+        if (errorCode == null) {
+            return "unknown";
+        }
+        return switch (errorCode) {
+            case "POLICY_SELECTION_PERSIST_FAILED" -> "policy_selection";
+            case "RUNTIME_START_FAILED", "START_STUCK" -> "start";
+            case "ORPHANED_ON_RESTART" -> "restart_recovery";
+            case "RUN_TIMEOUT" -> "watchdog";
+            case "CANCEL_FORCED" -> "cancel";
+            case "PAUSE_EXPIRED" -> "pause";
+            default -> "runtime";
+        };
+    }
+
+    private static boolean isRetryableSystemError(String errorCode) {
+        if (errorCode == null) {
+            return false;
+        }
+        return switch (errorCode) {
+            case "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED", "START_STUCK",
+                 "RUN_TIMEOUT", "POLICY_SELECTION_PERSIST_FAILED" -> true;
+            default -> false;
+        };
     }
 
     private String normalizeExecutionMode(String executionMode) {
@@ -2924,6 +3062,15 @@ public class ResumeEvaluationService {
 
     private String stringValue(Object value, String fallback) {
         return value == null ? fallback : String.valueOf(value);
+    }
+
+    /** Prefer non-blank payload value; otherwise fall back (may be null). */
+    private String nullableString(Object value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String text = String.valueOf(value).trim();
+        return StringUtils.hasText(text) ? text : fallback;
     }
 
     private Boolean boolValue(Object value) {
@@ -2974,7 +3121,24 @@ public class ResumeEvaluationService {
 
     private List<String> stringList(Object value) {
         if (value instanceof List<?> list) {
-            return list.stream().map(String::valueOf).toList();
+            List<String> out = new ArrayList<>();
+            for (Object item : list) {
+                if (item instanceof String s) {
+                    if (StringUtils.hasText(s)) {
+                        out.add(s);
+                    }
+                } else if (item instanceof Map<?, ?> map) {
+                    Object claim = map.get("claim");
+                    Object question = map.get("question");
+                    Object preferred = claim != null ? claim : question;
+                    if (preferred != null && StringUtils.hasText(String.valueOf(preferred))) {
+                        out.add(String.valueOf(preferred));
+                    }
+                } else if (item != null) {
+                    out.add(String.valueOf(item));
+                }
+            }
+            return out;
         }
         return new ArrayList<>();
     }
@@ -3101,6 +3265,8 @@ public class ResumeEvaluationService {
         private String evaluationBrief;
         private boolean planMode;
         private List<String> invalidatedNodes = List.of();
+        private Long candidateId;
+        private Long applicationId;
 
         private MutableTask(Long id, String traceId, String fileName, String jobCategory, String executionMode, String status,
                             Integer overallScore, String recommendation, String summary, Long durationMs, Integer tokenCost,

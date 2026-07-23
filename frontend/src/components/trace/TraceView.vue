@@ -7,7 +7,7 @@ import { computed, ref, watch } from 'vue';
  * 右栏是选中 span 的详情面板（目标 / 判断 / 入参出参 / tokens / 耗时）。
  */
 
-type ToolCategory = 'mcp' | 'skill' | 'sandbox' | 'internal' | 'gateway' | 'llm' | 'tool';
+type ToolCategory = 'mcp' | 'skill' | 'builtin' | 'retrieval' | 'llm' | 'tool' | 'external';
 
 interface ToolCallView {
   toolCallId?: string;
@@ -19,10 +19,10 @@ interface ToolCallView {
   output?: string;
   category?: string;
   origin?: string;
+  executionBackend?: string;
   mcpServer?: string;
   skillId?: string;
   skillVersion?: string;
-  sandboxExecutionId?: string;
 }
 
 interface RoundView {
@@ -122,11 +122,10 @@ interface SpanRow {
 const FILTERS: Array<{ id: ToolCategory | 'all'; label: string }> = [
   { id: 'all', label: '全部' },
   { id: 'llm', label: 'LLM' },
+  { id: 'builtin', label: 'BUILTIN' },
   { id: 'mcp', label: 'MCP' },
   { id: 'skill', label: 'SKILL' },
-  { id: 'sandbox', label: 'SANDBOX' },
-  { id: 'internal', label: 'INTERNAL' },
-  { id: 'gateway', label: 'GATEWAY' },
+  { id: 'retrieval', label: 'RETRIEVAL' },
 ];
 
 const selectedId = ref<string>('');
@@ -135,6 +134,7 @@ const kindFilter = ref<ToolCategory | 'all'>('all');
 const historyOpen = ref(false);
 
 const agents = computed<AgentView[]>(() => props.tree?.executionTree || []);
+// Historical attempts stay out of the default candidate Trace tree.
 const historicalAttempts = computed(() => props.tree?.historicalAttempts || []);
 
 const groups = computed<AgentView[][]>(() => {
@@ -158,17 +158,25 @@ function purpose(agent: AgentView): string {
 function normalizeCategory(raw?: string, toolName?: string, isLlm = false): ToolCategory {
   if (isLlm) return 'llm';
   const value = (raw || '').toLowerCase();
-  if (value === 'mcp' || value === 'skill' || value === 'sandbox'
-      || value === 'internal' || value === 'gateway' || value === 'llm') {
-    return value;
+  // Legacy labels remapped for candidate Trace.
+  if (value === 'sandbox' || value === 'internal') return 'builtin';
+  if (value === 'gateway') return 'external';
+  if (value === 'mcp' || value === 'skill' || value === 'builtin'
+      || value === 'retrieval' || value === 'llm' || value === 'external') {
+    return value as ToolCategory;
   }
   const name = toolName || '';
   if (name.startsWith('mcp_') || name.includes('.')) return 'mcp';
-  if (name === 'execute_skill' || name === 'list_skills') return 'skill';
+  if (name === 'execute_skill' || name === 'list_skills' || name === 'load_skill') return 'skill';
   if (['parse_resume', 'check_timeline', 'calculate_jd_coverage', 'locate_evidence',
-    'verify_report_evidence', 'resume_lint'].includes(name)) return 'sandbox';
-  if (name === 'external_profile_lookup') return 'gateway';
-  return 'internal';
+    'verify_report_evidence', 'resume_lint', 'validate_report_schema'].includes(name)) {
+    return 'builtin';
+  }
+  if (['knowledge_search', 'resume_semantic_search', 'jd_match_search'].includes(name)) {
+    return 'retrieval';
+  }
+  if (name === 'external_profile_lookup') return 'external';
+  return 'builtin';
 }
 
 function badgeLabel(badge?: ToolCategory): string {
@@ -433,8 +441,8 @@ async function copyText(text?: string) {
           <span
             v-else-if="row.kind === 'tool' || row.kind === 'round'"
             class="span-kind"
-            :class="`badge-${row.badge || (row.kind === 'round' ? 'llm' : 'internal')}`"
-          >{{ badgeLabel(row.badge || (row.kind === 'round' ? 'llm' : 'internal')) }}</span>
+            :class="`badge-${row.badge || (row.kind === 'round' ? 'llm' : 'builtin')}`"
+          >{{ badgeLabel(row.badge || (row.kind === 'round' ? 'llm' : 'builtin')) }}</span>
           <span class="span-label">{{ row.label }}</span>
           <span class="span-parallel" v-if="row.parallel">∥ 并行</span>
           <span class="span-tokens" v-if="row.tokens">{{ row.tokens }} tok</span>
@@ -616,6 +624,11 @@ async function copyText(text?: string) {
 .badge-mcp { background: #dcfce7; color: #15803d; }
 .badge-skill { background: #f3e8ff; color: #7e22ce; }
 .badge-sandbox { background: #ffedd5; color: #c2410c; }
+.badge-builtin { background: #ecfdf5; color: #047857; }
+.badge-retrieval { background: #eef2ff; color: #4338ca; }
+.badge-external { background: #f1f5f9; color: #475569; }
+.badge-internal { background: #ecfdf5; color: #047857; }
+.badge-gateway { background: #f1f5f9; color: #475569; }
 .badge-internal { background: #f1f5f9; color: #475569; }
 .badge-gateway { background: #e0e7ff; color: #4338ca; }
 .badge-tool { background: #fef3c7; color: #b45309; }

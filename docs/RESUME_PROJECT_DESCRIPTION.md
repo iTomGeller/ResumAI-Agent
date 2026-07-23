@@ -14,7 +14,8 @@
 核验，无网络、只读根文件系统、非 Root、资源限额、TTL 清理，Worker 镜像按部署
 Git SHA 固定，调用方无法指定镜像/命令/挂载/网络。
 
-实现基于反馈的无 GPU Agent 外层策略学习：将 Agent 组合、并行开关、Prompt/
-Skill 版本、Tool/Context 预算与证据核验规则抽象为 PolicyBundle，以
-epsilon-greedy/Thompson 按 HR 反馈与真实 E2E Benchmark（真实 LLM 调用次数、
-真实 Token 成本、评估标签与执行链严格隔离）持续选择更优策略。
+实现 Policy Optimization Lab（无 GPU）：将 Agent 组合、并行开关、Prompt/
+Skill 版本、Tool/Context 预算与证据核验规则抽象为 PolicyBundle；生产决策
+champion-only，bandit（epsilon-greedy/Thompson）仅 shadow/lab；离线为有界
+配置进化（非完整 GEPA）。按 HR 反馈与真实 E2E Benchmark（真实 LLM 调用次数、
+真实 Token 成本、评估标签与执行链严格隔离）持续改进策略；MODEL_WEIGHTS unchanged。

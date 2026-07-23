@@ -25,14 +25,15 @@ class RunTypeClassifierTest {
         assertEquals("backend_eval", classifier.classify("按 Java 后端岗重新评估", null));
         assertEquals("agent_eval", classifier.classify("按 AI Agent 岗位重新评估一次", null));
         assertEquals("followup", classifier.classify("为什么这个项目分低？", null));
-        assertEquals("quick_answer", classifier.classify("你好", null));
+        // Chat defaults must not map to quick_answer→ReportAgent anymore.
+        assertEquals("full_evaluation", classifier.classify("你好", null));
     }
 
     @Test
     void heavyVsLightRouting() {
         assertTrue(classifier.isHeavy("full_evaluation"));
         assertTrue(classifier.isHeavy("tech_match"));
-        assertFalse(classifier.isHeavy("quick_answer"));
+        assertFalse(classifier.isHeavy("quick_answer")); // legacy sentinel
         assertFalse(classifier.isHeavy("followup"));
     }
 }

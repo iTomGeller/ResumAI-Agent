@@ -1,0 +1,65 @@
+{
+  "id": 1209,
+  "traceId": "trace-8df751cd-f46b-44cb-832c-8ed709cc1660",
+  "fileName": "ai_agent_backend.pdf",
+  "jobCategory": "TECH",
+  "executionMode": "DAG_CONCURRENT",
+  "status": "PARTIAL_SUCCESS",
+  "overallScore": null,
+  "recommendation": "NEED_MANUAL_REVIEW",
+  "summary": "需人工复核。简历评估报告 建议 NEED_MANUAL_REVIEW ## 结论 共享状态为空，无简历文本、JD或任何证据可供评估，无法生成有效评估报告。 ## 风险 - 共享状态为空，无简历文本、JD或任何证据可供评估 ## 证据缺口 - 简历文本 - JD描述 - 技术能力证据 - 项目经历证据 - 履历可信度证据 ## 数据质量 - INSUFFICIENT",
+  "durationMs": 18280,
+  "tokenCost": 17004,
+  "createTime": "2026-07-22T11:08:50",
+  "updateTime": "2026-07-22T11:09:08.380162038",
+  "strengths": [],
+  "risks": [
+    "共享状态为空，无简历文本、JD或任何证据可供评估"
+  ],
+  "interviewQuestions": [],
+  "resumeText": "Mia Wang\nAI Agent Backend Engineer | 5 years backend + 2 years LLM application experience\nEmail: mia.wang@example.com | GitHub: https://github.com/example-dev\nSummary\nBackend engineer building production AI agent workflows, retrieval pipelines, and runtime observability.\nSkills\nPython, Java, FastAPI, Spring Boot, LangGraph, LangChain, MCP, Milvus, Redis, PostgreSQL, Docker, Kuberne\ntes, Langfuse.\nExperience\n2023.03 - Present  AI Recruiting Platform  Agent Platform Engineer\n- Built multi-agent resume evaluation workflow with intent router, parser, JD matcher, technical evaluato\nr, risk evaluator, and report generator.\n- Designed agent harness with route plan, tool budget, policy guard, trace replay, and evaluation feedbac\nk loop.\n- Implemented hybrid RAG with BM25-like lexical retrieval, embedding search, reranking, and fallback visi\nbility.\n- Integrated MCP resume evidence server and dynamic skill loading for evidence synthesis.\n2020.07 - 2023.02  Cloud Observability Company  Backend Engineer\n- Developed metrics ingestion APIs, alert routing, and dashboard query optimization.\n- Reduced trace query latency by 45% through index redesign and payload compaction.\nProjects\nAgentic RAG Evidence Pipeline\n- Added query planner, retrieval evaluator, reranker, confidence scoring, and Langfuse tracing for every \nretrieval step.\n- Tracked hit count, top score, fallback rate, latency, and answer faithfulness proxy in Grafana.\nEducation\n2015.09 - 2019.06  Zhejiang University  B.S. Computer Science",
+  "resumeFileUrl": "/api/tasks/trace-8df751cd-f46b-44cb-832c-8ed709cc1660/file",
+  "resumeFileType": null,
+  "matchedJdTitle": "高级 Java / AI Agent 平台工程师",
+  "jdMatchScore": 0.016,
+  "topJdMatches": null,
+  "aiRecommendation": null,
+  "decisionRationale": null,
+  "riskSummary": null,
+  "queue": {
+    "queueStatus": "PARTIAL_SUCCESS",
+    "uploadedBy": "demo-hr",
+    "tenantId": "default",
+    "priority": 0,
+    "queuedAt": "2026-07-22T11:08:50",
+    "startedAt": "2026-07-22T11:08:50",
+    "finishedAt": "2026-07-22T11:09:08",
+    "attemptCount": 0,
+    "nextRetryAt": null,
+    "workerId": "worker-1"
+  },
+  "conversationId": "trace-8df751cd-f46b-44cb-832c-8ed709cc1660",
+  "revisionNo": 1,
+  "workflowRunId": "run-e1616bcb-def0-4667-98f7-d29eefae69fc",
+  "baseWorkflowRunId": null,
+  "supersedesTraceId": null,
+  "supersededByTraceId": null,
+  "evaluationBrief": "",
+  "invalidatedNodes": [],
+  "fullReport": "# 简历评估报告\n\n建议 NEED_MANUAL_REVIEW\n\n## 结论\n\n共享状态为空，无简历文本、JD或任何证据可供评估，无法生成有效评估报告。\n\n## 风险\n\n- 共享状态为空，无简历文本、JD或任何证据可供评估\n\n## 证据缺口\n\n- 简历文本\n- JD描述\n- 技术能力证据\n- 项目经历证据\n- 履历可信度证据\n\n## 数据质量\n\n- INSUFFICIENT",
+  "structuredReport": {
+    "risks": [
+      "共享状态为空，无简历文本、JD或任何证据可供评估"
+    ],
+    "summary": "共享状态为空，无简历文本、JD或任何证据可供评估，无法生成有效评估报告。",
+    "dataQuality": "INSUFFICIENT",
+    "recommendation": "NEED_MANUAL_REVIEW",
+    "missingEvidence": [
+      "简历文本",
+      "JD描述",
+      "技术能力证据",
+      "项目经历证据",
+      "履历可信度证据"
+    ]
+  }
+}

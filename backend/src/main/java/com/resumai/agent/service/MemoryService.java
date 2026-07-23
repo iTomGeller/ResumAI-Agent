@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.dao.MemoryEntryMapper;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.MemoryEntryRow;
+import jakarta.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -13,7 +14,6 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,10 +29,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * Layered agent memory store (working / conversation / episodic / user
- * preference / HR feedback / domain / failure) with strict scope isolation,
- * lexical+recency+confidence retrieval, dedup by content hash, conflict
- * marking, expiry cleanup and sensitive-value redaction.
+ * Layered agent memory store (conversation / episodic / preference / failure)
+ * with strict scope/source/consumer isolation so control-plane failures and
+ * benchmark seeds never pollute candidate evaluation.
  */
 @Service
 public class MemoryService {
@@ -51,6 +50,20 @@ public class MemoryService {
             "CONVERSATION", "EPISODIC", "PREFERENCE", "FAILURE");
     public static final Set<String> SCOPES = Set.of("RUN", "CONVERSATION", "USER", "GLOBAL");
 
+    /** Default retrieval types for specialists / Report / Risk. */
+    public static final List<String> SPECIALIST_TYPES = List.of(
+            "CONVERSATION", "EPISODIC", "PREFERENCE");
+    /** Scopes visible to evaluation specialists by default. */
+    public static final Set<String> EVALUATION_SCOPES = Set.of("USER", "CONVERSATION");
+
+    /** Control-plane error codes that must never enter Report/Risk context. */
+    public static final Set<String> CONTROL_PLANE_ERROR_CODES = Set.of(
+            "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED", "START_STUCK");
+
+    private static final Set<String> FAILURE_CONSUMERS = Set.of(
+            "COORDINATORAGENT", "COORDINATOR", "POLICYEVOLUTION", "POLICY_EVOLUTION",
+            "POLICY-LAB", "POLICYLAB");
+
     private static final Map<String, String> LEGACY_TYPE_REMAP = Map.of(
             "USER_PREFERENCE", "PREFERENCE",
             "HR_FEEDBACK", "PREFERENCE",
@@ -62,6 +75,10 @@ public class MemoryService {
                     + "|api[_-]?key\\s*[:=]\\s*\\S+|AKID[A-Za-z0-9]{12,}|LTAI[A-Za-z0-9]{12,})",
             Pattern.CASE_INSENSITIVE);
 
+    /** Matches exp5_benchmark / exp_benchmark / exp12_benchmark style sources. */
+    private static final Pattern BENCHMARK_SOURCE_PATTERN = Pattern.compile(
+            "^exp\\d*_benchmark$", Pattern.CASE_INSENSITIVE);
+
     private final MemoryEntryMapper memoryMapper;
     private final ObjectMapper objectMapper;
     private final MemoryVectorService vectorService;
@@ -71,6 +88,18 @@ public class MemoryService {
         this.memoryMapper = memoryMapper;
         this.objectMapper = objectMapper;
         this.vectorService = vectorService;
+    }
+
+    @PostConstruct
+    public void archiveBenchmarkOnStartup() {
+        try {
+            int n = archiveBenchmarkMemories();
+            if (n > 0) {
+                log.info("archived {} benchmark memory entries on startup", n);
+            }
+        } catch (Exception e) {
+            log.debug("benchmark memory archive skipped: {}", e.getMessage());
+        }
     }
 
     public record WriteRequest(String type, String ownerScope, String userId, String conversationId,
@@ -85,11 +114,27 @@ public class MemoryService {
         String type = normalize(LEGACY_TYPE_REMAP.getOrDefault(rawType, rawType),
                 TYPES, "type");
         String scope = normalize(request.ownerScope(), SCOPES, "ownerScope");
+        // PREFERENCE must never be written as GLOBAL — that would leak HR/user
+        // preferences across all tenants into every evaluation.
+        if ("PREFERENCE".equals(type) && "GLOBAL".equals(scope)) {
+            log.warn("rejecting PREFERENCE GLOBAL write; coercing to USER");
+            scope = "USER";
+            if (!StringUtils.hasText(request.userId())) {
+                throw new IllegalArgumentException(
+                        "PREFERENCE requires USER/CONVERSATION scope with userId");
+            }
+        }
         String content = redactSecrets(request.content());
         if (!StringUtils.hasText(content)) {
             throw new IllegalArgumentException("memory content required");
         }
-        String hash = sha256(type + "|" + scope + "|" + scopeKey(request) + "|" + normalizeForHash(content));
+        String source = StringUtils.hasText(request.source()) ? request.source() : "model_generated";
+        if (isBenchmarkSource(source) && "GLOBAL".equals(scope)) {
+            // Keep benchmark seeds out of the global namespace.
+            scope = "USER";
+        }
+        String hash = sha256(type + "|" + scope + "|" + scopeKey(request, scope)
+                + "|" + normalizeForHash(content));
 
         // Dedup: identical content in the same scope bumps confidence instead
         // of creating another row.
@@ -133,7 +178,7 @@ public class MemoryService {
         row.setContent(content);
         row.setStructuredContent(writeJson(request.structuredContent()));
         row.setContentHash(hash);
-        row.setSource(StringUtils.hasText(request.source()) ? request.source() : "model_generated");
+        row.setSource(source);
         row.setSourceId(factKey != null ? factKey : request.sourceId());
         row.setConfidence(decimal(request.confidence() != null ? request.confidence() : 0.5));
         row.setStatus("ACTIVE");
@@ -158,39 +203,78 @@ public class MemoryService {
                                 String conversationId, String runId, Integer topK,
                                 Double minConfidence, Boolean includeSensitive,
                                 /** EXP-5 ablation: fused (default) | lexical | semantic */
-                                String channel) {
+                                String channel,
+                                /** Agent that will consume hits (drives type/scope whitelist). */
+                                String consumerAgent,
+                                /** When true, include exp*_benchmark sources (lab only). */
+                                Boolean includeBenchmarkSources) {
 
         public SearchRequest(String query, List<String> types, String userId,
                              String conversationId, String runId, Integer topK,
                              Double minConfidence, Boolean includeSensitive) {
             this(query, types, userId, conversationId, runId, topK,
-                    minConfidence, includeSensitive, null);
+                    minConfidence, includeSensitive, null, null, null);
+        }
+
+        public SearchRequest(String query, List<String> types, String userId,
+                             String conversationId, String runId, Integer topK,
+                             Double minConfidence, Boolean includeSensitive,
+                             String channel) {
+            this(query, types, userId, conversationId, runId, topK,
+                    minConfidence, includeSensitive, channel, null, null);
         }
     }
 
     /**
-     * Scope-isolated retrieval: an entry is visible only when its owner scope
-     * chain matches the caller (run -> conversation -> user -> global).
+     * Scope/source/consumer-isolated retrieval.
      * Ranking = lexical overlap x confidence x recency decay.
      */
     public List<Map<String, Object>> search(SearchRequest request) {
+        boolean allowFailure = allowsFailure(request.consumerAgent());
+        boolean includeBenchmark = Boolean.TRUE.equals(request.includeBenchmarkSources());
+        List<String> effectiveTypes = resolveTypes(request.types(), allowFailure);
+        boolean evaluationConsumer = !allowFailure;
+
+        if (evaluationConsumer
+                && !StringUtils.hasText(request.userId())
+                && !StringUtils.hasText(request.conversationId())) {
+            return List.of();
+        }
+
         QueryWrapper<MemoryEntryRow> query = new QueryWrapper<MemoryEntryRow>()
                 .eq("status", "ACTIVE")
                 .and(w -> {
-                    w.eq("owner_scope", "GLOBAL");
+                    boolean started = false;
+                    if (!evaluationConsumer) {
+                        w.eq("owner_scope", "GLOBAL");
+                        started = true;
+                    }
                     if (StringUtils.hasText(request.userId())) {
-                        w.or(u -> u.eq("owner_scope", "USER").eq("user_id", request.userId()));
+                        if (started) {
+                            w.or(u -> u.eq("owner_scope", "USER").eq("user_id", request.userId()));
+                        } else {
+                            w.eq("owner_scope", "USER").eq("user_id", request.userId());
+                            started = true;
+                        }
                     }
                     if (StringUtils.hasText(request.conversationId())) {
-                        w.or(c -> c.eq("owner_scope", "CONVERSATION")
-                                .eq("conversation_id", request.conversationId()));
+                        if (started) {
+                            w.or(c -> c.eq("owner_scope", "CONVERSATION")
+                                    .eq("conversation_id", request.conversationId()));
+                        } else {
+                            w.eq("owner_scope", "CONVERSATION")
+                                    .eq("conversation_id", request.conversationId());
+                            started = true;
+                        }
                     }
-                    if (StringUtils.hasText(request.runId())) {
+                    // RUN scope is short-term working memory; specialists stay on
+                    // USER/CONVERSATION only. Coordinator may still see RUN.
+                    if (!evaluationConsumer && StringUtils.hasText(request.runId())) {
                         w.or(r -> r.eq("owner_scope", "RUN").eq("run_id", request.runId()));
                     }
                 });
-        if (request.types() != null && !request.types().isEmpty()) {
-            query.in("type", request.types());
+        if (!effectiveTypes.isEmpty()) {
+            query.in("type", effectiveTypes);
         }
         query.orderByDesc("update_time").last("limit 400");
         List<MemoryEntryRow> candidates = memoryMapper.selectList(query);
@@ -201,8 +285,6 @@ public class MemoryService {
         // Two-way recall: semantic scores from Milvus are fused with the
         // lexical path; the DB-side scope/status/confidence filter above stays
         // authoritative so a vector hit can never cross scope boundaries.
-        // EXP-5 (2026-07-21): max-fusion validated — semantic recall 0.96 vs
-        // lexical 0.71 on paraphrased queries, fused never below either path.
         Map<String, Double> vectorScores = vectorService.recall(request.query(), 20);
         List<Map.Entry<MemoryEntryRow, Double>> scored = new ArrayList<>();
         LocalDateTime now = LocalDateTime.now();
@@ -214,6 +296,23 @@ public class MemoryService {
                 continue;
             }
             if (row.getExpiresAt() != null && row.getExpiresAt().isBefore(now)) {
+                continue;
+            }
+            if (!includeBenchmark && isBenchmarkSource(row.getSource())) {
+                continue;
+            }
+            if (evaluationConsumer && !EVALUATION_SCOPES.contains(row.getOwnerScope())) {
+                continue;
+            }
+            if ("FAILURE".equals(row.getType()) && !allowFailure) {
+                continue;
+            }
+            if (isControlPlaneFailure(row) && !allowFailure) {
+                continue;
+            }
+            // Report/Risk (and any evaluation consumer) never see control-plane
+            // restart/start failures even if somehow typed differently.
+            if (isControlPlaneFailure(row) && isReportOrRisk(request.consumerAgent())) {
                 continue;
             }
             double lexical = overlap(queryTerms, terms(row.getContent()));
@@ -239,13 +338,21 @@ public class MemoryService {
             view.put("memoryId", row.getMemoryId());
             view.put("type", row.getType());
             view.put("ownerScope", row.getOwnerScope());
+            view.put("scope", row.getOwnerScope());
             view.put("content", row.getContent());
             view.put("structuredContent", readJson(row.getStructuredContent()));
             view.put("source", row.getSource());
             view.put("sourceId", row.getSourceId());
             view.put("confidence", row.getConfidence());
             view.put("score", Math.round(entry.getValue() * 1000.0) / 1000.0);
+            view.put("relevance", Map.of(
+                    "lexical", Math.round(overlap(queryTerms, terms(row.getContent())) * 1000.0) / 1000.0,
+                    "semantic", Math.round(vectorScores.getOrDefault(row.getMemoryId(), 0.0) * 1000.0) / 1000.0,
+                    "fused", Math.round(entry.getValue() * 1000.0) / 1000.0));
             view.put("updatedAt", String.valueOf(row.getUpdateTime()));
+            if (StringUtils.hasText(request.consumerAgent())) {
+                view.put("consumerAgent", request.consumerAgent());
+            }
             out.add(view);
         }
         return out;
@@ -269,7 +376,39 @@ public class MemoryService {
         memoryMapper.update(null, update);
     }
 
-    public void writeEpisodicRunMemory(AgentRun run, String terminalStatus) {
+    /**
+     * Archive experiment/benchmark seeded memories so production retrieval
+     * cannot surface them even if the SQL REGEXP filter is bypassed.
+     */
+    public int archiveBenchmarkMemories() {
+        UpdateWrapper<MemoryEntryRow> update = new UpdateWrapper<>();
+        update.eq("status", "ACTIVE")
+                .apply("source REGEXP {0}", "^exp[0-9]*_benchmark$")
+                .set("status", "ARCHIVED")
+                .set("update_time", LocalDateTime.now());
+        return memoryMapper.update(null, update);
+    }
+
+    /**
+     * Terminal-run memory policy:
+     * <ul>
+     *   <li>FAILED / TIMED_OUT — archive RUN working memory only; never write
+     *       EPISODIC for control-plane or business failures (FAILURE rows stay
+     *       isolated via {@link #writeFailureMemory}).</li>
+     *   <li>Success / partial — write EPISODIC only when shared_state holds
+     *       business artifacts (resumeFacts / findings / report / coverage).</li>
+     * </ul>
+     */
+    public void writeRunEpisode(AgentRun run, String terminalStatus) {
+        String status = terminalStatus == null ? "" : terminalStatus.trim().toUpperCase(Locale.ROOT);
+        if ("FAILED".equals(status) || "TIMED_OUT".equals(status)) {
+            archiveRunWorkingMemory(run.getRunId());
+            return;
+        }
+        if (!hasBusinessArtifacts(run.getSharedState())) {
+            archiveRunWorkingMemory(run.getRunId());
+            return;
+        }
         Map<String, Object> structured = new LinkedHashMap<>();
         structured.put("runId", run.getRunId());
         structured.put("policyId", run.getPolicyId());
@@ -288,16 +427,69 @@ public class MemoryService {
         archiveRunWorkingMemory(run.getRunId());
     }
 
+    /** @deprecated Prefer {@link #writeRunEpisode}; kept for call-site compat. */
+    public void writeEpisodicRunMemory(AgentRun run, String terminalStatus) {
+        writeRunEpisode(run, terminalStatus);
+    }
+
+    /**
+     * True when shared_state JSON contains non-empty business artifacts that
+     * specialists may later use for score calibration.
+     */
+    boolean hasBusinessArtifacts(String sharedStateJson) {
+        if (!StringUtils.hasText(sharedStateJson)) {
+            return false;
+        }
+        try {
+            Object parsed = objectMapper.readValue(sharedStateJson, Object.class);
+            if (!(parsed instanceof Map<?, ?> root)) {
+                return false;
+            }
+            Object artifactsObj = root.get("artifacts");
+            if (!(artifactsObj instanceof Map<?, ?> artifacts) || artifacts.isEmpty()) {
+                return false;
+            }
+            for (String key : List.of(
+                    "resumeFacts", "parsedResume", "technicalFindings", "finalReport",
+                    "jdCoverage", "jdMatches", "evidence", "risks", "conflicts",
+                    "effectiveJd", "structuredReport")) {
+                Object value = artifacts.get(key);
+                if (value == null) {
+                    continue;
+                }
+                if (value instanceof Map<?, ?> m && !m.isEmpty()) {
+                    return true;
+                }
+                if (value instanceof List<?> list && !list.isEmpty()) {
+                    return true;
+                }
+                if (value instanceof String s && StringUtils.hasText(s)) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public void writeFailureMemory(AgentRun run, String errorCode, String errorMessage) {
         Map<String, Object> structured = new LinkedHashMap<>();
         structured.put("runId", run.getRunId());
         structured.put("errorCode", errorCode);
         structured.put("policyId", run.getPolicyId());
         structured.put("runType", run.getRunType());
+        boolean controlPlane = isControlPlaneErrorCode(errorCode);
+        if (controlPlane) {
+            structured.put("category", "CONTROL_PLANE");
+        }
         String content = "失败记录: 类别=" + run.getRunType() + " | 错误=" + errorCode
                 + " | 详情=" + trim(errorMessage, 300);
+        // FAILURE stays GLOBAL for Coordinator / policy evolution only;
+        // retrieval isolation prevents injection into Report/Risk.
         write(new WriteRequest("FAILURE", "GLOBAL", run.getUserId(), run.getConversationId(),
-                run.getRunId(), content, structured, "system_rule",
+                run.getRunId(), content, structured,
+                controlPlane ? "control_plane" : "system_rule",
                 "failure:" + run.getRunId(), 0.9, "NORMAL", 60));
     }
 
@@ -321,12 +513,104 @@ public class MemoryService {
             if (expired > 0) {
                 log.info("memory cleanup expired {} entries", expired);
             }
+            int archived = archiveBenchmarkMemories();
+            if (archived > 0) {
+                log.info("memory cleanup archived {} benchmark entries", archived);
+            }
         } catch (Exception e) {
             log.debug("memory cleanup skipped: {}", e.getMessage());
         }
     }
 
     // ------------------------------------------------------------------
+
+    static boolean isBenchmarkSource(String source) {
+        if (!StringUtils.hasText(source)) {
+            return false;
+        }
+        return BENCHMARK_SOURCE_PATTERN.matcher(source.trim()).matches();
+    }
+
+    static boolean isControlPlaneErrorCode(String errorCode) {
+        if (!StringUtils.hasText(errorCode)) {
+            return false;
+        }
+        return CONTROL_PLANE_ERROR_CODES.contains(errorCode.trim().toUpperCase(Locale.ROOT));
+    }
+
+    static boolean allowsFailure(String consumerAgent) {
+        if (!StringUtils.hasText(consumerAgent)) {
+            // Missing consumer defaults to evaluation-safe (no FAILURE / no GLOBAL).
+            return false;
+        }
+        String key = consumerAgent.trim().toUpperCase(Locale.ROOT).replace("-", "").replace("_", "");
+        if (FAILURE_CONSUMERS.contains(key) || FAILURE_CONSUMERS.contains(
+                consumerAgent.trim().toUpperCase(Locale.ROOT))) {
+            return true;
+        }
+        return "COORDINATORAGENT".equals(key) || key.startsWith("POLICY");
+    }
+
+    static boolean isReportOrRisk(String consumerAgent) {
+        if (!StringUtils.hasText(consumerAgent)) {
+            return false;
+        }
+        String key = consumerAgent.trim().toUpperCase(Locale.ROOT);
+        return "REPORTAGENT".equals(key) || "RISKAGENT".equals(key);
+    }
+
+    private boolean isControlPlaneFailure(MemoryEntryRow row) {
+        if (row == null) {
+            return false;
+        }
+        if ("control_plane".equalsIgnoreCase(row.getSource())) {
+            return true;
+        }
+        Object structured = readJson(row.getStructuredContent());
+        if (structured instanceof Map<?, ?> map) {
+            Object code = map.get("errorCode");
+            if (code != null && isControlPlaneErrorCode(String.valueOf(code))) {
+                return true;
+            }
+            Object category = map.get("category");
+            if (category != null && "CONTROL_PLANE".equalsIgnoreCase(String.valueOf(category))) {
+                return true;
+            }
+        }
+        String content = row.getContent() != null ? row.getContent() : "";
+        for (String code : CONTROL_PLANE_ERROR_CODES) {
+            if (content.contains(code)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<String> resolveTypes(List<String> requested, boolean allowFailure) {
+        List<String> base;
+        if (requested == null || requested.isEmpty()) {
+            base = new ArrayList<>(SPECIALIST_TYPES);
+            if (allowFailure) {
+                base.add("FAILURE");
+            }
+        } else {
+            base = new ArrayList<>();
+            for (String t : requested) {
+                if (!StringUtils.hasText(t)) {
+                    continue;
+                }
+                String normalized = t.trim().toUpperCase(Locale.ROOT);
+                String remapped = LEGACY_TYPE_REMAP.getOrDefault(normalized, normalized);
+                if (TYPES.contains(remapped)) {
+                    base.add(remapped);
+                }
+            }
+        }
+        if (!allowFailure) {
+            base.removeIf("FAILURE"::equals);
+        }
+        return base;
+    }
 
     private String factKey(WriteRequest request) {
         if (request.structuredContent() != null
@@ -337,11 +621,11 @@ public class MemoryService {
         return null;
     }
 
-    private String scopeKey(WriteRequest request) {
+    private String scopeKey(WriteRequest request, String scope) {
         return String.join(":",
                 String.valueOf(request.userId()),
                 String.valueOf(request.conversationId()),
-                "RUN".equals(request.ownerScope()) ? String.valueOf(request.runId()) : "-");
+                "RUN".equals(scope) ? String.valueOf(request.runId()) : "-");
     }
 
     static String redactSecrets(String content) {

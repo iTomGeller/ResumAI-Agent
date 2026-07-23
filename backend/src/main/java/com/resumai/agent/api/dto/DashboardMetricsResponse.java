@@ -21,6 +21,8 @@ public record DashboardMetricsResponse(
         Double averageScore,
         Integer totalTokenCost,
         Map<String, Long> modeDurationMs,
-        Map<String, Long> agentDurationMs
+        Map<String, Long> agentDurationMs,
+        /** 去重后的候选人数（candidate_profile COUNT），不是 resume_task COUNT。 */
+        Integer uniqueCandidates
 ) {
 }

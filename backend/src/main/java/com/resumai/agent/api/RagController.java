@@ -2,6 +2,7 @@ package com.resumai.agent.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.resumai.agent.api.dto.KnowledgeSearchResponse;
 import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.config.EmbeddingProperties;
 import com.resumai.agent.dao.JdLibraryMapper;
@@ -171,10 +172,14 @@ public class RagController {
                 "hybrid retrieval + agentic rerank/usefulness"));
         response.put("chunkSchema", Map.of(
                 "docId", "traceId or jdId",
-                "docType", "resume_pdf | resume_text | jd",
+                "documentId", "alias of docId / jdId for provenance",
+                "docType", "resume_pdf | resume_text | jd | knowledge",
                 "sectionPath", "summary/skills/experience/projects/education/risk/report",
                 "content", "retrievable text chunk",
-                "metadata", List.of("candidateRole", "fileName", "page", "section", "score", "recommendation", "createdAt")));
+                "metadata", List.of(
+                        "candidateRole", "fileName", "page", "section", "score", "recommendation",
+                        "createdAt", "updatedAt", "version", "charStart", "charEnd", "contentHash",
+                        "vectorScore", "bm25Score", "rrfScore", "documentId", "chunkId")));
         response.put("indexes", List.of(
                 Map.of("name", "lexical_bm25_like", "type", "in-memory lexical scoring", "purpose", "exact terms / sparse resume / fast path"),
                 Map.of("name", "milvus_embedding", "type", "vector", "provider", embeddingProperties.getProvider(), "purpose", "semantic recall"),
@@ -217,21 +222,23 @@ public class RagController {
     }
 
     @PostMapping("/knowledge-base/search")
-    public Map<String, Object> searchKnowledgeDocument(@RequestBody KnowledgeSearchRequest request) {
+    public KnowledgeSearchResponse searchKnowledgeDocument(@RequestBody KnowledgeSearchRequest request) {
         int topK = request.topK() != null ? request.topK() : 5;
         boolean rerank = Boolean.TRUE.equals(request.rerank());
         KnowledgeBaseDocumentService.SearchResult result =
                 knowledgeBaseDocumentService.searchDetailed(request.query(), topK, rerank);
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("chunks", result.chunks());
-        body.put("strategy", result.strategy());
-        body.put("lexicalHits", result.lexicalHits());
-        body.put("vectorHits", result.vectorHits());
-        body.put("fusion", result.fusion());
-        body.put("rerankApplied", result.rerankApplied());
-        body.put("fallbackStage", result.fallbackStage());
-        body.put("fallbackChain", result.fallbackChain());
-        return body;
+        return new KnowledgeSearchResponse(
+                result.chunks(),
+                result.strategy(),
+                result.lexicalHits(),
+                result.vectorHits(),
+                result.fusion(),
+                result.rerankApplied(),
+                result.fallbackStage(),
+                result.fallbackChain(),
+                result.queryId(),
+                result.retrievedAt(),
+                result.latencyMs());
     }
 
     @PostMapping("/knowledge-base/reindex")

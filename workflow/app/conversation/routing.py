@@ -244,7 +244,9 @@ def _side_question_reply(message: str, context: Mapping[str, Any]) -> str:
                 if not isinstance(item, Mapping):
                     continue
                 title = str(item.get("title") or item.get("name") or "未命名岗位")
-                score = item.get("score")
+                score = item.get("matchScore")
+                if score is None:
+                    score = item.get("score")
                 gaps = item.get("gaps") or []
                 score_text = f"{round(float(score) * 100)}%" if isinstance(score, (int, float)) else "未给分"
                 gap_text = f"，主要缺口：{'、'.join(map(str, gaps[:2]))}" if isinstance(gaps, list) and gaps else ""

@@ -48,10 +48,21 @@ public class RunQueueService {
     }
 
     /**
-     * Enqueue one conversation turn as a run (or merge it into the pending
-     * COLLECT run). Caller must already hold the conversation row lock so the
-     * merge check cannot race with another turn of the same conversation.
+     * Enqueue an evaluation revision. Ordinary chat must NOT call this —
+     * use ConversationReplyService / TurnDisposition.DIRECT_REPLY instead.
      */
+    public SubmitResult submitEvaluationRun(String conversationId, String userId, String traceId,
+                                            int revision, String runType, boolean supersede,
+                                            String userMessage, Long messageId) {
+        return submit(conversationId, userId, traceId, revision, runType,
+                supersede ? "interrupt" : "collect", userMessage, messageId, null);
+    }
+
+    /**
+     * @deprecated Prefer {@link #submitEvaluationRun}; kept for internal callers
+     *             that still pass queueMode explicitly.
+     */
+    @Deprecated
     public SubmitResult submit(String conversationId, String userId, String traceId,
                                int revision, String runType, String queueMode,
                                String userMessage, Long messageId) {

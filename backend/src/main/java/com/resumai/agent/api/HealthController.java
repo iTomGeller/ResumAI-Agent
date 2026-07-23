@@ -2,6 +2,7 @@ package com.resumai.agent.api;
 
 import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.config.EmbeddingProperties;
+import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.config.WorkflowProperties;
 import com.resumai.agent.service.ResumeRagService;
 import java.time.LocalDateTime;
@@ -22,34 +23,38 @@ public class HealthController {
     private final EmbeddingProperties embeddingProperties;
     private final ResumeRagService resumeRagService;
     private final WorkflowProperties workflowProperties;
+    private final LangfuseHealthService langfuseHealth;
 
     public HealthController(EmbeddingAvailability embeddingAvailability,
                             EmbeddingProperties embeddingProperties,
                             ResumeRagService resumeRagService,
-                            WorkflowProperties workflowProperties) {
+                            WorkflowProperties workflowProperties,
+                            LangfuseHealthService langfuseHealth) {
         this.embeddingAvailability = embeddingAvailability;
         this.embeddingProperties = embeddingProperties;
         this.resumeRagService = resumeRagService;
         this.workflowProperties = workflowProperties;
+        this.langfuseHealth = langfuseHealth;
     }
 
-  /**
+    /**
      * 返回后端健康状态。
      *
      * @return 健康状态
      */
     @GetMapping("/health")
     public Map<String, Object> health() {
-        return Map.of(
-                "status", "UP",
-                "service", "resumai-agent-backend",
-                "time", LocalDateTime.now(),
-                "embedding", Map.of(
-                        "operational", embeddingAvailability.isOperational(),
-                        "provider", embeddingProperties.getProvider() == null ? "local" : embeddingProperties.getProvider(),
-                        "message", embeddingAvailability.statusMessage()
-                )
-        );
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "UP");
+        body.put("service", "resumai-agent-backend");
+        body.put("time", LocalDateTime.now());
+        body.put("embedding", Map.of(
+                "operational", embeddingAvailability.isOperational(),
+                "provider", embeddingProperties.getProvider() == null ? "local" : embeddingProperties.getProvider(),
+                "message", embeddingAvailability.statusMessage()
+        ));
+        body.put("langfuse", langfuseHealth.snapshot());
+        return body;
     }
 
     @GetMapping("/health/dependencies")
@@ -69,6 +74,7 @@ public class HealthController {
         deps.put("workflow", Map.of(
                 "mcpResumeToolsAuthorized", mcpAuthorized
         ));
+        deps.put("langfuse", langfuseHealth.snapshot());
         return Map.of("status", "UP", "dependencies", deps);
     }
 }

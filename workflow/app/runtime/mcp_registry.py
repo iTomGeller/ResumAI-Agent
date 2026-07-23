@@ -327,6 +327,8 @@ class McpRegistry:
             if isinstance(v, list)
         }
         self._probed = False
+        self._last_probe_at: Optional[float] = None
+        self._last_probe_iso: str = ""
 
     async def probe_all(self, *, force: bool = False) -> Dict[str, McpServerHealth]:
         if self._probed and not force:
@@ -346,6 +348,8 @@ class McpRegistry:
             await self._probe_server(name, cfg, optional=is_optional)
 
         self._probed = True
+        self._last_probe_at = time.time()
+        self._last_probe_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._last_probe_at))
         summary = {k: v.status for k, v in self.health.items()}
         logger.info("MCP health probe: %s (%d tools)", summary, len(self.tools))
         return self.health
@@ -528,20 +532,41 @@ class McpRegistry:
         return available
 
     def status_snapshot(self) -> Dict[str, Any]:
+        """Live registry health — never inferred from config description text."""
+        servers_cfg = dict(self.config.get("mcpServers") or {})
+        optional_cfg = dict(self.config.get("optionalMcpServers") or {})
+        servers: Dict[str, Any] = {}
+        for name, h in self.health.items():
+            cfg = servers_cfg.get(name) or optional_cfg.get(name) or {}
+            entry: Dict[str, Any] = {
+                "name": name,
+                "status": h.status,
+                "transport": h.transport,
+                "latencyMs": h.latency_ms,
+                "tools": list(h.tools),
+                "error": h.error,
+                "url": h.url,
+                "optional": name in optional_cfg,
+                "enabled": bool(cfg.get("enabled", True)) if isinstance(cfg, dict) else False,
+                "default": bool(cfg.get("default", False)) if isinstance(cfg, dict) else False,
+                "description": str(cfg.get("description") or "") if isinstance(cfg, dict) else "",
+            }
+            http_client = self._http_clients.get(name)
+            if http_client is not None:
+                entry["sessionId"] = http_client.session_id or ""
+                entry["circuitOpen"] = bool(http_client._circuit_blocked())  # noqa: SLF001
+                entry["failCount"] = int(http_client._fail_count)  # noqa: SLF001
+                entry["protocolVersion"] = http_client.protocol_version
+            servers[name] = entry
         return {
-            "servers": {
-                name: {
-                    "status": h.status,
-                    "transport": h.transport,
-                    "latencyMs": h.latency_ms,
-                    "tools": h.tools,
-                    "error": h.error,
-                    "url": h.url,
-                }
-                for name, h in self.health.items()
-            },
+            "source": "python_mcp_registry",
+            "probed": self._probed,
+            "lastProbeAt": self._last_probe_iso or None,
+            "servers": servers,
             "availableTools": sorted(self.tools.keys()),
+            "toolCount": len(self.tools),
             "configPath": str(resolve_mcp_config_path() or ""),
+            "statusEnum": ["AVAILABLE", "RATE_LIMITED", "AUTH_REQUIRED", "DOWN"],
         }
 
     async def call(self, catalog_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:

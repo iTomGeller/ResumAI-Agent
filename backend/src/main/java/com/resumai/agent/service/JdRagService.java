@@ -35,6 +35,7 @@ import java.time.LocalDateTime;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -74,8 +75,20 @@ public class JdRagService {
     );
 
     private static final Set<String> NON_SKILL_GAP_WORDS = Set.of(
-            "招聘", "hr", "面试", "工程师", "经理", "负责", "要求", "熟悉", "具备", "以上", "本科", "硕士"
+            "招聘", "hr", "面试", "工程师", "经理", "负责", "要求", "熟悉", "具备", "以上", "本科", "硕士",
+            "必要技能", "经验", "经验要求", "学历要求", "核心职责", "加分项", "年以上", "年", "技能"
     );
+
+    /** 简历时间线区间：2020.01-2023.06 / 2020年1月-至今 / 2020-2024 */
+    private static final Pattern TIMELINE_RANGE = Pattern.compile(
+            "(20\\d{2}|19\\d{2})(?:\\s*[./年]\\s*(\\d{1,2})\\s*月?)?\\s*[-–—~至到]+\\s*"
+                    + "(?:((?:20\\d{2}|19\\d{2})(?:\\s*[./年]\\s*(\\d{1,2})\\s*月?)?)|至今|现在|now|present)",
+            Pattern.CASE_INSENSITIVE);
+
+    /** 「必要技能」段结束于下一结构化字段 */
+    private static final Pattern REQUIRED_SKILL_SECTION_END = Pattern.compile(
+            "(?:经验要求|学历要求|核心职责|加分项|岗位职责|任职要求|工作职责)[：:]");
+
 
     private static final List<DefaultJd> DEFAULT_JDS = List.of(
             new DefaultJd("job-java-agent", "高级 Java / AI Agent 平台工程师", "TECH",
@@ -289,7 +302,7 @@ public class JdRagService {
                     }
                 }
                 if (!deduped.containsKey(jdId)) {
-                    deduped.put(jdId, enrichMatchResult(jdId, title, category, match.score(), resumeText));
+                    deduped.put(jdId, enrichMatchResult(jdId, title, category, match.score(), resumeText, "vector"));
                 }
                 if (deduped.size() >= topK) break;
             }
@@ -391,12 +404,12 @@ public class JdRagService {
             // 归一化到 (0,1]，保持与向量路分数同一量纲供 RRF/展示使用
             double normalized = maxScore > 0 ? rawScores[i] / maxScore : 0;
             scored.add(enrichMatchResult(jd.getJdId(), jd.getTitle(), jd.getCategory(),
-                    Math.min(0.95, 0.15 + normalized * 0.8), resumeText));
+                    Math.min(0.95, 0.15 + normalized * 0.8), resumeText, "bm25"));
         }
-        scored.sort((a, b) -> Double.compare(b.score(), a.score()));
+        scored.sort((a, b) -> Double.compare(b.matchScore(), a.matchScore()));
         List<JdMatchResult> top = scored.stream().limit(topK).collect(Collectors.toList());
         agentMetrics.recordRagRetrieval("jd_lexical_bm25", top.isEmpty(),
-                top.isEmpty() ? 0 : top.get(0).score());
+                top.isEmpty() ? 0 : top.get(0).matchScore());
         return top;
     }
 
@@ -461,14 +474,17 @@ public class JdRagService {
         return Math.min(0.95, 0.15 + ratio * 0.8);
     }
 
-    private JdMatchResult enrichMatchResult(String jdId, String title, String category, double score, String resumeText) {
+    private JdMatchResult enrichMatchResult(String jdId, String title, String category,
+                                            double channelScore, String resumeText, String channel) {
         String jdText = loadJdDescription(jdId);
         DimensionalMatch dimensional = computeDimensionalMatch(resumeText, jdText);
-        double blendedScore = dimensional.overallScore() > 0 ? dimensional.overallScore() : score;
+        double blendedScore = dimensional.overallScore() > 0 ? dimensional.overallScore() : channelScore;
         List<String> reasons = buildMatchReasons(resumeText, jdText, title, dimensional);
         List<String> gaps = buildGaps(resumeText, jdText, dimensional);
         List<String> checks = buildInterviewChecks(gaps, title);
-        return new JdMatchResult(
+        Double vectorScore = "vector".equals(channel) ? channelScore : null;
+        Double bm25Score = "bm25".equals(channel) ? channelScore : null;
+        JdMatchResult base = new JdMatchResult(
                 jdId,
                 title != null ? title : "",
                 category != null ? category : "TECH",
@@ -481,6 +497,31 @@ public class JdRagService {
                 dimensional.projectMatchScore(),
                 dimensional.riskPenalty()
         );
+        return base.withChannelScores(vectorScore, bm25Score).withProvenance(buildJdProvenance(jdId));
+    }
+
+    private com.resumai.agent.api.dto.RagProvenance buildJdProvenance(String jdId) {
+        JdLibrary row = null;
+        try {
+            row = jdLibraryMapper.selectOne(new LambdaQueryWrapper<JdLibrary>().eq(JdLibrary::getJdId, jdId));
+        } catch (Exception ignored) {
+        }
+        if (row == null) {
+            return com.resumai.agent.api.dto.RagProvenance.document(jdId, null, null, null);
+        }
+        return new com.resumai.agent.api.dto.RagProvenance(
+                row.getJdId(),
+                null,
+                row.getVersion() != null ? String.valueOf(row.getVersion()) : null,
+                row.getCreateTime() != null ? row.getCreateTime().toString() : null,
+                row.getUpdateTime() != null ? row.getUpdateTime().toString() : null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null);
     }
 
     private record DimensionalMatch(
@@ -517,11 +558,33 @@ public class JdRagService {
             return skills;
         }
         int idx = jdText.indexOf("必要技能");
-        String segment = idx >= 0 ? jdText.substring(idx) : jdText;
+        if (idx < 0) {
+            return skills;
+        }
+        String after = jdText.substring(idx + "必要技能".length()).replaceFirst("^[：:\\s]+", "");
+        Matcher end = REQUIRED_SKILL_SECTION_END.matcher(after);
+        String segment = end.find() ? after.substring(0, end.start()) : after;
+        // 防止无字段分隔时吞掉整段描述：最多截到首个句号/换行后的下一字段痕迹
+        int hardCut = segment.length();
+        Matcher periodCut = Pattern.compile("[。\\n]").matcher(segment);
+        if (periodCut.find() && periodCut.start() + 1 < segment.length()) {
+            String rest = segment.substring(periodCut.start() + 1);
+            if (REQUIRED_SKILL_SECTION_END.matcher(rest).lookingAt()
+                    || rest.startsWith("经验") || rest.startsWith("学历")) {
+                hardCut = periodCut.start();
+            }
+        }
+        segment = segment.substring(0, hardCut);
+
         Matcher matcher = Pattern.compile("[A-Za-z][A-Za-z0-9+#\\.\\-/]*|[\\u4e00-\\u9fa5]{2,8}").matcher(segment);
         while (matcher.find() && skills.size() < 16) {
             String token = matcher.group().trim();
-            if (token.length() >= 2 && !NON_SKILL_GAP_WORDS.contains(token.toLowerCase(Locale.ROOT))) {
+            String lower = token.toLowerCase(Locale.ROOT);
+            if (token.length() >= 2
+                    && !NON_SKILL_GAP_WORDS.contains(lower)
+                    && !lower.matches("\\d+")
+                    && !lower.endsWith("年以上")
+                    && !lower.contains("经验要求")) {
                 skills.add(normalizeSkillToken(token));
             }
         }
@@ -547,15 +610,82 @@ public class JdRagService {
     private double computeExperienceMatch(String resumeLower, String jdLower) {
         Matcher jdYears = Pattern.compile("(\\d+)\\s*年以上").matcher(jdLower);
         int requiredYears = jdYears.find() ? Integer.parseInt(jdYears.group(1)) : 3;
-        Matcher resumeYears = Pattern.compile("(\\d+)\\s*年").matcher(resumeLower);
-        int candidateYears = 0;
-        while (resumeYears.find()) {
-            candidateYears = Math.max(candidateYears, Integer.parseInt(resumeYears.group(1)));
+
+        double candidateYears = estimateYearsFromTimeline(resumeLower);
+        if (candidateYears <= 0) {
+            // 次选：明确「N年经验/工作」表述，避免把任意「N年」误当工龄
+            Matcher resumeYears = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*年(?:以上)?(?:工作)?经验").matcher(resumeLower);
+            while (resumeYears.find()) {
+                candidateYears = Math.max(candidateYears, Double.parseDouble(resumeYears.group(1)));
+            }
         }
         if (candidateYears <= 0) {
-            return 0.55;
+            // 无法从时间线或明确年限推断：给不确定中性分，不再硬编码 0.55
+            return 0.40;
         }
         return Math.min(1.0, candidateYears / (double) Math.max(requiredYears, 1));
+    }
+
+    /**
+     * 从履历时间线区间估算工作年限（月并集 / 12）。
+     * 支持 2020.01-2023.06、2020年1月-至今、2020-2024。
+     */
+    private double estimateYearsFromTimeline(String resumeText) {
+        if (!StringUtils.hasText(resumeText)) {
+            return 0;
+        }
+        int nowYear = LocalDateTime.now().getYear();
+        int nowMonth = LocalDateTime.now().getMonthValue();
+        int nowIndex = nowYear * 12 + (nowMonth - 1);
+
+        List<int[]> intervals = new ArrayList<>();
+        Matcher matcher = TIMELINE_RANGE.matcher(resumeText);
+        while (matcher.find()) {
+            int startYear = Integer.parseInt(matcher.group(1));
+            int startMonth = matcher.group(2) != null ? clampMonth(Integer.parseInt(matcher.group(2))) : 1;
+            int startIndex = startYear * 12 + (startMonth - 1);
+
+            int endIndex;
+            String endToken = matcher.group(3);
+            if (endToken == null || endToken.matches("(?i)至今|现在|now|present")) {
+                endIndex = nowIndex;
+            } else {
+                Matcher endParts = Pattern.compile("(20\\d{2}|19\\d{2})(?:\\s*[./年]\\s*(\\d{1,2}))?").matcher(endToken);
+                if (!endParts.find()) {
+                    continue;
+                }
+                int endYear = Integer.parseInt(endParts.group(1));
+                int endMonth = endParts.group(2) != null ? clampMonth(Integer.parseInt(endParts.group(2))) : 12;
+                endIndex = endYear * 12 + (endMonth - 1);
+            }
+            if (endIndex < startIndex) {
+                continue;
+            }
+            intervals.add(new int[]{startIndex, endIndex});
+        }
+        if (intervals.isEmpty()) {
+            return 0;
+        }
+        intervals.sort(Comparator.comparingInt(a -> a[0]));
+        int mergedMonths = 0;
+        int curStart = intervals.get(0)[0];
+        int curEnd = intervals.get(0)[1];
+        for (int i = 1; i < intervals.size(); i++) {
+            int[] next = intervals.get(i);
+            if (next[0] <= curEnd + 1) {
+                curEnd = Math.max(curEnd, next[1]);
+            } else {
+                mergedMonths += curEnd - curStart + 1;
+                curStart = next[0];
+                curEnd = next[1];
+            }
+        }
+        mergedMonths += curEnd - curStart + 1;
+        return Math.min(40.0, mergedMonths / 12.0);
+    }
+
+    private static int clampMonth(int month) {
+        return Math.max(1, Math.min(12, month));
     }
 
     private double computeProjectMatch(String resumeLower, String jdLower) {

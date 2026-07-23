@@ -57,18 +57,23 @@ public class RunTypeClassifier {
             return "jd_evaluation";
         }
         if (containsAny(text, "为什么", "怎么看", "解释", "上一轮", "刚才", "继续")) {
+            // Chat follow-ups are handled by TurnDisposition.DIRECT_REPLY;
+            // if an evaluation run is still requested, treat as targeted follow-up eval.
             return "followup";
         }
         if (text.length() > 60 || containsAny(text, "评估", "分析")) {
             return "full_evaluation";
         }
-        return "quick_answer";
+        // Never default chat to quick_answer→ReportAgent; evaluation submitters
+        // should only reach here for explicit evaluation intents.
+        return "full_evaluation";
     }
 
     /** Categories that go through the heavyweight multi-agent pipeline. */
     public boolean isHeavy(String category) {
         return switch (category) {
-            case "quick_answer", "followup" -> false;
+            case "followup" -> false;
+            case "quick_answer" -> false; // legacy; chat must not use this path
             default -> true;
         };
     }

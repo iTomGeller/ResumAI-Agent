@@ -106,9 +106,11 @@ public class RunLifecycleService {
         }
         try {
             Map<String, Object> selectionContext = selectionContext(run, session);
+            // PRODUCTION_DECISION: champion only — never epsilon-explore on candidate traffic.
             PolicyService.Selection selection = StringUtils.hasText(run.getPolicyId())
                     ? policyService.forcedSelection(runId, category(run), run.getPolicyId())
-                    : policyService.selectPolicy(runId, category(run), selectionContext);
+                    : policyService.selectPolicy(runId, category(run), selectionContext,
+                            PolicyService.ExecutionPurpose.PRODUCTION_DECISION);
             PolicyBundleRow bundle = selection.bundle();
             JsonNode config = readJson(bundle.getConfig());
             int runTimeout = config.path("timeoutPolicy").path("runTimeoutSeconds")
@@ -127,18 +129,19 @@ public class RunLifecycleService {
                 // Cancelled while starting; permits are released by cancel path.
                 return;
             }
+            Map<String, Object> startedPayload = new LinkedHashMap<>();
+            startedPayload.put("policyId", bundle.getPolicyId());
+            startedPayload.put("policyName", bundle.getName() != null ? bundle.getName() : "");
+            startedPayload.put("selectionMode", selection.mode().storageValue());
+            startedPayload.put("assignmentVersion", selection.assignmentVersion());
+            startedPayload.put("executionPurpose",
+                    PolicyService.ExecutionPurpose.PRODUCTION_DECISION.name());
+            startedPayload.put("runType", category(run));
             eventService.publish(runId, run.getConversationId(), run.getTraceId(),
-                    "run.started", null, null, Map.of(
-                            "policyId", bundle.getPolicyId(),
-                            "policyName", bundle.getName() != null ? bundle.getName() : "",
-                            "selectionMode", selection.mode(),
-                            "runType", category(run)));
+                    "run.started", null, null, startedPayload);
             Map<String, Object> payload = buildRuntimePayload(run, session, bundle);
-            if ("FORCED".equals(selection.mode())) {
-                // Benchmark/replay runs execute their deterministic tools in
-                // isolated Docker workers; normal user requests stay in-process.
-                payload.put("isolatedSandbox", true);
-            }
+            // Candidate evaluation never carries sandbox fields. Policy Lab /
+            // benchmark isolation goes through /api/internal/policy-lab/* only.
             // Checkpoint retry: a queued run created from a failed run carries
             // its snapshot — the runtime resumes after the last finished group.
             if (StringUtils.hasText(run.getExecutionSnapshot())) {
@@ -148,6 +151,15 @@ public class RunLifecycleService {
                 }
             }
             runtimeClient.startRun(payload);
+        } catch (PolicySelectionPersistenceException e) {
+            log.warn("policy selection persist failed run={}: {}", runId, e.getMessage());
+            AgentRun latest = runMapper.selectById(runId);
+            if (latest != null && !RunStatus.isTerminal(latest.getStatus())) {
+                finishInternal(latest, RunStatus.FAILED, null,
+                        "POLICY_SELECTION_PERSIST_FAILED", trim(e.getMessage(), 1800), null,
+                        controlPlaneMeta("POLICY_SELECTION_PERSIST_FAILED", latest,
+                                "policy_selection"));
+            }
         } catch (Exception e) {
             log.warn("run start failed run={}: {}", runId, e.getMessage());
             AgentRun latest = runMapper.selectById(runId);
@@ -200,6 +212,8 @@ public class RunLifecycleService {
         String resume = session.getResumeText() != null ? session.getResumeText() : "";
         String jd = session.getJobDescription() != null ? session.getJobDescription() : "";
         context.put("goal", trim(run.getUserMessage(), 300));
+        context.put("runType", category(run));
+        context.put("goalCategory", category(run));
         context.put("jobCategory", session.getJobCategory());
         context.put("resumeLength", resume.length());
         context.put("resumePages", Math.max(1, resume.length() / 2600));
@@ -207,6 +221,8 @@ public class RunLifecycleService {
         context.put("workExperienceCount", countOccurrences(resume, "公司"));
         context.put("jdRequirementCount", countOccurrences(jd, "\n"));
         context.put("conversationRevision", session.getActiveRevision());
+        context.put("executionPurpose",
+                PolicyService.ExecutionPurpose.PRODUCTION_DECISION.name());
         return context;
     }
 
@@ -720,7 +736,9 @@ public class RunLifecycleService {
                         succeeded);
                 rewardService.recordAutoReward(finished, terminal == RunStatus.SUCCEEDED);
             }
-            memoryService.writeEpisodicRunMemory(finished, terminal.name());
+            // EPISODIC only for successful runs with business artifacts;
+            // FAILED/TIMED_OUT archive working memory and write isolated FAILURE.
+            memoryService.writeRunEpisode(finished, terminal.name());
             if (terminal == RunStatus.FAILED || terminal == RunStatus.TIMED_OUT) {
                 memoryService.writeFailureMemory(finished, errorCode, errorMessage);
             }
@@ -781,7 +799,10 @@ public class RunLifecycleService {
                 if (title != null && StringUtils.hasText(String.valueOf(title))) {
                     matchedJdTitle = String.valueOf(title);
                 }
-                Object score = best.get("score");
+                Object score = best.get("matchScore");
+                if (!(score instanceof Number)) {
+                    score = best.get("score");
+                }
                 if (score instanceof Number n) {
                     jdMatchScore = n.doubleValue();
                 }
@@ -855,6 +876,31 @@ public class RunLifecycleService {
         return answer;
     }
 
+    /**
+     * Top-level TaskResponse lists stay as strings for list/card UIs.
+     * Structured objects remain under structuredReport.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<String> flattenReportClaims(Object raw, String field) {
+        if (!(raw instanceof List<?> list) || list.isEmpty()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof String s) {
+                if (StringUtils.hasText(s)) {
+                    out.add(s.trim());
+                }
+            } else if (item instanceof Map<?, ?> map) {
+                Object value = map.get(field);
+                if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                    out.add(String.valueOf(value).trim());
+                }
+            }
+        }
+        return out;
+    }
+
     private static String recommendationLabel(String recommendation) {
         return switch (recommendation) {
             case "HIRE" -> "建议录用";
@@ -897,8 +943,13 @@ public class RunLifecycleService {
             payload.put("fullReport", answer != null ? answer : "");
             payload.put("structuredReport", report);
             payload.put("strengths", report.getOrDefault("strengths", List.of()));
-            payload.put("risks", report.getOrDefault("risks", List.of()));
-            payload.put("interviewQuestions", report.getOrDefault("interviewQuestions", List.of()));
+            payload.put("risks", flattenReportClaims(report.get("risks"), "claim"));
+            payload.put("interviewQuestions",
+                    flattenReportClaims(
+                            report.containsKey("interviewProbes")
+                                    ? report.get("interviewProbes")
+                                    : report.get("interviewQuestions"),
+                            "question"));
             if (durationMs != null) {
                 payload.put("durationMs", durationMs);
             }
@@ -1231,7 +1282,7 @@ public class RunLifecycleService {
         }
         return switch (errorCode) {
             case "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED", "START_STUCK",
-                 "RUN_TIMEOUT" -> true;
+                 "RUN_TIMEOUT", "POLICY_SELECTION_PERSIST_FAILED" -> true;
             default -> false;
         };
     }
@@ -1241,6 +1292,7 @@ public class RunLifecycleService {
             return null;
         }
         return switch (errorCode) {
+            case "POLICY_SELECTION_PERSIST_FAILED" -> "policy_selection";
             case "RUNTIME_START_FAILED", "START_STUCK" -> "start";
             case "ORPHANED_ON_RESTART" -> "restart_recovery";
             case "RUN_TIMEOUT" -> "watchdog";

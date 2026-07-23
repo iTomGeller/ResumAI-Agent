@@ -287,22 +287,67 @@ class SkillManager:
                 used[skill.skill_id] = f"{skill.version}#{skill.hash}"
         return used
 
+    def runtime_manifest(self, *, include_deprecated: bool = False) -> Dict[str, Any]:
+        """Python SkillManager snapshot for Ops — not the Java install catalog alone."""
+        active: List[Dict[str, Any]] = []
+        deprecated: List[Dict[str, Any]] = []
+        for skill_id in sorted(self.list_ids()):
+            try:
+                skill = self.get(skill_id)
+            except KeyError:
+                continue
+            item = {
+                "skillId": skill.skill_id,
+                "name": skill.name,
+                "version": skill.version,
+                "hash": skill.hash,
+                "status": skill.status,
+                "deprecated": skill.deprecated,
+                "description": skill.description,
+                "requiredTools": list(skill.required_tools),
+                "requiredMcp": list(skill.required_mcp),
+                "sourcePath": skill.source_path,
+                "adminOnly": skill.skill_id in ADMIN_ONLY_SKILLS,
+            }
+            if skill.deprecated or skill.skill_id in ADMIN_ONLY_SKILLS:
+                deprecated.append(item)
+            else:
+                active.append(item)
+        skills = list(active)
+        if include_deprecated:
+            skills.extend(deprecated)
+        return {
+            "source": "python_skill_manager",
+            "root": str(self.root or ""),
+            "count": len(skills),
+            "activeCount": len(active),
+            "deprecatedCount": len(deprecated),
+            "skills": skills,
+            "deprecatedSkills": deprecated if include_deprecated else [],
+            "advertisedTools": ["load_skill", "execute_skill", "read_skill_resource"],
+        }
+
     async def emit_selection(self, emitter: Any, agent_id: str,
-                             skills: List[SkillDefinition]) -> None:
+                             skills: List[SkillDefinition],
+                             *, trigger_reason: str = "policy_match") -> None:
+        """Emit skill lifecycle for Trace — Skill is not a tool execution.
+
+        Events: skill.selected → skill.applied (no fake started/completed tool
+        lifecycle). RunTraceBridge must consume these as Agent annotations.
+        """
         for skill in skills:
-            payload = {
+            base = {
                 "skillId": skill.skill_id,
                 "skillVersion": skill.version,
                 "skillHash": skill.hash,
                 "agentId": agent_id,
+                "triggerReason": trigger_reason,
             }
             await emitter.emit("skill.selected", agent_id=agent_id,
-                               tool_name=skill.skill_id, payload=payload)
-            await emitter.emit("skill.started", agent_id=agent_id,
-                               tool_name=skill.skill_id, payload=payload)
-            await emitter.emit("skill.completed", agent_id=agent_id,
+                               tool_name=skill.skill_id, payload=base)
+            await emitter.emit("skill.applied", agent_id=agent_id,
                                tool_name=skill.skill_id, payload={
-                                   **payload, "injected": True})
+                                   **base, "injected": True})
 
 
 default_skill_manager = SkillManager()

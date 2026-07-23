@@ -136,6 +136,8 @@ def main() -> int:
             started = time.monotonic()
             response = http("POST", f"{api}/memory/search", {
                 "query": query, "userId": USER, "topK": 5, "channel": channel,
+                "consumerAgent": "PolicyEvolution",
+                "includeBenchmarkSources": True,
             }, token)
             latency = (time.monotonic() - started) * 1000
             ranked = [str(h.get("memoryId")) for h in response.get("hits", [])]

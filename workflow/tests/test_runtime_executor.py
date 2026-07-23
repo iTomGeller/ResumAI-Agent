@@ -1,9 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,7 +18,7 @@ from app.runtime.events import NullEmitter
 from app.runtime.executor import RunExecutor
 from app.runtime.memory import NullMemoryClient
 from app.runtime.models import AgentRunRequest, BudgetExceeded, PolicyBundle
-from app.runtime.sandbox import LocalSandboxFallback
+from app.runtime.builtin_tools import BuiltinToolRegistry
 
 RESUME = """张三
 工作经历
@@ -55,13 +56,28 @@ class FakeLlm:
             raise LlmError("SERVER_ERROR", f"injected failure for {agent_id}", False)
         if agent_id == "CoordinatorAgent":
             return json.dumps({"plan": [], "reason": "keep rule plan"})
+        section = {
+            "ResumeParserAgent": "resume_facts",
+            "JDAnalysisAgent": "jd_requirements",
+            "TechAgent": "technical_findings",
+            "ProjectAgent": "project_findings",
+            "RiskAgent": "risks",
+            "EvidenceAgent": "evidence",
+            "ReportAgent": "recommendations",
+            "ResumeOptimizeAgent": "recommendations",
+            "InterviewQuestionAgent": "recommendations",
+        }.get(agent_id, "technical_findings")
+        claim_value: Any
+        if section in {"resume_facts", "jd_requirements"}:
+            claim_value = {"summary": f"{agent_id} 完成", "skills": ["Java", "Kafka"]}
+        else:
+            claim_value = [{"text": f"{agent_id} 结论", "evidence": "第6行"}]
         output = {
             "thought": f"{agent_id} 分析",
             "toolCalls": [],
             "output": {
                 "summary": f"{agent_id} 完成",
-                "claims": [{"section": "technical_findings",
-                            "value": [{"text": f"{agent_id} 结论", "evidence": "第6行"}]}],
+                "claims": [{"section": section, "value": claim_value}],
                 "evidence": [{"text": f"{agent_id} 证据", "sourceLine": 6,
                               "source": "resume", "verified": None}],
                 "confidence": 0.8,
@@ -69,19 +85,55 @@ class FakeLlm:
             "done": True,
         }
         if agent_id == "ReportAgent":
+            ref = {
+                "sourceType": "RESUME",
+                "sourceId": "resume",
+                "lineStart": 6,
+                "lineEnd": 6,
+                "quote": "基于Kafka实现异步解耦，峰值处理 5000 QPS",
+            }
             output["output"]["report"] = {
                 "recommendation": "INTERVIEW_RECOMMEND",
                 "dimensions": [
-                    {"name": "技术能力", "score": 78, "rationale": "Kafka 项目证据充分"},
-                    {"name": "项目深度", "score": 72, "rationale": "有峰值 QPS 量化"},
-                    {"name": "JD匹配", "score": 70, "rationale": "Java/Redis 覆盖，K8s 缺口"},
-                    {"name": "履历可信度", "score": 60, "rationale": "时间线存在重叠风险"},
+                    {"name": "技术能力", "score": 78, "status": "ASSESSED",
+                     "evidenceCoverage": 0.8, "rationale": "Kafka 项目证据充分",
+                     "evidenceRefs": [ref]},
+                    {"name": "项目深度", "score": 72, "status": "ASSESSED",
+                     "evidenceCoverage": 0.7, "rationale": "有峰值 QPS 量化",
+                     "evidenceRefs": [ref]},
+                    {"name": "JD匹配", "score": 70, "status": "ASSESSED",
+                     "evidenceCoverage": 0.7, "rationale": "Java/Redis 覆盖，K8s 缺口",
+                     "evidenceRefs": [ref]},
+                    {"name": "履历可信度", "score": 60, "status": "ASSESSED",
+                     "evidenceCoverage": 0.6, "rationale": "时间线存在重叠风险",
+                     "evidenceRefs": [ref]},
                 ],
                 "strengths": ["Kafka 异步解耦经验"],
-                "risks": ["时间线重叠"],
+                "risks": [{
+                    "id": "r-timeline",
+                    "category": "TIMELINE",
+                    "severity": "MEDIUM",
+                    "claim": "工作时间线存在重叠",
+                    "impact": "需核验真实在职区间",
+                    "evidenceRefs": [ref],
+                    "verificationPlan": "对照社保/离职证明核对起止月份",
+                }],
+                "interviewProbes": [{
+                    "id": "p1",
+                    "priority": "P1",
+                    "question": "请说明订单中台峰值如何压测？",
+                    "objective": "验证 Kafka 峰值处理真实性",
+                    "triggeredBy": "project_claim",
+                    "evidenceRefs": [ref],
+                    "goodSignals": ["能说出压测工具与瓶颈定位"],
+                    "redFlags": ["只能复述简历原句"],
+                    "followUps": ["当时的 consumer lag 如何监控？"],
+                    "scoreRubric": "能讲清压测方法与结果记满分",
+                }],
                 "interviewQuestions": ["请说明订单中台峰值如何压测？"],
                 "dataQuality": "SUFFICIENT",
                 "missingEvidence": [],
+                "systemWarnings": [],
             }
         return json.dumps(output, ensure_ascii=False)
 
@@ -99,7 +151,7 @@ def make_executor(request, llm=None):
     executor = RunExecutor(
         request, emitter,
         memory=NullMemoryClient(),
-        sandbox=LocalSandboxFallback(),
+        builtin_tools=BuiltinToolRegistry(),
         llm=llm or FakeLlm())
     return executor, emitter
 
@@ -164,7 +216,7 @@ def test_query_rewrite_degrades_to_single_query_without_llm():
     from app.runtime.tools import ToolExecutor
 
     executor = ToolExecutor(
-        _NullEmitter(), RunBudget(), LocalSandboxFallback(),
+        _NullEmitter(), RunBudget(), BuiltinToolRegistry(),
         max_tool_calls_run=5, tool_timeout_seconds=10,
         run_context={"resumeText": RESUME, "jobDescription": JD}, llm=None)
 
@@ -194,7 +246,7 @@ def test_enable_rewrite_flag_reaches_dispatch():
 
     llm = RewriteLlm()
     tools = ToolExecutor(
-        _NullEmitter("r", "c", "t"), RunBudget(), LocalSandboxFallback(),
+        _NullEmitter("r", "c", "t"), RunBudget(), BuiltinToolRegistry(),
         max_tool_calls_run=10, tool_timeout_seconds=10,
         run_context={"resumeText": RESUME, "jobDescription": JD}, llm=llm)
 
@@ -290,7 +342,8 @@ def test_agent_failure_degrades_not_hangs():
 
 
 def test_tool_whitelist_enforced_per_agent():
-    request = make_request(run_type="quick_answer", message="随便聊聊")
+    # followup keeps ReportAgent-only pipeline; chat no longer uses quick_answer.
+    request = make_request(run_type="followup", message="随便聊聊")
 
     class NaughtyLlm(FakeLlm):
         async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
@@ -385,7 +438,7 @@ def test_pause_snapshot_and_resume_skips_completed_agents():
         pause_event = asyncio.Event()
         emitter = NullEmitter(request.runId, request.conversationId, request.traceId)
         executor = RunExecutor(request, emitter, memory=NullMemoryClient(),
-                               sandbox=LocalSandboxFallback(),
+                               builtin_tools=BuiltinToolRegistry(),
                                llm=FakeLlm(delay=0.05),
                                pause_event=pause_event)
         task = asyncio.create_task(executor.execute())
@@ -407,7 +460,7 @@ def test_pause_snapshot_and_resume_skips_completed_agents():
                                 NullEmitter(request.runId, request.conversationId,
                                             request.traceId),
                                 memory=NullMemoryClient(),
-                                sandbox=LocalSandboxFallback(), llm=resumed_llm)
+                                builtin_tools=BuiltinToolRegistry(), llm=resumed_llm)
         result2 = await executor2.execute()
         assert result2["status"] in ("SUCCEEDED", "PARTIAL_SUCCESS")
         rerun = [c["agent"] for c in resumed_llm.calls

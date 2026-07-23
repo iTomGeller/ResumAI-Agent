@@ -161,7 +161,7 @@ public class InternalWorkflowController {
         // 与 AutoMatch 同源：hybrid-RRF（可选 rerank），不再走 vector-or-lexical 单通道。
         List<JdMatchResult> items = hybridRagService.retrieve(
                 request.resumeText(), RagOptions.defaults().withTopK(topK));
-        double topScore = items.stream().mapToDouble(JdMatchResult::score).max().orElse(0D);
+        double topScore = items.stream().mapToDouble(JdMatchResult::matchScore).max().orElse(0D);
         String effectiveJd = "";
         if (!items.isEmpty()) {
             effectiveJd = jdRagService.getJdDescription(items.get(0).jdId());

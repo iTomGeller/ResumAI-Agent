@@ -13,7 +13,14 @@ from app.runtime.coordinator import Coordinator, TERMINAL_AGENTS
 from app.runtime.events import RuntimeEmitter
 from app.runtime.llm import LlmError, ResilientLlmClient, extract_json_object
 from app.runtime.loop_guard import LoopGuard
-from app.runtime.memory import MemoryClient
+from app.runtime.memory import (
+    CONTROL_PLANE_ERROR_CODES,
+    MemoryClient,
+    SPECIALIST_TYPES,
+    decisions_from_hits,
+    filter_hits_for_consumer,
+    memory_trace_entries,
+)
 from app.runtime.models import (
     AgentDecision,
     AgentOutput,
@@ -24,7 +31,7 @@ from app.runtime.models import (
     RunPaused,
 )
 from app.runtime.prompts import default_prompt_manager
-from app.runtime.sandbox import SandboxClient
+from app.runtime.builtin_tools import BuiltinToolRegistry
 from app.runtime.skills import default_skill_manager
 from app.runtime.state import SharedState
 from app.runtime.tools import ToolExecutor
@@ -61,17 +68,37 @@ REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；不要写长 
     "confidence": 0.0-1.0,
     "report": {
       "recommendation": "HIRE|INTERVIEW_RECOMMEND|NEED_MANUAL_REVIEW|NOT_RECOMMEND",
-      "dimensions": [{"name": "技术能力|项目深度|JD匹配|履历可信度", "score": 0-100, "rationale": "..."}],
+      "dimensions": [{
+        "name": "技术能力|项目深度|JD匹配|履历可信度",
+        "score": "0-100 或 null",
+        "status": "ASSESSED|UNASSESSED|PARTIAL",
+        "evidenceCoverage": 0.0-1.0,
+        "rationale": "...",
+        "evidenceRefs": [{"sourceType":"RESUME|JD|KNOWLEDGE|EXTERNAL","sourceId":"...","quote":"...","lineStart":1,"lineEnd":2}]
+      }],
       "strengths": ["..."],
-      "risks": ["..."],
-      "interviewQuestions": ["..."],
+      "risks": [{
+        "id":"r1","category":"CANDIDATE","severity":"HIGH|MEDIUM|LOW",
+        "claim":"...","impact":"...","verificationPlan":"...",
+        "evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"..."}]
+      }],
+      "interviewQuestions": [{
+        "id":"q1","priority":"HIGH|MEDIUM|LOW","question":"...",
+        "objective":"...","triggeredBy":"...",
+        "evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"..."}],
+        "goodSignals":["..."],"redFlags":["..."],"followUps":["..."],
+        "scoreRubric":"..."
+      }],
+      "systemWarnings": [{"code":"...","stage":"...","retryable":false,"message":"..."}],
       "dataQuality": "SUFFICIENT|PARTIAL|INSUFFICIENT",
       "missingEvidence": ["..."]
     }
   },
   "done": true
 }
-禁止输出 overallScore 与长 Markdown；综合分与正文由系统生成。"""
+禁止输出 overallScore 与长 Markdown；综合分与正文由系统生成。
+风险仅写候选人侧（category=CANDIDATE）且必须带 evidenceRefs；PROCESS/DATA/控制面问题放入 systemWarnings。
+无证据维度必须 status=UNASSESSED 且 score=null，禁止用 0 分代替。"""
 
 # Provider-side schema enforcement (JSON guarantee layer 1): the decision loop
 # forces this function; DeepSeek then guarantees arguments match the schema.
@@ -125,14 +152,75 @@ EMIT_DECISION_TOOL = {
 FORCE_EMIT_DECISION = {"type": "function", "function": {"name": "emit_decision"}}
 
 # ReportAgent: strong schema for structured report (Markdown is rendered offline).
+_SOURCE_REF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "sourceType": {
+            "type": "string",
+            "enum": ["RESUME", "JD", "KNOWLEDGE", "EXTERNAL"],
+        },
+        "sourceId": {"type": "string"},
+        "lineStart": {"type": "integer"},
+        "lineEnd": {"type": "integer"},
+        "quote": {"type": "string"},
+        "uri": {"type": "string"},
+    },
+    "required": ["sourceType", "sourceId", "quote"],
+}
 _REPORT_DIM = {
     "type": "object",
     "properties": {
         "name": {"type": "string"},
-        "score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "score": {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
+        "status": {
+            "type": "string",
+            "enum": ["ASSESSED", "UNASSESSED", "PARTIAL"],
+        },
+        "evidenceCoverage": {"type": "number", "minimum": 0, "maximum": 1},
         "rationale": {"type": "string"},
+        "evidenceRefs": {"type": "array", "items": _SOURCE_REF_SCHEMA},
     },
-    "required": ["name", "score", "rationale"],
+    "required": ["name", "status", "rationale"],
+}
+_CANDIDATE_RISK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "category": {"type": "string"},
+        "severity": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+        "confidence": {"type": "number"},
+        "claim": {"type": "string"},
+        "impact": {"type": "string"},
+        "evidenceRefs": {"type": "array", "items": _SOURCE_REF_SCHEMA},
+        "verificationPlan": {"type": "string"},
+    },
+    "required": ["claim", "evidenceRefs"],
+}
+_INTERVIEW_PROBE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "priority": {"type": "string"},
+        "question": {"type": "string"},
+        "objective": {"type": "string"},
+        "triggeredBy": {"type": "string"},
+        "evidenceRefs": {"type": "array", "items": _SOURCE_REF_SCHEMA},
+        "goodSignals": {"type": "array", "items": {"type": "string"}},
+        "redFlags": {"type": "array", "items": {"type": "string"}},
+        "followUps": {"type": "array", "items": {"type": "string"}},
+        "scoreRubric": {"type": "string"},
+    },
+    "required": ["question", "evidenceRefs", "goodSignals"],
+}
+_SYSTEM_WARNING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string"},
+        "stage": {"type": "string"},
+        "retryable": {"type": "boolean"},
+        "message": {"type": "string"},
+    },
+    "required": ["code", "message"],
 }
 EMIT_REPORT_TOOL = {
     "type": "function",
@@ -169,9 +257,14 @@ EMIT_REPORT_TOOL = {
                                 },
                                 "dimensions": {"type": "array", "items": _REPORT_DIM},
                                 "strengths": {"type": "array", "items": {"type": "string"}},
-                                "risks": {"type": "array", "items": {"type": "string"}},
+                                "risks": {
+                                    "type": "array", "items": _CANDIDATE_RISK_SCHEMA},
                                 "interviewQuestions": {
-                                    "type": "array", "items": {"type": "string"}},
+                                    "type": "array", "items": _INTERVIEW_PROBE_SCHEMA},
+                                "interviewProbes": {
+                                    "type": "array", "items": _INTERVIEW_PROBE_SCHEMA},
+                                "systemWarnings": {
+                                    "type": "array", "items": _SYSTEM_WARNING_SCHEMA},
                                 "dataQuality": {
                                     "type": "string",
                                     "enum": ["SUFFICIENT", "PARTIAL", "INSUFFICIENT"],
@@ -199,6 +292,11 @@ _DIMENSION_WEIGHTS = {
     "jd匹配": 0.25,
     "履历可信度": 0.15,
 }
+_CORE_DIMENSION_KEYS = {
+    n.replace(" ", "").lower() for n in _DIMENSION_WEIGHTS
+}
+_MIN_EVIDENCE_COVERAGE = 0.2
+_PROCESS_DATA_CATEGORIES = frozenset({"PROCESS", "DATA", "CONTROL_PLANE", "SYSTEM"})
 MIN_REPORT_ANSWER_CHARS = 80
 MIN_RESUME_TEXT_CHARS = 80
 _SCORE_CONTRACT_SKIP_TYPES = {
@@ -222,7 +320,7 @@ class RunExecutor:
     def __init__(self, request: AgentRunRequest, emitter: RuntimeEmitter, *,
                  registry: Optional[AgentRegistry] = None,
                  memory: Optional[MemoryClient] = None,
-                 sandbox: Optional[Any] = None,
+                 builtin_tools: Optional[BuiltinToolRegistry] = None,
                  llm: Optional[ResilientLlmClient] = None,
                  pause_event: Optional[asyncio.Event] = None) -> None:
         self.request = request
@@ -235,19 +333,10 @@ class RunExecutor:
         self.pause_event = pause_event
         self.memory = memory or MemoryClient(request.runId, request.conversationId,
                                              request.userId)
-        # Deterministic resume tools are pure functions. Normal user requests
-        # run them in-process (no per-call Docker cost); the isolated Docker
-        # worker path is reserved for policy replay / benchmark environments
-        # (request.isolatedSandbox) where hard isolation is the point.
-        if sandbox is not None:
-            self.sandbox = sandbox
-        elif request.isolatedSandbox:
-            self.sandbox = SandboxClient(
-                emitter, request.runId, request.conversationId,
-                timeout_seconds=self.policy.timeoutPolicy.sandboxTimeoutSeconds)
-        else:
-            from app.runtime.sandbox import LocalSandboxFallback
-            self.sandbox = LocalSandboxFallback()
+        # Production candidate evaluation always uses in-process builtin tools.
+        # Docker Sandbox is reserved for Policy Lab / benchmark / replay and
+        # must not appear in this dependency graph.
+        self.builtin_tools = builtin_tools or BuiltinToolRegistry()
         run_context = {
             "resumeText": request.resumeText or "",
             "jobDescription": request.jobDescription or "",
@@ -260,7 +349,7 @@ class RunExecutor:
         # The tool executor holds an llm reference only for query rewriting
         # (agentic retrieval); it never drives its own decision loop.
         self.tools = ToolExecutor(
-            emitter, self.budget, self.sandbox,
+            emitter, self.budget, self.builtin_tools,
             max_tool_calls_run=self.policy.toolBudget.maxToolCallsPerRun,
             tool_timeout_seconds=self.policy.timeoutPolicy.toolTimeoutSeconds,
             run_context=run_context, llm=self.llm)
@@ -270,7 +359,9 @@ class RunExecutor:
         self.state = SharedState()
         self.skill_selections: Dict[str, List[Any]] = {}
         self.memory_hits: List[Dict[str, Any]] = []
+        self.failure_hits: List[Dict[str, Any]] = []
         self.failure_notes: List[str] = []
+        self.memory_traces: List[Dict[str, Any]] = []
         self.final_answer: str = ""
         self.degraded_reasons: List[str] = []
         self.agent_counters: Dict[str, Dict[str, int]] = {}
@@ -358,36 +449,57 @@ class RunExecutor:
         if not resumed:
             await self.emitter.emit("run.progress", payload={
                 "stage": "observe", "message": "加载记忆与上下文"})
-            memory_types = ["CONVERSATION", "EPISODIC", "PREFERENCE", "FAILURE"]
+            # Specialists/Report: USER/CONVERSATION PREFERENCE/CONVERSATION/EPISODIC
+            # only — never FAILURE (control-plane noise must not enter evaluation).
             self.memory_hits = await self.memory.search(
-                request.userMessage, types=memory_types,
+                request.userMessage, types=sorted(SPECIALIST_TYPES),
                 top_k=self.policy.memoryRetrieval.topK,
-                min_confidence=self.policy.memoryRetrieval.minConfidence)
+                min_confidence=self.policy.memoryRetrieval.minConfidence,
+                consumer_agent="SpecialistAgent")
+            # FAILURE is Coordinator / policy-evolution only.
+            self.failure_hits = await self.memory.search(
+                request.userMessage, types=["FAILURE"],
+                top_k=3,
+                min_confidence=self.policy.memoryRetrieval.minConfidence,
+                consumer_agent="CoordinatorAgent")
             self.failure_notes = [
-                str(h.get("content", ""))[:160] for h in self.memory_hits
-                if h.get("type") == "FAILURE"][:3]
+                str(h.get("content", ""))[:160] for h in self.failure_hits][:3]
             # Memory retrieval must be observable in the trace, not a black box.
             type_counts: Dict[str, int] = {}
-            for hit in self.memory_hits:
+            for hit in self.memory_hits + self.failure_hits:
                 hit_type = str(hit.get("type") or "UNKNOWN")
                 type_counts[hit_type] = type_counts.get(hit_type, 0) + 1
+            observe_trace = memory_trace_entries(
+                [{"used": True, "ignoredReason": None, **h} for h in self.memory_hits],
+                [],
+                "SpecialistAgent",
+            ) + memory_trace_entries(
+                [{"used": True, "ignoredReason": None, **h} for h in self.failure_hits],
+                [],
+                "CoordinatorAgent",
+            )
+            self.memory_traces.extend(observe_trace)
             await self.emitter.emit("run.progress", payload={
                 "stage": "memory",
-                "message": f"记忆命中 {len(self.memory_hits)} 条",
+                "message": (f"记忆命中 {len(self.memory_hits)} 条"
+                            f"（FAILURE 仅 Coordinator {len(self.failure_hits)} 条）"),
                 "memoryHits": len(self.memory_hits),
+                "failureHits": len(self.failure_hits),
                 "memoryTypeCounts": type_counts,
+                "memoryTrace": observe_trace[:12],
                 "memoryTop": [
-                    {"type": str(h.get("type") or ""),
+                    {"memoryId": h.get("memoryId"),
+                     "type": str(h.get("type") or ""),
+                     "scope": h.get("ownerScope") or h.get("scope"),
+                     "source": h.get("source"),
+                     "consumerAgent": "SpecialistAgent",
+                     "used": True,
+                     "ignoredReason": None,
                      "confidence": h.get("confidence"),
                      "content": str(h.get("content") or "")[:120]}
                     for h in self.memory_hits[:3]
                 ]})
 
-            coordinator = Coordinator(self.registry, self.policy, self.llm)
-            needs_parse = bool(request.resumeText) \
-                and request.runType in ("full_evaluation", "jd_evaluation",
-                                        "backend_eval", "agent_eval",
-                                        "resume_optimize", "project_rewrite")
             if getattr(self, "_mcp_attach_pending", False):
                 try:
                     from app.runtime.mcp_registry import get_mcp_registry
@@ -396,16 +508,27 @@ class RunExecutor:
                 except Exception as exc:  # noqa: BLE001
                     logger.info("MCP probe skipped: %s", exc)
                 self._mcp_attach_pending = False
+
+            # Deterministic preflight: parse resume / load JD into the
+            # canonical artifact store BEFORE artifact backward-chaining.
+            await self._prepare_context()
+            coordinator = Coordinator(self.registry, self.policy, self.llm)
+            arts = self.state.artifacts()
+            needs_parse = bool(request.resumeText) and not arts.get("resumeFacts") \
+                and request.runType in ("full_evaluation", "jd_evaluation",
+                                        "backend_eval", "agent_eval",
+                                        "resume_optimize", "project_rewrite")
             planned = await coordinator.plan(
                 run_type=request.runType, user_message=request.userMessage,
                 conversation_summary=request.conversationSummary or "",
-                shared_digest="", failure_notes=self.failure_notes,
+                shared_digest=self.state.view_for("CoordinatorAgent", max_chars=2000),
+                failure_notes=self.failure_notes,
                 memory_notes=[str(h.get("content", ""))[:120]
                               for h in self.memory_hits[:3]],
                 needs_parse=needs_parse,
                 resume_text=request.resumeText or "",
                 job_description=request.jobDescription or "",
-                artifacts=self.state.data.get("artifacts") or {},
+                artifacts=arts,
                 shared=self.state.data)
             self.plan = planned["plan"]
             self.parallel_groups = planned["parallelGroups"]
@@ -415,6 +538,7 @@ class RunExecutor:
                 "skippedBecause": planned.get("skippedBecause") or {},
                 "artifactEdges": planned.get("artifactEdges") or [],
                 "goalArtifacts": planned.get("goalArtifacts") or [],
+                "optionalArtifacts": planned.get("optionalArtifacts") or [],
                 "budget": self.budget_plan,
             }
             await self.emitter.emit("agent.selected", agent_id="CoordinatorAgent", payload={
@@ -488,7 +612,7 @@ class RunExecutor:
             if not runnable:
                 continue
 
-            conflicts_before = len(self.state.data["conflicts"])
+            conflicts_before = len(self.state.artifact("conflicts") or [])
             self._tool_failed_this_group = False
             self._pending_handoff = None
             self._missing_artifacts = []
@@ -524,10 +648,16 @@ class RunExecutor:
             self.report_agent_failed = True
         summary = self._conversation_summary()
         await self._write_memories(summary)
+        missing_goals = self._missing_required_goal_artifacts()
         status = "PARTIAL_SUCCESS" if (self.report_agent_failed or
-                                       self._has_hard_degradation()) else "SUCCEEDED"
+                                       self._has_hard_degradation() or
+                                       missing_goals) else "SUCCEEDED"
         error_code = None
         error_message = None
+        if missing_goals:
+            self.degraded_reasons.append("missing_goal_artifacts")
+            error_code = "MISSING_GOAL_ARTIFACTS"
+            error_message = "缺少必选 goal artifacts: " + ", ".join(missing_goals)
         if status == "SUCCEEDED" and self._requires_score_contract():
             contract_error = self._report_contract_violation()
             if contract_error:
@@ -537,7 +667,8 @@ class RunExecutor:
                 self.degraded_reasons.append("report_contract_failed")
         return self._result(status, self.final_answer,
                             error_code=error_code, error_message=error_message,
-                            conversation_summary=summary)
+                            conversation_summary=summary,
+                            missing_goal_artifacts=missing_goals)
 
     # ------------------------------------------------------------------
     # group execution
@@ -665,7 +796,7 @@ class RunExecutor:
         """One-round conflict adjudication: unresolved conflicts get a
         keep / reject / uncertain ruling with a reason. The ruling is final
         (written back onto the conflict), the ReportAgent cites it."""
-        conflicts = [c for c in self.state.data["conflicts"]
+        conflicts = [c for c in (self.state.artifact("conflicts") or [])
                      if isinstance(c, dict) and not c.get("resolution")]
         if not conflicts or self._arbitrated:
             return
@@ -713,7 +844,7 @@ class RunExecutor:
         non_terminal_remaining = [a for a in remaining if a not in TERMINAL_AGENTS]
         if self.replan_count >= 2 or not non_terminal_remaining:
             return
-        new_conflicts = len(self.state.data["conflicts"]) - conflicts_before
+        new_conflicts = len(self.state.artifact("conflicts") or []) - conflicts_before
         recent_outputs = self.state.data["agentOutputs"][-3:]
         confidences = [float(o.get("confidence", 1.0)) for o in recent_outputs
                        if isinstance(o, dict)]
@@ -722,18 +853,18 @@ class RunExecutor:
         # Detect missing required artifacts for remaining agents.
         missing: List[str] = list(self._missing_artifacts)
         present = set()
-        arts = self.state.data.get("artifacts") or {}
-        if arts.get("parsedResume") or self.state.data.get("resumeFacts"):
+        arts = self.state.artifacts()
+        if arts.get("parsedResume") or arts.get("resumeFacts"):
             present.add("resume_facts")
-        if arts.get("effectiveJd") or self.state.data.get("jdRequirements"):
+        if arts.get("effectiveJd") or arts.get("jdRequirements"):
             present.add("jd_requirements")
-        if self.state.data.get("technicalFindings"):
+        if arts.get("technicalFindings"):
             present.add("technical_findings")
-        if self.state.data.get("projectFindings"):
+        if arts.get("projectFindings"):
             present.add("project_findings")
-        if self.state.data.get("risks") or arts.get("timelineCheck"):
+        if arts.get("risks") or arts.get("timelineCheck"):
             present.add("risks")
-        if self.state.data.get("evidence"):
+        if arts.get("evidence"):
             present.add("evidence_ledger")
         for agent_id in remaining:
             if not self.registry.known(agent_id):
@@ -766,14 +897,16 @@ class RunExecutor:
             trigger = f"low_confidence:{avg_confidence:.2f}"
         if trigger is None:
             return
-        state = self.state.data
+        arts = self.state.artifacts()
         shared_digest = json.dumps({
-            "technicalFindings": len(state["technicalFindings"]),
-            "projectFindings": len(state["projectFindings"]),
-            "risks": len(state["risks"]),
+            "technicalFindings": len(arts.get("technicalFindings") or []),
+            "projectFindings": len(arts.get("projectFindings") or []),
+            "risks": len(arts.get("risks") or []),
             "conflicts": [str(c.get("claim", c.get("key", "")))[:80]
-                          for c in state["conflicts"][-3:] if isinstance(c, dict)],
+                          for c in (arts.get("conflicts") or [])[-3:]
+                          if isinstance(c, dict)],
             "missingArtifacts": missing[:6],
+            "inputPresence": arts.get("inputPresence") or {},
         }, ensure_ascii=False)
         adjusted = await coordinator.adaptive_replan(
             remaining=remaining, executed=self.executed,
@@ -816,9 +949,20 @@ class RunExecutor:
         hard = {"run_timeout", "consecutive_failures"}
         return any(r in hard or r.endswith("_failed") for r in self.degraded_reasons)
 
+    def _missing_required_goal_artifacts(self) -> List[str]:
+        """Run-end closure: required goal artifacts absent → never silent SUCCEEDED."""
+        goals = list((self.plan_meta or {}).get("goalArtifacts") or [])
+        if not goals:
+            return []
+        present = Coordinator._present_artifacts(
+            self.state.artifacts() if hasattr(self.state, "artifacts") else
+            self.state.data.get("artifacts") or {},
+            self.state.data if isinstance(self.state.data, dict) else {})
+        # Also treat camelCase finalReport / evidence mirrors as present.
+        return [g for g in goals if g not in present]
+
     def _requires_score_contract(self) -> bool:
         return self.request.runType not in _SCORE_CONTRACT_SKIP_TYPES
-
     def _report_contract_violation(self) -> Optional[str]:
         """SUCCEEDED requires non-empty structuredReport, numeric score, and
         a rendered answer that meets the minimum length contract."""
@@ -863,10 +1007,14 @@ class RunExecutor:
                 self.policy.promptVersions),
             "skillVersions": default_skill_manager.versions_used(self.skill_selections),
             "policyId": self.policy.policyId,
+            "planMeta": dict(self.plan_meta or {}),
             "finalAnswer": self.final_answer,
             "degradedReasons": list(self.degraded_reasons),
             "agentTimings": dict(self.agent_timings),
             "failureNotes": list(self.failure_notes)[-5:],
+            "memoryHits": list(self.memory_hits)[:20],
+            "failureHits": list(self.failure_hits)[:10],
+            "memoryTraces": list(self.memory_traces)[-40:],
             "createdAt": time.time(),
         }
 
@@ -895,6 +1043,12 @@ class RunExecutor:
             self.degraded_reasons = list(snapshot.get("degradedReasons") or [])
             self.agent_timings = dict(snapshot.get("agentTimings") or {})
             self.failure_notes = list(snapshot.get("failureNotes") or [])
+            self.memory_hits = list(snapshot.get("memoryHits") or [])
+            self.failure_hits = list(snapshot.get("failureHits") or [])
+            self.memory_traces = list(snapshot.get("memoryTraces") or [])
+            plan_meta = snapshot.get("planMeta")
+            if isinstance(plan_meta, dict):
+                self.plan_meta = dict(plan_meta)
             for agent_id in self.executed:
                 self.guard.record_completed_agent(agent_id)
             return True
@@ -1026,6 +1180,24 @@ class RunExecutor:
                 tool_results_block=tool_results_block,
                 output_schema=(REPORT_OUTPUT_SCHEMA if agent_id == "ReportAgent"
                                else AGENT_OUTPUT_SCHEMA))
+            audit = getattr(self, "_last_memory_audit", None)
+            if audit and audit.get("consumerAgent") == agent_id:
+                await self.emitter.emit("run.progress", agent_id=agent_id, payload={
+                    "stage": "memory_inject",
+                    "message": (f"{agent_id} 注入记忆 {audit.get('usedCount', 0)} 条"
+                                f"（忽略 {audit.get('ignoredCount', 0)}）"),
+                    "memoryTrace": audit.get("memoryTrace") or [],
+                    "usedCount": audit.get("usedCount"),
+                    "ignoredCount": audit.get("ignoredCount"),
+                })
+                decisions = audit.get("decisions") or []
+                if decisions:
+                    try:
+                        await self.memory.record_usage(
+                            consumer_agent=agent_id, decisions=decisions)
+                    except Exception:  # noqa: BLE001
+                        pass
+                self._last_memory_audit = None
             if self.context.needs_compaction(messages):
                 messages = await self.context.compact(
                     messages, reason="context_over_threshold",
@@ -1325,6 +1497,7 @@ class RunExecutor:
             agentId="ResumeParserAgent",
             type="resume_facts",
             claims=[{"text": summary, "confidence": facts.get("confidence", 0.8)}],
+            artifacts={"resumeFacts": facts},
             evidence=[],
             confidence=float(facts.get("confidence") or 0.8),
             source="tools",
@@ -1335,7 +1508,7 @@ class RunExecutor:
     def _maybe_skip_evidence_llm(self, tool_results_block: str) -> Optional[AgentOutput]:
         """Skip Evidence LLM when deterministic verify is clean and support is high."""
         support = self.state.evidence_support_ratio()
-        conflicts = self.state.data.get("conflicts") or []
+        conflicts = self.state.artifact("conflicts") or []
         if conflicts:
             return None
         if support is None or support < 0.85:
@@ -1375,63 +1548,235 @@ class RunExecutor:
                 if not isinstance(dim, dict):
                     continue
                 name = dim.get("name", "")
+                status = str(dim.get("status") or "").upper()
                 dim_score = dim.get("score")
                 rationale = dim.get("rationale") or ""
-                score_part = f"{dim_score} 分" if dim_score is not None else "未评分"
+                if status == "UNASSESSED" or dim_score is None:
+                    score_part = "未评估"
+                else:
+                    score_part = f"{dim_score} 分"
+                    if status == "PARTIAL":
+                        score_part += "（部分证据）"
                 lines.append(f"- **{name}**：{score_part}"
                              + (f" — {rationale}" if rationale else ""))
+                refs = dim.get("evidenceRefs") or []
+                for ref in refs[:3]:
+                    if isinstance(ref, dict) and ref.get("quote"):
+                        loc = ""
+                        if ref.get("lineStart") is not None:
+                            end = ref.get("lineEnd") or ref.get("lineStart")
+                            loc = f" L{ref['lineStart']}-{end}"
+                        lines.append(
+                            f"  - 证据[{ref.get('sourceType', '?')}{loc}]："
+                            f"{str(ref['quote'])[:120]}")
             sections.append("\n".join(lines))
-        for key, heading in (("strengths", "优势"), ("risks", "风险"),
-                             ("interviewQuestions", "面试追问"),
-                             ("missingEvidence", "证据缺口")):
-            values = [str(v) for v in (report.get(key) or []) if str(v).strip()]
-            if values:
-                body = "\n".join(f"- {v}" for v in values)
-                sections.append(f"## {heading}\n\n{body}")
+        strengths = [str(v) for v in (report.get("strengths") or []) if str(v).strip()]
+        if strengths:
+            sections.append("## 优势\n\n" + "\n".join(f"- {v}" for v in strengths))
+        risks = report.get("risks") or []
+        if risks:
+            lines = ["## 候选人风险\n"]
+            for risk in risks:
+                if isinstance(risk, str):
+                    lines.append(f"- {risk}")
+                    continue
+                if not isinstance(risk, dict):
+                    continue
+                sev = risk.get("severity") or "MEDIUM"
+                claim = risk.get("claim") or ""
+                impact = risk.get("impact") or ""
+                lines.append(f"- **[{sev}]** {claim}"
+                             + (f"（影响：{impact}）" if impact else ""))
+                plan = risk.get("verificationPlan") or ""
+                if plan:
+                    lines.append(f"  - 核实：{plan}")
+                for ref in (risk.get("evidenceRefs") or [])[:2]:
+                    if isinstance(ref, dict) and ref.get("quote"):
+                        lines.append(f"  - 证据：{str(ref['quote'])[:120]}")
+            sections.append("\n".join(lines))
+        probes = report.get("interviewProbes") or report.get("interviewQuestions") or []
+        if probes:
+            lines = ["## 面试追问\n"]
+            for probe in probes:
+                if isinstance(probe, str):
+                    lines.append(f"- {probe}")
+                    continue
+                if not isinstance(probe, dict):
+                    continue
+                q = probe.get("question") or ""
+                lines.append(f"- {q}")
+                if probe.get("objective"):
+                    lines.append(f"  - 考察点：{probe['objective']}")
+                goods = [str(s) for s in (probe.get("goodSignals") or []) if str(s).strip()]
+                if goods:
+                    lines.append(f"  - 好信号：{'；'.join(goods[:3])}")
+                flags = [str(s) for s in (probe.get("redFlags") or []) if str(s).strip()]
+                if flags:
+                    lines.append(f"  - 红旗：{'；'.join(flags[:3])}")
+            sections.append("\n".join(lines))
+        missing = [str(v) for v in (report.get("missingEvidence") or []) if str(v).strip()]
+        if missing:
+            sections.append("## 证据缺口\n\n" + "\n".join(f"- {v}" for v in missing))
+        warnings = report.get("systemWarnings") or []
+        if warnings:
+            lines = ["## 系统告警\n"]
+            for warn in warnings:
+                if not isinstance(warn, dict):
+                    continue
+                code = warn.get("code") or "WARNING"
+                msg = warn.get("message") or ""
+                stage = warn.get("stage") or ""
+                retry = "可重试" if warn.get("retryable") else "不可重试"
+                lines.append(f"- **{code}**"
+                             + (f"@{stage}" if stage else "")
+                             + f"（{retry}）：{msg}")
+            sections.append("\n".join(lines))
         if quality and quality != "SUFFICIENT":
             sections.append(f"## 数据质量\n\n- {quality}")
         return "\n\n".join(sections).strip()
 
     @staticmethod
+    def _parse_source_refs(raw: Any) -> List[Dict[str, Any]]:
+        refs: List[Dict[str, Any]] = []
+        if not isinstance(raw, list):
+            return refs
+        allowed = {"RESUME", "JD", "KNOWLEDGE", "EXTERNAL"}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            source_type = str(item.get("sourceType") or "").strip().upper()
+            quote = str(item.get("quote") or "").strip()
+            source_id = str(item.get("sourceId") or "").strip()
+            if source_type not in allowed or not quote or not source_id:
+                continue
+            entry: Dict[str, Any] = {
+                "sourceType": source_type,
+                "sourceId": source_id[:120],
+                "quote": quote[:400],
+            }
+            for key in ("lineStart", "lineEnd"):
+                val = item.get(key)
+                if isinstance(val, (int, float)) and int(val) >= 0:
+                    entry[key] = int(val)
+            if item.get("uri"):
+                entry["uri"] = str(item["uri"])[:300]
+            refs.append(entry)
+        return refs[:8]
+
+    @staticmethod
+    def _claim_has_control_plane_noise(claim: str) -> bool:
+        text = claim or ""
+        upper = text.upper()
+        if any(code in upper for code in CONTROL_PLANE_ERROR_CODES):
+            return True
+        markers = (
+            "CONTROL_PLANE", "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED",
+            "START_STUCK", "WORKER", "QUEUE_STUCK", "控制面",
+        )
+        return any(m in upper or m in text for m in markers)
+
+    @staticmethod
     def _validate_structured_report(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Validate structured report; overallScore is computed from dimension
-        scores with fixed weights (never taken from the model verbatim)."""
+        """Validate structured report; overallScore is computed only when
+        enough core dimensions are evidence-assessed (never from the model,
+        never by inventing 0 for UNASSESSED)."""
         allowed_recommendations = {
             "HIRE", "INTERVIEW_RECOMMEND", "NEED_MANUAL_REVIEW", "NOT_RECOMMEND"}
+        legacy_recommendations = {
+            "STRONG_RECOMMEND": "HIRE",
+            "RECOMMEND": "INTERVIEW_RECOMMEND",
+            "MANUAL_REVIEW": "NEED_MANUAL_REVIEW",
+            "REVIEW": "NEED_MANUAL_REVIEW",
+        }
         out: Dict[str, Any] = {}
         recommendation = str(report.get("recommendation") or "").strip().upper()
+        recommendation = legacy_recommendations.get(recommendation, recommendation)
         if recommendation in allowed_recommendations:
             out["recommendation"] = recommendation
         quality = str(report.get("dataQuality") or "SUFFICIENT").strip().upper()
         if quality not in {"SUFFICIENT", "PARTIAL", "INSUFFICIENT"}:
             quality = "SUFFICIENT"
         out["dataQuality"] = quality
-        dimensions = []
-        scored: List[Tuple[str, int]] = []
+
+        system_warnings: List[Dict[str, Any]] = []
+        for warn in report.get("systemWarnings") or []:
+            if not isinstance(warn, dict):
+                continue
+            code = str(warn.get("code") or "").strip()
+            message = str(warn.get("message") or "").strip()
+            if not code or not message:
+                continue
+            system_warnings.append({
+                "code": code[:80],
+                "stage": str(warn.get("stage") or "")[:80],
+                "retryable": bool(warn.get("retryable", False)),
+                "message": message[:400],
+            })
+
+        dimensions: List[Dict[str, Any]] = []
+        assessed_core: List[Tuple[str, int]] = []
         for dim in report.get("dimensions") or []:
             if not isinstance(dim, dict) or not dim.get("name"):
                 continue
-            entry: Dict[str, Any] = {"name": str(dim["name"])[:60]}
+            name = str(dim["name"])[:60]
+            status = str(dim.get("status") or "").strip().upper()
             dim_score = dim.get("score")
+            score_val: Optional[int] = None
             if isinstance(dim_score, (int, float)) and 0 <= float(dim_score) <= 100:
-                entry["score"] = int(round(float(dim_score)))
-                scored.append((entry["name"], entry["score"]))
+                score_val = int(round(float(dim_score)))
+
+            if status not in {"ASSESSED", "UNASSESSED", "PARTIAL"}:
+                status = "UNASSESSED" if score_val is None else "ASSESSED"
+
+            # UNASSESSED must keep score=null — never coerce missing evidence to 0.
+            if status == "UNASSESSED":
+                score_val = None
+
+            refs = RunExecutor._parse_source_refs(dim.get("evidenceRefs"))
+            try:
+                coverage = float(dim.get("evidenceCoverage", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                coverage = 0.0
+            if refs and coverage <= 0:
+                coverage = min(1.0, 0.35 * len(refs))
+            coverage = max(0.0, min(1.0, coverage))
+
+            # Score without evidence cannot count as fully assessed.
+            if status == "ASSESSED" and (not refs or coverage < _MIN_EVIDENCE_COVERAGE):
+                if score_val is None:
+                    status = "UNASSESSED"
+                else:
+                    status = "PARTIAL"
+
+            entry: Dict[str, Any] = {
+                "name": name,
+                "status": status,
+                "evidenceCoverage": round(coverage, 3),
+                "score": score_val,
+            }
             if dim.get("rationale"):
                 entry["rationale"] = str(dim["rationale"])[:300]
+            if refs:
+                entry["evidenceRefs"] = refs
             dimensions.append(entry)
+
+            key = name.replace(" ", "").lower()
+            evidence_ok = bool(refs) and coverage >= _MIN_EVIDENCE_COVERAGE
+            if (status in {"ASSESSED", "PARTIAL"}
+                    and score_val is not None
+                    and evidence_ok
+                    and key in _CORE_DIMENSION_KEYS):
+                assessed_core.append((name, score_val))
+
         if dimensions:
             out["dimensions"] = dimensions[:10]
-        # overallScore: weighted mean of known dimensions; equal weights otherwise.
-        # If the model marked INSUFFICIENT but still provided dimension scores,
-        # treat quality as PARTIAL and compute the score (do not hide a numeric
-        # result behind a contradictory dataQuality flag).
-        if scored:
-            if quality == "INSUFFICIENT":
-                quality = "PARTIAL"
-                out["dataQuality"] = quality
+
+        # overallScore only when ≥3 core dimensions are evidence-assessed.
+        # Do NOT promote INSUFFICIENT → PARTIAL just because low scores exist.
+        if len(assessed_core) >= 3:
             weight_sum = 0.0
             weighted = 0.0
-            for name, score in scored:
+            for name, score in assessed_core:
                 key = name.replace(" ", "").lower()
                 weight = next(
                     (w for n, w in _DIMENSION_WEIGHTS.items()
@@ -1444,15 +1789,122 @@ class RunExecutor:
             if weight_sum > 0:
                 out["overallScore"] = int(round(weighted / weight_sum))
             else:
-                out["overallScore"] = int(round(sum(s for _, s in scored) / len(scored)))
-        elif quality == "INSUFFICIENT":
-            # No dimension scores and insufficient evidence → no numeric score.
+                out["overallScore"] = int(
+                    round(sum(s for _, s in assessed_core) / len(assessed_core)))
+        else:
             out.pop("overallScore", None)
-        for key in ("strengths", "risks", "interviewQuestions", "missingEvidence"):
-            values = [str(v)[:300] for v in (report.get(key) or [])
-                      if isinstance(v, (str, int, float)) and str(v).strip()]
-            if values:
-                out[key] = values[:12]
+
+        strengths = [str(v)[:300] for v in (report.get("strengths") or [])
+                     if isinstance(v, (str, int, float)) and str(v).strip()]
+        if strengths:
+            out["strengths"] = strengths[:12]
+
+        risks_out: List[Dict[str, Any]] = []
+        for idx, risk in enumerate(report.get("risks") or []):
+            # Legacy string risks lack evidence → reject (do not promote).
+            if isinstance(risk, str):
+                text = risk.strip()
+                if not text:
+                    continue
+                if RunExecutor._claim_has_control_plane_noise(text):
+                    system_warnings.append({
+                        "code": "CONTROL_PLANE_IN_RISK_CLAIM",
+                        "stage": "report_validation",
+                        "retryable": False,
+                        "message": f"控制面噪声已从候选人风险剔除：{text[:200]}",
+                    })
+                continue
+            if not isinstance(risk, dict):
+                continue
+            claim = str(risk.get("claim") or "").strip()
+            if not claim:
+                continue
+            category = str(risk.get("category") or "CANDIDATE").strip().upper()
+            if category in _PROCESS_DATA_CATEGORIES:
+                system_warnings.append({
+                    "code": str(risk.get("id") or category)[:80],
+                    "stage": "report",
+                    "retryable": bool(risk.get("retryable", False)),
+                    "message": claim[:400],
+                })
+                continue
+            if RunExecutor._claim_has_control_plane_noise(claim):
+                system_warnings.append({
+                    "code": "CONTROL_PLANE_IN_RISK_CLAIM",
+                    "stage": "report_validation",
+                    "retryable": False,
+                    "message": f"控制面错误码不得进入候选人风险：{claim[:200]}",
+                })
+                continue
+            refs = RunExecutor._parse_source_refs(risk.get("evidenceRefs"))
+            if not refs:
+                # risks without evidenceRefs → reject
+                continue
+            severity = str(risk.get("severity") or "MEDIUM").strip().upper()
+            if severity not in {"HIGH", "MEDIUM", "LOW"}:
+                severity = "MEDIUM"
+            entry = {
+                "id": str(risk.get("id") or f"risk-{idx + 1}")[:60],
+                "category": "CANDIDATE",
+                "severity": severity,
+                "claim": claim[:400],
+                "impact": str(risk.get("impact") or "")[:300],
+                "evidenceRefs": refs,
+                "verificationPlan": str(risk.get("verificationPlan") or "")[:300],
+            }
+            conf = risk.get("confidence")
+            if isinstance(conf, (int, float)):
+                entry["confidence"] = max(0.0, min(1.0, float(conf)))
+            risks_out.append(entry)
+        if risks_out:
+            out["risks"] = risks_out[:12]
+
+        probes_raw = report.get("interviewProbes")
+        if not isinstance(probes_raw, list) or not probes_raw:
+            probes_raw = report.get("interviewQuestions") or []
+        probes_out: List[Dict[str, Any]] = []
+        for idx, probe in enumerate(probes_raw):
+            if isinstance(probe, str):
+                # Legacy bare questions lack evidence/signals → reject
+                continue
+            if not isinstance(probe, dict):
+                continue
+            question = str(probe.get("question") or "").strip()
+            if not question:
+                continue
+            refs = RunExecutor._parse_source_refs(probe.get("evidenceRefs"))
+            good = [str(s)[:200] for s in (probe.get("goodSignals") or [])
+                    if isinstance(s, (str, int, float)) and str(s).strip()]
+            if not refs or not good:
+                continue
+            entry = {
+                "id": str(probe.get("id") or f"probe-{idx + 1}")[:60],
+                "priority": (
+                    p if (p := str(probe.get("priority") or "MEDIUM").strip().upper())
+                    in {"HIGH", "MEDIUM", "LOW"} else "MEDIUM"
+                ),
+                "question": question[:400],
+                "objective": str(probe.get("objective") or "")[:300],
+                "triggeredBy": str(probe.get("triggeredBy") or "")[:200],
+                "evidenceRefs": refs,
+                "goodSignals": good[:8],
+                "redFlags": [str(s)[:200] for s in (probe.get("redFlags") or [])
+                             if isinstance(s, (str, int, float)) and str(s).strip()][:8],
+                "followUps": [str(s)[:200] for s in (probe.get("followUps") or [])
+                              if isinstance(s, (str, int, float)) and str(s).strip()][:6],
+                "scoreRubric": str(probe.get("scoreRubric") or "")[:300],
+            }
+            probes_out.append(entry)
+        if probes_out:
+            out["interviewQuestions"] = probes_out[:12]
+            out["interviewProbes"] = probes_out[:12]
+
+        missing = [str(v)[:300] for v in (report.get("missingEvidence") or [])
+                   if isinstance(v, (str, int, float)) and str(v).strip()]
+        if missing:
+            out["missingEvidence"] = missing[:12]
+        if system_warnings:
+            out["systemWarnings"] = system_warnings[:20]
         if report.get("summary"):
             out["summary"] = str(report["summary"])[:500]
         # Require the core contract fields for a non-empty artifact.
@@ -1460,12 +1912,61 @@ class RunExecutor:
             return None
         return out or None
 
+    async def _prepare_context(self) -> None:
+        """Deterministic preflight before Coordinator planning.
+
+        Ensures resumeFacts / parsedResume / effectiveJd / jdMatches live in
+        the canonical artifact store so subsequent agents never claim
+        "原文缺失" when the raw inputs were actually provided.
+        """
+        request = self.request
+        resume = (request.resumeText or "").strip()
+        jd = (request.jobDescription or "").strip()
+        arts = self.state.artifacts()
+
+        self.state.set_input_presence(
+            resume_chars=len(resume),
+            jd_chars=len(jd),
+            has_jd_matches=bool(arts.get("jdMatches")))
+
+        await self.emitter.emit("run.progress", payload={
+            "stage": "preflight",
+            "message": "确定性上下文预热",
+            "resumeChars": len(resume),
+            "jdChars": len(jd)})
+
+        if resume and not arts.get("parsedResume"):
+            call = await self.tools.execute(
+                "CoordinatorAgent", "parse_resume", {"resumeText": resume})
+            if call.status == "SUCCEEDED" and isinstance(call.result, dict):
+                self.state.apply_artifacts({"parsedResume": call.result})
+                facts = self._resume_facts_from_parse(call.result)
+                if facts:
+                    self.state.apply_artifacts({"resumeFacts": facts})
+
+        if jd and not arts.get("effectiveJd"):
+            self.state.apply_artifacts({"effectiveJd": jd})
+
+        if resume and not jd and not arts.get("jdMatches"):
+            call = await self.tools.execute(
+                "CoordinatorAgent", "jd_match_search", {"resumeText": resume})
+            if call.status == "SUCCEEDED":
+                self._store_jd_match_artifacts(call.result)
+
+        # Refresh presence after JD match may have landed.
+        arts = self.state.artifacts()
+        self.state.set_input_presence(
+            resume_chars=len(resume),
+            jd_chars=len(jd) or len(str(arts.get("effectiveJd") or "")),
+            has_jd_matches=bool(arts.get("jdMatches")))
+
     def _pre_steps(self, definition: AgentDefinition) -> List[tuple]:
         request = self.request
         resume = request.resumeText or ""
-        artifacts = self.state.data.get("artifacts", {})
+        artifacts = self.state.artifacts()
         steps: List[tuple] = []
-        parsed_already = "parsedResume" in artifacts
+        parsed_already = "parsedResume" in artifacts and bool(artifacts.get("parsedResume"))
+        # ResumeParserAgent: skip re-parse when preflight already populated facts.
         if definition.agent_id == "ResumeParserAgent" and resume and not parsed_already:
             steps.append(("parse_resume", {"resumeText": resume}))
         elif definition.agent_id == "JDAnalysisAgent" and resume \
@@ -1511,17 +2012,25 @@ class RunExecutor:
     def _apply_verification(self, result: Any) -> None:
         if not isinstance(result, dict):
             return
-        for entry in result.get("supported", []):
-            self.state.data["evidence"].append({
+        supported = []
+        unsupported = []
+        for entry in result.get("supported", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            supported.append({
                 "text": entry.get("claim", ""), "verified": True,
                 "location": entry.get("location"), "byAgent": "EvidenceAgent"})
-        for entry in result.get("unsupported", []):
-            self.state.data["evidence"].append({
+        for entry in result.get("unsupported", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            unsupported.append({
                 "text": entry.get("claim", ""), "verified": False,
                 "reason": entry.get("reason"), "byAgent": "EvidenceAgent"})
             self.state.add_conflict({
                 "type": "unsupported_claim", "claim": entry.get("claim", ""),
                 "reason": entry.get("reason", ""), "byAgent": "EvidenceAgent"})
+        if supported or unsupported:
+            self.state.apply_artifacts({"evidence": supported + unsupported})
 
     def _policy_instructions(self) -> str:
         ev = self.policy.evidenceVerification
@@ -1536,12 +2045,39 @@ class RunExecutor:
         return "\n".join(lines)
 
     def _memory_block(self, definition: AgentDefinition) -> str:
-        if definition.memory_policy == "none" or not self.memory_hits:
+        if definition.memory_policy == "none":
             return ""
+        agent_id = definition.agent_id
+        # Coordinator may additionally see FAILURE hits for planning hints;
+        # Report/Risk and other specialists only see the evaluation-safe pool.
+        pool = list(self.memory_hits)
+        if agent_id == "CoordinatorAgent":
+            pool = pool + list(self.failure_hits)
+        if not pool:
+            return ""
+        used, ignored = filter_hits_for_consumer(pool, agent_id)
+        trace = memory_trace_entries(used, ignored, agent_id)
+        self.memory_traces.extend(trace)
+        decisions = decisions_from_hits(used, ignored, agent_id)
+        # Emit per-agent memory audit so Trace can show used vs ignoredReason.
+        # Persistence happens in async _run_agent after this sync helper returns.
+        try:
+            self._last_memory_audit = {
+                "consumerAgent": agent_id,
+                "usedCount": len(used),
+                "ignoredCount": len(ignored),
+                "memoryTrace": trace[:20],
+                "decisions": decisions,
+            }
+        except Exception:  # noqa: BLE001
+            pass
         lines = []
-        for hit in self.memory_hits[: self.policy.memoryRetrieval.topK]:
-            lines.append(f"- [{hit.get('type')}|置信{hit.get('confidence')}] "
-                         f"{str(hit.get('content', ''))[:200]}")
+        for hit in used[: self.policy.memoryRetrieval.topK]:
+            scope = hit.get("ownerScope") or hit.get("scope") or "?"
+            lines.append(
+                f"- [{hit.get('type')}|{scope}|src={hit.get('source') or '?'}|"
+                f"置信{hit.get('confidence')}] "
+                f"{str(hit.get('content', ''))[:200]}")
         return "\n".join(lines)
 
     @staticmethod
@@ -1560,22 +2096,21 @@ class RunExecutor:
     def _degraded_answer(self, reason: str) -> str:
         """Best-effort answer from whatever the blackboard already holds.
         Always labelled — degraded output is never disguised as a report."""
-        state = self.state.data
+        arts = self.state.artifacts()
         sections: List[str] = [f"> 说明：{reason}，以下为基于已完成分析的降级结果（非完整报告）。\n"]
-        if state["technicalFindings"]:
+        if arts.get("technicalFindings"):
             sections.append("## 技术发现\n" + "\n".join(
                 f"- {e.get('text', json.dumps(e, ensure_ascii=False)[:160])}"
-                for e in state["technicalFindings"][:8] if isinstance(e, dict)))
-        if state["risks"]:
+                for e in (arts.get("technicalFindings") or [])[:8] if isinstance(e, dict)))
+        if arts.get("risks"):
             sections.append("## 风险\n" + "\n".join(
                 f"- {e.get('text', json.dumps(e, ensure_ascii=False)[:160])}"
-                for e in state["risks"][:8] if isinstance(e, dict)))
-        if state["conflicts"]:
+                for e in (arts.get("risks") or [])[:8] if isinstance(e, dict)))
+        if arts.get("conflicts"):
             sections.append("## 证据不足/冲突\n" + "\n".join(
                 f"- {c.get('claim', c.get('key', ''))}"
-                for c in state["conflicts"][:6] if isinstance(c, dict)))
-        artifacts = state.get("artifacts", {})
-        coverage = artifacts.get("jdCoverage")
+                for c in (arts.get("conflicts") or [])[:6] if isinstance(c, dict)))
+        coverage = arts.get("jdCoverage")
         if isinstance(coverage, dict) and coverage.get("coverage") is not None:
             sections.append(f"## JD 覆盖率\n- {coverage.get('coverage')}")
         if len(sections) == 1:
@@ -1583,18 +2118,18 @@ class RunExecutor:
         return "\n\n".join(sections)
 
     def _conversation_summary(self) -> str:
-        state = self.state.data
+        arts = self.state.artifacts()
         parts = [f"目标: {(self.request.currentGoal or self.request.userMessage or '')[:150]}"]
-        if state["technicalFindings"]:
+        if arts.get("technicalFindings"):
             parts.append("技术结论: " + "; ".join(
-                str(e.get("text", ""))[:80] for e in state["technicalFindings"][:3]
+                str(e.get("text", ""))[:80] for e in (arts.get("technicalFindings") or [])[:3]
                 if isinstance(e, dict)))
-        if state["risks"]:
+        if arts.get("risks"):
             parts.append("风险: " + "; ".join(
-                str(e.get("text", ""))[:80] for e in state["risks"][:3]
+                str(e.get("text", ""))[:80] for e in (arts.get("risks") or [])[:3]
                 if isinstance(e, dict)))
-        if state["conflicts"]:
-            parts.append(f"未决冲突 {len(state['conflicts'])} 项")
+        if arts.get("conflicts"):
+            parts.append(f"未决冲突 {len(arts.get('conflicts') or [])} 项")
         return "\n".join(parts)[:1800]
 
     def _explicit_preferences(self) -> List[Dict[str, str]]:
@@ -1616,7 +2151,7 @@ class RunExecutor:
                 content=f"会话摘要更新: {summary[:600]}",
                 structured={"factKey": f"summary:{self.request.conversationId}"},
                 source="system_rule", confidence=0.8)
-            unsupported = [c for c in self.state.data["conflicts"]
+            unsupported = [c for c in (self.state.artifact("conflicts") or [])
                            if isinstance(c, dict) and c.get("type") == "unsupported_claim"]
             # unsupported claims already live in the shared-state snapshot;
             # a separate short-term WORKING memory row duplicated it (removed).
@@ -1632,13 +2167,15 @@ class RunExecutor:
     def _result(self, status: str, answer: str, *, error_code: Optional[str] = None,
                 error_message: Optional[str] = None,
                 conversation_summary: Optional[str] = None,
-                snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                snapshot: Optional[Dict[str, Any]] = None,
+                missing_goal_artifacts: Optional[List[str]] = None) -> Dict[str, Any]:
         executed_agents = [o.get("agentId") for o in self.state.data["agentOutputs"]]
         support_ratio = self.state.evidence_support_ratio()
         coverage = None
         artifact = self.state.data["artifacts"].get("jdCoverage")
         if isinstance(artifact, dict):
             coverage = artifact.get("coverage")
+        missing_goals = list(missing_goal_artifacts or [])
         metrics = {
             "llmCalls": self.budget.llm_calls,
             "toolCalls": self.budget.tool_calls,
@@ -1654,6 +2191,7 @@ class RunExecutor:
             "degradedReasons": self.degraded_reasons,
             "evidenceSupportRatio": support_ratio,
             "jdCoverage": coverage,
+            "missingGoalArtifacts": missing_goals,
             **self.tools.metrics(),
         }
         prompt_versions = default_prompt_manager.versions_used(
@@ -1673,6 +2211,7 @@ class RunExecutor:
             "skillVersions": skill_versions,
             "conversationSummary": conversation_summary or "",
             "currentGoal": (self.request.currentGoal or self.request.userMessage or "")[:500],
+            "missingGoalArtifacts": missing_goals,
         }
         final_report = self.state.data["artifacts"].get("finalReport")
         if isinstance(final_report, dict) and final_report:

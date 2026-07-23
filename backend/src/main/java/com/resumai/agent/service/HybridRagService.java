@@ -86,11 +86,17 @@ public class HybridRagService {
         long start = System.currentTimeMillis();
         List<JdMatchResult> candidates = retrieve(resumeText, opts);
         long elapsed = System.currentTimeMillis() - start;
-        return Map.of(
-                "candidates", candidates,
-                "metricsMs", elapsed,
-                "strategy", opts != null ? opts.strategy() : "hybrid",
-                "rerankerEnabled", opts != null && opts.rerankerEnabled());
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("candidates", candidates);
+        body.put("metricsMs", elapsed);
+        body.put("latencyMs", elapsed);
+        body.put("strategy", opts != null ? opts.strategy() : "hybrid");
+        body.put("rerankerEnabled", opts != null && opts.rerankerEnabled());
+        body.put("retrievedAt", java.time.LocalDateTime.now().toString());
+        body.put("scoreFields", List.of("matchScore", "retrievalScore", "vectorScore", "bm25Score", "rrfScore"));
+        body.put("provenanceFields", List.of(
+                "documentId", "chunkId", "version", "createdAt", "updatedAt", "charStart", "charEnd"));
+        return body;
     }
 
     private VariantResult runVariant(String resumeText, NamedVariant variant) {
@@ -132,8 +138,21 @@ public class HybridRagService {
 
         Map<String, Double> fusedScores = fuseRRFWeighted(vectorHits, lexicalHits, opts);
         Map<String, JdMatchResult> byId = new HashMap<>();
-        vectorHits.forEach(r -> byId.putIfAbsent(r.jdId(), r));
-        lexicalHits.forEach(r -> byId.putIfAbsent(r.jdId(), r));
+        Map<String, Double> vectorById = new HashMap<>();
+        Map<String, Double> bm25ById = new HashMap<>();
+        // 优先保留向量路结果的业务分/维度；词面路补充 bm25 召回分
+        for (JdMatchResult r : vectorHits) {
+            byId.putIfAbsent(r.jdId(), r);
+            if (r.vectorScore() != null) {
+                vectorById.put(r.jdId(), r.vectorScore());
+            }
+        }
+        for (JdMatchResult r : lexicalHits) {
+            byId.putIfAbsent(r.jdId(), r);
+            if (r.bm25Score() != null) {
+                bm25ById.put(r.jdId(), r.bm25Score());
+            }
+        }
 
         List<JdMatchResult> fused = new ArrayList<>();
         fusedScores.entrySet().stream()
@@ -142,11 +161,11 @@ public class HybridRagService {
                 .forEach(entry -> {
                     JdMatchResult base = byId.get(entry.getKey());
                     if (base != null) {
-                        fused.add(new JdMatchResult(
-                                base.jdId(), base.title(), base.category(), entry.getValue(),
-                                base.matchReasons(), base.gaps(), base.interviewChecks(),
-                                base.skillMatchScore(), base.experienceMatchScore(),
-                                base.projectMatchScore(), base.riskPenalty()));
+                        // RRF 只写入召回解释字段，不得覆盖业务 matchScore
+                        fused.add(base.withRetrieval(
+                                entry.getValue(),
+                                vectorById.get(entry.getKey()),
+                                bm25ById.get(entry.getKey())));
                     }
                 });
         return fused;
@@ -173,7 +192,7 @@ public class HybridRagService {
             sb.append(i + 1).append(". id=").append(c.jdId())
                     .append(" title=").append(c.title())
                     .append(" category=").append(c.category())
-                    .append(" score=").append(String.format(Locale.ROOT, "%.3f", c.score()))
+                    .append(" matchScore=").append(String.format(Locale.ROOT, "%.3f", c.matchScore()))
                     .append('\n');
         }
         try {

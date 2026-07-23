@@ -17,13 +17,13 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 import docker
 from docker.errors import APIError, ImageNotFound, NotFound
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sandbox-manager")
@@ -33,6 +33,10 @@ ALLOWED_TOOLS = {
     "verify_report_evidence", "resume_lint", "validate_report_schema",
     "evaluate_policy_output",
 }
+
+ALLOWED_PURPOSES = {"POLICY_EVOLUTION", "BENCHMARK", "REPLAY"}
+FORBIDDEN_PURPOSES = {"CANDIDATE_EVALUATION", "LEGACY_CANDIDATE_EVALUATION"}
+
 
 WORKER_IMAGE = os.getenv("SANDBOX_WORKER_IMAGE", "resumai-sandbox-worker:latest")
 MAX_CONCURRENT = int(os.getenv("SANDBOX_MAX_CONCURRENT", "2"))
@@ -74,13 +78,33 @@ class InvokeRequest(BaseModel):
     sandboxId: str
     runId: str
     conversationId: str = ""
+    purpose: Literal["POLICY_EVOLUTION", "BENCHMARK", "REPLAY"]
+    experimentId: str
+    trialId: str
     tool: str
     args: Dict[str, Any] = Field(default_factory=dict)
     timeoutSeconds: int = DEFAULT_TIMEOUT
 
+    @model_validator(mode="after")
+    def reject_candidate_evaluation(self) -> "InvokeRequest":
+        purpose = (self.purpose or "").upper()
+        if purpose in FORBIDDEN_PURPOSES or purpose == "CANDIDATE_EVALUATION":
+            raise ValueError("candidate evaluation is forbidden in Policy Lab sandbox")
+        if purpose not in ALLOWED_PURPOSES:
+            raise ValueError(f"purpose must be one of {sorted(ALLOWED_PURPOSES)}")
+        if not self.experimentId or not self.trialId:
+            raise ValueError("experimentId and trialId are required")
+        return self
+
 
 class CancelBody(BaseModel):
     reason: str = "cancelled"
+
+
+class CancelTrialBody(BaseModel):
+    experimentId: str
+    trialId: str
+    reason: str = "experiment_cancelled"
 
 
 @app.get("/health")
@@ -105,6 +129,12 @@ async def ready() -> Dict[str, Any]:
 async def invoke(request: InvokeRequest) -> Dict[str, Any]:
     if request.tool not in ALLOWED_TOOLS:
         raise HTTPException(status_code=400, detail=f"tool not allowed: {request.tool}")
+    if not request.purpose:
+        raise HTTPException(status_code=400, detail="purpose is required")
+    if request.purpose.upper() in FORBIDDEN_PURPOSES:
+        raise HTTPException(
+            status_code=400,
+            detail="candidate evaluation is forbidden in Policy Lab sandbox")
     timeout = min(max(request.timeoutSeconds, 10), 300)
     payload = json.dumps({"tool": request.tool, "args": request.args},
                          ensure_ascii=False)
@@ -149,6 +179,9 @@ def _run_container(request: InvokeRequest, payload: str, timeout: int) -> Dict[s
                 "runId": request.runId,
                 "conversationId": request.conversationId,
                 "sandboxId": request.sandboxId,
+                "purpose": request.purpose,
+                "experimentId": request.experimentId,
+                "trialId": request.trialId,
                 "expireAt": expire_at.isoformat(),
             },
             stdin_open=True,
@@ -231,6 +264,26 @@ async def cancel(sandbox_id: str, body: CancelBody) -> Dict[str, Any]:
         return {"sandboxId": sandbox_id, "status": "CANCEL_FAILED", "error": str(exc)[:200]}
 
 
+@app.post("/sandbox/cancel-by-trial")
+async def cancel_by_trial(body: CancelTrialBody) -> Dict[str, Any]:
+    """Destroy all active containers for an experiment trial (pause/cancel)."""
+    destroyed = []
+    for sandbox_id, container_id in list(_active.items()):
+        try:
+            container = client().containers.get(container_id)
+            labels = container.labels or {}
+            if labels.get("experimentId") == body.experimentId and labels.get("trialId") == body.trialId:
+                container.remove(force=True)
+                _active.pop(sandbox_id, None)
+                destroyed.append(sandbox_id)
+        except NotFound:
+            _active.pop(sandbox_id, None)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("cancel-by-trial failed sandbox=%s: %s", sandbox_id, exc)
+    return {"experimentId": body.experimentId, "trialId": body.trialId,
+            "destroyed": destroyed, "reason": body.reason}
+
+
 @app.get("/sandbox/{sandbox_id}")
 async def status(sandbox_id: str) -> Dict[str, Any]:
     container_id = _active.get(sandbox_id)
@@ -253,6 +306,9 @@ def _report(request: InvokeRequest, status: str, container_id: Optional[str],
             "toolName": request.tool,
             "containerId": container_id,
             "status": status,
+            "purpose": request.purpose,
+            "experimentId": request.experimentId,
+            "trialId": request.trialId,
             "exitCode": exit_code,
             "durationMs": duration_ms,
             "stdoutTail": stdout_tail,

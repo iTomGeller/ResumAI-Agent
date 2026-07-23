@@ -1,16 +1,67 @@
-"""OpenTelemetry export to Langfuse (OTLP HTTP). Soft-fail when unset/unavailable."""
+"""OpenTelemetry export to Langfuse (OTLP HTTP). Soft-fail when unset/unavailable.
+
+Exporter enables only when endpoint + public key + secret key are all present.
+Empty keys with a default endpoint would otherwise send Basic ":" and 401.
+"""
 
 from __future__ import annotations
 
 import base64
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 _tracer = None
 _initialized = False
+_status: Dict[str, Any] = {
+    "enabled": False,
+    "status": "DISABLED",
+    "reason": "not initialized",
+    "endpoint": "",
+    "publicUrlConfigured": False,
+    "publicUrl": "",
+    "authConfigured": False,
+    "externalLinksEnabled": False,
+    "lastSuccessAt": None,
+    "lastErrorAt": None,
+    "lastError": None,
+}
+
+
+def _trim(value: Optional[str]) -> str:
+    return (value or "").strip()
+
+
+def _redact_endpoint(endpoint: str) -> str:
+    if not endpoint:
+        return ""
+    try:
+        uri = urlparse(endpoint)
+        if not uri.hostname:
+            return endpoint[:48] + ("…" if len(endpoint) > 48 else "")
+        netloc = uri.hostname
+        if uri.port:
+            netloc = f"{netloc}:{uri.port}"
+        return f"{uri.scheme}://{netloc}{uri.path or ''}"
+    except Exception:  # noqa: BLE001
+        return "***"
+
+
+def _valid_public_url(public_url: str) -> bool:
+    lower = public_url.lower()
+    return lower.startswith("http://") or lower.startswith("https://")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _set_status(**kwargs: Any) -> None:
+    _status.update(kwargs)
 
 
 def init_otel() -> bool:
@@ -20,13 +71,42 @@ def init_otel() -> bool:
         return _tracer is not None
     _initialized = True
 
-    endpoint = (
-        os.getenv("LANGFUSE_OTEL_ENDPOINT")
-        or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-        or ""
-    ).strip()
-    if not endpoint:
-        logger.info("[otel] LANGFUSE_OTEL_ENDPOINT / OTEL_EXPORTER_OTLP_ENDPOINT unset")
+    endpoint = _trim(
+        os.getenv("LANGFUSE_OTEL_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    )
+    public_key = _trim(os.getenv("LANGFUSE_PUBLIC_KEY"))
+    secret_key = _trim(os.getenv("LANGFUSE_SECRET_KEY"))
+    public_url = _trim(os.getenv("LANGFUSE_PUBLIC_URL"))
+    auth_ok = bool(public_key and secret_key)
+    public_ok = _valid_public_url(public_url)
+
+    _set_status(
+        endpoint=_redact_endpoint(endpoint),
+        publicUrlConfigured=public_ok,
+        publicUrl=public_url if public_ok else "",
+        authConfigured=auth_ok,
+        externalLinksEnabled=False,
+    )
+
+    if not endpoint and not auth_ok:
+        reason = "DISABLED: Langfuse not configured (endpoint + keys required)"
+        _set_status(enabled=False, status="DISABLED", reason=reason)
+        logger.info("[otel] %s", reason)
+        return False
+
+    if endpoint and not auth_ok:
+        reason = (
+            "AUTH_REQUIRED: LANGFUSE_PUBLIC_KEY/SECRET_KEY missing; "
+            "exporter disabled to avoid 401"
+        )
+        _set_status(enabled=False, status="AUTH_REQUIRED", reason=reason)
+        logger.info("[otel] %s", reason)
+        return False
+
+    if not endpoint and auth_ok:
+        reason = "DISABLED: LANGFUSE_OTEL_ENDPOINT (or OTEL_EXPORTER_OTLP_ENDPOINT) not set"
+        _set_status(enabled=False, status="DISABLED", reason=reason)
+        logger.info("[otel] %s", reason)
         return False
 
     try:
@@ -36,17 +116,16 @@ def init_otel() -> bool:
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
     except ImportError:
-        logger.warning("[otel] OpenTelemetry packages not installed; tracing disabled")
+        reason = "DISABLED: OpenTelemetry packages not installed"
+        _set_status(enabled=False, status="DISABLED", reason=reason)
+        logger.warning("[otel] %s", reason)
         return False
 
-    public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-    secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
     headers: Dict[str, str] = {
         "x-langfuse-ingestion-version": "4",
+        "Authorization": "Basic "
+        + base64.b64encode(f"{public_key}:{secret_key}".encode()).decode(),
     }
-    if public_key and secret_key:
-        token = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
-        headers["Authorization"] = f"Basic {token}"
 
     # Langfuse expects /api/public/otel or /api/public/otel/v1/traces
     otlp_endpoint = endpoint.rstrip("/")
@@ -62,8 +141,63 @@ def init_otel() -> bool:
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer("resumai.workflow", "2.0.0")
-    logger.info("[otel] tracing enabled → %s", otlp_endpoint)
+
+    reason = (
+        "Langfuse exporter 已启用"
+        if public_ok
+        else "Langfuse exporter 已启用，但 LANGFUSE_PUBLIC_URL 未配置，无法生成外链"
+    )
+    _set_status(
+        enabled=True,
+        status="READY",
+        reason=reason,
+        endpoint=_redact_endpoint(otlp_endpoint),
+        externalLinksEnabled=public_ok,
+        lastSuccessAt=_now_iso(),
+    )
+    logger.info("[otel] tracing enabled → %s", _redact_endpoint(otlp_endpoint))
     return True
+
+
+def record_export_success() -> None:
+    _set_status(
+        lastSuccessAt=_now_iso(),
+        lastError=None,
+        status="READY" if _status.get("enabled") else _status.get("status"),
+    )
+
+
+def record_export_error(message: str) -> None:
+    msg = (message or "export failed")[:300]
+    lower = msg.lower()
+    status = "AUTH_FAILED" if any(
+        token in lower for token in ("401", "403", "unauthorized", "auth")
+    ) else "UNREACHABLE"
+    _set_status(
+        lastErrorAt=_now_iso(),
+        lastError=msg,
+        status=status,
+        externalLinksEnabled=False,
+    )
+
+
+def status_snapshot() -> Dict[str, Any]:
+    """Ops / health snapshot (safe to call before init)."""
+    if not _initialized:
+        # Reflect env without starting exporter side effects beyond init_otel.
+        init_otel()
+    return dict(_status)
+
+
+def build_trace_url(trace_id: str) -> str:
+    snap = status_snapshot()
+    if not snap.get("externalLinksEnabled") or snap.get("status") != "READY":
+        return ""
+    public_url = _trim(str(snap.get("publicUrl") or ""))
+    if not _valid_public_url(public_url) or not _trim(trace_id):
+        return ""
+    base = public_url.rstrip("/")
+    return f"{base}/project/resumai-project/traces/{trace_id}"
 
 
 def start_span(name: str, attributes: Optional[Dict[str, Any]] = None) -> Any:
@@ -98,8 +232,9 @@ def end_span(span: Any, *, status: str = "OK", duration_ms: int = 0,
         else:
             span.set_status(Status(StatusCode.OK))
         span.end()
-    except Exception:  # noqa: BLE001
-        pass
+        record_export_success()
+    except Exception as exc:  # noqa: BLE001
+        record_export_error(str(exc))
 
 
 def current_trace_id_hex() -> Optional[str]:

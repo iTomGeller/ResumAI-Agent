@@ -1,6 +1,6 @@
--- V10: policy self-evolution loop (GEPA-style evolutionary search over
--- policy text/parameters, no GPU): lineage columns on policy_bundle and a
--- full audit log of every generation / promotion / retirement.
+-- V10: Policy Optimization Lab OFFLINE_SEARCH audit trail (bounded evolutionary
+-- search over policy text/parameters, no GPU; not full GEPA): lineage columns on
+-- policy_bundle and a full audit log of every generation / promotion / retirement.
 
 -- @guard column:policy_bundle.parent_policy_id
 ALTER TABLE `policy_bundle` ADD COLUMN `parent_policy_id` VARCHAR(64) NULL
