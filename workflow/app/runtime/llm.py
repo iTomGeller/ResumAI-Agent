@@ -247,9 +247,8 @@ class ResilientLlmClient:
             if tool_choice:
                 body["tool_choice"] = tool_choice
         elif json_mode:
-            # API-enforced valid JSON (prompt already contains the word "json"
-            # through the output schema, as DeepSeek requires).
             body["response_format"] = {"type": "json_object"}
+            body["thinking"] = {"type": "disabled"}
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 url,
