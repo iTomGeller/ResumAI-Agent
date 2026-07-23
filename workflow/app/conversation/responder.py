@@ -107,33 +107,15 @@ def _local_answer(
                 actions=[CopilotAction(type="OPEN_REPORT", label="查看完整报告")],
                 suggestions=["为什么给这个分数？", "主要风险详情", "面试该问什么？"],
             )
-        summary = str(snapshot.get("summary") or "").strip()
-        if summary:
-            lines = summary.split("\n")
-            useful_parts = []
-            for line in lines:
-                line = line.strip()
-                if line.startswith("目标:") or line.startswith("目标："):
-                    continue
-                if line:
-                    useful_parts.append(line)
-            if useful_parts:
-                compact = "；".join(useful_parts)
-                if len(compact) > 200:
-                    compact = compact[:200] + "…"
-                return CopilotAnswer(
-                    turnId=request.turnId,
-                    answer=f"评估进行中，当前已有信息：{compact}\n完整结论请等待评估完成后在决策报告页查看。",
-                    citations=[SourceRef(sourceType="SESSION", sourceId="summary",
-                                         quote=compact[:200])],
-                    actions=[CopilotAction(type="OPEN_REPORT", label="打开决策报告")],
-                    suggestions=["为什么给这个分数？", "主要风险是什么？"],
-                )
         return CopilotAnswer(
             turnId=request.turnId,
-            answer="当前还没有可用的评估结果。发起完整评估后，可在决策报告页查看证据化结论。",
+            answer=(
+                "评估尚未完成或未找到已完成的评估报告。"
+                "请等待当前评估完成，或点击下方按钮发起新评估。"
+                "评估完成后，我可以告诉你候选人的优势、风险、面试追问建议等。"
+            ),
             actions=[CopilotAction(type="START_EVALUATION", label="发起完整评估")],
-            suggestions=["完整评估这份简历", "先核对 JD 缺口"],
+            suggestions=["完整评估这份简历", "当前评估进度如何？", "先核对 JD 缺口"],
         )
 
     if any(k in lowered for k in ("你好", "谢谢", "在吗")):
@@ -182,10 +164,19 @@ async def _model_answer(
         if not settings.deepseek_api_key:
             return None
 
+        report = snapshot.get("structuredReport") or snapshot.get("report") or {}
+        has_useful_context = (
+            (isinstance(report, dict) and report.get("recommendation"))
+            or snapshot.get("hasResume")
+            or snapshot.get("revision")
+        )
+        if not has_useful_context:
+            return None
+
         compact = {
             key: snapshot.get(key)
             for key in ("activeGoal", "summary", "jobCategory", "revision",
-                        "hasResume", "hasJobDescription")
+                        "hasResume", "hasJobDescription", "structuredReport")
             if snapshot.get(key) not in (None, "", [], {})
         }
         user_payload = json.dumps(

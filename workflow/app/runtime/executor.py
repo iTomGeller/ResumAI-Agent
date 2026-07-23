@@ -1655,7 +1655,11 @@ class RunExecutor:
             resume, _re.IGNORECASE)
         if tech_keywords:
             return f"{tech_keywords[0]} 项目 架构"
-        return ""
+        companies = _re.findall(
+            r"([\u4e00-\u9fa5]{2,8}(?:科技|网络|信息|技术|集团|公司|互联网))", resume)
+        if companies:
+            return f"{companies[0]} 技术项目 开发"
+        return "软件开发项目 技术架构 实践"
 
     def _build_project_search_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
         """Build a search query for project verification."""
