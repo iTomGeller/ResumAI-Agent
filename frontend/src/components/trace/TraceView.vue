@@ -158,8 +158,7 @@ function purpose(agent: AgentView): string {
 function normalizeCategory(raw?: string, toolName?: string, isLlm = false): ToolCategory {
   if (isLlm) return 'llm';
   const value = (raw || '').toLowerCase();
-  // Legacy labels remapped for candidate Trace.
-  if (value === 'sandbox' || value === 'internal') return 'builtin';
+  if (value === 'sandbox') return 'builtin';
   if (value === 'gateway') return 'external';
   if (value === 'mcp' || value === 'skill' || value === 'builtin'
       || value === 'retrieval' || value === 'llm' || value === 'external') {
@@ -176,7 +175,8 @@ function normalizeCategory(raw?: string, toolName?: string, isLlm = false): Tool
     return 'retrieval';
   }
   if (name === 'external_profile_lookup') return 'external';
-  return 'builtin';
+  if (value === 'internal') return 'builtin';
+  return 'tool';
 }
 
 function badgeLabel(badge?: ToolCategory): string {

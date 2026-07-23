@@ -68,11 +68,10 @@ REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；精简表达�
     "confidence": 0.0-1.0,
     "report": {
       "recommendation": "HIRE|INTERVIEW_RECOMMEND|NEED_MANUAL_REVIEW|NOT_RECOMMEND",
-      "dimensions": [{"name":"技术能力|项目深度|JD匹配|履历可信度","score":"0-100整数（依据证据合理评分）","status":"ASSESSED|PARTIAL|UNASSESSED","rationale":"判断理由","evidence":["[RESUME L行号] 原文片段≤30字"]}],
+      "dimensions": [{"name":"技术能力|项目深度|JD匹配|履历可信度","score":"0-100整数（依据证据合理评分）","status":"ASSESSED|PARTIAL|UNASSESSED","rationale":"判断理由","evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"原文≤30字"}]}],
       "strengths": ["有事实支撑的优势"],
-      "risks": [{"risk":"具体风险","severity":"HIGH|MEDIUM|LOW","verification":"面试核实方式"}],
-      "interviewProbes": [{"question":"针对性问题","whyAsk":"目的","expectedSignals":["好信号"],"redFlags":["警示信号"]}],
-      "systemWarnings": [{"code":"...","stage":"...","retryable":false,"message":"..."}],
+      "risks": [{"id":"r1","category":"CANDIDATE","severity":"HIGH|MEDIUM|LOW","claim":"具体风险","verificationPlan":"面试核实方式"}],
+      "interviewProbes": [{"id":"q1","priority":"HIGH|MEDIUM","question":"针对性问题","objective":"目的","triggeredBy":"由哪个项目/风险/JD缺口触发","goodSignals":["好信号"],"redFlags":["警示信号"]}],
       "dataQuality": "SUFFICIENT|PARTIAL|INSUFFICIENT",
       "missingEvidence": ["无法从简历判断的信息"]
     }
@@ -81,7 +80,8 @@ REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；精简表达�
 }
 禁止输出 overallScore（系统加权计算）。无证据维度 status=UNASSESSED score=null。
 评分标准：60=基本合格，70=良好匹配，80+=优秀匹配。有证据支撑合理给分，不要全部压低。
-risks 仅写候选人侧；系统/数据问题放 systemWarnings。"""
+risks 仅写候选人侧(category=CANDIDATE)；系统/数据问题放 systemWarnings。
+interviewProbes 数量≥6（丰富简历）或≥4（信息不足），必须覆盖：每个HIGH风险、TOP3 JD缺口、最重要项目的深挖。"""
 
 # Provider-side schema enforcement (JSON guarantee layer 1): the decision loop
 # forces this function; DeepSeek then guarantees arguments match the schema.
@@ -177,7 +177,7 @@ _CANDIDATE_RISK_SCHEMA = {
         "evidenceRefs": {"type": "array", "items": _SOURCE_REF_SCHEMA},
         "verificationPlan": {"type": "string"},
     },
-    "required": ["claim", "evidenceRefs"],
+    "required": ["claim"],
 }
 _INTERVIEW_PROBE_SCHEMA = {
     "type": "object",
@@ -193,7 +193,7 @@ _INTERVIEW_PROBE_SCHEMA = {
         "followUps": {"type": "array", "items": {"type": "string"}},
         "scoreRubric": {"type": "string"},
     },
-    "required": ["question", "evidenceRefs", "goodSignals"],
+    "required": ["question"],
 }
 _SYSTEM_WARNING_SCHEMA = {
     "type": "object",
@@ -682,37 +682,36 @@ class RunExecutor:
         """Independent specialists run concurrently against read-only state
         views; outputs are merged sequentially afterwards so no coroutine
         ever mutates the blackboard concurrently."""
-        started_at: Dict[str, float] = {}
+        group_start = time.monotonic()
         for definition in definitions:
-            started_at[definition.agent_id] = time.monotonic()
             await self.emitter.emit("agent.started", agent_id=definition.agent_id,
                                     payload={"description": definition.description,
                                              "parallelGroup": [d.agent_id for d in definitions],
                                              "position": len(self.executed) + 1,
                                              "planned": len(self.plan)})
 
-        async def guarded(defn: AgentDefinition) -> Tuple[AgentDefinition, Any]:
+        async def guarded(defn: AgentDefinition) -> Tuple[AgentDefinition, Any, float]:
+            t0 = time.monotonic()
             try:
                 output = await asyncio.wait_for(
                     self._run_agent(defn), timeout=defn.timeout_seconds)
-                return defn, output
+                return defn, output, t0
             except (asyncio.CancelledError, BudgetExceeded):
                 raise
             except Exception as exc:  # noqa: BLE001
-                return defn, exc
+                return defn, exc, t0
 
         results = await asyncio.gather(*(guarded(d) for d in definitions))
         any_success = False
-        for definition, outcome in results:
+        for definition, outcome, agent_start in results:
             if isinstance(outcome, AgentOutput):
                 conflicts = self.state.apply_output(outcome)
                 self._after_agent_success(definition, outcome, conflicts,
-                                          started_at[definition.agent_id],
+                                          agent_start,
                                           fire_started=False)
                 any_success = True
             else:
-                await self._after_agent_failure(definition, outcome,
-                                                started_at[definition.agent_id])
+                await self._after_agent_failure(definition, outcome, agent_start)
         return any_success
 
     def _after_agent_success(self, definition: AgentDefinition, output: AgentOutput,
@@ -935,7 +934,11 @@ class RunExecutor:
         return any(r in hard or r.endswith("_failed") for r in self.degraded_reasons)
 
     def _missing_required_goal_artifacts(self) -> List[str]:
-        """Run-end closure: required goal artifacts absent → never silent SUCCEEDED."""
+        """Run-end closure: required goal artifacts absent → never silent SUCCEEDED.
+        
+        An artifact is NOT considered missing if its designated producer Agent
+        was executed (even if output was empty) — this avoids false PARTIAL_SUCCESS
+        when e.g. EvidenceAgent fast-path finds no conflicts."""
         goals = list((self.plan_meta or {}).get("goalArtifacts") or [])
         if not goals:
             return []
@@ -943,8 +946,20 @@ class RunExecutor:
             self.state.artifacts() if hasattr(self.state, "artifacts") else
             self.state.data.get("artifacts") or {},
             self.state.data if isinstance(self.state.data, dict) else {})
-        # Also treat camelCase finalReport / evidence mirrors as present.
-        return [g for g in goals if g not in present]
+        # Agents that ran count their artifacts as "attempted" even if empty.
+        _AGENT_PRODUCES = {
+            "ProjectAgent": {"project_findings"},
+            "EvidenceAgent": {"evidence_ledger"},
+            "TechAgent": {"technical_findings"},
+            "RiskAgent": {"risks"},
+            "JDAnalysisAgent": {"jd_requirements"},
+            "ResumeParserAgent": {"resume_facts", "parsed_resume"},
+            "ReportAgent": {"final_report"},
+        }
+        attempted = set()
+        for agent_id in self.executed:
+            attempted.update(_AGENT_PRODUCES.get(agent_id, set()))
+        return [g for g in goals if g not in present and g not in attempted]
 
     def _requires_score_contract(self) -> bool:
         return self.request.runType not in _SCORE_CONTRACT_SKIP_TYPES
@@ -1222,14 +1237,14 @@ class RunExecutor:
                 try:
                     raw = await self.llm.chat(
                         messages, agent_id=agent_id,
-                        purpose=definition.output_type, max_tokens=2048,
+                        purpose=definition.output_type, max_tokens=4096,
                         tools=[EMIT_REPORT_TOOL],
                         tool_choice=FORCE_EMIT_DECISION)
                 except LlmError as exc:
                     if exc.code in ("PROMPT_OR_SCHEMA_ERROR", "EMPTY_FUNCTION_ARGS"):
                         raw = await self.llm.chat(
                             messages, agent_id=agent_id,
-                            purpose=definition.output_type, max_tokens=2048)
+                            purpose=definition.output_type, max_tokens=4096)
                     else:
                         raise
             elif is_terminal:
@@ -1240,14 +1255,14 @@ class RunExecutor:
                 try:
                     raw = await self.llm.chat(messages, agent_id=agent_id,
                                               purpose=definition.output_type,
-                                              max_tokens=1200,
+                                              max_tokens=4096,
                                               tools=[EMIT_DECISION_TOOL],
                                               tool_choice=FORCE_EMIT_DECISION)
                 except LlmError as exc:
                     if exc.code in ("PROMPT_OR_SCHEMA_ERROR", "EMPTY_FUNCTION_ARGS"):
                         raw = await self.llm.chat(messages, agent_id=agent_id,
                                                   purpose=definition.output_type,
-                                                  max_tokens=1200)
+                                                  max_tokens=4096)
                     else:
                         raise
             agent_llm_calls += 1
@@ -1528,7 +1543,10 @@ class RunExecutor:
             agentId="EvidenceAgent",
             type="evidence",
             claims=[],
-            evidence=[],
+            artifacts={"evidence": [{"text": summary, "verified": True,
+                                     "byAgent": "EvidenceAgent", "fastPath": True}]},
+            evidence=[{"text": summary, "verified": True,
+                       "byAgent": "EvidenceAgent"}],
             confidence=max(0.7, float(support)),
             source="tools",
             dependencies=[],

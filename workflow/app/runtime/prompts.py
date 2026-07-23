@@ -92,8 +92,9 @@ _PROMPTS: List[PromptVersion] = [
 3. risks 仅候选人风险（category=CANDIDATE），禁止系统错误码。
 4. 面试问题必须针对该候选人具体项目/技术/成绩，禁止通用模板问题。
 5. recommendation 与分数自洽：均分>=65 → INTERVIEW_RECOMMEND，均分>=80 → HIRE，均分<40 → NOT_RECOMMEND。
-6. 禁止输出 overallScore（系统计算）。strengths≥2, risks≥1, interviewProbes≥4。
-7. 无法评估的维度 status=UNASSESSED, score=null。
+6. 禁止输出 overallScore（系统计算）。strengths≥2, risks≥1。
+7. interviewProbes≥6（丰富简历）或≥4（信息不足），必须覆盖：每个HIGH风险至少1题、TOP3 JD缺口、最重要的2个项目深挖、候选人实际贡献边界。禁止通用模板问题。
+8. 无法评估的维度 status=UNASSESSED, score=null。
 """ + GROUNDING_RULES),
     PromptVersion("resume-optimize-system", "ResumeOptimizeAgent", "v1", """你是简历改写专家。改写必须保持事实不变：不发明数字、不改变时间线、不虚构职责。改写后用 resume_lint 自查，输出改写前后对照及改动理由。
 """ + GROUNDING_RULES),
