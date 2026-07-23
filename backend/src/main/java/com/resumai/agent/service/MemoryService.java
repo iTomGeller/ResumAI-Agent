@@ -424,15 +424,15 @@ public class MemoryService {
         StringBuilder dimText = new StringBuilder();
         for (Object d : dimensions) {
             if (d instanceof Map<?, ?> dim) {
-                dimText.append(dim.getOrDefault("name", "?")).append("=")
-                       .append(dim.getOrDefault("score", "?")).append("; ");
+                dimText.append(dim.get("name")).append("=")
+                       .append(dim.get("score")).append("; ");
             }
         }
         StringBuilder riskText = new StringBuilder();
         for (Object r : risks) {
             if (r instanceof Map<?, ?> risk) {
-                riskText.append(risk.getOrDefault("claim", "")).append("(")
-                        .append(risk.getOrDefault("severity", "")).append("); ");
+                riskText.append(risk.get("claim")).append("(")
+                        .append(risk.get("severity")).append("); ");
             }
         }
 

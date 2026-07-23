@@ -161,8 +161,8 @@ public class ConversationReplyService {
             sb.append("维度评分：");
             for (Object d : dims) {
                 if (d instanceof Map<?, ?> dim) {
-                    sb.append(dim.getOrDefault("name", "?")).append(" ")
-                      .append(dim.getOrDefault("score", "?")).append("/100, ");
+                    sb.append(dim.get("name")).append(" ")
+                      .append(dim.get("score")).append("/100, ");
                 }
             }
             sb.setLength(sb.length() - 2);
@@ -186,9 +186,9 @@ public class ConversationReplyService {
             for (Object r : risks) {
                 if (c++ >= 2) break;
                 if (r instanceof Map<?, ?> risk) {
-                    String claim = String.valueOf(risk.getOrDefault("claim", ""));
+                    String claim = String.valueOf(risk.get("claim"));
                     sb.append(claim.length() > 40 ? claim.substring(0, 40) + "..." : claim)
-                      .append("(").append(risk.getOrDefault("severity", "")).append("); ");
+                      .append("(").append(risk.get("severity")).append("); ");
                 }
             }
             sb.append("\n\n");
@@ -200,7 +200,7 @@ public class ConversationReplyService {
             for (Object q : probes) {
                 if (c++ >= 2) break;
                 if (q instanceof Map<?, ?> probe) {
-                    String question = String.valueOf(probe.getOrDefault("question", ""));
+                    String question = String.valueOf(probe.get("question"));
                     sb.append(question.length() > 50 ? question.substring(0, 50) + "..." : question).append("; ");
                 }
             }
