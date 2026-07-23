@@ -1100,10 +1100,20 @@ class RunExecutor:
 
         # Live tool catalog: static definition tools + AVAILABLE MCP route.
         allowed_tools = set(definition.tools)
+        catalog_description = ""
         try:
             catalog = self.tools.catalog_for_agent(agent_id, list(definition.tools))
+            mcp_entries = []
             for entry in catalog:
                 allowed_tools.add(str(entry.get("name") or ""))
+                if entry.get("kind") == "mcp" or entry.get("mcpServer"):
+                    mcp_entries.append(
+                        f"  - {entry['name']}（MCP/{entry.get('mcpServer','?')}）: "
+                        f"{entry.get('description','')[:60]}")
+            if mcp_entries:
+                catalog_description = (
+                    "\n[可用 MCP 工具（外部验证）]\n" + "\n".join(mcp_entries) +
+                    "\n优先使用 MCP 工具进行外部核验，在 toolCalls 中引用。\n")
         except Exception:  # noqa: BLE001
             pass
 
@@ -1196,6 +1206,9 @@ class RunExecutor:
             iteration += 1
             await self.emitter.emit("agent.progress", agent_id=agent_id, payload={
                 "iteration": iteration, "maxIterations": max_iterations})
+            effective_tool_results = tool_results_block
+            if catalog_description and iteration == 1:
+                effective_tool_results = catalog_description + tool_results_block
             messages = self.context.assemble(
                 system_prompt=prompt.content,
                 policy_instructions=self._policy_instructions(),
@@ -1206,7 +1219,7 @@ class RunExecutor:
                 recent_messages=request.recentMessages,
                 conversation_summary=request.conversationSummary or "",
                 memory_block=self._memory_block(definition),
-                tool_results_block=tool_results_block,
+                tool_results_block=effective_tool_results,
                 output_schema=(REPORT_OUTPUT_SCHEMA if agent_id == "ReportAgent"
                                else AGENT_OUTPUT_SCHEMA))
             audit = getattr(self, "_last_memory_audit", None)
@@ -1591,6 +1604,57 @@ class RunExecutor:
             return f"{name} {company} 工程师"
         elif name:
             return f"{name} 技术 GitHub"
+        return ""
+
+    def _fallback_search_query(self, resume: str) -> str:
+        """Always produce a search query from resume text for evidence verification."""
+        lines = (resume or "").strip().split("\n")[:30]
+        skills = []
+        companies = []
+        for line in lines:
+            clean = line.strip()
+            if not clean:
+                continue
+            import re as _re
+            company_match = _re.search(
+                r"([\u4e00-\u9fa5]{2,8}(?:科技|网络|信息|技术|集团|公司|互联网))", clean)
+            if company_match:
+                companies.append(company_match.group(1))
+            skill_match = _re.findall(
+                r"\b(Java|Python|Go|Rust|React|Vue|Spring|K8s|Kubernetes|Docker|"
+                r"微服务|分布式|MySQL|Redis|Kafka|Flink|大数据|AI|机器学习)\b",
+                clean, _re.IGNORECASE)
+            skills.extend(skill_match[:2])
+        if companies:
+            return f"{companies[0]} 技术团队 {' '.join(skills[:2])}"
+        if skills:
+            return f"{' '.join(skills[:3])} 工程师 技术"
+        first_meaningful = ""
+        for line in lines[:5]:
+            clean = line.strip()
+            if 2 <= len(clean) <= 20 and not any(c in clean for c in "：:·|【】{}"):
+                first_meaningful = clean
+                break
+        if first_meaningful:
+            return f"{first_meaningful} 工程师"
+        return "软件工程师 技术能力"
+
+    def _fallback_project_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
+        """Always produce a project search query from resume content."""
+        import re as _re
+        lines = (resume or "").strip().split("\n")
+        for line in lines:
+            proj_match = _re.search(
+                r"(?:项目[名称]*[:：]\s*|(?:独立|个人|开源)项目\s*[:：]?\s*)(.{4,30})",
+                line)
+            if proj_match:
+                return proj_match.group(1).strip()
+        tech_keywords = _re.findall(
+            r"\b(Spring\s*Boot|Spring\s*Cloud|Vue|React|Next\.?js|Django|"
+            r"FastAPI|Kubernetes|Flink|Spark|TensorFlow|PyTorch|LangChain)\b",
+            resume, _re.IGNORECASE)
+        if tech_keywords:
+            return f"{tech_keywords[0]} 项目 架构"
         return ""
 
     def _build_project_search_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
@@ -2194,6 +2258,8 @@ class RunExecutor:
                     steps.append((fetch_tool_name, {"url": url, "maxLength": 4000}))
             if has_exa:
                 search_query = self._build_evidence_search_query(resume, artifacts)
+                if not search_query:
+                    search_query = self._fallback_search_query(resume)
                 if search_query:
                     steps.append(("exa.web_search_exa",
                                   {"query": search_query, "numResults": 3,
@@ -2204,6 +2270,8 @@ class RunExecutor:
             fetch_tool_name = "fetch.fetch" if self._has_mcp_tool("fetch.fetch") else "mcp_fetch_url"
             if has_exa:
                 project_query = self._build_project_search_query(resume, artifacts)
+                if not project_query:
+                    project_query = self._fallback_project_query(resume, artifacts)
                 if project_query:
                     steps.append(("exa.web_search_exa",
                                   {"query": project_query, "numResults": 3,
