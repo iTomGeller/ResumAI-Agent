@@ -78,12 +78,20 @@ _PROMPTS: List[PromptVersion] = [
  "dataQuality": "SUFFICIENT|PARTIAL|INSUFFICIENT",
  "missingEvidence": ["无法从简历判断的信息"]}
 
+评分校准（score 是 0-100 整数）：
+- 80-100：与JD高度匹配，有充分证据支撑（资深经验+核心技术栈匹配+量化成果）
+- 65-79：良好匹配，证据较充分但有小缺口
+- 50-64：基本合格，满足主要要求但存在明显不足
+- 30-49：不够匹配，关键要求未满足
+- 0-29：明显不匹配或信息严重不足
+评分依据简历事实与JD要求的匹配程度，不因"信息不够完美"就全部压到低分。候选人具备相关经验和技术就应给予合理分数。
+
 规则：
 1. dimensions 必须覆盖4个核心维度（技术能力/项目深度/JD匹配/履历可信度），每个有 rationale。
-2. 有证据时填 evidenceRefs（quote 引用原文），无法精确定位时可省略 evidenceRefs 但 rationale 必填。
+2. 有证据时填 evidenceRefs（quote 引用原文），无法精确定位时可省略但 rationale 必填。
 3. risks 仅候选人风险（category=CANDIDATE），禁止系统错误码。
 4. 面试问题必须针对该候选人具体项目/技术/成绩，禁止通用模板问题。
-5. recommendation 与分数自洽：均分<50 不得 HIRE，均分>75 不得 NOT_RECOMMEND。
+5. recommendation 与分数自洽：均分>=65 → INTERVIEW_RECOMMEND，均分>=80 → HIRE，均分<40 → NOT_RECOMMEND。
 6. 禁止输出 overallScore（系统计算）。strengths≥2, risks≥1, interviewProbes≥4。
 7. 无法评估的维度 status=UNASSESSED, score=null。
 """ + GROUNDING_RULES),

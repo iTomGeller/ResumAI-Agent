@@ -59,46 +59,29 @@ AGENT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容）：
   "done": true/false
 }"""
 
-REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；不要写长 Markdown）：
+REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；精简表达）：
 {
   "thought": "简要计划",
   "toolCalls": [],
   "output": {
-    "summary": "一句话结论",
+    "summary": "面试官视角的一句话结论",
     "confidence": 0.0-1.0,
     "report": {
       "recommendation": "HIRE|INTERVIEW_RECOMMEND|NEED_MANUAL_REVIEW|NOT_RECOMMEND",
-      "dimensions": [{
-        "name": "技术能力|项目深度|JD匹配|履历可信度",
-        "score": "0-100 或 null",
-        "status": "ASSESSED|UNASSESSED|PARTIAL",
-        "evidenceCoverage": 0.0-1.0,
-        "rationale": "...",
-        "evidenceRefs": [{"sourceType":"RESUME|JD|KNOWLEDGE|EXTERNAL","sourceId":"...","quote":"...","lineStart":1,"lineEnd":2}]
-      }],
-      "strengths": ["..."],
-      "risks": [{
-        "id":"r1","category":"CANDIDATE","severity":"HIGH|MEDIUM|LOW",
-        "claim":"...","impact":"...","verificationPlan":"...",
-        "evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"..."}]
-      }],
-      "interviewQuestions": [{
-        "id":"q1","priority":"HIGH|MEDIUM|LOW","question":"...",
-        "objective":"...","triggeredBy":"...",
-        "evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"..."}],
-        "goodSignals":["..."],"redFlags":["..."],"followUps":["..."],
-        "scoreRubric":"..."
-      }],
+      "dimensions": [{"name":"技术能力|项目深度|JD匹配|履历可信度","score":"0-100整数（依据证据合理评分）","status":"ASSESSED|PARTIAL|UNASSESSED","rationale":"判断理由","evidence":["[RESUME L行号] 原文片段≤30字"]}],
+      "strengths": ["有事实支撑的优势"],
+      "risks": [{"risk":"具体风险","severity":"HIGH|MEDIUM|LOW","verification":"面试核实方式"}],
+      "interviewProbes": [{"question":"针对性问题","whyAsk":"目的","expectedSignals":["好信号"],"redFlags":["警示信号"]}],
       "systemWarnings": [{"code":"...","stage":"...","retryable":false,"message":"..."}],
       "dataQuality": "SUFFICIENT|PARTIAL|INSUFFICIENT",
-      "missingEvidence": ["..."]
+      "missingEvidence": ["无法从简历判断的信息"]
     }
   },
   "done": true
 }
-禁止输出 overallScore 与长 Markdown；综合分与正文由系统生成。
-风险仅写候选人侧（category=CANDIDATE）且必须带 evidenceRefs；PROCESS/DATA/控制面问题放入 systemWarnings。
-无证据维度必须 status=UNASSESSED 且 score=null，禁止用 0 分代替。"""
+禁止输出 overallScore（系统加权计算）。无证据维度 status=UNASSESSED score=null。
+评分标准：60=基本合格，70=良好匹配，80+=优秀匹配。有证据支撑合理给分，不要全部压低。
+risks 仅写候选人侧；系统/数据问题放 systemWarnings。"""
 
 # Provider-side schema enforcement (JSON guarantee layer 1): the decision loop
 # forces this function; DeepSeek then guarantees arguments match the schema.
@@ -1161,6 +1144,15 @@ class RunExecutor:
                     "fastPath": 1}
                 return fast
 
+        # Performance fast-path: JD short/provided → skip LLM.
+        if definition.agent_id == "JDAnalysisAgent":
+            fast = self._maybe_skip_jd_llm()
+            if fast is not None:
+                self.agent_counters[definition.agent_id] = {
+                    "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
+                    "fastPath": 1}
+                return fast
+
         # Performance fast-path: Evidence verify clean → skip arbitration LLM.
         if definition.agent_id == "EvidenceAgent":
             fast = self._maybe_skip_evidence_llm(tool_results_block)
@@ -1248,16 +1240,14 @@ class RunExecutor:
                 try:
                     raw = await self.llm.chat(messages, agent_id=agent_id,
                                               purpose=definition.output_type,
-                                              max_tokens=2048,
+                                              max_tokens=1200,
                                               tools=[EMIT_DECISION_TOOL],
                                               tool_choice=FORCE_EMIT_DECISION)
                 except LlmError as exc:
                     if exc.code in ("PROMPT_OR_SCHEMA_ERROR", "EMPTY_FUNCTION_ARGS"):
-                        # Provider rejected the tool schema: fall back to
-                        # json_object mode within the same iteration.
                         raw = await self.llm.chat(messages, agent_id=agent_id,
                                                   purpose=definition.output_type,
-                                                  max_tokens=2048)
+                                                  max_tokens=1200)
                     else:
                         raise
             agent_llm_calls += 1
@@ -1463,12 +1453,12 @@ class RunExecutor:
             if lines:
                 self.state.put_artifact("effectiveJd", "\n".join(lines))
 
-    @staticmethod
-    def _resume_facts_from_parse(parsed: Any) -> Optional[Dict[str, Any]]:
+    def _resume_facts_from_parse(self, parsed: Any) -> Optional[Dict[str, Any]]:
         """Map deterministic parse_resume output into resumeFacts artifact.
 
         Always returns facts when parse succeeded — downstream agents MUST
         have material to work with even for short/unstructured resumes.
+        Always includes rawExcerpt so agents can read the original text.
         """
         if not isinstance(parsed, dict) or not parsed.get("success"):
             return None
@@ -1488,7 +1478,9 @@ class RunExecutor:
             completeness += 1
         if parsed.get("timelinePeriods"):
             completeness += 1
+        resume_text = (self.request.resumeText or "").strip()
         return {
+            "rawExcerpt": resume_text[:3000],
             "skills": skills[:40],
             "projects": [{"name": p} for p in projects[:12]],
             "experiences": [{"raw": e} for e in experiences],
@@ -1542,6 +1534,35 @@ class RunExecutor:
             dependencies=[],
             requestedNextAction=None,
             summary=summary[:500])
+
+    def _maybe_skip_jd_llm(self) -> Optional[AgentOutput]:
+        """Skip JDAnalysis LLM when JD is short text provided directly."""
+        jd = (self.request.jobDescription or "").strip()
+        effective = self.state.artifact("effectiveJd")
+        if isinstance(effective, str) and effective.strip():
+            jd = effective.strip()
+        if not jd or len(jd) > 800:
+            return None
+        requirements = {"rawJd": jd, "source": "direct_text_fast_path"}
+        lines = [l.strip() for l in jd.replace("；", "\n").replace("、", "\n").split("\n") if l.strip()]
+        must_have = [l for l in lines if any(k in l for k in ("要求", "必须", "精通", "熟悉", "年以上", "经验"))]
+        nice_to_have = [l for l in lines if l not in must_have and len(l) > 4]
+        requirements["mustHave"] = must_have[:10]
+        requirements["niceToHave"] = nice_to_have[:8]
+        requirements["title"] = lines[0] if lines else ""
+        self.state.put_artifact("jdRequirements", requirements)
+        summary = f"JD 确定性提取完成：{len(must_have)} 必需 + {len(nice_to_have)} 优选"
+        return AgentOutput(
+            agentId="JDAnalysisAgent",
+            type="jd_requirements",
+            claims=[{"text": summary, "confidence": 0.8}],
+            artifacts={"jdRequirements": requirements},
+            evidence=[],
+            confidence=0.8,
+            source="tools",
+            dependencies=[],
+            requestedNextAction=None,
+            summary=summary)
 
     @staticmethod
     def render_report(report: Dict[str, Any]) -> str:
@@ -1657,7 +1678,31 @@ class RunExecutor:
         if not isinstance(raw, list):
             return refs
         allowed = {"RESUME", "JD", "KNOWLEDGE", "EXTERNAL"}
+        _LINE_RE = re.compile(
+            r"\[?(RESUME|JD|KNOWLEDGE|EXTERNAL)\s*L?(\d+)(?:-L?(\d+))?\]?\s*(.*)",
+            re.I)
         for item in raw:
+            if isinstance(item, str):
+                text = item.strip()
+                if not text:
+                    continue
+                m = _LINE_RE.match(text)
+                if m:
+                    refs.append({
+                        "sourceType": m.group(1).upper(),
+                        "sourceId": m.group(1).lower(),
+                        "quote": (m.group(4) or text)[:400],
+                        "lineStart": int(m.group(2)),
+                        "lineEnd": int(m.group(3)) if m.group(3) else int(m.group(2)),
+                    })
+                else:
+                    source = "RESUME" if "resume" in text.lower() or "简历" in text else "JD"
+                    refs.append({
+                        "sourceType": source,
+                        "sourceId": source.lower(),
+                        "quote": text[:400],
+                    })
+                continue
             if not isinstance(item, dict):
                 continue
             source_type = str(item.get("sourceType") or "").strip().upper()
@@ -1748,7 +1793,8 @@ class RunExecutor:
             if status == "UNASSESSED":
                 score_val = None
 
-            refs = RunExecutor._parse_source_refs(dim.get("evidenceRefs"))
+            refs = RunExecutor._parse_source_refs(
+                dim.get("evidenceRefs") or dim.get("evidence"))
             try:
                 coverage = float(dim.get("evidenceCoverage", 0.0) or 0.0)
             except (TypeError, ValueError):
@@ -1833,7 +1879,7 @@ class RunExecutor:
                 continue
             if not isinstance(risk, dict):
                 continue
-            claim = str(risk.get("claim") or "").strip()
+            claim = str(risk.get("claim") or risk.get("risk") or "").strip()
             if not claim:
                 continue
             category = str(risk.get("category") or "CANDIDATE").strip().upper()
@@ -1863,7 +1909,7 @@ class RunExecutor:
                 "severity": severity,
                 "claim": claim[:400],
                 "impact": str(risk.get("impact") or "")[:300],
-                "verificationPlan": str(risk.get("verificationPlan") or "")[:300],
+                "verificationPlan": str(risk.get("verificationPlan") or risk.get("verification") or "")[:300],
             }
             if refs:
                 entry["evidenceRefs"] = refs
@@ -1888,7 +1934,7 @@ class RunExecutor:
             if not question:
                 continue
             refs = RunExecutor._parse_source_refs(probe.get("evidenceRefs"))
-            good = [str(s)[:200] for s in (probe.get("goodSignals") or [])
+            good = [str(s)[:200] for s in (probe.get("goodSignals") or probe.get("expectedSignals") or [])
                     if isinstance(s, (str, int, float)) and str(s).strip()]
             entry = {
                 "id": str(probe.get("id") or f"probe-{idx + 1}")[:60],
@@ -1897,7 +1943,7 @@ class RunExecutor:
                     in {"HIGH", "MEDIUM", "LOW"} else "MEDIUM"
                 ),
                 "question": question[:400],
-                "objective": str(probe.get("objective") or "")[:300],
+                "objective": str(probe.get("objective") or probe.get("whyAsk") or "")[:300],
                 "triggeredBy": str(probe.get("triggeredBy") or "")[:200],
                 "evidenceRefs": refs,
                 "goodSignals": good[:8],
