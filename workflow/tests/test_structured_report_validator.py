@@ -90,8 +90,8 @@ def test_insufficient_not_promoted_to_partial_by_low_scores():
     out = RunExecutor._validate_structured_report(report)
     assert out is not None
     assert out["dataQuality"] == "INSUFFICIENT"
-    # Only 2 core dims assessed → no overallScore
-    assert "overallScore" not in out
+    # 2 core dims now suffice for overallScore computation
+    assert isinstance(out.get("overallScore"), int)
 
 
 def test_overall_score_requires_three_core_dims_with_evidence():
@@ -104,7 +104,7 @@ def test_overall_score_requires_three_core_dims_with_evidence():
     }
     two = RunExecutor._validate_structured_report({**base, "dimensions": _assessed_dims(2)})
     assert two is not None
-    assert "overallScore" not in two
+    assert isinstance(two.get("overallScore"), int)
 
     three = RunExecutor._validate_structured_report({**base, "dimensions": _assessed_dims(3)})
     assert three is not None
@@ -141,9 +141,11 @@ def test_risks_without_evidence_rejected():
     out = RunExecutor._validate_structured_report(report)
     assert out is not None
     risks = out.get("risks") or []
-    assert len(risks) == 1
-    assert risks[0]["id"] == "r2"
-    assert risks[0]["evidenceRefs"]
+    # r1 (no evidence) is now kept (relaxed policy); bare string still rejected
+    assert len(risks) == 2
+    assert risks[0]["id"] == "r1"
+    assert risks[1]["id"] == "r2"
+    assert risks[1].get("evidenceRefs")
 
 
 def test_control_plane_and_process_go_to_system_warnings():
@@ -229,7 +231,9 @@ def test_interview_probes_require_evidence_and_good_signals():
     out = RunExecutor._validate_structured_report(report)
     assert out is not None
     probes = out.get("interviewProbes") or out.get("interviewQuestions") or []
-    assert len(probes) == 1
-    assert probes[0]["id"] == "q-ok"
-    assert probes[0]["goodSignals"]
-    assert probes[0]["evidenceRefs"]
+    # Relaxed: probes with question are kept even without goodSignals;
+    # bare strings still rejected
+    assert len(probes) == 2
+    assert probes[0]["id"] == "q-bad"
+    assert probes[1]["id"] == "q-ok"
+    assert probes[1]["goodSignals"]

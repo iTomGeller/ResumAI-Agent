@@ -76,6 +76,7 @@ REPLAN_TRIGGERS = {
 
 # Soft preference for simple runTypes: still artifact-planned, but skip LLM refine.
 SIMPLE_RULE_TYPES = {
+    "full_evaluation", "jd_evaluation", "backend_eval", "agent_eval",
     "timeline_check", "risk_check", "evidence_check", "tech_match",
     "project_analysis", "project_rewrite", "resume_optimize",
     "interview_questions", "followup",

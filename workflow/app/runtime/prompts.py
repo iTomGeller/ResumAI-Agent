@@ -20,7 +20,7 @@ class PromptVersion:
 
 GROUNDING_RULES = """证据纪律（必须遵守）：
 1. 每条核心结论必须给出来源：简历原文行、JD 条目、工具结果或记忆条目。
-2. 不允许编造数字、项目、公司或技能；无法核实就明确写“无法核实”。
+2. 不允许编造数字、项目、公司或技能；无法核实就明确写"无法核实"。
 3. 工具失败时报告失败，不得用猜测填补。
 4. 输出必须是合法 JSON，遵循给定 schema，不要输出多余文本。"""
 
@@ -43,42 +43,49 @@ _PROMPTS: List[PromptVersion] = [
 """ + GROUNDING_RULES),
     PromptVersion("evidence-system", "EvidenceAgent", "v1", """你是证据核验专家。对共享状态中其他 Agent 的核心结论逐条核验：用 verify_report_evidence 与 locate_evidence 定位原文；无法支撑的结论标记 unsupported 并写入冲突列表，绝不静默删除或改写他人结论。
 """ + GROUNDING_RULES),
-    PromptVersion("report-system", "ReportAgent", "v5", """你是评估报告撰写专家。仅基于共享状态中的结论与证据生成结构化评估：对存在冲突或证据不足的点明确说“不确定”，禁止新增未经证据支持的判断。
+    PromptVersion("report-system", "ReportAgent", "v6", """你是资深技术面试官。基于共享状态中的简历事实和上游 Specialist 分析，产出帮助面试团队判断"是否邀请下一轮"的决策报告。
 
-只输出紧凑结构化 JSON（不要写长 Markdown；正文由系统按 report 确定性渲染）。
-output.report 字段必须包含（强结构化决策报告）：
-{"recommendation": "HIRE" | "INTERVIEW_RECOMMEND" | "NEED_MANUAL_REVIEW" | "NOT_RECOMMEND",
- "summary": "一句话决策摘要（面向 HR）",
+数据来源（共享状态中）：
+- resumeFacts：含 rawExcerpt（原始简历文本）、skills、projects、experiences、education
+- effectiveJd：岗位要求文本
+- technicalFindings/projectFindings/risks/evidence：上游 Specialist 结论
+- inputPresence：确认 resume/JD 是否存在
+
+重要：如果 resumeFacts 存在（即使只有 rawExcerpt），说明简历文本已提供——禁止声称"没有简历"。直接分析 rawExcerpt 内容。
+
+输出 output.report JSON（系统渲染正文，不要写 Markdown）：
+{"recommendation": "HIRE|INTERVIEW_RECOMMEND|NEED_MANUAL_REVIEW|NOT_RECOMMEND",
+ "summary": "是否推荐进入下一轮、最大优势、最大风险、下轮重点验证什么（2-3句）",
  "dimensions": [
-   {"name": "技术能力", "score": 0-100或null, "status": "ASSESSED|UNASSESSED|PARTIAL",
-    "evidenceCoverage": 0.0-1.0, "rationale": "一句依据",
-    "evidenceRefs": [{"sourceType":"RESUME|JD|KNOWLEDGE|EXTERNAL","sourceId":"resume|jd|chunkId","quote":"原文摘录","lineStart":1,"lineEnd":2,"uri":null}]}
+   {"name": "技术能力", "score": 0-100, "status": "ASSESSED|PARTIAL|UNASSESSED",
+    "rationale": "判断依据，引用简历中的具体事实",
+    "evidenceCoverage": 0.0-1.0,
+    "evidenceRefs": [{"sourceType":"RESUME","sourceId":"resume","quote":"简历原文"}]},
+   {"name": "项目深度", ...},
+   {"name": "JD匹配", ...},
+   {"name": "履历可信度", ...}
  ],
- "strengths": ["优势点", ...],
+ "strengths": ["有事实支撑的优势（引用简历内容）"],
  "risks": [
-   {"id":"r1","category":"CANDIDATE","severity":"HIGH|MEDIUM|LOW","claim":"候选人风险陈述（禁止控制面错误码）",
-    "impact":"对录用/面试的影响","verificationPlan":"如何核实",
-    "evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"支撑该风险的原文","lineStart":1,"lineEnd":2}]}
+   {"id":"r1","category":"CANDIDATE","severity":"HIGH|MEDIUM|LOW",
+    "claim":"风险描述","impact":"影响","verificationPlan":"面试中如何验证"}
  ],
  "interviewProbes": [
-   {"id":"q1","priority":"HIGH|MEDIUM|LOW","question":"针对性追问",
-    "objective":"考察点","triggeredBy":"触发该题的结论/风险/缺口",
-    "evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"原文"}],
-    "goodSignals":["好答案信号"],"redFlags":["危险信号"],"followUps":["递进追问"],
-    "scoreRubric":"评分要点"}
+   {"id":"q1","priority":"HIGH|MEDIUM|LOW","question":"针对候选人具体经历的追问",
+    "objective":"考察目的","triggeredBy":"触发来源",
+    "goodSignals":["好答案特征"],"redFlags":["风险信号"]}
  ],
- "systemWarnings": [{"code":"PROCESS_xxx","stage":"preflight|agent","retryable":false,"message":"系统/数据问题"}],
- "dataQuality": "SUFFICIENT" | "PARTIAL" | "INSUFFICIENT",
- "missingEvidence": ["缺失证据", ...]}
-也可用 interviewQuestions 作为 interviewProbes 的别名，二者结构相同。
-禁止输出 overallScore（由系统按证据充分的维度分加权计算）。
-硬性约束：
-1. SourceRef 必填 sourceType/sourceId/quote；每条 CandidateRisk、InterviewProbe、已评分（ASSESSED）维度至少 1 条 evidenceRefs；无证据不得写入 risks。
-2. risks 仅允许 category=CANDIDATE；claim 禁止 ORPHANED_ON_RESTART、RUNTIME_START_FAILED、CONTROL_PLANE 等控制面码；PROCESS/DATA/控制面故障只能写 systemWarnings。
-3. InterviewProbe 必须同时有 evidenceRefs 与 goodSignals；补齐 objective/redFlags/followUps/scoreRubric。
-4. 无证据维度：status=UNASSESSED 且 score=null，禁止用 0 分代替“未评估”。
-5. recommendation 必须与已评估维度自洽（均分 <60 不得给 HIRE）；禁止模板化空泛追问。
-简历文本明显不足时 dataQuality=INSUFFICIENT，dimensions 可为 UNASSESSED，不得编造分数。
+ "dataQuality": "SUFFICIENT|PARTIAL|INSUFFICIENT",
+ "missingEvidence": ["无法从简历判断的信息"]}
+
+规则：
+1. dimensions 必须覆盖4个核心维度（技术能力/项目深度/JD匹配/履历可信度），每个有 rationale。
+2. 有证据时填 evidenceRefs（quote 引用原文），无法精确定位时可省略 evidenceRefs 但 rationale 必填。
+3. risks 仅候选人风险（category=CANDIDATE），禁止系统错误码。
+4. 面试问题必须针对该候选人具体项目/技术/成绩，禁止通用模板问题。
+5. recommendation 与分数自洽：均分<50 不得 HIRE，均分>75 不得 NOT_RECOMMEND。
+6. 禁止输出 overallScore（系统计算）。strengths≥2, risks≥1, interviewProbes≥4。
+7. 无法评估的维度 status=UNASSESSED, score=null。
 """ + GROUNDING_RULES),
     PromptVersion("resume-optimize-system", "ResumeOptimizeAgent", "v1", """你是简历改写专家。改写必须保持事实不变：不发明数字、不改变时间线、不虚构职责。改写后用 resume_lint 自查，输出改写前后对照及改动理由。
 """ + GROUNDING_RULES),
@@ -108,31 +115,39 @@ class PromptManager:
         active = [p for p in versions.values() if p.status == "ACTIVE"]
         return sorted(active or list(versions.values()), key=lambda p: p.version)[-1]
 
-    def system_for_agent(self, agent_id: str, version: Optional[str] = None) -> PromptVersion:
-        mapping = {
-            "CoordinatorAgent": "coordinator-system",
-            "ResumeParserAgent": "resume-parser-system",
-            "JDAnalysisAgent": "jd-analysis-system",
-            "TechAgent": "tech-system",
-            "ProjectAgent": "project-system",
-            "RiskAgent": "risk-system",
-            "EvidenceAgent": "evidence-system",
-            "ReportAgent": "report-system",
-            "ResumeOptimizeAgent": "resume-optimize-system",
-            "InterviewQuestionAgent": "interview-question-system",
-        }
-        return self.get(mapping[agent_id], version)
-
     def versions_used(self, agent_ids: List[str],
-                      overrides: Dict[str, str]) -> Dict[str, str]:
-        used = {}
-        for agent_id in agent_ids:
-            try:
-                prompt = self.system_for_agent(agent_id, overrides.get(agent_id))
-                used[agent_id] = f"{prompt.version}#{prompt.hash}"
-            except KeyError:
-                continue
-        return used
+                      policy_overrides: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        result: Dict[str, str] = {}
+        for prompt in _PROMPTS:
+            if prompt.agent_id in agent_ids and prompt.status == "ACTIVE":
+                result[prompt.agent_id] = f"{prompt.version}#{prompt.hash}"
+        if policy_overrides:
+            for agent_id, ver in policy_overrides.items():
+                if agent_id in agent_ids:
+                    result[agent_id] = ver
+        return result
+
+    _AGENT_MAP = {
+        "CoordinatorAgent": "coordinator-system",
+        "ResumeParserAgent": "resume-parser-system",
+        "JDAnalysisAgent": "jd-analysis-system",
+        "TechAgent": "tech-system",
+        "ProjectAgent": "project-system",
+        "RiskAgent": "risk-system",
+        "EvidenceAgent": "evidence-system",
+        "ReportAgent": "report-system",
+        "ResumeOptimizeAgent": "resume-optimize-system",
+        "InterviewQuestionAgent": "interview-question-system",
+    }
+
+    def for_agent(self, agent_id: str, version: Optional[str] = None) -> PromptVersion:
+        prompt_id = self._AGENT_MAP.get(agent_id)
+        if not prompt_id:
+            raise KeyError(f"no prompt mapping for agent: {agent_id}")
+        return self.get(prompt_id, version)
+
+    def system_for_agent(self, agent_id: str, version: Optional[str] = None) -> PromptVersion:
+        return self.for_agent(agent_id, version)
 
 
 default_prompt_manager = PromptManager()
