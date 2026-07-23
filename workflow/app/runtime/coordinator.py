@@ -87,7 +87,7 @@ SIMPLE_RULE_TYPES = {
 AGENT_DEPENDENCIES: Dict[str, List[str]] = {
     "ResumeParserAgent": [],
     "JDAnalysisAgent": ["ResumeParserAgent"],
-    "TechAgent": ["JDAnalysisAgent"],
+    "TechAgent": ["ResumeParserAgent"],
     "ProjectAgent": ["ResumeParserAgent"],
     "RiskAgent": ["ResumeParserAgent"],
     "EvidenceAgent": ["TechAgent", "ProjectAgent", "RiskAgent"],
@@ -96,7 +96,7 @@ AGENT_DEPENDENCIES: Dict[str, List[str]] = {
     "InterviewQuestionAgent": ["RiskAgent"],
 }
 
-PARALLELIZABLE = {"TechAgent", "ProjectAgent", "RiskAgent"}
+PARALLELIZABLE = {"JDAnalysisAgent", "TechAgent", "ProjectAgent", "RiskAgent"}
 
 _PROJECT_HINT = re.compile(
     r"(项目经历|项目经验|project\s*experience|side\s*project|"
