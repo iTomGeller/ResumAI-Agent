@@ -336,16 +336,18 @@ class McpRegistry:
         self.health.clear()
         self.tools.clear()
 
+        skip_probe = os.getenv("MCP_SKIP_PROBE", "").strip() in ("1", "true", "yes")
         servers = dict(self.config.get("mcpServers") or {})
         optional = dict(self.config.get("optionalMcpServers") or {})
 
-        # Optional servers: still probe for status visibility, but only register
-        # tools when enabled AND env requirements are met.
         for name, cfg in {**servers, **optional}.items():
             if not isinstance(cfg, dict):
                 continue
             is_optional = name in optional
-            await self._probe_server(name, cfg, optional=is_optional)
+            if skip_probe and not is_optional:
+                self._register_without_probe(name, cfg)
+            else:
+                await self._probe_server(name, cfg, optional=is_optional)
 
         self._probed = True
         self._last_probe_at = time.time()
@@ -353,6 +355,54 @@ class McpRegistry:
         summary = {k: v.status for k, v in self.health.items()}
         logger.info("MCP health probe: %s (%d tools)", summary, len(self.tools))
         return self.health
+
+    def _register_without_probe(self, name: str, cfg: Dict[str, Any]) -> None:
+        """Register tools from config without probing (MCP_SKIP_PROBE mode).
+        Tools are marked AVAILABLE optimistically; errors surface at call time."""
+        transport = str(cfg.get("transport") or "streamable-http")
+        url = str(cfg.get("url") or "")
+        enabled = bool(cfg.get("enabled", True))
+        required_env = [str(e) for e in (cfg.get("requiredEnv") or [])]
+        missing = [e for e in required_env if not (os.getenv(e) or "").strip()]
+        if missing or not enabled:
+            self.health[name] = McpServerHealth(
+                name=name, status="AUTH_REQUIRED" if missing else "DOWN",
+                transport=transport, url=url,
+                error=f"skip_probe: missing_env={','.join(missing)}" if missing else "disabled")
+            return
+        allowed = set(cfg.get("allowedTools") or [])
+        prefix = str(cfg.get("toolPrefix") or name)
+        declared_tools = cfg.get("declaredTools") or []
+        tools: List[McpToolInfo] = []
+        for item in declared_tools:
+            if isinstance(item, str):
+                item = {"name": item, "description": f"MCP {name}/{item}"}
+            if not isinstance(item, dict):
+                continue
+            tname = str(item.get("name") or "").strip()
+            if not tname or (allowed and tname not in allowed):
+                continue
+            catalog = f"{prefix}.{tname}" if prefix else tname
+            tools.append(McpToolInfo(
+                server=name, name=tname, catalog_name=catalog,
+                description=str(item.get("description") or f"MCP {name}/{tname}"),
+                input_schema=item.get("inputSchema")
+                if isinstance(item.get("inputSchema"), dict) else {"type": "object"},
+                protocol_version=PROTOCOL_VERSION))
+        if not tools and allowed:
+            for tname in allowed:
+                catalog = f"{prefix}.{tname}" if prefix else tname
+                tools.append(McpToolInfo(
+                    server=name, name=tname, catalog_name=catalog,
+                    description=f"MCP {name}/{tname}",
+                    input_schema={"type": "object"},
+                    protocol_version=PROTOCOL_VERSION))
+        self.health[name] = McpServerHealth(
+            name=name, status="AVAILABLE", transport=transport, url=url,
+            tools=[t.catalog_name for t in tools])
+        for tool in tools:
+            self.tools[tool.catalog_name] = tool
+        logger.info("MCP %s: skip-probe registered %d tools", name, len(tools))
 
     async def _probe_server(self, name: str, cfg: Dict[str, Any], *,
                             optional: bool) -> None:
@@ -411,12 +461,16 @@ class McpRegistry:
                 name=name, status=status, transport=transport,
                 latency_ms=latency, url=url, error=msg[:300])
             logger.warning("MCP probe %s -> %s: %s", name, status, msg[:200])
+            if status == "DOWN" and not optional:
+                self._register_without_probe(name, cfg)
         except Exception as exc:  # noqa: BLE001
             latency = int((time.monotonic() - started) * 1000)
             self.health[name] = McpServerHealth(
                 name=name, status="DOWN", transport=transport,
                 latency_ms=latency, url=url, error=str(exc)[:300])
             logger.warning("MCP probe %s failed: %s", name, exc)
+            if not optional:
+                self._register_without_probe(name, cfg)
 
     async def _probe_http(self, name: str, cfg: Dict[str, Any],
                           allowed: set, prefix: str, url: str

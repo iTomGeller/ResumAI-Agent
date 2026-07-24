@@ -236,6 +236,15 @@ class Coordinator:
             r"(论文|paper|publish|arxiv|conference|journal)", text, re.I))
         is_senior = bool(re.search(
             r"(高级|资深|senior|lead|architect|principal|staff|\d{2,}\s*年)", text, re.I))
+        has_management_exp = bool(re.search(
+            r"(管理|带.*团队|leader|manager|director|VP|CTO|负责.*人|下属)", text, re.I))
+        is_career_changer = bool(re.search(
+            r"(转行|转型|跨.*领域|career\s*change|从.*转.*到|非科班)", text, re.I))
+        has_certifications = bool(re.search(
+            r"(PMP|AWS|CKA|CKAD|CFA|FRM|注册|认证|certified|certification)", text, re.I))
+        is_fresh_grad = bool(re.search(
+            r"(应届|在读|实习|intern|fresh\s*grad|202[4-7].*毕业)", text, re.I))
+        resume_lang = "en" if len(re.findall(r"[a-zA-Z]+", text)) > len(text) * 0.4 else "zh"
         return {
             "has_projects": has_projects,
             "has_timeline": has_timeline,
@@ -247,6 +256,11 @@ class Coordinator:
             "has_publications": has_publications,
             "is_rich_resume": is_rich_resume,
             "is_senior": is_senior,
+            "has_management_exp": has_management_exp,
+            "is_career_changer": is_career_changer,
+            "has_certifications": has_certifications,
+            "is_fresh_grad": is_fresh_grad,
+            "resume_language": resume_lang,
             "evidence_enabled": bool(self.policy.evidenceVerification.enabled),
             "needs_parse": "resume_facts" not in present and bool(text.strip()),
         }
@@ -402,6 +416,11 @@ class Coordinator:
         signals = self.inspect_signals(
             resume_text=resume_text, job_description=job_description,
             artifacts=artifacts, shared=shared)
+        self._last_signals = signals
+        self._execution_history = [
+            n for n in (memory_notes if isinstance(memory_notes, list) else [])
+            if isinstance(n, dict) and (n.get("source") == "execution_profile"
+                                        or "execution_profile" in str(n.get("structured", {}).get("factKey", "")))]
 
         # Full evaluations: NEVER cache plans — each candidate deserves a
         # fresh, signal-driven plan. Only cache simple/lightweight run types.
@@ -485,7 +504,10 @@ class Coordinator:
         groups = self._parallel_groups(ordered)
         terminal = next((a for a in reversed(ordered) if a in TERMINAL_AGENTS),
                         "ReportAgent")
-        budget = self._budget_plan(ordered, terminal)
+        budget = self._budget_plan(
+            ordered, terminal,
+            execution_history=getattr(self, "_execution_history", None),
+            signals=getattr(self, "_last_signals", None))
         return {
             "plan": ordered,
             "reason": reason,
@@ -503,24 +525,73 @@ class Coordinator:
             "missingGoalArtifacts": still_missing,
             "planClosureOk": not still_missing,
         }
-    def _budget_plan(self, ordered: List[str], terminal: str) -> Dict[str, Dict[str, int]]:
-        """Plan-time budget allocation: the terminal agent gets a guaranteed
-        floor of 2 LLM calls so specialists can never starve the report; the
-        rest of the run budget is split evenly across the other agents."""
+    def _budget_plan(self, ordered: List[str], terminal: str,
+                     execution_history: Optional[List[Dict[str, Any]]] = None,
+                     signals: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, int]]:
+        """Adaptive budget allocation driven by historical execution profiles.
+        Falls back to even split when no history is available."""
+        sig = signals or {}
+        base_llm = self.policy.maxLlmCalls
+        if sig.get("is_rich_resume"):
+            base_llm = min(base_llm + 3, 18)
+        elif sig.get("is_fresh_grad") or not sig.get("has_projects"):
+            base_llm = max(8, base_llm - 2)
+
         terminal_floor = 2
         others = [a for a in ordered if a != terminal]
-        remaining_llm = max(1, self.policy.maxLlmCalls - terminal_floor)
-        per_agent_llm = max(1, remaining_llm // max(1, len(others)))
-        per_agent_tools = max(1, self.policy.toolBudget.maxToolCallsPerRun
-                              // max(1, len(ordered)))
+
+        hist_ratios = self._extract_budget_ratios(execution_history, others)
+        remaining_llm = max(1, base_llm - terminal_floor)
+
         budget: Dict[str, Dict[str, int]] = {}
-        for agent in ordered:
-            budget[agent] = {
-                "llmQuota": terminal_floor if agent == terminal else per_agent_llm,
-                "toolQuota": min(per_agent_tools,
-                                 self.policy.toolBudget.maxToolCallsPerAgent),
-            }
+        if hist_ratios:
+            for agent in others:
+                ratio = hist_ratios.get(agent, 1.0 / max(1, len(others)))
+                budget[agent] = {
+                    "llmQuota": max(1, round(remaining_llm * ratio)),
+                    "toolQuota": min(
+                        max(1, self.policy.toolBudget.maxToolCallsPerRun
+                            // max(1, len(ordered))),
+                        self.policy.toolBudget.maxToolCallsPerAgent),
+                }
+        else:
+            per_agent_llm = max(1, remaining_llm // max(1, len(others)))
+            per_agent_tools = max(1, self.policy.toolBudget.maxToolCallsPerRun
+                                  // max(1, len(ordered)))
+            for agent in others:
+                budget[agent] = {
+                    "llmQuota": per_agent_llm,
+                    "toolQuota": min(per_agent_tools,
+                                     self.policy.toolBudget.maxToolCallsPerAgent),
+                }
+        budget[terminal] = {
+            "llmQuota": terminal_floor,
+            "toolQuota": min(
+                max(1, self.policy.toolBudget.maxToolCallsPerRun // max(1, len(ordered))),
+                self.policy.toolBudget.maxToolCallsPerAgent),
+        }
         return budget
+
+    @staticmethod
+    def _extract_budget_ratios(execution_history: Optional[List[Dict[str, Any]]],
+                               agents: List[str]) -> Optional[Dict[str, float]]:
+        """Derive per-agent budget ratio from historical execution profiles."""
+        if not execution_history:
+            return None
+        agent_totals: Dict[str, int] = {}
+        count = 0
+        for profile in execution_history[-5:]:
+            structured = profile.get("structured") or profile
+            agent_llm = structured.get("agentLlmCalls") or {}
+            if not agent_llm:
+                continue
+            count += 1
+            for agent, calls in agent_llm.items():
+                agent_totals[agent] = agent_totals.get(agent, 0) + int(calls or 0)
+        if count == 0 or not agent_totals:
+            return None
+        total = sum(agent_totals.values()) or 1
+        return {a: agent_totals.get(a, 1) / total for a in agents}
 
     def _order_by_dependencies(self, plan: List[str]) -> List[str]:
         """Stable topological pass: an agent is scheduled only after every
@@ -599,19 +670,29 @@ class Coordinator:
         sig = signals or {}
         signal_lines = []
         if sig.get("is_rich_resume"):
-            signal_lines.append("简历丰富（>2000字，有项目+时间线），建议完整Agent覆盖")
+            signal_lines.append("简历丰富（>2000字，有项目+时间线），建议完整Agent覆盖+深度验证")
+        elif sig.get("is_fresh_grad"):
+            signal_lines.append("应届生/实习生，精简路径：跳过深度验证，重点考察潜力和学习能力")
         if sig.get("has_github"):
-            signal_lines.append("有 GitHub 链接，EvidenceAgent 应使用 MCP 工具验证代码贡献")
+            signal_lines.append("有 GitHub 链接，EvidenceAgent 必须使用 MCP fetch 验证代码贡献")
         if sig.get("has_publications"):
-            signal_lines.append("有论文/出版物，TechAgent 应深入评估学术能力")
+            signal_lines.append("有论文/出版物，TechAgent 应深入评估学术能力和研究方向")
         if sig.get("is_senior"):
-            signal_lines.append("资深候选人，RiskAgent 需关注管理经验和架构能力的证据")
+            signal_lines.append("资深候选人（10年+），RiskAgent 重点关注架构决策和团队管理证据")
+        if sig.get("has_management_exp"):
+            signal_lines.append("有管理经验，评估应包含团队规模、管理方法论和跨部门协作能力")
+        if sig.get("is_career_changer"):
+            signal_lines.append("跨领域转型候选人，JDAnalysisAgent 需额外评估能力迁移可行性")
+        if sig.get("has_certifications"):
+            signal_lines.append("有行业认证，TechAgent 需验证认证有效性并作为加分项")
         if not sig.get("has_projects"):
-            signal_lines.append("无明显项目经历，跳过 ProjectAgent")
+            signal_lines.append("无明显项目经历，可跳过 ProjectAgent，预算分配给其他Agent")
         if not sig.get("has_timeline"):
-            signal_lines.append("无清晰时间线，RiskAgent 可降低优先级")
+            signal_lines.append("无清晰时间线，RiskAgent 时间线核查优先级降低")
         if sig.get("has_external_urls"):
-            signal_lines.append("有外部链接，EvidenceAgent 应优先验证可公开验证的声明")
+            signal_lines.append("有外部链接，EvidenceAgent 应使用 MCP 验证可公开验证的声明")
+        if sig.get("resume_language") == "en":
+            signal_lines.append("英文简历，评估标准切换为国际化口径")
 
         prompt_user = (
             f"任务类别: {run_type}\n用户问题: {user_message[:600]}\n"

@@ -19,9 +19,6 @@ logger = logging.getLogger(__name__)
 # Deprecated aliases kept on disk for admin/compat but not injected into the
 # candidate-evaluation main runtime path.
 DEPRECATED_SKILLS = {
-    "project_depth_analysis",
-    "tech_stack_assessment",
-    "evidence_synthesis",
     "intent_routing",
     "webapp-testing",
     "mcp-builder",

@@ -459,7 +459,8 @@ function friendlyError(raw: string): string {
   position: sticky;
   top: 18px;
   align-self: start;
-  width: 420px;
+  display: flex;
+  flex-direction: column;
   max-width: 100%;
   overflow: hidden;
   border: 1px solid var(--color-border);
@@ -712,7 +713,7 @@ function friendlyError(raw: string): string {
   font-weight: 600;
 }
 
-.conversation-composer { padding: 12px 14px 14px; }
+.conversation-composer { padding: 12px 14px 14px; flex-shrink: 0; border-top: 1px solid var(--color-border); }
 .conversation-composer textarea {
   width: 100%;
   resize: vertical;
@@ -742,5 +743,17 @@ function friendlyError(raw: string): string {
   color: white;
   font-size: 13px;
   font-weight: 600;
+}
+
+.conversation-panel :deep(.conversation-message-list) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+@media (max-width: 1280px) {
+  .conversation-panel {
+    max-width: min(420px, 35vw);
+  }
 }
 </style>

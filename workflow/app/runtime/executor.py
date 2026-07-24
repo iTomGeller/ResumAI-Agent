@@ -501,13 +501,15 @@ class RunExecutor:
                 and request.runType in ("full_evaluation", "jd_evaluation",
                                         "backend_eval", "agent_eval",
                                         "resume_optimize", "project_rewrite")
+            execution_profiles = [h for h in self.memory_hits
+                                   if isinstance(h, dict) and h.get("source") == "execution_profile"]
             planned = await coordinator.plan(
                 run_type=request.runType, user_message=request.userMessage,
                 conversation_summary=request.conversationSummary or "",
                 shared_digest=self.state.view_for("CoordinatorAgent", max_chars=2000),
                 failure_notes=self.failure_notes,
-                memory_notes=[str(h.get("content", ""))[:120]
-                              for h in self.memory_hits[:3]],
+                memory_notes=execution_profiles or [
+                    str(h.get("content", ""))[:120] for h in self.memory_hits[:3]],
                 needs_parse=needs_parse,
                 resume_text=request.resumeText or "",
                 job_description=request.jobDescription or "",
@@ -2204,7 +2206,7 @@ class RunExecutor:
         if jd and not arts.get("effectiveJd"):
             self.state.apply_artifacts({"effectiveJd": jd})
 
-        if resume and not jd and not arts.get("jdMatches"):
+        if resume and not arts.get("jdMatches"):
             call = await self.tools.execute(
                 "CoordinatorAgent", "jd_match_search", {"resumeText": resume})
             if call.status == "SUCCEEDED":
@@ -2227,9 +2229,7 @@ class RunExecutor:
         if definition.agent_id == "ResumeParserAgent" and resume and not parsed_already:
             steps.append(("parse_resume", {"resumeText": resume}))
         elif definition.agent_id == "JDAnalysisAgent" and resume \
-                and not (request.jobDescription or "").strip() \
                 and "jdMatches" not in artifacts:
-            # No user JD: deterministic hybrid match (do not rely on LLM tool whim).
             steps.append(("jd_match_search", {"resumeText": resume}))
         elif definition.agent_id == "RiskAgent" and resume \
                 and "timelineCheck" not in artifacts:
@@ -2495,7 +2495,55 @@ class RunExecutor:
                                               for r in verified_risks[:4]]},
                         source="evaluation_result", confidence=0.85)
 
-            # 4) User preferences (unchanged)
+            # 4) EPISODIC: interview probes for future reference
+            probes = (final_report.get("interviewProbes") or []) if isinstance(final_report, dict) else []
+            if probes and isinstance(probes, list) and len(probes) >= 2:
+                probe_summary = "; ".join(
+                    p.get("question", "")[:50] for p in probes[:5]
+                    if isinstance(p, dict) and p.get("question"))
+                if probe_summary:
+                    await self.memory.write(
+                        type_="EPISODIC", owner_scope="CONVERSATION",
+                        content=f"面试追问要点({len(probes)}条): {probe_summary}",
+                        structured={"factKey": "interview_probes",
+                                    "probeCount": len(probes),
+                                    "topProbes": [p.get("question", "") for p in probes[:5]
+                                                  if isinstance(p, dict)]},
+                        source="evaluation_result", confidence=0.85)
+
+            # 5) EPISODIC: execution profile for adaptive budget
+            agent_timings = getattr(self, "_agent_timings", {})
+            agent_counters = getattr(self, "_agent_counters", {})
+            if agent_timings or agent_counters:
+                agent_llm_calls = {a: c.get("llmCalls", 0)
+                                   for a, c in agent_counters.items() if isinstance(c, dict)}
+                agent_tool_calls = {a: c.get("toolCalls", 0)
+                                    for a, c in agent_counters.items() if isinstance(c, dict)}
+                await self.memory.write(
+                    type_="EPISODIC", owner_scope="USER",
+                    content=(f"执行画像: agents={list(agent_timings.keys())}, "
+                             f"totalLlm={self.budget.llm_calls}, "
+                             f"totalTools={self.budget.tool_calls}, "
+                             f"elapsed={self.budget.elapsed_seconds():.0f}s"),
+                    structured={
+                        "factKey": "execution_profile",
+                        "agentTimings": agent_timings,
+                        "agentLlmCalls": agent_llm_calls,
+                        "agentToolCalls": agent_tool_calls,
+                        "totalLlmCalls": self.budget.llm_calls,
+                        "totalToolCalls": self.budget.tool_calls,
+                        "totalTokens": getattr(self.budget, "total_tokens", 0),
+                        "elapsedSeconds": self.budget.elapsed_seconds(),
+                        "resumeLength": len(self.request.resumeText or ""),
+                        "runType": self.request.runType,
+                    },
+                    source="execution_profile", confidence=0.95)
+                self._emit_progress("memory_write", {
+                    "writes": ["evaluation_result", "execution_profile", "interview_probes"],
+                    "count": 5,
+                })
+
+            # 6) User preferences (unchanged)
             for preference in self._explicit_preferences():
                 await self.memory.write(
                     type_="PREFERENCE", owner_scope="USER",

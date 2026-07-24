@@ -165,12 +165,8 @@ async def _model_answer(
             return None
 
         report = snapshot.get("structuredReport") or snapshot.get("report") or {}
-        has_useful_context = (
-            (isinstance(report, dict) and report.get("recommendation"))
-            or snapshot.get("hasResume")
-            or snapshot.get("revision")
-        )
-        if not has_useful_context:
+        has_report = isinstance(report, dict) and report.get("recommendation")
+        if not has_report:
             return None
 
         compact = {
