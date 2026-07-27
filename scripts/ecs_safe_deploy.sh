@@ -301,13 +301,30 @@ ls -lh target/resumai-agent-backend.jar
 
 log "fetch Temurin JRE cache if missing"
 mkdir -p "$SRC_DIR/backend/.jre-cache"
-if [[ ! -f "$SRC_DIR/backend/.jre-cache/temurin-21-jre.tar.gz" ]]; then
-  # Tsinghua Adoptium mirror first (mainland-stable), GitHub as fallback.
-  curl -fsSL --connect-timeout 15 -o "$SRC_DIR/backend/.jre-cache/temurin-21-jre.tar.gz" \
-    "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jre/x64/linux/OpenJDK21U-jre_x64_linux_hotspot_21.0.7_6.tar.gz" || \
-  curl -fsSL -o "$SRC_DIR/backend/.jre-cache/temurin-21-jre.tar.gz" \
-    "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.7%2B6/OpenJDK21U-jre_x64_linux_hotspot_21.0.7_6.tar.gz"
+JRE_CACHE="$SRC_DIR/backend/.jre-cache/temurin-21-jre.tar.gz"
+if [[ ! -s "$JRE_CACHE" ]] || ! tar -tzf "$JRE_CACHE" >/dev/null 2>&1; then
+  rm -f "$JRE_CACHE"
+  # Reuse the verified JRE already serving production before attempting a
+  # slow cross-border download. The archive keeps one top-level directory
+  # because Dockerfile.ecs extracts it with --strip-components=1.
+  if docker exec ai-resume-backend test -x /opt/java/bin/java 2>/dev/null; then
+    log "export JRE from current healthy backend container"
+    JRE_TMP="$(mktemp -d)"
+    docker cp ai-resume-backend:/opt/java "$JRE_TMP/java" >/dev/null
+    tar -czf "$JRE_CACHE" -C "$JRE_TMP" java
+    rm -rf "$JRE_TMP"
+  else
+    # Tsinghua first, GitHub fallback; both have bounded retries and total time.
+    curl -fsSL --retry 2 --connect-timeout 15 --max-time 300 \
+      -o "$JRE_CACHE.tmp" \
+      "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jre/x64/linux/OpenJDK21U-jre_x64_linux_hotspot_21.0.7_6.tar.gz" || \
+    curl -fsSL --retry 2 --connect-timeout 15 --max-time 600 \
+      -o "$JRE_CACHE.tmp" \
+      "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.7%2B6/OpenJDK21U-jre_x64_linux_hotspot_21.0.7_6.tar.gz"
+    mv "$JRE_CACHE.tmp" "$JRE_CACHE"
+  fi
 fi
+tar -tzf "$JRE_CACHE" >/dev/null
 ls -lh "$SRC_DIR/backend/.jre-cache/"
 
 log "frontend lint + typecheck + build (ECS only)"
