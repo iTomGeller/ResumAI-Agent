@@ -10,7 +10,9 @@ import com.resumai.agent.service.MemoryService;
 import com.resumai.agent.service.RunMemoryUsageService;
 import com.resumai.agent.service.run.RunLifecycleService;
 import com.resumai.agent.service.run.RunSchedulerService;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -137,11 +139,43 @@ public class AgentRunInternalController {
     public Map<String, Object> memoryWrite(@RequestHeader("X-Internal-Token") String token,
                                            @RequestBody MemoryWriteRequest request) {
         authorize(token);
-        var row = memoryService.write(new MemoryService.WriteRequest(
+        if (hasText(request.runId())
+                && !lifecycleService.acceptsRuntimeMemoryWrite(request.runId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "run no longer accepts memory writes");
+        }
+        var row = memoryService.stageRuntimeWrite(new MemoryService.WriteRequest(
                 request.type(), request.ownerScope(), request.userId(), request.conversationId(),
                 request.runId(), request.content(), request.structuredContent(), request.source(),
                 request.sourceId(), request.confidence(), request.sensitivityLevel(),
                 request.ttlDays()));
+        if (hasText(request.runId())
+                && !lifecycleService.acceptsRuntimeMemoryWrite(request.runId())) {
+            // The run may have been cancelled between the pre-check and insert.
+            // Roll back only the row staged by this request. A run-wide update
+            // can race with terminal promotion and archive already-durable
+            // memories or unrelated WORKING checkpoint/scratch rows.
+            memoryService.archiveRuntimeWrite(
+                    request.runId(), row.getMemoryId());
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "run cancelled while staging memory");
+        }
+        Map<String, Object> audit = new LinkedHashMap<>();
+        audit.put("memoryId", row.getMemoryId());
+        audit.put("type", MemoryService.canonicalTaxonomy(row.getType()));
+        audit.put("memoryType", MemoryService.canonicalTaxonomy(row.getType()));
+        audit.put("taxonomy", MemoryService.canonicalTaxonomy(row.getType()));
+        audit.put("namespace", MemoryService.namespaceOf(row));
+        audit.put("scope", row.getOwnerScope());
+        audit.put("source", row.getSource());
+        audit.put("targetTaxonomy", MemoryService.canonicalTaxonomy(request.type()));
+        audit.put("reason", "WORKING".equals(MemoryService.canonicalTaxonomy(request.type()))
+                ? "run_scoped_memory_write" : "staged_until_terminal_success");
+        audit.put("occurredAt", Instant.now().toString());
+        if (hasText(request.runId())) {
+            lifecycleService.applyRuntimeEvent(request.runId(), "memory.written",
+                    "MemoryService", "memory_write", audit);
+        }
         return Map.of("status", "OK", "memoryId", row.getMemoryId());
     }
 
@@ -160,7 +194,78 @@ public class AgentRunInternalController {
                 request.runId(), request.topK(), request.minConfidence(), false,
                 request.channel(), request.consumerAgent(),
                 request.includeBenchmarkSources()));
+        String occurredAt = Instant.now().toString();
+        Map<String, Object> readAudit = new LinkedHashMap<>();
+        readAudit.put("memoryId", "");
+        readAudit.put("type", "MULTI");
+        readAudit.put("memoryType", "MULTI");
+        readAudit.put("taxonomy", "MULTI");
+        readAudit.put("namespace", scopedNamespace(request));
+        readAudit.put("agent", defaultAgent(request.consumerAgent()));
+        readAudit.put("runId", request.runId());
+        readAudit.put("reason", "agent_memory_retrieval");
+        readAudit.put("hitCount", hits.size());
+        readAudit.put("occurredAt", occurredAt);
+        if (hasText(request.runId())) {
+            lifecycleService.applyRuntimeEvent(request.runId(), "memory.read",
+                    defaultAgent(request.consumerAgent()), "memory_search", readAudit);
+            if (hits.isEmpty()) {
+                Map<String, Object> missAudit = new LinkedHashMap<>(readAudit);
+                missAudit.put("reason", "no_relevant_memory_after_scope_confidence_expiry_filters");
+                lifecycleService.applyRuntimeEvent(request.runId(), "memory.missed",
+                        defaultAgent(request.consumerAgent()), "memory_search", missAudit);
+            } else {
+                for (Map<String, Object> hit : hits) {
+                    Map<String, Object> selected = new LinkedHashMap<>();
+                    copyAuditField(hit, selected, "memoryId");
+                    copyAuditField(hit, selected, "type");
+                    copyAuditField(hit, selected, "memoryType");
+                    copyAuditField(hit, selected, "taxonomy");
+                    copyAuditField(hit, selected, "namespace");
+                    copyAuditField(hit, selected, "scope");
+                    copyAuditField(hit, selected, "source");
+                    copyAuditField(hit, selected, "score");
+                    selected.put("agent", defaultAgent(request.consumerAgent()));
+                    selected.put("runId", request.runId());
+                    selected.put("reason", hit.getOrDefault(
+                            "selectionReason", "ranked_after_scope_confidence_expiry_filters"));
+                    selected.put("occurredAt", hit.getOrDefault("occurredAt", occurredAt));
+                    lifecycleService.applyRuntimeEvent(request.runId(), "memory.selected",
+                            defaultAgent(request.consumerAgent()), "memory_search", selected);
+                }
+            }
+        }
         return Map.of("hits", hits, "hitCount", hits.size());
+    }
+
+    private static void copyAuditField(Map<String, Object> source,
+                                       Map<String, Object> target, String key) {
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    private static String defaultAgent(String consumerAgent) {
+        return hasText(consumerAgent)
+                ? consumerAgent : "MemoryConsumer";
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private static String scopedNamespace(MemorySearchRequest request) {
+        if (request.runId() != null && !request.runId().isBlank()) {
+            return "run";
+        }
+        if (request.conversationId() != null && !request.conversationId().isBlank()) {
+            return "conversation";
+        }
+        if (request.userId() != null && !request.userId().isBlank()) {
+            return "user";
+        }
+        return "global";
     }
 
     /**

@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Guardrail: Ops MCP status must never be inferred from config description text
- * (e.g. "rate limit" in Firecrawl description).
+ * (e.g. "rate limit" in a public provider description).
  */
 class OpsControllerContractTest {
 
@@ -38,10 +38,13 @@ class OpsControllerContractTest {
         Method mcp = OpsController.class.getMethod("mcp",
                 boolean.class, int.class, String.class, String.class, String.class);
         Method skills = OpsController.class.getMethod("skills", boolean.class, int.class);
+        Method rag = OpsController.class.getMethod("rag",
+                int.class, String.class, String.class, String.class);
         Method policyLab = OpsController.class.getMethod("policyLabSandbox", int.class);
         assertTrue(runs.getName().equals("runs"));
         assertTrue(mcp.getName().equals("mcp"));
         assertTrue(skills.getName().equals("skills"));
+        assertTrue(rag.getName().equals("rag"));
         assertTrue(policyLab.getName().equals("policyLabSandbox"));
     }
 

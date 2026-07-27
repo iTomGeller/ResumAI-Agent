@@ -14,7 +14,98 @@ BACKUP_DIR="${BACKUP_ROOT}/${STAMP}"
 
 log() { echo "[ecs-deploy $(date +%H:%M:%S)] $*"; }
 
+verify_fresh_archive_manifest() (
+  local manifest=".deploy-source.sha256"
+  local expected_files actual_files special_path entry path
+  expected_files="$(mktemp)"
+  actual_files="$(mktemp)"
+  trap 'rm -f -- "$expected_files" "$actual_files"' EXIT
+
+  # A git archive may contain symlinks, but the checksum manifest only covers
+  # regular-file contents. Reject links (and all other special file types)
+  # rather than allowing an unhashed path into a broad Docker build context.
+  special_path="$(find . -type l -print -quit)"
+  if [[ -n "$special_path" ]]; then
+    echo "source tree contains forbidden symbolic link: $special_path" >&2
+    return 1
+  fi
+  special_path="$(find . ! -type d ! -type f -print -quit)"
+  if [[ -n "$special_path" ]]; then
+    echo "source tree contains forbidden non-regular file: $special_path" >&2
+    return 1
+  fi
+
+  # Parse the sha256sum format without word splitting so ordinary spaces,
+  # tabs and backslashes in tracked filenames remain part of the path.
+  # Newline-containing git paths are deliberately rejected because the
+  # line-oriented manifest generator cannot represent them unambiguously.
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
+    if [[ ! "$entry" =~ ^[0-9a-fA-F]{64}\ \ .+$ ]]; then
+      echo "invalid committed-source manifest entry" >&2
+      return 1
+    fi
+    path="${entry:66}"
+    if [[ -z "$path" || "$path" == /* || "$path" == "." || "$path" == ".." \
+          || "$path" == ./* || "$path" == ../* || "$path" == */../* \
+          || "$path" == */.. ]]; then
+      echo "unsafe committed-source manifest path: $path" >&2
+      return 1
+    fi
+    case "$path" in
+      .env|.deploy-commit|.deploy-source.sha256)
+        echo "deployment control file must not appear in source manifest: $path" >&2
+        return 1
+        ;;
+    esac
+    printf '%s\0' "$path" >> "$expected_files"
+  done < "$manifest"
+
+  # Only these deployment control files may exist outside the committed
+  # archive. A second deploy from a previously-built directory therefore
+  # fails closed; callers must sync a new fresh archive first.
+  while IFS= read -r -d '' path; do
+    path="${path#./}"
+    case "$path" in
+      .env|.deploy-commit|.deploy-source.sha256)
+        continue
+        ;;
+    esac
+    printf '%s\0' "$path" >> "$actual_files"
+  done < <(find . -type f -print0)
+
+  LC_ALL=C sort -z -o "$expected_files" "$expected_files"
+  LC_ALL=C sort -z -o "$actual_files" "$actual_files"
+  if ! cmp -s -- "$expected_files" "$actual_files"; then
+    echo "source file set differs from committed manifest; sync a fresh archive" >&2
+    return 1
+  fi
+
+  # The set comparison above proves there are no unlisted regular files;
+  # this check then proves the content of every listed file.
+  sha256sum --check --strict "$manifest" >/dev/null
+)
+
 cd "$SRC_DIR"
+if [[ -z "${DEPLOY_SHA:-}" ]]; then
+  echo "DEPLOY_SHA is required; deploy through sync_src_and_safe_deploy.py" >&2
+  exit 1
+fi
+GIT_SHA_FULL="$DEPLOY_SHA"
+if [[ ! "$GIT_SHA_FULL" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  echo "invalid DEPLOY_SHA; refusing non-reproducible deploy" >&2
+  exit 1
+fi
+if [[ ! -f .deploy-commit || ! -s .deploy-source.sha256 ]]; then
+  echo "missing deploy commit/checksum manifest; refusing broad build context" >&2
+  exit 1
+fi
+SOURCE_SHA="$(tr -d '[:space:]' < .deploy-commit)"
+if [[ "$SOURCE_SHA" != "$GIT_SHA_FULL" ]]; then
+  echo "source marker $SOURCE_SHA does not match DEPLOY_SHA $GIT_SHA_FULL" >&2
+  exit 1
+fi
+verify_fresh_archive_manifest
+GIT_SHA="${GIT_SHA_FULL:0:12}"
 
 log "preflight"
 df -h /
@@ -24,8 +115,8 @@ docker version --format '{{.Server.Version}}'
 docker compose version
 docker ps -a --format 'table {{.Names}}\t{{.Status}}'
 docker volume ls
-git rev-parse --short HEAD
-git status -sb
+log "deploy commit: $GIT_SHA_FULL"
+git status -sb || true
 
 if [[ ! -f .env ]]; then
   if [[ -f "$DEPLOY_ENV_SRC" ]]; then
@@ -65,7 +156,6 @@ fi
 grep -q '^CACHE_ENABLED=' .env || echo 'CACHE_ENABLED=true' >> .env
 
 # Pin the sandbox worker image to this exact commit (never latest).
-GIT_SHA="$(git rev-parse --short HEAD)"
 if grep -q '^SANDBOX_WORKER_TAG=' .env; then
   sed -i "s/^SANDBOX_WORKER_TAG=.*/SANDBOX_WORKER_TAG=${GIT_SHA}/" .env
 else
@@ -76,7 +166,7 @@ log "sandbox worker image tag: resumai-sandbox-worker:${GIT_SHA}"
 mkdir -p "$BACKUP_DIR"
 cp -a .env "$BACKUP_DIR/env.backup"
 cp -a docker-compose.prod.yml "$BACKUP_DIR/"
-git rev-parse HEAD > "$BACKUP_DIR/git-commit.txt"
+printf '%s\n' "$GIT_SHA_FULL" > "$BACKUP_DIR/git-commit.txt"
 log "backup dir: $BACKUP_DIR"
 
 set -a
@@ -129,9 +219,27 @@ drain_api() {
   fi
 }
 
+DRAIN_ARMED=0
+restore_dispatch_on_exit() {
+  local rc=$?
+  trap - EXIT
+  if [[ "$DRAIN_ARMED" == "1" ]]; then
+    log "deploy exited before normal scheduler resume; attempting fail-safe resume"
+    drain_api POST /resume-dispatch >/tmp/resumai-drain-recovery.json 2>/dev/null || \
+      drain_api POST /drain '{"enabled":false}' >/tmp/resumai-drain-recovery.json 2>/dev/null || \
+      log "WARN: fail-safe scheduler resume was unavailable"
+  fi
+  exit "$rc"
+}
+trap restore_dispatch_on_exit EXIT
+
 if docker ps --format '{{.Names}}' | grep -q '^ai-resume-backend$'; then
   log "enable scheduler drain before rebuild/restart"
-  drain_api POST /drain '{"enabled":true}' >/tmp/resumai-drain.json || log "WARN: drain call failed"
+  if drain_api POST /drain '{"enabled":true}' >/tmp/resumai-drain.json; then
+    DRAIN_ARMED=1
+  else
+    log "WARN: drain call failed"
+  fi
   DRAIN_WAIT_SEC="${DRAIN_WAIT_SEC:-15}"
   for ((i=0; i<DRAIN_WAIT_SEC; i+=3)); do
     snap="$(drain_api GET /active 2>/dev/null || echo '')"
@@ -161,7 +269,7 @@ else
   log "backend not running yet — skip pre-build drain"
 fi
 
-log "Java compile + package"
+log "Java full test suite + package (ECS only)"
 cd "$SRC_DIR/backend"
 # System default mvn may resolve a JDK without --release 21 support; pin JDK 21.
 if [[ -d /usr/lib/jvm/java-21-openjdk-amd64 ]]; then
@@ -181,7 +289,7 @@ if [[ ! -f settings.xml ]]; then
 XML
 fi
 # clean is mandatory: stale target/classes would be repackaged into the jar
-mvn -B -s settings.xml -DskipTests clean package
+mvn -B -s settings.xml clean package
 JAR="$(ls -1 target/resumai-agent-backend-*.jar 2>/dev/null | grep -v original | head -1)"
 test -n "$JAR"
 cp -f "$JAR" target/resumai-agent-backend.jar
@@ -198,7 +306,7 @@ if [[ ! -f "$SRC_DIR/backend/.jre-cache/temurin-21-jre.tar.gz" ]]; then
 fi
 ls -lh "$SRC_DIR/backend/.jre-cache/"
 
-log "frontend build (on ECS only)"
+log "frontend lint + typecheck + build (ECS only)"
 cd "$SRC_DIR/frontend"
 npm config set registry https://registry.npmmirror.com
 if [[ -f package-lock.json ]]; then
@@ -208,6 +316,7 @@ if [[ -f package-lock.json ]]; then
 else
   npm install --no-audit --no-fund
 fi
+npm run lint
 npm run build
 test -d dist
 
@@ -264,13 +373,20 @@ for i in $(seq 1 30); do
   fi
   sleep 2
   if [[ "$i" -eq 30 ]]; then
-    log "WARN: workflow /ready not confirmed"
+    log "workflow /ready failed after $i attempts"
+    docker compose -f docker-compose.prod.yml logs --tail=100 ai-resume-workflow || true
+    exit 1
   fi
 done
 
 log "resume scheduler dispatch after deploy"
-drain_api POST /resume-dispatch || drain_api POST /drain '{"enabled":false}' >/tmp/resumai-drain-off.json || \
-  log "WARN: resume-dispatch call failed"
+if drain_api POST /resume-dispatch >/tmp/resumai-drain-off.json || \
+    drain_api POST /drain '{"enabled":false}' >/tmp/resumai-drain-off.json; then
+  DRAIN_ARMED=0
+else
+  log "scheduler resume failed"
+  exit 1
+fi
 
 AFTER_TASKS="$(docker exec resumai-mysql mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" \
   "$MYSQL_DATABASE" -e 'SELECT COUNT(*) FROM resume_task' 2>/dev/null | tail -1 || echo unknown)"

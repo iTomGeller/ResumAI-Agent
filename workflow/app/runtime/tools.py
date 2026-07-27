@@ -4,9 +4,11 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from app.runtime import cache, gateway
@@ -23,7 +25,7 @@ CACHEABLE_TOOLS = {"parse_resume", "check_timeline", "calculate_jd_coverage",
 
 # OpenTelemetry GenAI / MCP semantic conventions (development schema).
 OTEL_GENAI_SCHEMA = "https://opentelemetry.io/schemas/1.28.0"
-MCP_PROTOCOL_VERSION = "2024-11-05"
+MCP_PROTOCOL_VERSION = "2025-11-25"
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,68 @@ class ToolCallResult:
 
 class ToolValidationError(ValueError):
     pass
+
+
+_GITHUB_REPOSITORY_URL = re.compile(
+    r"https?://(?:www\.)?github\.com/"
+    r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)",
+    re.IGNORECASE,
+)
+_REPOSITORY_SLUG = re.compile(
+    r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_DEEPWIKI_REPOSITORY_KEYS = {
+    "repo", "reponame", "repo_name", "repository", "repositoryname",
+    "repository_name",
+}
+
+
+def _normalize_repository_slug(value: Any) -> str:
+    text = str(value or "").strip().strip("\"'")
+    match = _GITHUB_REPOSITORY_URL.search(text)
+    if match:
+        owner = match.group("owner")
+        repo = match.group("repo")
+    else:
+        candidate = text.strip("/")
+        if candidate.lower().endswith(".git"):
+            candidate = candidate[:-4]
+        if not _REPOSITORY_SLUG.fullmatch(candidate):
+            return ""
+        owner, repo = candidate.split("/", 1)
+    if repo.lower().endswith(".git"):
+        repo = repo[:-4]
+    repo = repo.rstrip(".")
+    if not owner or not repo:
+        return ""
+    return f"{owner}/{repo}".lower()
+
+
+def _declared_github_repositories(run_context: Dict[str, Any]) -> Dict[str, str]:
+    """Extract only repositories explicitly present in candidate/user text."""
+    texts = [
+        str(run_context.get("resumeText") or ""),
+        str(run_context.get("userMessage") or ""),
+    ]
+    for message in run_context.get("recentMessages") or []:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip().lower() not in {
+                "user", "human", "hr"}:
+            continue
+        texts.append(str(message.get("content") or ""))
+
+    declared: Dict[str, str] = {}
+    for text in texts:
+        for match in _GITHUB_REPOSITORY_URL.finditer(text):
+            owner = match.group("owner")
+            repo = match.group("repo")
+            if repo.lower().endswith(".git"):
+                repo = repo[:-4]
+            repo = repo.rstrip(".")
+            slug = _normalize_repository_slug(f"{owner}/{repo}")
+            if slug:
+                declared[slug] = f"https://github.com/{owner}/{repo}"
+    return declared
 
 
 def _validate(schema: Dict[str, Any], payload: Dict[str, Any], direction: str) -> None:
@@ -124,17 +188,6 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
         TEXT_ARGS, ANY_OBJECT, timeout_seconds=45.0, max_retries=0,
         network_policy="gateway", kind="gateway"))
 
-    # ---- public-web MCP tools (real MCP protocol, allowlisted hosts) ----
-    add(ToolDefinition(
-        "mcp_fetch_url", "通过 MCP fetch server 抓取候选人声明的公开主页"
-                         "（GitHub/Gitee/技术博客，白名单域名），核验开源贡献与博客内容",
-        {"type": "object", "properties": {
-            "url": {"type": "string"},
-            "maxLength": {"type": "integer"}}, "required": ["url"]},
-        ANY_OBJECT, timeout_seconds=40.0, max_retries=0,
-        network_policy="gateway", kind="mcp",
-        mcp_server="fetch", protocol_version=MCP_PROTOCOL_VERSION))
-
     # ---- builtin tools (deterministic in-process kernels) ----
     builtin_schemas: Dict[str, Dict[str, Any]] = {
         "parse_resume": {"type": "object", "properties": {
@@ -165,6 +218,37 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
             builtin_schemas.get(tool_name, ANY_OBJECT), SUCCESS_SCHEMA,
             timeout_seconds=30.0, max_retries=0, network_policy="none",
             kind="builtin", execution_backend="in_process"))
+
+    # ---- progressive skill loading tool ----
+    add(ToolDefinition(
+        "load_skill",
+        "加载技能完整指令。当你在可用技能摘要中看到某个技能适合当前任务时，"
+        "调用此工具获取完整的执行指令。",
+        {"type": "object", "properties": {
+            "skill_id": {"type": "string",
+                         "description": "技能 ID，如 assess-technical-evidence"}},
+         "required": ["skill_id"]},
+        {"type": "object", "properties": {
+            "instructions": {"type": "string"},
+            "loaded": {"type": "boolean"}}},
+        timeout_seconds=2.0, max_retries=0, network_policy="none",
+        kind="internal", execution_backend="in_process"))
+    add(ToolDefinition(
+        "read_skill_resource",
+        "读取已加载技能明确列出的一个 references/scripts/assets 资源。"
+        "仅在 SKILL.md 指向该资源且当前任务确实需要细节时调用。",
+        {"type": "object", "properties": {
+            "skill_id": {"type": "string"},
+            "path": {
+                "type": "string",
+                "description": "load_skill 返回的 resources 中的相对路径"},
+         }, "required": ["skill_id", "path"]},
+        {"type": "object", "properties": {
+            "content": {"type": "string"},
+            "loaded": {"type": "boolean"}}},
+        timeout_seconds=2.0, max_retries=0, network_policy="none",
+        kind="internal", execution_backend="in_process"))
+
     return definitions
 
 
@@ -183,8 +267,8 @@ class ToolExecutor:
         self.max_tool_calls_run = max_tool_calls_run
         self.tool_timeout_seconds = tool_timeout_seconds
         self.run_context = run_context
-        # Optional LLM handle for query rewriting (agentic retrieval); None
-        # keeps every retrieval single-query (zero degradation risk).
+        # Retained for API compatibility only. Retrieval never performs a
+        # hidden provider call: native tool arguments are executed verbatim.
         self.llm = llm
         self.definitions = build_tool_definitions()
         self.signature_counts: Dict[str, int] = {}
@@ -202,7 +286,9 @@ class ToolExecutor:
         meta: Dict[str, Any] = {
             "kind": defn.kind,
             "origin": defn.kind,
+            "source": defn.kind,
             "executionBackend": defn.execution_backend,
+            "toolName": defn.name,
         }
         if defn.mcp_server:
             meta["mcpServer"] = defn.mcp_server
@@ -226,6 +312,7 @@ class ToolExecutor:
                     "description": defn.description,
                     "inputSchema": defn.input_schema,
                     "kind": defn.kind,
+                    "modelName": self.model_name(defn.name),
                 }
                 if defn.mcp_server:
                     entry["mcpServer"] = defn.mcp_server
@@ -239,31 +326,80 @@ class ToolExecutor:
         names = list(tool_names or [])
         if agent_id == "ReportAgent":
             names = [n for n in names
-                     if not str(n).startswith(("exa.", "firecrawl.", "fetch.", "context7."))
-                     and n != "mcp_fetch_url"]
+                     if not (self.definitions.get(n)
+                             and self.definitions[n].kind == "mcp")]
             return self.catalog_for(names)
+        routed: set = set()
         if self.mcp_registry is not None:
-            for extra in self.mcp_registry.tools_for_agent(agent_id):
+            routed = set(self.mcp_registry.tools_for_agent(agent_id))
+            for extra in routed:
                 if extra not in names:
                     names.append(extra)
-            # Drop MCP tools that are not AVAILABLE / not routed for this agent.
-            routed = set(self.mcp_registry.tools_for_agent(agent_id))
-            filtered = []
-            for name in names:
-                defn = self.definitions.get(name)
-                if defn is None:
-                    continue
-                if defn.kind == "mcp" and name not in routed and name not in (tool_names or []):
-                    # Allow definition-listed MCP only when registry says AVAILABLE.
-                    info = self.mcp_registry.tools.get(name)
-                    health = self.mcp_registry.health.get(info.server) if info else None
-                    if name == "mcp_fetch_url":
-                        health = self.mcp_registry.health.get("fetch")
-                    if not health or health.status != "AVAILABLE":
-                        continue
-                filtered.append(name)
-            names = filtered
+        declared_repositories = _declared_github_repositories(self.run_context)
+        filtered = []
+        for name in names:
+            defn = self.definitions.get(name)
+            if defn is None:
+                continue
+            # A configured name or optimistic health flag is insufficient.
+            # MCP entries reach the model only after live tools/list discovery
+            # and only when the agent route explicitly includes them.
+            if defn.kind == "mcp" and name not in routed:
+                continue
+            # DeepWiki is meaningful only for an explicitly declared public
+            # repository. Hiding it here avoids teaching the model a tool that
+            # runtime policy would necessarily reject for this candidate.
+            if (defn.mcp_server == "deepwiki"
+                    and not declared_repositories):
+                continue
+            filtered.append(name)
+        names = filtered
         return self.catalog_for(names)
+
+    @staticmethod
+    def model_name(catalog_name: str) -> str:
+        """Map an MCP catalog name to a provider-safe function identifier."""
+        safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(catalog_name or "tool"))
+        if not safe:
+            safe = "tool"
+        if len(safe) > 55:
+            suffix = hashlib.sha256(
+                catalog_name.encode("utf-8")).hexdigest()[:8]
+            safe = f"{safe[:46]}_{suffix}"
+        return safe
+
+    @staticmethod
+    def openai_tools(catalog: List[Dict[str, Any]]) -> tuple[
+            List[Dict[str, Any]], Dict[str, str]]:
+        """Convert the live catalog to model-native function definitions."""
+        tools: List[Dict[str, Any]] = []
+        aliases: Dict[str, str] = {}
+        for entry in catalog:
+            catalog_name = str(entry.get("name") or "").strip()
+            if not catalog_name:
+                continue
+            model_name = str(entry.get("modelName")
+                             or ToolExecutor.model_name(catalog_name))
+            # Deterministic collision handling without altering the MCP name
+            # stored in trace/provenance.
+            if model_name in aliases and aliases[model_name] != catalog_name:
+                suffix = hashlib.sha256(
+                    catalog_name.encode("utf-8")).hexdigest()[:8]
+                model_name = f"{model_name[:46]}_{suffix}"
+            aliases[model_name] = catalog_name
+            schema = entry.get("inputSchema")
+            if not isinstance(schema, dict):
+                schema = {"type": "object"}
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": model_name,
+                    "description": str(entry.get("description") or "")[:1024],
+                    "parameters": schema,
+                },
+            })
+            entry["modelName"] = model_name
+        return tools, aliases
 
     @staticmethod
     def signature(tool: str, args: Dict[str, Any]) -> str:
@@ -271,11 +407,16 @@ class ToolExecutor:
         return f"{tool}:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:16]}"
 
     async def execute(self, agent_id: str, tool: str, args: Dict[str, Any],
-                      enable_rewrite: bool = False) -> ToolCallResult:
+                      enable_rewrite: bool = False,
+                      tool_call_id: Optional[str] = None) -> ToolCallResult:
+        proposed_id = str(tool_call_id or f"tc-{uuid.uuid4().hex[:16]}")
         defn = self.definitions.get(tool)
         if defn is None:
-            return self._reject(agent_id, tool, args, "TOOL_NOT_ALLOWED",
-                                f"工具不在白名单中: {tool}")
+            call = self._reject(agent_id, tool, args, "TOOL_NOT_ALLOWED",
+                                f"工具不在白名单中: {tool}",
+                                tool_call_id=proposed_id)
+            await self._emit_rejected(agent_id, tool, args, call)
+            return call
         if self.budget.tool_calls >= self.max_tool_calls_run:
             raise BudgetExceeded("maxToolCallsPerRun", f"limit={self.max_tool_calls_run}")
 
@@ -289,7 +430,22 @@ class ToolExecutor:
         try:
             _validate(defn.input_schema, args, "input")
         except ToolValidationError as exc:
-            return self._reject(agent_id, tool, args, "INPUT_SCHEMA", str(exc))
+            call = self._reject(agent_id, tool, args, "INPUT_SCHEMA", str(exc),
+                                tool_call_id=proposed_id)
+            await self._emit_rejected(agent_id, tool, args, call, defn=defn)
+            return call
+        if defn.kind == "mcp" and defn.mcp_server == "deepwiki":
+            try:
+                # Validate and canonicalize before trace/signature generation
+                # so the recorded arguments equal the repository actually sent.
+                self._deepwiki_context_policy(args)
+            except ToolValidationError as exc:
+                call = self._reject(
+                    agent_id, tool, args, "SUBJECT_BINDING", str(exc),
+                    tool_call_id=proposed_id)
+                await self._emit_rejected(
+                    agent_id, tool, args, call, defn=defn)
+                return call
 
         # Wire enable_rewrite AFTER schema validation (internal flag, not in tool schema).
         if enable_rewrite and tool in ("resume_semantic_search", "knowledge_search"):
@@ -299,10 +455,11 @@ class ToolExecutor:
                                           if k != "_rewrite"})
         self.signature_counts[signature] = self.signature_counts.get(signature, 0) + 1
 
-        tool_call_id = f"tc-{uuid.uuid4().hex[:16]}"
+        tool_call_id = proposed_id
         self.budget.tool_calls += 1
         public_args = {k: v for k, v in args.items() if k != "_rewrite"}
         meta = self._tool_event_meta(defn)
+        started_at = _utc_now()
         started_payload = {
             "toolCallId": tool_call_id,
             "arguments": _preview_args(public_args),
@@ -310,6 +467,9 @@ class ToolExecutor:
             "sideEffectLevel": defn.side_effect_level,
             "retryCount": 0,
             "rewriteEnabled": bool(args.get("_rewrite")),
+            "lifecycleStage": "EXECUTION_STARTED",
+            "occurredAt": started_at,
+            "startedAt": started_at,
             **meta,
         }
         await self.emitter.emit("tool.started", agent_id=agent_id, tool_name=tool,
@@ -334,6 +494,10 @@ class ToolExecutor:
                                             "toolCallId": tool_call_id,
                                             "durationMs": duration_ms,
                                             "cacheHit": True,
+                                            "lifecycleStage": "RESULT",
+                                            "occurredAt": _utc_now(),
+                                            "startedAt": started_at,
+                                            "endedAt": _utc_now(),
                                             "arguments": _preview_args(public_args),
                                             "resultPreview": _preview(cached),
                                             **meta,
@@ -356,26 +520,43 @@ class ToolExecutor:
                     last_error = f"OUTPUT_SCHEMA: {exc}"
                     break
                 duration_ms = int((time.monotonic() - started) * 1000)
-                call = ToolCallResult(tool_call_id, tool, "SUCCEEDED", result,
+                outcome = "SUCCEEDED"
+                if isinstance(result, dict) and result.get("success") is False:
+                    outcome = "FAILED"
+                call = ToolCallResult(tool_call_id, tool, outcome, result,
                                       duration_ms=duration_ms, retries=retries)
                 self.call_log.append(call)
-                if cache_key is not None:
+                if cache_key is not None and outcome == "SUCCEEDED":
                     await cache.set_json(cache_key, result, cache.TTL_PARSE_RESUME)
-                await self.emitter.emit("tool.completed", agent_id=agent_id, tool_name=tool,
+                ended_at = _utc_now()
+                event_type = "tool.completed" if outcome == "SUCCEEDED" else "tool.failed"
+                await self.emitter.emit(event_type, agent_id=agent_id, tool_name=tool,
                                         payload={
                                             "toolCallId": tool_call_id,
+                                            "outcome": outcome,
+                                            "lifecycleStage": (
+                                                "RESULT" if outcome == "SUCCEEDED"
+                                                else "ERROR"),
+                                            "occurredAt": ended_at,
+                                            "startedAt": started_at,
+                                            "endedAt": ended_at,
                                             "durationMs": duration_ms,
                                             "retryCount": retries,
                                             "arguments": _preview_args(args),
                                             "resultPreview": _preview(result),
                                             **meta,
                                         })
-                _end_tool_span(otel_span, "SUCCEEDED", duration_ms)
+                _end_tool_span(otel_span, outcome, duration_ms)
                 return call
             except asyncio.CancelledError:
                 await self.emitter.emit("tool.failed", agent_id=agent_id, tool_name=tool,
                                         payload={"toolCallId": tool_call_id,
-                                                 "error": "cancelled", **meta})
+                                                 "error": "cancelled",
+                                                 "lifecycleStage": "ERROR",
+                                                 "occurredAt": _utc_now(),
+                                                 "startedAt": started_at,
+                                                 "endedAt": _utc_now(),
+                                                 **meta})
                 _end_tool_span(otel_span, "CANCELLED",
                                int((time.monotonic() - started) * 1000))
                 raise
@@ -398,10 +579,48 @@ class ToolExecutor:
         self.call_log.append(call)
         await self.emitter.emit("tool.failed", agent_id=agent_id, tool_name=tool, payload={
             "toolCallId": tool_call_id, "error": (last_error or "")[:300],
+            "lifecycleStage": "ERROR",
+            "occurredAt": _utc_now(),
+            "startedAt": started_at,
+            "endedAt": _utc_now(),
             "arguments": _preview_args(args),
             "durationMs": duration_ms, "retryCount": retries, **meta})
         _end_tool_span(otel_span, "FAILED", duration_ms, last_error)
         return call
+
+    def _deepwiki_context_policy(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        declared = _declared_github_repositories(self.run_context)
+        requested = ""
+        requested_key = ""
+        for key, value in args.items():
+            if str(key).strip().lower() in _DEEPWIKI_REPOSITORY_KEYS:
+                requested_key = str(key)
+                requested = _normalize_repository_slug(value)
+                break
+        if not requested:
+            raise ToolValidationError(
+                "DeepWiki requires a repository argument in owner/repo form")
+        source_url = declared.get(requested)
+        if not source_url:
+            allowed = ", ".join(sorted(declared)) or "none"
+            raise ToolValidationError(
+                "DeepWiki repository was not explicitly declared by the "
+                f"candidate/user: {requested}; declared=[{allowed}]")
+        canonical_repository = source_url.split(
+            "https://github.com/", 1)[-1].strip("/")
+        # DeepWiki's repoName contract is owner/repo and preserves casing.
+        # Bind the outbound argument to the candidate-declared canonical path,
+        # rather than trusting the model-authored spelling or URL form.
+        args[requested_key] = canonical_repository
+        return {
+            "evidenceUse": "context_only",
+            "candidateFactEligible": False,
+            "subjectBinding": "candidate_declared_repository",
+            "repository": canonical_repository,
+            "sourceUrl": source_url,
+            "sourceUrls": [source_url],
+            "contentNature": "ai_generated_wiki_context",
+        }
 
     async def _dispatch(self, defn: ToolDefinition, args: Dict[str, Any],
                         agent_id: str = "") -> Any:
@@ -413,13 +632,16 @@ class ToolExecutor:
                 raise ToolValidationError(
                     "ReportAgent 不得直接调用公网 MCP，只消费已校准 evidence")
             if self.mcp_registry is not None:
-                return await self.mcp_registry.call(defn.name, args)
-            from app.runtime import mcp_client
-
-            if defn.name == "mcp_fetch_url":
-                return await mcp_client.fetch_url(
-                    str(args.get("url") or ""),
-                    max_length=int(args.get("maxLength") or 6000))
+                deepwiki_policy = (
+                    self._deepwiki_context_policy(args)
+                    if defn.mcp_server == "deepwiki" else None)
+                result = await self.mcp_registry.call(defn.name, args)
+                if deepwiki_policy is not None and isinstance(result, dict):
+                    # Remote wiki prose is model-generated context, never a
+                    # candidate fact. Overwrite any untrusted remote claim
+                    # about provenance with the locally enforced binding.
+                    result["evidencePolicy"] = deepwiki_policy
+                return result
             raise ToolValidationError(f"no MCP dispatcher for tool {defn.name}")
         if defn.name in ("resume_semantic_search", "knowledge_search"):
             return await self._retrieve_with_rewrite(defn, args, rewrite)
@@ -435,48 +657,28 @@ class ToolExecutor:
         raise ToolValidationError(f"no dispatcher for tool {defn.name}")
 
     # ------------------------------------------------------------------
-    # Agentic retrieval: query rewrite -> multi-query recall -> RRF fusion.
+    # Multi-stage retrieval: visible query -> recall -> fusion -> rerank.
     # ------------------------------------------------------------------
 
     async def _rewrite_queries(self, query: str) -> List[str]:
-        """LLM query expansion (<=2 extra queries), cached by content hash.
-        No LLM handle or any failure => original query only."""
-        if self.llm is None or not query.strip():
-            return [query]
+        """Budget-safe rewrite stage.
 
-        async def compute() -> List[str]:
-            prompt = ("把下面的检索请求改写成最多 2 个语义等价的检索 query"
-                      "（中文同义扩展、术语归一，保持简短），输出 json："
-                      "{\"queries\": [\"...\", \"...\"]}\n"
-                      f"原始请求: {query[:300]}")
-            raw = await self.llm.chat(
-                [{"role": "system",
-                  "content": "你是检索查询改写器，只输出 json。"},
-                 {"role": "user", "content": prompt}],
-                agent_id="RetrievalRewriter", purpose="query_rewrite",
-                max_tokens=150)
-            from app.runtime.llm import extract_json_object
-
-            parsed = extract_json_object(raw)
-            rewritten = [str(q).strip() for q in parsed.get("queries", [])
-                         if str(q).strip() and str(q).strip() != query]
-            return rewritten[:2]
-
-        try:
-            key = cache.content_key("rewrite", query[:300])
-            extra, _hit = await cache.get_or_compute(
-                key, cache.TTL_QUERY_REWRITE, compute)
-            return [query] + [q for q in (extra or []) if isinstance(q, str)]
-        except Exception as exc:  # noqa: BLE001 - rewrite is best-effort
-            logger.debug("query rewrite skipped: %s", exc)
-            return [query]
+        The provider-native agent already selected the tool and authored the
+        query. Returning it verbatim avoids an invisible second LLM call while
+        keeping queryRewriteMs and later retrieval/fusion/rerank stages
+        observable.
+        """
+        return [str(query or "").strip()]
 
     async def _retrieve_with_rewrite(self, defn: ToolDefinition,
                                      args: Dict[str, Any],
                                      rewrite: bool) -> Any:
+        import time as _time
         query = str(args.get("query") or "")
         top_k = int(args.get("topK") or 5)
+        _t0 = _time.perf_counter()
         queries = await self._rewrite_queries(query) if rewrite else [query]
+        _rewrite_ms = (_time.perf_counter() - _t0) * 1000
 
         async def one(q: str, *, use_rerank: bool = False) -> Any:
             if defn.name == "resume_semantic_search":
@@ -485,31 +687,62 @@ class ToolExecutor:
                     resume_text=str(args.get("resumeText") or ""),
                     jd_requirements=str(self.run_context.get("jobDescription") or "")[:2000],
                     strategy="hybrid")
-            # EXP-4: default no LLM rerank; only agentic second round may enable.
             return await gateway.java_knowledge_search(
                 query=q, top_k=top_k, rerank=use_rerank)
 
         if len(queries) == 1:
+            _t1 = _time.perf_counter()
             result = await one(queries[0], use_rerank=False)
+            _embed_ms = (_time.perf_counter() - _t1) * 1000
             result = self._normalize_result(result)
             if isinstance(result, dict):
                 result.setdefault("queriesUsed", queries)
-                # Agentic second round: rewrite path + low confidence → rerank.
+                result["queryRewriteMode"] = (
+                    "deterministic_passthrough" if rewrite
+                    else "not_requested")
+                result["_latency"] = {
+                    "rewrite_ms": round(_rewrite_ms, 1),
+                    "retrieval_ms": round(_embed_ms, 1),
+                    "rerank_ms": 0,
+                    "total_ms": round(_rewrite_ms + _embed_ms, 1),
+                }
                 if (rewrite and defn.name == "knowledge_search"
                         and self._retrieval_low_confidence(result)):
+                    _t2 = _time.perf_counter()
                     reranked = await one(queries[0], use_rerank=True)
+                    _rerank_ms = (_time.perf_counter() - _t2) * 1000
                     reranked = self._normalize_result(reranked)
                     if isinstance(reranked, dict):
+                        before_top = self._top_retrieval_score(result)
+                        after_top = self._top_retrieval_score(reranked)
                         reranked.setdefault("queriesUsed", queries)
+                        reranked["queryRewriteMode"] = (
+                            "deterministic_passthrough")
                         reranked["agenticRerank"] = True
+                        reranked["rerankProvider"] = "retrieval_backend"
+                        if before_top is not None and after_top is not None:
+                            reranked["rerankBeforeTopScore"] = before_top
+                            reranked["rerankAfterTopScore"] = after_top
+                            reranked["rerankLift"] = round(
+                                after_top - before_top, 6)
+                        reranked["_latency"] = {
+                            "rewrite_ms": round(_rewrite_ms, 1),
+                            "retrieval_ms": round(_embed_ms, 1),
+                            "rerank_ms": round(_rerank_ms, 1),
+                            "total_ms": round(_rewrite_ms + _embed_ms + _rerank_ms, 1),
+                        }
                         return reranked
             return result
 
+        _t1 = _time.perf_counter()
         raws = await asyncio.gather(*(one(q, use_rerank=False) for q in queries),
                                     return_exceptions=True)
+        _embed_ms = (_time.perf_counter() - _t1) * 1000
         # RRF fusion across query variants, dedup by item identity.
+        _t_fuse = _time.perf_counter()
         fused: Dict[str, Dict[str, Any]] = {}
         scores: Dict[str, float] = {}
+        raw_candidate_count = 0
         key_fields = ("chunkId", "id", "docId", "jdId", "title", "content")
         for raw in raws:
             if isinstance(raw, Exception):
@@ -523,6 +756,7 @@ class ToolExecutor:
                         break
             elif isinstance(parsed, list):
                 items = parsed
+            raw_candidate_count += len(items)
             for rank, item in enumerate(items):
                 if not isinstance(item, dict):
                     continue
@@ -535,23 +769,77 @@ class ToolExecutor:
                 scores[identity] = scores.get(identity, 0.0) + 1.0 / (60 + rank + 1)
         ranked = sorted(fused.items(), key=lambda kv: scores[kv[0]],
                         reverse=True)[:top_k]
+        _fusion_ms = (_time.perf_counter() - _t_fuse) * 1000
         fused_result = {
             "success": True,
-            "chunks": [item for _, item in ranked],
+            "chunks": [
+                {**item, "rrfScore": round(scores[identity], 8)}
+                for identity, item in ranked
+            ],
             "queriesUsed": queries,
+            "queryRewriteMode": "deterministic_passthrough",
+            "strategy": "multi_query_retrieval",
             "fusion": "rrf_multi_query",
+            "candidateCount": raw_candidate_count,
+            "deduplicatedCount": max(0, raw_candidate_count - len(fused)),
+            "_latency": {
+                "rewrite_ms": round(_rewrite_ms, 1),
+                "retrieval_ms": round(_embed_ms, 1),
+                "fusion_ms": round(_fusion_ms, 1),
+                "rerank_ms": 0,
+                "total_ms": round(_rewrite_ms + _embed_ms + _fusion_ms, 1),
+            },
         }
-        # After multi-query fusion, still-low confidence → one LLM rerank pass.
+        # After multi-query fusion, still-low confidence asks the retrieval
+        # backend for its configured rerank stage; this runtime does not issue
+        # another provider chat completion.
         if (rewrite and defn.name == "knowledge_search"
                 and self._retrieval_low_confidence(fused_result)):
+            _t2 = _time.perf_counter()
             reranked = await one(query, use_rerank=True)
+            _rerank_ms = (_time.perf_counter() - _t2) * 1000
             reranked = self._normalize_result(reranked)
             if isinstance(reranked, dict):
+                before_top = self._top_retrieval_score(fused_result)
+                after_top = self._top_retrieval_score(reranked)
                 reranked.setdefault("queriesUsed", queries)
+                reranked["queryRewriteMode"] = "deterministic_passthrough"
                 reranked["agenticRerank"] = True
-                reranked["fusion"] = "rrf_multi_query+llm_rerank"
+                reranked["rerankProvider"] = "retrieval_backend"
+                reranked["fusion"] = "rrf_multi_query+backend_rerank"
+                if before_top is not None and after_top is not None:
+                    reranked["rerankBeforeTopScore"] = before_top
+                    reranked["rerankAfterTopScore"] = after_top
+                    reranked["rerankLift"] = round(after_top - before_top, 6)
+                reranked["_latency"] = {
+                    "rewrite_ms": round(_rewrite_ms, 1),
+                    "retrieval_ms": round(_embed_ms, 1),
+                    "fusion_ms": round(_fusion_ms, 1),
+                    "rerank_ms": round(_rerank_ms, 1),
+                    "total_ms": round(_rewrite_ms + _embed_ms + _fusion_ms + _rerank_ms, 1),
+                }
                 return reranked
         return fused_result
+
+    @staticmethod
+    def _top_retrieval_score(result: Dict[str, Any]) -> Optional[float]:
+        """Return the provider/fusion score of the first scored top result."""
+        items: List[Any] = []
+        for field_name in ("chunks", "hits", "results", "items"):
+            if isinstance(result.get(field_name), list):
+                items = result[field_name]
+                break
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for key in (
+                    "rerankScore", "vectorScore", "bm25Score",
+                    "retrievalScore", "similarity", "rrfScore",
+                    "matchScore", "score"):
+                value = item.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    return float(value)
+        return None
 
     @staticmethod
     def _retrieval_low_confidence(result: Dict[str, Any]) -> bool:
@@ -593,12 +881,35 @@ class ToolExecutor:
         return {"success": True, "value": raw}
 
     def _reject(self, agent_id: str, tool: str, args: Dict[str, Any],
-                code: str, message: str) -> ToolCallResult:
-        call = ToolCallResult(f"tc-{uuid.uuid4().hex[:16]}", tool, "REJECTED",
+                code: str, message: str, *,
+                tool_call_id: Optional[str] = None) -> ToolCallResult:
+        call = ToolCallResult(tool_call_id or f"tc-{uuid.uuid4().hex[:16]}",
+                              tool, "REJECTED",
                               None, error=f"{code}: {message}")
         self.call_log.append(call)
         logger.info("tool rejected agent=%s tool=%s: %s", agent_id, tool, message)
         return call
+
+    async def _emit_rejected(self, agent_id: str, tool: str,
+                             args: Dict[str, Any], call: ToolCallResult,
+                             *, defn: Optional[ToolDefinition] = None) -> None:
+        now = _utc_now()
+        meta = self._tool_event_meta(defn) if defn is not None else {
+            "kind": "unknown", "origin": "unknown", "source": "unknown",
+            "toolName": tool,
+        }
+        await self.emitter.emit("tool.failed", agent_id=agent_id,
+                                tool_name=tool, payload={
+                                    "toolCallId": call.tool_call_id,
+                                    "error": call.error,
+                                    "outcome": "REJECTED",
+                                    "lifecycleStage": "ERROR",
+                                    "arguments": _preview_args(args),
+                                    "occurredAt": now,
+                                    "startedAt": now,
+                                    "endedAt": now,
+                                    **meta,
+                                })
 
     def metrics(self) -> Dict[str, Any]:
         failed = sum(1 for c in self.call_log if c.status == "FAILED")
@@ -651,6 +962,11 @@ def _preview_args(args: Dict[str, Any]) -> Dict[str, Any]:
         else:
             out[key] = value
     return out
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z")
 
 
 def _start_tool_span(defn: ToolDefinition, tool: str, tool_call_id: str) -> Any:

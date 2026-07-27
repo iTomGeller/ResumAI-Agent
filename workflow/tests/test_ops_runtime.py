@@ -9,9 +9,9 @@ from app.runtime.skills import SkillManager
 def test_mcp_status_snapshot_uses_probe_not_description():
     registry = McpRegistry(config={
         "mcpServers": {
-            "firecrawl": {
+            "exa": {
                 "enabled": True,
-                "description": "Official Firecrawl hosted MCP; keyless search/scrape are rate limited",
+                "description": "Official Exa hosted MCP; free access is rate limited",
                 "transport": "streamable-http",
                 "url": "https://example.invalid/mcp",
             }
@@ -20,18 +20,18 @@ def test_mcp_status_snapshot_uses_probe_not_description():
         "agentToolRouting": {},
     })
     # Simulate a real probe result — AVAILABLE despite description mentioning rate limit.
-    registry.health["firecrawl"] = McpServerHealth(
-        name="firecrawl", status="AVAILABLE", transport="streamable-http",
-        latency_ms=12, tools=["firecrawl.firecrawl_search"], url="https://example.invalid/mcp")
+    registry.health["exa"] = McpServerHealth(
+        name="exa", status="AVAILABLE", transport="streamable-http",
+        latency_ms=12, tools=["exa.web_search_exa"], url="https://example.invalid/mcp")
     registry._probed = True
     registry._last_probe_iso = "2026-07-22T00:00:00Z"
 
     snap = registry.status_snapshot()
     assert snap["source"] == "python_mcp_registry"
-    assert snap["servers"]["firecrawl"]["status"] == "AVAILABLE"
-    assert "rate limit" in (snap["servers"]["firecrawl"].get("description") or "").lower()
+    assert snap["servers"]["exa"]["status"] == "AVAILABLE"
+    assert "rate limit" in (snap["servers"]["exa"].get("description") or "").lower()
     # Description is metadata only; status stays the probed value.
-    assert snap["servers"]["firecrawl"]["status"] != "RATE_LIMITED"
+    assert snap["servers"]["exa"]["status"] != "RATE_LIMITED"
 
 
 def test_skill_runtime_manifest_separates_active_and_admin():

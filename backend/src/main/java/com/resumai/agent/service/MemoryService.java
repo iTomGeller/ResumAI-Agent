@@ -12,6 +12,7 @@ import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -29,32 +30,25 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * Layered agent memory store (conversation / episodic / preference / failure)
- * with strict scope/source/consumer isolation so control-plane failures and
- * benchmark seeds never pollute candidate evaluation.
+ * Layered agent memory store using the standard agent-memory taxonomy:
+ * semantic facts, episodic execution experience, approved procedures and
+ * run-scoped working memory. Scope/source/consumer isolation prevents one
+ * candidate, benchmark seed or control-plane failure from contaminating
+ * another candidate's evaluation.
  */
 @Service
 public class MemoryService {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryService.class);
 
-    /**
-     * Four memory types, each anchored to a unique consumer:
-     * CONVERSATION (context injection), EPISODIC (score calibration),
-     * PREFERENCE (user/HR stated preferences — source distinguishes
-     * hr_feedback vs user_stated), FAILURE (planning hints + evolution loop).
-     * WORKING (duplicate of the in-run blackboard) and DOMAIN (belongs to the
-     * knowledge base) were removed in V8; legacy writes are remapped below.
-     */
+    /** Canonical taxonomy exposed to the runtime and trace UI. */
     public static final Set<String> TYPES = Set.of(
-            "CONVERSATION", "EPISODIC", "PREFERENCE", "FAILURE");
+            "SEMANTIC", "EPISODIC", "PROCEDURAL", "WORKING");
     public static final Set<String> SCOPES = Set.of("RUN", "CONVERSATION", "USER", "GLOBAL");
 
-    /** Default retrieval types for specialists / Report / Risk. */
+    /** Default evaluation-safe pool; per-agent retrieval plans narrow this further. */
     public static final List<String> SPECIALIST_TYPES = List.of(
-            "CONVERSATION", "EPISODIC", "PREFERENCE");
-    /** Scopes visible to evaluation specialists by default. */
-    public static final Set<String> EVALUATION_SCOPES = Set.of("USER", "CONVERSATION");
+            "SEMANTIC", "EPISODIC", "PROCEDURAL");
 
     /** Control-plane error codes that must never enter Report/Risk context. */
     public static final Set<String> CONTROL_PLANE_ERROR_CODES = Set.of(
@@ -64,20 +58,49 @@ public class MemoryService {
             "COORDINATORAGENT", "COORDINATOR", "POLICYEVOLUTION", "POLICY_EVOLUTION",
             "POLICY-LAB", "POLICYLAB");
 
-    private static final Map<String, String> LEGACY_TYPE_REMAP = Map.of(
-            "USER_PREFERENCE", "PREFERENCE",
-            "HR_FEEDBACK", "PREFERENCE",
-            "WORKING", "CONVERSATION",
-            "DOMAIN", "CONVERSATION");
+    /**
+     * Read/write compatibility for rows created before the canonical taxonomy.
+     * FAILURE remains an episodic outcome, never a fifth memory taxonomy.
+     */
+    private static final Map<String, String> LEGACY_TYPE_REMAP = Map.ofEntries(
+            Map.entry("CONVERSATION", "WORKING"),
+            Map.entry("SHORT_TERM", "WORKING"),
+            Map.entry("PREFERENCE", "SEMANTIC"),
+            Map.entry("USER_PREFERENCE", "SEMANTIC"),
+            Map.entry("HR_FEEDBACK", "SEMANTIC"),
+            Map.entry("DOMAIN", "SEMANTIC"),
+            Map.entry("FAILURE", "EPISODIC"));
+
+    private static final Map<String, Set<String>> STORAGE_TYPES = Map.of(
+            "SEMANTIC", Set.of("SEMANTIC", "PREFERENCE", "USER_PREFERENCE", "HR_FEEDBACK", "DOMAIN"),
+            "EPISODIC", Set.of("EPISODIC", "FAILURE"),
+            "PROCEDURAL", Set.of("PROCEDURAL"),
+            "WORKING", Set.of("WORKING", "CONVERSATION", "SHORT_TERM"));
+
+    private static final Set<String> TRUSTED_PROCEDURAL_SOURCES = Set.of(
+            "approved_policy", "approved_skill", "policy_approval",
+            "skill_registry", "system_approved");
 
     private static final Pattern SECRET_PATTERN = Pattern.compile(
             "(sk-[A-Za-z0-9]{16,}|Bearer\\s+[A-Za-z0-9._-]{16,}|password\\s*[:=]\\s*\\S+"
                     + "|api[_-]?key\\s*[:=]\\s*\\S+|AKID[A-Za-z0-9]{12,}|LTAI[A-Za-z0-9]{12,})",
             Pattern.CASE_INSENSITIVE);
 
+    private static final Map<String, Duration> TTL_BY_TYPE = Map.of(
+            "WORKING", Duration.ofDays(2),
+            "SEMANTIC", Duration.ofDays(90),
+            "EPISODIC", Duration.ofDays(90),
+            "PROCEDURAL", Duration.ofDays(365));
+
     /** Matches exp5_benchmark / exp_benchmark / exp12_benchmark style sources. */
     private static final Pattern BENCHMARK_SOURCE_PATTERN = Pattern.compile(
             "^exp\\d*_benchmark$", Pattern.CASE_INSENSITIVE);
+    private static final String PENDING_PROMOTION_KEY = "_pendingPromotion";
+    private static final String RUNTIME_WRITE_KEY = "_runtimeWrite";
+    private static final String RUNTIME_WRITE_ID_KEY = "writeId";
+    private static final String RUNTIME_WRITE_KIND_KEY = "kind";
+    private static final String RUNTIME_WORKING_KIND = "WORKING";
+    private static final String RUNTIME_PROMOTION_KIND = "PENDING_PROMOTION";
 
     private final MemoryEntryMapper memoryMapper;
     private final ObjectMapper objectMapper;
@@ -111,19 +134,29 @@ public class MemoryService {
     public MemoryEntryRow write(WriteRequest request) {
         String rawType = request.type() != null
                 ? request.type().trim().toUpperCase(Locale.ROOT) : "";
-        String type = normalize(LEGACY_TYPE_REMAP.getOrDefault(rawType, rawType),
-                TYPES, "type");
+        String type = normalize(canonicalTaxonomy(rawType), TYPES, "type");
         String scope = normalize(request.ownerScope(), SCOPES, "ownerScope");
-        // PREFERENCE must never be written as GLOBAL — that would leak HR/user
-        // preferences across all tenants into every evaluation.
-        if ("PREFERENCE".equals(type) && "GLOBAL".equals(scope)) {
-            log.warn("rejecting PREFERENCE GLOBAL write; coercing to USER");
-            scope = "USER";
-            if (!StringUtils.hasText(request.userId())) {
-                throw new IllegalArgumentException(
-                        "PREFERENCE requires USER/CONVERSATION scope with userId");
+        if ("WORKING".equals(type)) {
+            // Scratch/checkpoint context belongs to exactly one run. New writes
+            // never create long-lived "conversation memory" by accident.
+            if (!StringUtils.hasText(request.runId())) {
+                throw new IllegalArgumentException("WORKING memory requires runId");
             }
+            scope = "RUN";
         }
+        if ("SEMANTIC".equals(type) && "GLOBAL".equals(scope)) {
+            // Candidate/job/user facts are tenant facts, not global truths.
+            if (!StringUtils.hasText(request.userId())) {
+                throw new IllegalArgumentException("SEMANTIC GLOBAL write requires a user namespace");
+            }
+            log.warn("coercing SEMANTIC GLOBAL write to USER scope");
+            scope = "USER";
+        }
+        if ("PROCEDURAL".equals(type) && !isApprovedProcedure(request)) {
+            throw new IllegalArgumentException(
+                    "PROCEDURAL memory requires an approved policy/skill source");
+        }
+        validateScopeOwner(request, scope);
         String content = redactSecrets(request.content());
         if (!StringUtils.hasText(content)) {
             throw new IllegalArgumentException("memory content required");
@@ -134,6 +167,7 @@ public class MemoryService {
             scope = "USER";
         }
         String hash = sha256(type + "|" + scope + "|" + scopeKey(request, scope)
+                + "|" + runtimeDedupDiscriminator(request, source)
                 + "|" + normalizeForHash(content));
 
         // Dedup: identical content in the same scope bumps confidence instead
@@ -141,8 +175,10 @@ public class MemoryService {
         MemoryEntryRow existing = memoryMapper.selectOne(new QueryWrapper<MemoryEntryRow>()
                 .eq("content_hash", hash).eq("status", "ACTIVE").last("limit 1"));
         if (existing != null) {
+            double existingConfidence = existing.getConfidence() != null
+                    ? existing.getConfidence().doubleValue() : 0.5;
             double bumped = Math.min(1.0,
-                    existing.getConfidence().doubleValue() * 0.7
+                    existingConfidence * 0.7
                             + (request.confidence() != null ? request.confidence() : 0.5) * 0.3 + 0.05);
             existing.setConfidence(decimal(bumped));
             existing.setVersion(existing.getVersion() + 1);
@@ -155,10 +191,12 @@ public class MemoryService {
         // content marks the older entry CONFLICTED (no silent overwrite).
         String factKey = factKey(request);
         if (factKey != null) {
-            List<MemoryEntryRow> sameFact = memoryMapper.selectList(new QueryWrapper<MemoryEntryRow>()
+            QueryWrapper<MemoryEntryRow> sameFactQuery = new QueryWrapper<MemoryEntryRow>()
                     .eq("type", type).eq("owner_scope", scope).eq("status", "ACTIVE")
-                    .eq("source_id", factKey)
-                    .last("limit 10"));
+                    .eq("source_id", factKey);
+            addExactScope(sameFactQuery, request, scope);
+            List<MemoryEntryRow> sameFact = memoryMapper.selectList(
+                    sameFactQuery.last("limit 10"));
             for (MemoryEntryRow oldEntry : sameFact) {
                 if (!normalizeForHash(oldEntry.getContent()).equals(normalizeForHash(content))) {
                     oldEntry.setStatus("CONFLICTED");
@@ -189,14 +227,133 @@ public class MemoryService {
         if (request.ttlDays() != null && request.ttlDays() > 0) {
             row.setExpiresAt(now.plusDays(request.ttlDays()));
         } else if ("RUN".equals(scope)) {
-            // RUN-scoped short-term memory always expires quickly.
             row.setExpiresAt(now.plusDays(2));
+        } else {
+            Duration defaultTtl = TTL_BY_TYPE.getOrDefault(type, Duration.ofDays(30));
+            row.setExpiresAt(now.plus(defaultTtl));
         }
         row.setCreateTime(now);
         row.setUpdateTime(now);
         memoryMapper.insert(row);
         vectorService.indexAsync(row.getMemoryId(), content);
         return row;
+    }
+
+    /**
+     * Runtime writes are staged as RUN-scoped WORKING memory. Durable
+     * SEMANTIC/EPISODIC/PROCEDURAL rows are created only after Java accepts a
+     * successful terminal callback. This makes cancellation rollback complete
+     * without a schema migration or cross-table transaction.
+     */
+    public MemoryEntryRow stageRuntimeWrite(WriteRequest request) {
+        String targetType = normalize(
+                canonicalTaxonomy(request.type()), TYPES, "type");
+        String targetScope = normalize(request.ownerScope(), SCOPES, "ownerScope");
+        if (!StringUtils.hasText(request.runId())) {
+            throw new IllegalArgumentException(
+                    "runtime memory staging requires runId");
+        }
+        Map<String, Object> structured = new LinkedHashMap<>();
+        if (request.structuredContent() != null) {
+            structured.putAll(request.structuredContent());
+        }
+        Map<String, Object> runtimeWrite = new LinkedHashMap<>();
+        runtimeWrite.put(RUNTIME_WRITE_ID_KEY, "rw-" + UUID.randomUUID());
+        runtimeWrite.put(RUNTIME_WRITE_KIND_KEY,
+                "WORKING".equals(targetType)
+                        ? RUNTIME_WORKING_KIND : RUNTIME_PROMOTION_KIND);
+        structured.put(RUNTIME_WRITE_KEY, runtimeWrite);
+
+        if ("WORKING".equals(targetType)) {
+            /*
+             * Runtime WORKING writes deliberately carry a per-call writeId.
+             * The writeId participates in the hash, so this request cannot
+             * deduplicate onto a pre-existing checkpoint/scratch row. The
+             * controller can therefore compensate the pre/post-cancel race by
+             * the returned memoryId without archiving anybody else's row.
+             */
+            return write(new WriteRequest(
+                    "WORKING", "RUN", request.userId(), request.conversationId(),
+                    request.runId(), request.content(), structured,
+                    request.source(), request.sourceId(), request.confidence(),
+                    request.sensitivityLevel(), request.ttlDays()));
+        }
+
+        Map<String, Object> promotion = new LinkedHashMap<>();
+        promotion.put("type", targetType);
+        promotion.put("ownerScope", targetScope);
+        promotion.put("source", StringUtils.hasText(request.source())
+                ? request.source() : "model_generated");
+        if (StringUtils.hasText(request.sourceId())) {
+            promotion.put("sourceId", request.sourceId());
+        }
+        if (request.ttlDays() != null) {
+            promotion.put("ttlDays", request.ttlDays());
+        }
+        structured.put(PENDING_PROMOTION_KEY, promotion);
+        return write(new WriteRequest(
+                "WORKING", "RUN", request.userId(), request.conversationId(),
+                request.runId(), request.content(), structured,
+                request.source(), request.sourceId(), request.confidence(),
+                request.sensitivityLevel(), 2));
+    }
+
+    /**
+     * Promote staged durable memories after an accepted success, then archive
+     * every remaining RUN scratch row. Failed promotions are fail-closed and
+     * remain non-retrievable after archival.
+     */
+    public List<MemoryEntryRow> promoteRunMemories(String runId) {
+        if (!StringUtils.hasText(runId)) {
+            return List.of();
+        }
+        List<MemoryEntryRow> staged = memoryMapper.selectList(
+                new QueryWrapper<MemoryEntryRow>()
+                        .eq("run_id", runId)
+                        .eq("owner_scope", "RUN")
+                        .eq("type", "WORKING")
+                        .eq("status", "ACTIVE"));
+        List<MemoryEntryRow> promoted = new ArrayList<>();
+        for (MemoryEntryRow row : staged) {
+            Object decoded = readJson(row.getStructuredContent());
+            if (!(decoded instanceof Map<?, ?> rawStructured)
+                    || !(rawStructured.get(PENDING_PROMOTION_KEY)
+                    instanceof Map<?, ?> pending)) {
+                continue;
+            }
+            Map<String, Object> structured = new LinkedHashMap<>();
+            rawStructured.forEach((key, value) -> {
+                String name = String.valueOf(key);
+                if (!PENDING_PROMOTION_KEY.equals(name)
+                        && !RUNTIME_WRITE_KEY.equals(name)) {
+                    structured.put(String.valueOf(key), value);
+                }
+            });
+            String targetType = String.valueOf(pending.get("type"));
+            String targetScope = String.valueOf(pending.get("ownerScope"));
+            String sourceId = pending.get("sourceId") != null
+                    ? String.valueOf(pending.get("sourceId")) : row.getSourceId();
+            Integer ttlDays = pending.get("ttlDays") instanceof Number n
+                    ? n.intValue() : null;
+            try {
+                MemoryEntryRow durable = write(new WriteRequest(
+                        targetType, targetScope, row.getUserId(),
+                        row.getConversationId(), row.getRunId(),
+                        row.getContent(), structured, row.getSource(), sourceId,
+                        row.getConfidence() != null
+                                ? row.getConfidence().doubleValue() : 0.5,
+                        row.getSensitivityLevel(), ttlDays));
+                promoted.add(durable);
+                row.setStatus("ARCHIVED");
+                row.setUpdateTime(LocalDateTime.now());
+                memoryMapper.updateById(row);
+            } catch (Exception e) {
+                log.warn("memory promotion rejected run={} memory={}: {}",
+                        runId, row.getMemoryId(), e.getMessage());
+            }
+        }
+        archiveRunWorkingMemory(runId);
+        return promoted;
     }
 
     public record SearchRequest(String query, List<String> types, String userId,
@@ -232,12 +389,16 @@ public class MemoryService {
     public List<Map<String, Object>> search(SearchRequest request) {
         boolean allowFailure = allowsFailure(request.consumerAgent());
         boolean includeBenchmark = Boolean.TRUE.equals(request.includeBenchmarkSources());
-        List<String> effectiveTypes = resolveTypes(request.types(), allowFailure);
-        boolean evaluationConsumer = !allowFailure;
+        boolean failureOnly = requestsLegacyFailure(request.types());
+        RetrievalPlan retrievalPlan = retrievalPlan(
+                request.types(), request.consumerAgent(), request.query());
+        List<String> effectiveTypes = retrievalPlan.allowedTypes();
 
-        if (evaluationConsumer
-                && !StringUtils.hasText(request.userId())
-                && !StringUtils.hasText(request.conversationId())) {
+        boolean hasOwnedNamespace = StringUtils.hasText(request.userId())
+                || StringUtils.hasText(request.conversationId())
+                || StringUtils.hasText(request.runId());
+        boolean mayReadGlobal = effectiveTypes.contains("PROCEDURAL") || allowFailure;
+        if (!hasOwnedNamespace && !mayReadGlobal) {
             return List.of();
         }
 
@@ -245,7 +406,7 @@ public class MemoryService {
                 .eq("status", "ACTIVE")
                 .and(w -> {
                     boolean started = false;
-                    if (!evaluationConsumer) {
+                    if (mayReadGlobal) {
                         w.eq("owner_scope", "GLOBAL");
                         started = true;
                     }
@@ -267,14 +428,19 @@ public class MemoryService {
                             started = true;
                         }
                     }
-                    // RUN scope is short-term working memory; specialists stay on
-                    // USER/CONVERSATION only. Coordinator may still see RUN.
-                    if (!evaluationConsumer && StringUtils.hasText(request.runId())) {
-                        w.or(r -> r.eq("owner_scope", "RUN").eq("run_id", request.runId()));
+                    if (StringUtils.hasText(request.runId())) {
+                        if (started) {
+                            w.or(r -> r.eq("owner_scope", "RUN")
+                                    .eq("run_id", request.runId()));
+                        } else {
+                            w.eq("owner_scope", "RUN").eq("run_id", request.runId());
+                            started = true;
+                        }
                     }
                 });
-        if (!effectiveTypes.isEmpty()) {
-            query.in("type", effectiveTypes);
+        Set<String> storedTypes = storageTypesFor(effectiveTypes);
+        if (!storedTypes.isEmpty()) {
+            query.in("type", storedTypes);
         }
         query.orderByDesc("update_time").last("limit 400");
         List<MemoryEntryRow> candidates = memoryMapper.selectList(query);
@@ -289,7 +455,10 @@ public class MemoryService {
         List<Map.Entry<MemoryEntryRow, Double>> scored = new ArrayList<>();
         LocalDateTime now = LocalDateTime.now();
         for (MemoryEntryRow row : candidates) {
-            if (row.getConfidence().doubleValue() < minConfidence) {
+            String taxonomy = canonicalTaxonomy(row.getType());
+            double confidence = row.getConfidence() != null
+                    ? row.getConfidence().doubleValue() : 0.0;
+            if (confidence < minConfidence) {
                 continue;
             }
             if (!includeSensitive && "SENSITIVE".equals(row.getSensitivityLevel())) {
@@ -301,44 +470,63 @@ public class MemoryService {
             if (!includeBenchmark && isBenchmarkSource(row.getSource())) {
                 continue;
             }
-            if (evaluationConsumer && !EVALUATION_SCOPES.contains(row.getOwnerScope())) {
+            if (!isVisibleInNamespace(row, taxonomy, request, allowFailure)) {
                 continue;
             }
-            if ("FAILURE".equals(row.getType()) && !allowFailure) {
+            boolean failureEpisode = isFailureEpisode(row);
+            if (failureOnly && !failureEpisode) {
                 continue;
             }
-            if (isControlPlaneFailure(row) && !allowFailure) {
+            if (failureEpisode && !allowFailure) {
                 continue;
             }
-            // Report/Risk (and any evaluation consumer) never see control-plane
-            // restart/start failures even if somehow typed differently.
             if (isControlPlaneFailure(row) && isReportOrRisk(request.consumerAgent())) {
+                continue;
+            }
+            if ("PROCEDURAL".equals(taxonomy) && !isApprovedProcedure(row)) {
                 continue;
             }
             double lexical = overlap(queryTerms, terms(row.getContent()));
             double ageDays = Math.max(0,
                     Duration.between(row.getUpdateTime(), now).toHours() / 24.0);
-            double recency = Math.exp(-ageDays / 30.0);
+            double recency = Math.exp(-ageDays / recencyHalfLifeDays(taxonomy));
             double semantic = vectorScores.getOrDefault(row.getMemoryId(), 0.0);
             double relevance = switch (request.channel() == null ? "fused" : request.channel()) {
                 case "lexical" -> lexical;
                 case "semantic" -> semantic;
                 default -> Math.max(lexical, semantic);
             };
+            // A zero-overlap row is not a "hit". This prevents the old
+            // always-100%-hit dashboard caused by the score floor alone.
+            if (!queryTerms.isEmpty() && relevance < 0.05) {
+                continue;
+            }
+            double typeAffinity = typeAffinity(taxonomy, retrievalPlan.preferredTypes());
             double score = (0.25 + 0.75 * relevance)
-                    * row.getConfidence().doubleValue() * (0.3 + 0.7 * recency);
+                    * confidence * (0.3 + 0.7 * recency) * typeAffinity;
             scored.add(Map.entry(row, score));
         }
         scored.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
         int topK = request.topK() != null ? Math.min(Math.max(request.topK(), 1), 20) : 5;
         List<Map<String, Object>> out = new ArrayList<>();
+        String occurredAt = Instant.now().toString();
         for (var entry : scored.subList(0, Math.min(topK, scored.size()))) {
             MemoryEntryRow row = entry.getKey();
+            String taxonomy = canonicalTaxonomy(row.getType());
+            double lexical = overlap(queryTerms, terms(row.getContent()));
+            double semantic = vectorScores.getOrDefault(row.getMemoryId(), 0.0);
+            double ageDays = Math.max(0,
+                    Duration.between(row.getUpdateTime(), now).toHours() / 24.0);
+            double recency = Math.exp(-ageDays / recencyHalfLifeDays(taxonomy));
             Map<String, Object> view = new LinkedHashMap<>();
             view.put("memoryId", row.getMemoryId());
-            view.put("type", row.getType());
+            view.put("type", taxonomy);
+            view.put("memoryType", taxonomy);
+            view.put("taxonomy", taxonomy);
+            view.put("storedType", row.getType());
             view.put("ownerScope", row.getOwnerScope());
             view.put("scope", row.getOwnerScope());
+            view.put("namespace", namespaceOf(row));
             view.put("content", row.getContent());
             view.put("structuredContent", readJson(row.getStructuredContent()));
             view.put("source", row.getSource());
@@ -346,10 +534,13 @@ public class MemoryService {
             view.put("confidence", row.getConfidence());
             view.put("score", Math.round(entry.getValue() * 1000.0) / 1000.0);
             view.put("relevance", Map.of(
-                    "lexical", Math.round(overlap(queryTerms, terms(row.getContent())) * 1000.0) / 1000.0,
-                    "semantic", Math.round(vectorScores.getOrDefault(row.getMemoryId(), 0.0) * 1000.0) / 1000.0,
+                    "lexical", Math.round(lexical * 1000.0) / 1000.0,
+                    "semantic", Math.round(semantic * 1000.0) / 1000.0,
+                    "recency", Math.round(recency * 1000.0) / 1000.0,
                     "fused", Math.round(entry.getValue() * 1000.0) / 1000.0));
             view.put("updatedAt", String.valueOf(row.getUpdateTime()));
+            view.put("occurredAt", occurredAt);
+            view.put("selectionReason", retrievalPlan.reason());
             if (StringUtils.hasText(request.consumerAgent())) {
                 view.put("consumerAgent", request.consumerAgent());
             }
@@ -377,6 +568,80 @@ public class MemoryService {
     }
 
     /**
+     * Compensate the post-insert cancellation race for one runtime write.
+     * The predicates are deliberately redundant: even if promotion wins the
+     * race, a durable row or an archived staging row cannot be touched.
+     */
+    public boolean archiveRuntimeWrite(String runId, String memoryId) {
+        if (!StringUtils.hasText(runId) || !StringUtils.hasText(memoryId)) {
+            return false;
+        }
+        UpdateWrapper<MemoryEntryRow> update =
+                runtimeWriteArchive(runId, memoryId);
+        return memoryMapper.update(null, update) > 0;
+    }
+
+    /**
+     * Backward-compatible name retained for callers compiled against the
+     * initial durable-only staging implementation.
+     */
+    public boolean archivePendingRuntimeMemory(String runId, String memoryId) {
+        return archiveRuntimeWrite(runId, memoryId);
+    }
+
+    /**
+     * Roll back only pending durable-memory staging rows of a non-successful
+     * run. Plain WORKING rows may contain resumable scratch/checkpoint context
+     * and promoted durable rows have a different scope/type, so neither is
+     * eligible for this compensation.
+     */
+    public int archiveRunProducedMemory(String runId) {
+        if (!StringUtils.hasText(runId)) {
+            return 0;
+        }
+        UpdateWrapper<MemoryEntryRow> update =
+                pendingPromotionArchive(runId, null);
+        return memoryMapper.update(null, update);
+    }
+
+    static UpdateWrapper<MemoryEntryRow> pendingPromotionArchive(
+            String runId, String memoryId) {
+        UpdateWrapper<MemoryEntryRow> update = new UpdateWrapper<>();
+        update.eq("run_id", runId);
+        if (StringUtils.hasText(memoryId)) {
+            update.eq("memory_id", memoryId);
+        }
+        update.eq("owner_scope", "RUN")
+                .eq("type", "WORKING")
+                .eq("status", "ACTIVE")
+                .apply("JSON_CONTAINS_PATH(structured_content, 'one', '$._pendingPromotion') = 1")
+                .set("status", "ARCHIVED")
+                .set("update_time", LocalDateTime.now());
+        return update;
+    }
+
+    /**
+     * Exact pre/post-check compensation for one HTTP runtime write. memory_id
+     * identifies the returned row; the runtime marker prevents an ordinary
+     * checkpoint/scratch row from being eligible even if a caller supplies a
+     * wrong identifier.
+     */
+    static UpdateWrapper<MemoryEntryRow> runtimeWriteArchive(
+            String runId, String memoryId) {
+        UpdateWrapper<MemoryEntryRow> update = new UpdateWrapper<>();
+        update.eq("run_id", runId)
+                .eq("memory_id", memoryId)
+                .eq("owner_scope", "RUN")
+                .eq("type", "WORKING")
+                .eq("status", "ACTIVE")
+                .apply("JSON_CONTAINS_PATH(structured_content, 'one', "
+                        + "'$._runtimeWrite.writeId') = 1")
+                .set("status", "ARCHIVED")
+                .set("update_time", LocalDateTime.now());
+        return update;
+    }
+
+    /**
      * Archive experiment/benchmark seeded memories so production retrieval
      * cannot surface them even if the SQL REGEXP filter is bypassed.
      */
@@ -393,8 +658,8 @@ public class MemoryService {
      * Terminal-run memory policy:
      * <ul>
      *   <li>FAILED / TIMED_OUT — archive RUN working memory only; never write
-     *       EPISODIC for control-plane or business failures (FAILURE rows stay
-     *       isolated via {@link #writeFailureMemory}).</li>
+     *       EPISODIC for control-plane or business failures (failed outcomes
+     *       stay isolated via source/category metadata).</li>
      *   <li>Success / partial — write EPISODIC only when shared_state holds
      *       business artifacts (resumeFacts / findings / report / coverage).</li>
      * </ul>
@@ -402,12 +667,8 @@ public class MemoryService {
     @SuppressWarnings("unchecked")
     public void writeRunEpisode(AgentRun run, String terminalStatus) {
         String status = terminalStatus == null ? "" : terminalStatus.trim().toUpperCase(Locale.ROOT);
-        if ("FAILED".equals(status) || "TIMED_OUT".equals(status)) {
-            archiveRunWorkingMemory(run.getRunId());
-            return;
-        }
-        if (!hasBusinessArtifacts(run.getSharedState())) {
-            archiveRunWorkingMemory(run.getRunId());
+        if (!shouldWriteRunEpisode(status, run.getSharedState())) {
+            archiveRunProducedMemory(run.getRunId());
             return;
         }
 
@@ -463,6 +724,15 @@ public class MemoryService {
                 run.getConversationId(), run.getRunId(), content, structured,
                 "evaluation_result", "episodic:" + run.getRunId(), 0.85, "NORMAL", 90));
         archiveRunWorkingMemory(run.getRunId());
+    }
+
+    boolean shouldWriteRunEpisode(String terminalStatus, String sharedStateJson) {
+        String status = terminalStatus == null
+                ? "" : terminalStatus.trim().toUpperCase(Locale.ROOT);
+        if (Set.of("FAILED", "TIMED_OUT", "CANCELLED").contains(status)) {
+            return false;
+        }
+        return hasBusinessArtifacts(sharedStateJson);
     }
 
     @SuppressWarnings("unchecked")
@@ -534,18 +804,19 @@ public class MemoryService {
         if (controlPlane) {
             structured.put("category", "CONTROL_PLANE");
         }
+        structured.put("outcome", "FAILURE");
         String content = "失败记录: 类别=" + run.getRunType() + " | 错误=" + errorCode
                 + " | 详情=" + trim(errorMessage, 300);
-        // FAILURE stays GLOBAL for Coordinator / policy evolution only;
-        // retrieval isolation prevents injection into Report/Risk.
-        write(new WriteRequest("FAILURE", "GLOBAL", run.getUserId(), run.getConversationId(),
+        // A failed run is still an EPISODIC event. GLOBAL scope is reserved
+        // for Coordinator/policy learning and is excluded from evaluation.
+        write(new WriteRequest("EPISODIC", "GLOBAL", run.getUserId(), run.getConversationId(),
                 run.getRunId(), content, structured,
-                controlPlane ? "control_plane" : "system_rule",
+                controlPlane ? "control_plane" : "failed_run",
                 "failure:" + run.getRunId(), 0.9, "NORMAL", 60));
     }
 
     public void writeHrFeedbackMemory(AgentRun run, String comment, Map<String, Object> structured) {
-        write(new WriteRequest("PREFERENCE", "CONVERSATION", run.getUserId(),
+        write(new WriteRequest("SEMANTIC", "CONVERSATION", run.getUserId(),
                 run.getConversationId(), run.getRunId(),
                 "HR 反馈: " + trim(comment, 500), structured, "hr_feedback",
                 "feedback:" + run.getRunId() + ":" + System.currentTimeMillis(), 0.95, "NORMAL", null));
@@ -637,30 +908,204 @@ public class MemoryService {
         return false;
     }
 
-    private List<String> resolveTypes(List<String> requested, boolean allowFailure) {
-        List<String> base;
-        if (requested == null || requested.isEmpty()) {
-            base = new ArrayList<>(SPECIALIST_TYPES);
-            if (allowFailure) {
-                base.add("FAILURE");
+    public record RetrievalPlan(List<String> allowedTypes,
+                                List<String> preferredTypes,
+                                String reason) {
+    }
+
+    /**
+     * Agent- and query-aware taxonomy plan. The allow-list protects isolation;
+     * the preference order changes ranking without hiding useful evidence.
+     */
+    static RetrievalPlan retrievalPlan(List<String> requested, String consumerAgent, String query) {
+        List<String> allowed = new ArrayList<>();
+        if (requested != null && !requested.isEmpty()) {
+            for (String type : requested) {
+                String canonical = canonicalTaxonomy(type);
+                if (TYPES.contains(canonical) && !allowed.contains(canonical)) {
+                    allowed.add(canonical);
+                }
             }
         } else {
-            base = new ArrayList<>();
-            for (String t : requested) {
-                if (!StringUtils.hasText(t)) {
-                    continue;
-                }
-                String normalized = t.trim().toUpperCase(Locale.ROOT);
-                String remapped = LEGACY_TYPE_REMAP.getOrDefault(normalized, normalized);
-                if (TYPES.contains(remapped)) {
-                    base.add(remapped);
-                }
+            String agent = normalizeAgent(consumerAgent);
+            if (agent.contains("RESUMEPARSER") || agent.contains("CONVERSATION")) {
+                allowed.addAll(List.of("SEMANTIC", "WORKING"));
+            } else if (agent.contains("JDANALYSIS") || agent.contains("JDAGENT")) {
+                allowed.addAll(List.of("SEMANTIC", "PROCEDURAL", "WORKING"));
+            } else if (agent.contains("POLICY")) {
+                allowed.addAll(List.of("PROCEDURAL", "EPISODIC"));
+            } else if (agent.contains("COORDINATOR")) {
+                allowed.addAll(List.of("WORKING", "SEMANTIC", "PROCEDURAL", "EPISODIC"));
+            } else if (agent.contains("REPORT") || agent.contains("RISK")) {
+                allowed.addAll(List.of("EPISODIC", "SEMANTIC", "PROCEDURAL"));
+            } else {
+                allowed.addAll(SPECIALIST_TYPES);
             }
         }
-        if (!allowFailure) {
-            base.removeIf("FAILURE"::equals);
+        if (allowed.isEmpty()) {
+            allowed.addAll(SPECIALIST_TYPES);
         }
-        return base;
+
+        List<String> inferred = inferQueryTypes(query);
+        List<String> preferred = new ArrayList<>();
+        for (String type : inferred) {
+            if (allowed.contains(type) && !preferred.contains(type)) {
+                preferred.add(type);
+            }
+        }
+        for (String type : allowed) {
+            if (!preferred.contains(type)) {
+                preferred.add(type);
+            }
+        }
+        String reason = inferred.isEmpty()
+                ? "agent_policy:" + normalizeAgent(consumerAgent)
+                : "query_intent:" + String.join(",", inferred);
+        return new RetrievalPlan(List.copyOf(allowed), List.copyOf(preferred), reason);
+    }
+
+    private static List<String> inferQueryTypes(String query) {
+        if (!StringUtils.hasText(query)) {
+            return List.of();
+        }
+        String q = query.toLowerCase(Locale.ROOT);
+        List<String> out = new ArrayList<>();
+        if (containsAny(q, "候选人", "简历", "岗位", "jd", "技能", "经历", "偏好", "事实")) {
+            out.add("SEMANTIC");
+        }
+        if (containsAny(q, "历史", "上次", "之前", "成功", "失败", "评估结果", "经验", "对比")) {
+            out.add("EPISODIC");
+        }
+        if (containsAny(q, "规则", "流程", "策略", "评分标准", "skill", "技能说明", "怎么评")) {
+            out.add("PROCEDURAL");
+        }
+        if (containsAny(q, "本次", "当前", "刚才", "草稿", "checkpoint", "上下文", "scratch")) {
+            out.add("WORKING");
+        }
+        return out;
+    }
+
+    private static boolean containsAny(String text, String... needles) {
+        for (String needle : needles) {
+            if (text.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String normalizeAgent(String consumerAgent) {
+        return StringUtils.hasText(consumerAgent)
+                ? consumerAgent.trim().toUpperCase(Locale.ROOT)
+                    .replace("-", "").replace("_", "")
+                : "SPECIALIST";
+    }
+
+    public static String canonicalTaxonomy(String rawType) {
+        if (!StringUtils.hasText(rawType)) {
+            return "";
+        }
+        String normalized = rawType.trim().toUpperCase(Locale.ROOT);
+        return LEGACY_TYPE_REMAP.getOrDefault(normalized, normalized);
+    }
+
+    private static boolean requestsLegacyFailure(List<String> requested) {
+        return requested != null && requested.stream()
+                .filter(StringUtils::hasText)
+                .anyMatch(t -> "FAILURE".equalsIgnoreCase(t.trim()));
+    }
+
+    private static Set<String> storageTypesFor(List<String> canonicalTypes) {
+        Set<String> out = new HashSet<>();
+        for (String type : canonicalTypes) {
+            out.addAll(STORAGE_TYPES.getOrDefault(type, Set.of(type)));
+        }
+        return out;
+    }
+
+    private static double typeAffinity(String taxonomy, List<String> preferred) {
+        int index = preferred.indexOf(taxonomy);
+        if (index == 0) {
+            return 1.12;
+        }
+        if (index == 1) {
+            return 1.04;
+        }
+        return 0.92;
+    }
+
+    private static double recencyHalfLifeDays(String taxonomy) {
+        return switch (taxonomy) {
+            case "WORKING" -> 2.0;
+            case "SEMANTIC" -> 60.0;
+            case "PROCEDURAL" -> 365.0;
+            default -> 90.0;
+        };
+    }
+
+    private boolean isVisibleInNamespace(MemoryEntryRow row, String taxonomy,
+                                         SearchRequest request, boolean allowFailure) {
+        String scope = row.getOwnerScope();
+        if ("RUN".equals(scope)) {
+            return "WORKING".equals(taxonomy)
+                    && StringUtils.hasText(request.runId())
+                    && request.runId().equals(row.getRunId());
+        }
+        if ("CONVERSATION".equals(scope)) {
+            // Never widen candidate facts by userId. Conversation equality is
+            // the candidate isolation boundary.
+            return StringUtils.hasText(request.conversationId())
+                    && request.conversationId().equals(row.getConversationId());
+        }
+        if ("USER".equals(scope)) {
+            return StringUtils.hasText(request.userId())
+                    && request.userId().equals(row.getUserId());
+        }
+        if ("GLOBAL".equals(scope)) {
+            return "PROCEDURAL".equals(taxonomy)
+                    || (allowFailure && isFailureEpisode(row));
+        }
+        return false;
+    }
+
+    private boolean isFailureEpisode(MemoryEntryRow row) {
+        if (row == null) {
+            return false;
+        }
+        if ("FAILURE".equalsIgnoreCase(row.getType())
+                || "control_plane".equalsIgnoreCase(row.getSource())
+                || "failed_run".equalsIgnoreCase(row.getSource())
+                || (row.getSourceId() != null && row.getSourceId().startsWith("failure:"))) {
+            return true;
+        }
+        Object structured = readJson(row.getStructuredContent());
+        return structured instanceof Map<?, ?> map
+                && ("FAILURE".equalsIgnoreCase(String.valueOf(map.get("outcome")))
+                    || "CONTROL_PLANE".equalsIgnoreCase(String.valueOf(map.get("category"))));
+    }
+
+    private static boolean isApprovedProcedure(WriteRequest request) {
+        if (TRUSTED_PROCEDURAL_SOURCES.contains(
+                String.valueOf(request.source()).trim().toLowerCase(Locale.ROOT))) {
+            return true;
+        }
+        Map<String, Object> structured = request.structuredContent();
+        if (structured == null) {
+            return false;
+        }
+        return Boolean.TRUE.equals(structured.get("approved"))
+                || "APPROVED".equalsIgnoreCase(String.valueOf(structured.get("approvalStatus")));
+    }
+
+    private boolean isApprovedProcedure(MemoryEntryRow row) {
+        if (TRUSTED_PROCEDURAL_SOURCES.contains(
+                String.valueOf(row.getSource()).trim().toLowerCase(Locale.ROOT))) {
+            return true;
+        }
+        Object structured = readJson(row.getStructuredContent());
+        return structured instanceof Map<?, ?> map
+                && (Boolean.TRUE.equals(map.get("approved"))
+                    || "APPROVED".equalsIgnoreCase(String.valueOf(map.get("approvalStatus"))));
     }
 
     private String factKey(WriteRequest request) {
@@ -672,11 +1117,101 @@ public class MemoryService {
         return null;
     }
 
+    /**
+     * Runtime staging lives physically in WORKING/RUN rows, but it must not
+     * share the ordinary WORKING dedup namespace. Durable stages additionally
+     * keep distinct promotion destinations separate; otherwise equal content
+     * intended for (for example) SEMANTIC/CONVERSATION and EPISODIC/USER could
+     * collapse into one staging row and promote with the wrong metadata.
+     */
+    private static String runtimeDedupDiscriminator(WriteRequest request,
+                                                    String normalizedSource) {
+        Map<String, Object> structured = request.structuredContent();
+        if (structured == null
+                || !(structured.get(RUNTIME_WRITE_KEY) instanceof Map<?, ?> runtimeWrite)) {
+            return "ordinary";
+        }
+        if (structured.get(PENDING_PROMOTION_KEY) instanceof Map<?, ?> promotion) {
+            Object targetSourceId = promotion.get("sourceId");
+            if (targetSourceId == null) {
+                targetSourceId = structured.get("factKey");
+            }
+            Object targetSource = promotion.get("source");
+            if (targetSource == null) {
+                targetSource = normalizedSource;
+            }
+            return String.join("|",
+                    "runtime-promotion",
+                    dedupPart(promotion.get("type")),
+                    dedupPart(promotion.get("ownerScope")),
+                    dedupPart(targetSource),
+                    dedupPart(targetSourceId));
+        }
+        /*
+         * A runtime WORKING call must always get its own row. Including the
+         * per-call writeId prevents the post-insert cancellation compensator
+         * from ever receiving the memoryId of an older checkpoint/scratch row.
+         */
+        return "runtime-working|"
+                + dedupPart(runtimeWrite.get(RUNTIME_WRITE_ID_KEY));
+    }
+
+    private static String dedupPart(Object value) {
+        String text = value != null
+                ? String.valueOf(value).trim().toLowerCase(Locale.ROOT) : "";
+        return text.length() + ":" + text;
+    }
+
+    private static void addExactScope(QueryWrapper<MemoryEntryRow> query,
+                                      WriteRequest request, String scope) {
+        switch (scope) {
+            case "RUN" -> query.eq("run_id", request.runId());
+            case "CONVERSATION" -> query.eq("conversation_id", request.conversationId());
+            case "USER" -> query.eq("user_id", request.userId());
+            default -> {
+                // GLOBAL has no owner key.
+            }
+        }
+    }
+
+    private static void validateScopeOwner(WriteRequest request, String scope) {
+        if ("RUN".equals(scope) && !StringUtils.hasText(request.runId())) {
+            throw new IllegalArgumentException("RUN scope requires runId");
+        }
+        if ("CONVERSATION".equals(scope)
+                && !StringUtils.hasText(request.conversationId())) {
+            throw new IllegalArgumentException("CONVERSATION scope requires conversationId");
+        }
+        if ("USER".equals(scope) && !StringUtils.hasText(request.userId())) {
+            throw new IllegalArgumentException("USER scope requires userId");
+        }
+    }
+
     private String scopeKey(WriteRequest request, String scope) {
-        return String.join(":",
-                String.valueOf(request.userId()),
-                String.valueOf(request.conversationId()),
-                "RUN".equals(scope) ? String.valueOf(request.runId()) : "-");
+        return switch (scope) {
+            case "RUN" -> String.valueOf(request.runId());
+            case "CONVERSATION" -> String.valueOf(request.conversationId());
+            case "USER" -> String.valueOf(request.userId());
+            default -> "global";
+        };
+    }
+
+    /** Opaque namespace label safe for traces (does not expose owner IDs). */
+    public static String namespaceOf(MemoryEntryRow row) {
+        if (row == null || !StringUtils.hasText(row.getOwnerScope())) {
+            return "unknown";
+        }
+        String key = switch (row.getOwnerScope()) {
+            case "RUN" -> row.getRunId();
+            case "CONVERSATION" -> row.getConversationId();
+            case "USER" -> row.getUserId();
+            default -> "global";
+        };
+        if ("GLOBAL".equals(row.getOwnerScope())) {
+            return "global";
+        }
+        return row.getOwnerScope().toLowerCase(Locale.ROOT) + "/"
+                + sha256(String.valueOf(key)).substring(0, 12);
     }
 
     static String redactSecrets(String content) {

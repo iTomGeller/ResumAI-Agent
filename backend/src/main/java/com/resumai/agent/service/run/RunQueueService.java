@@ -216,6 +216,15 @@ public class RunQueueService {
                 .last("limit 1"));
     }
 
+    /** Latest durable pause for conversational RESUME/CANCEL commands. */
+    public AgentRun findPausedRun(String conversationId) {
+        return runMapper.selectOne(new QueryWrapper<AgentRun>()
+                .eq("conversation_id", conversationId)
+                .eq("status", RunStatus.PAUSED.name())
+                .orderByDesc("created_at")
+                .last("limit 1"));
+    }
+
     public List<AgentRun> listQueued(String conversationId) {
         return runMapper.selectList(new QueryWrapper<AgentRun>()
                 .eq("conversation_id", conversationId)

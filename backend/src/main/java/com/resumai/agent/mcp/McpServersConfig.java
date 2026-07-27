@@ -84,14 +84,7 @@ public class McpServersConfig {
         out.put("configPath", resolvedPath);
         out.put("servers", serverNames("mcpServers"));
         out.put("optionalServers", serverNames("optionalMcpServers"));
-        JsonNode github = root.path("optionalMcpServers").path("github");
-        boolean hasToken = System.getenv("GITHUB_TOKEN") != null
-                && !System.getenv("GITHUB_TOKEN").isBlank();
-        if (!github.isMissingNode() && !hasToken) {
-            out.put("githubStatus", "AUTH_REQUIRED");
-        } else if (!github.isMissingNode()) {
-            out.put("githubStatus", github.path("enabled").asBoolean(false) ? "CONFIGURED" : "DISABLED");
-        }
+        out.put("authenticationMode", "KEYLESS_ONLY");
         return out;
     }
 

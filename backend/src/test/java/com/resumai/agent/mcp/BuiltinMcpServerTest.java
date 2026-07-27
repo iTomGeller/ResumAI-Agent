@@ -65,23 +65,25 @@ class BuiltinMcpServerTest {
             assertNotNull(input);
             JsonNode root = new ObjectMapper().readTree(input);
             assertFalse(root.path("evidencePolicy").path("allowSyntheticFallback").asBoolean(true));
-        assertTrue(root.path("mcpServers").has("exa"));
-        assertTrue(root.path("mcpServers").has("firecrawl"));
-        assertTrue(root.path("mcpServers").has("context7"));
-        assertEquals("https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
-                root.path("mcpServers").path("exa").path("url").asText());
-        assertEquals("https://mcp.firecrawl.dev/v2/mcp",
-                root.path("mcpServers").path("firecrawl").path("url").asText());
-        assertEquals("https://mcp.context7.com/mcp",
-                root.path("mcpServers").path("context7").path("url").asText());
-        assertTrue(root.path("optionalMcpServers").has("github"));
-        assertEquals("AUTH_REQUIRED",
-                root.path("optionalMcpServers").path("github")
-                        .path("healthStatusWhenMissingEnv").asText());
-        assertTrue(root.path("optionalMcpServers").has("tavily"));
-        assertTrue(root.path("optionalMcpServers").has("brave-search"));
-        assertTrue(root.path("optionalMcpServers").has("time"));
-        assertTrue(root.path("optionalMcpServers").has("arxiv"));
+            assertEquals(5, root.path("mcpServers").size());
+            assertTrue(root.path("mcpServers").has("exa"));
+            assertTrue(root.path("mcpServers").has("context7"));
+            assertTrue(root.path("mcpServers").has("deepwiki"));
+            assertTrue(root.path("mcpServers").has("microsoft-learn"));
+            assertTrue(root.path("mcpServers").has("fetch"));
+            assertEquals("https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
+                    root.path("mcpServers").path("exa").path("url").asText());
+            assertEquals("https://mcp.context7.com/mcp",
+                    root.path("mcpServers").path("context7").path("url").asText());
+            assertEquals("https://mcp.deepwiki.com/mcp",
+                    root.path("mcpServers").path("deepwiki").path("url").asText());
+            assertEquals("https://learn.microsoft.com/api/mcp",
+                    root.path("mcpServers").path("microsoft-learn").path("url").asText());
+            assertEquals(0, root.path("optionalMcpServers").size());
+            String serialized = root.toString().toLowerCase();
+            assertFalse(serialized.contains("oauth"));
+            assertFalse(serialized.contains("requiredenv"));
+            assertFalse(serialized.contains("authorization"));
         }
     }
 }

@@ -5,6 +5,8 @@ Builds happen only on ECS (mvn/npm/docker). Never prints secrets.
 from __future__ import annotations
 
 import os
+import hashlib
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -14,43 +16,6 @@ import paramiko
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = "/opt/resumai-src"
-INCLUDE_PREFIXES = (
-    "backend/src/",
-    "backend/pom.xml",
-    "backend/Dockerfile",
-    "backend/skills/",
-    "frontend/src/",
-    "frontend/nginx.conf",
-    "frontend/Dockerfile",
-    "frontend/Dockerfile.ecs",
-    "frontend/package.json",
-    "frontend/package-lock.json",
-    "frontend/tsconfig.json",
-    "frontend/tsconfig.node.json",
-    "frontend/vite.config.ts",
-    "frontend/index.html",
-    "workflow/",
-    "harness/",
-    "config/",
-    "scripts/ecs_safe_deploy.sh",
-    "scripts/seed_knowledge_base.py",
-    "scripts/ecs_acceptance.sh",
-    "scripts/ecs_acceptance_decision_agent.py",
-    "testdata/benchmark/",
-    "docker-compose.prod.yml",
-    "docker-compose.ecs.yml",
-    "docs/WHY_UNIFIED_RUNTIME.md",
-    "sandbox/manager/",
-)
-EXCLUDE_PARTS = (
-    "/__pycache__/",
-    "/.pytest_cache/",
-    "/node_modules/",
-    "/target/",
-    "/dist/",
-    ".pyc",
-)
-
 # Files deleted locally that must be removed on ECS too.
 STALE = [
     "backend/src/main/java/com/resumai/agent/ai/ResumeEvaluationOrchestrator.java",
@@ -66,6 +31,12 @@ STALE = [
     "backend/src/main/java/com/resumai/agent/service/ResumeGraphService.java",
     "backend/src/main/java/com/resumai/agent/domain/enums/RagStrategyType.java",
     "backend/src/test/java/com/resumai/agent/ai/McpToolRegistryTest.java",
+    # Old local experiments that impersonated MCP/Skills without going through
+    # the production registry. They were previously copied by the broad
+    # workspace glob and can otherwise survive on the ECS source tree.
+    "workflow/app/conversation/copilot_mcp.py",
+    "workflow/app/conversation/intent_classifier.py",
+    "workflow/app/conversation/react_agent.py",
 ]
 
 
@@ -80,30 +51,53 @@ def load_env() -> dict[str, str]:
     return env
 
 
-def wanted(rel: str) -> bool:
-    if any(p in f"/{rel}/" or rel.endswith(p) for p in EXCLUDE_PARTS):
-        return False
-    return any(rel == p or rel.startswith(p) for p in INCLUDE_PREFIXES)
-
-
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     env = load_env()
+    deploy_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    if len(deploy_sha) != 40 or any(
+        c not in "0123456789abcdef" for c in deploy_sha.lower()
+    ):
+        raise SystemExit("invalid git HEAD; refusing non-reproducible deploy")
     host = env["ALIYUN_HOST"]
     user = env.get("ALIYUN_USER", "root")
     password = env["ALIYUN_PASSWORD"]
     openrouter_key = env.get("EMBEDDING_API_KEY") or env.get("OPENROUTER_API_KEY") or ""
 
-    files = [p for p in ROOT.rglob("*") if p.is_file() and wanted(p.relative_to(ROOT).as_posix())]
-    # Also wipe deleted agent/tools dirs by including empty markers via cleanup below.
-    print(f"[pack] {len(files)} files")
+    tracked = subprocess.check_output(
+        ["git", "ls-tree", "-r", "--name-only", deploy_sha],
+        cwd=ROOT,
+        text=True,
+    ).splitlines()
+    print(f"[pack] {len(tracked)} committed files from {deploy_sha[:12]}")
 
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         tar_path = Path(tmp.name)
-    with tarfile.open(tar_path, "w:gz") as tar:
-        for p in files:
-            tar.add(p, arcname=p.relative_to(ROOT).as_posix())
+    subprocess.check_call(
+        [
+            "git", "archive", "--format=tar.gz",
+            f"--output={tar_path}", deploy_sha,
+        ],
+        cwd=ROOT,
+    )
+    archive_sha256 = hashlib.sha256(tar_path.read_bytes()).hexdigest()
+    with tempfile.NamedTemporaryFile(
+        suffix=".sha256", mode="w", encoding="utf-8",
+        newline="\n", delete=False
+    ) as manifest_tmp:
+        manifest_path = Path(manifest_tmp.name)
+        with tarfile.open(tar_path, "r:gz") as archive:
+            for member in sorted(archive.getmembers(), key=lambda item: item.name):
+                if not member.isfile():
+                    continue
+                source = archive.extractfile(member)
+                if source is None:
+                    raise SystemExit(f"cannot hash archive member: {member.name}")
+                digest = hashlib.sha256(source.read()).hexdigest()
+                manifest_tmp.write(f"{digest}  {member.name}\n")
     print(f"[pack] archive={tar_path.stat().st_size // 1024} KB")
 
     ssh = paramiko.SSHClient()
@@ -113,8 +107,10 @@ def main() -> None:
     try:
         sftp = ssh.open_sftp()
         remote_tar = "/tmp/resumai-sync.tar.gz"
+        remote_manifest = "/tmp/resumai-source.sha256"
         print(f"[upload] -> {remote_tar}")
         sftp.put(str(tar_path), remote_tar)
+        sftp.put(str(manifest_path), remote_manifest)
         sftp.close()
 
         def run(cmd: str, timeout: int = 7200) -> str:
@@ -131,14 +127,32 @@ def main() -> None:
                 raise SystemExit(f"remote failed ({code})")
             return out + err
 
-        run(f"mkdir -p {SRC_DIR} && tar -xzf {remote_tar} -C {SRC_DIR} && rm -f {remote_tar}")
+        # Atomically replace only the deployment source tree. Runtime state is
+        # held in named Docker volumes and is never touched here. Extracting
+        # into a fresh directory prevents stale, previously-untracked Python
+        # modules or fake Skill/MCP fixtures from surviving a new release.
+        incoming = f"{SRC_DIR}.incoming"
+        previous = f"{SRC_DIR}.previous"
+        run(
+            f"echo '{archive_sha256}  {remote_tar}' | sha256sum -c -; "
+            f"rm -rf {incoming}; mkdir -p {incoming}; "
+            f"tar -xzf {remote_tar} -C {incoming}; "
+            f"mv {remote_manifest} {incoming}/.deploy-source.sha256; "
+            f"printf '%s\\n' '{deploy_sha}' > {incoming}/.deploy-commit; "
+            f"if test -f {SRC_DIR}/.env; then cp -a {SRC_DIR}/.env {incoming}/.env; fi; "
+            f"rm -rf {previous}; "
+            f"if test -d {SRC_DIR}; then mv {SRC_DIR} {previous}; fi; "
+            f"mv {incoming} {SRC_DIR}; rm -f {remote_tar}",
+            timeout=180,
+        )
 
         # Remove deleted Java dead-code files + empty agent/tool packages.
         stale_rm = " ".join(f"{SRC_DIR}/{f}" for f in STALE)
         run(
             f"rm -f {stale_rm}; "
             f"rm -rf {SRC_DIR}/backend/src/main/java/com/resumai/agent/ai/agents "
-            f"{SRC_DIR}/backend/src/main/java/com/resumai/agent/ai/tools; "
+            f"{SRC_DIR}/backend/src/main/java/com/resumai/agent/ai/tools "
+            f"{SRC_DIR}/workflow/app/skills; "
             f"chmod +x {SRC_DIR}/scripts/ecs_safe_deploy.sh",
             timeout=60,
         )
@@ -191,7 +205,11 @@ def main() -> None:
         )
 
         print("\n[deploy] starting ecs_safe_deploy.sh (long)")
-        run(f"cd {SRC_DIR} && bash scripts/ecs_safe_deploy.sh", timeout=7200)
+        run(
+            f"cd {SRC_DIR} && DEPLOY_SHA={deploy_sha} "
+            "bash scripts/ecs_safe_deploy.sh",
+            timeout=7200,
+        )
         print("\n[ok] ECS deploy finished")
     finally:
         ssh.close()
@@ -200,6 +218,11 @@ def main() -> None:
         except TypeError:
             if tar_path.exists():
                 tar_path.unlink()
+        try:
+            manifest_path.unlink(missing_ok=True)
+        except TypeError:
+            if manifest_path.exists():
+                manifest_path.unlink()
 
 
 if __name__ == "__main__":

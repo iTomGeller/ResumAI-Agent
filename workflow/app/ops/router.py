@@ -27,7 +27,9 @@ async def runtime_ops_snapshot(
             registry = await get_mcp_registry(probe=True)
         elif probe:
             await registry.probe_all(force=True)
-        elif not registry._probed:  # noqa: SLF001
+        else:
+            # Cheap when healthy/not due; automatically retries degraded
+            # servers after the bounded registry TTL.
             await registry.probe_all()
         mcp_body = registry.status_snapshot()
     except Exception as exc:  # noqa: BLE001

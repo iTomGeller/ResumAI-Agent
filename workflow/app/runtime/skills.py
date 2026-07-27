@@ -10,7 +10,9 @@ import hashlib
 import logging
 import os
 import re
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -35,8 +37,8 @@ class SkillDefinition:
     name: str
     version: str
     description: str
-    applicable_conditions: tuple
-    instructions: str
+    applicable_conditions: tuple = ()
+    instructions: str = ""
     positive_examples: tuple = ()
     negative_examples: tuple = ()
     required_tools: tuple = ()
@@ -46,10 +48,15 @@ class SkillDefinition:
     status: str = "ACTIVE"
     source_path: str = ""
     deprecated: bool = False
+    loaded: bool = False
+    content_hash: str = ""
+    resource_paths: tuple = ()
 
     @property
     def hash(self) -> str:
-        return hashlib.sha256(self.instructions.encode("utf-8")).hexdigest()[:12]
+        # The full-file content hash is intentionally unavailable until the
+        # skill is activated. Startup discovery reads frontmatter only.
+        return self.content_hash or "not-loaded"
 
 
 def _skills_root_candidates() -> List[Path]:
@@ -65,6 +72,7 @@ def _skills_root_candidates() -> List[Path]:
         repo / "backend" / "src" / "main" / "resources" / "skills",
         Path("backend/src/main/resources/skills"),
         Path("src/main/resources/skills"),
+        here.parents[2] / "skills",  # development fallback only
         Path("skills"),
     ])
     return candidates
@@ -103,16 +111,43 @@ def _parse_frontmatter(text: str) -> Tuple[Dict[str, str], str]:
     return meta, body
 
 
+def _read_frontmatter_only(skill_md: Path) -> Dict[str, str]:
+    """Read only SKILL.md frontmatter during catalog discovery.
+
+    Agent Skills progressive disclosure requires startup context to contain
+    metadata only. Keeping the body out of the in-memory catalog also makes
+    accidental eager prompt injection structurally impossible.
+    """
+    try:
+        with skill_md.open("r", encoding="utf-8") as handle:
+            if handle.readline().strip() != "---":
+                return {}
+            lines: List[str] = []
+            for line in handle:
+                if line.strip() == "---":
+                    break
+                lines.append(line)
+                if len(lines) > 200:
+                    raise ValueError("SKILL.md frontmatter exceeds 200 lines")
+            else:
+                return {}
+    except (OSError, UnicodeError, ValueError) as exc:
+        logger.warning("failed reading skill metadata %s: %s", skill_md, exc)
+        return {}
+    meta: Dict[str, str] = {}
+    for line in lines:
+        if ":" not in line or line[:1].isspace():
+            continue
+        key, value = line.split(":", 1)
+        meta[key.strip()] = value.strip().strip('"').strip("'")
+    return meta
+
+
 def _load_skill_dir(skill_dir: Path) -> Optional[SkillDefinition]:
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
         return None
-    try:
-        raw = skill_md.read_text(encoding="utf-8")
-    except OSError as exc:
-        logger.warning("failed reading %s: %s", skill_md, exc)
-        return None
-    meta, body = _parse_frontmatter(raw)
+    meta = _read_frontmatter_only(skill_md)
     skill_id = meta.get("name") or skill_dir.name
     description = meta.get("description") or ""
     allowed = tuple(
@@ -127,12 +162,13 @@ def _load_skill_dir(skill_dir: Path) -> Optional[SkillDefinition]:
         version=version,
         description=description[:500],
         applicable_conditions=(),
-        instructions=body.strip()[:12000],
+        instructions="",
         required_tools=allowed,
         output_requirements="",
         status=status,
         source_path=str(skill_md),
         deprecated=deprecated,
+        loaded=False,
     )
 
 
@@ -142,10 +178,12 @@ class SkillManager:
     def __init__(self, root: Optional[Path] = None) -> None:
         self.root = root or resolve_skills_root()
         self._by_id: Dict[str, Dict[str, SkillDefinition]] = {}
+        self._loaded: Dict[Tuple[str, str], SkillDefinition] = {}
         self.reload()
 
     def reload(self) -> int:
         self._by_id.clear()
+        self._loaded.clear()
         root = self.root or resolve_skills_root()
         self.root = root
         if root is None:
@@ -178,6 +216,85 @@ class SkillManager:
 
     def list_ids(self) -> List[str]:
         return list(self._by_id.keys())
+
+    def catalog(self, *, include_deprecated: bool = False) -> List[SkillDefinition]:
+        """Return metadata-only entries in stable order."""
+        result: List[SkillDefinition] = []
+        for skill_id in sorted(self.list_ids()):
+            try:
+                skill = self.get(skill_id)
+            except KeyError:
+                continue
+            if not include_deprecated and (skill.deprecated or skill.status != "ACTIVE"):
+                continue
+            result.append(skill)
+        return result
+
+    def load(self, skill_id: str, version: Optional[str] = None) -> SkillDefinition:
+        """Activate one skill by loading only its SKILL.md instructions.
+
+        Referenced resources are indexed by path but are not read here.
+        """
+        metadata = self.get(skill_id, version)
+        key = (metadata.skill_id, metadata.version)
+        cached = self._loaded.get(key)
+        if cached is not None:
+            return cached
+        skill_md = Path(metadata.source_path)
+        try:
+            raw = skill_md.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise KeyError(f"skill unreadable: {skill_id}: {exc}") from exc
+        _meta, body = _parse_frontmatter(raw)
+        resources: List[str] = []
+        skill_root = skill_md.parent
+        for folder_name in ("references", "scripts", "assets"):
+            folder = skill_root / folder_name
+            if not folder.is_dir():
+                continue
+            try:
+                for child in sorted(folder.iterdir()):
+                    if child.is_file():
+                        resources.append(child.relative_to(skill_root).as_posix())
+            except OSError:
+                continue
+        loaded = replace(
+            metadata,
+            instructions=body.strip()[:20000],
+            loaded=True,
+            content_hash=hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12],
+            resource_paths=tuple(resources),
+        )
+        self._loaded[key] = loaded
+        return loaded
+
+    def read_resource(self, skill_id: str, relative_path: str, *,
+                      version: Optional[str] = None,
+                      max_chars: int = 12000) -> str:
+        """Read one explicitly requested, one-level skill resource.
+
+        The resource must have been advertised by ``load`` and remain inside
+        the skill package. Deep reference chains and traversal are rejected.
+        """
+        loaded = self.load(skill_id, version)
+        normalized = str(relative_path or "").replace("\\", "/").strip("/")
+        if normalized not in set(loaded.resource_paths):
+            raise KeyError(f"resource not advertised for {skill_id}: {normalized}")
+        parts = Path(normalized).parts
+        if len(parts) != 2 or parts[0] not in {"references", "scripts", "assets"}:
+            raise KeyError(f"resource path must be one level deep: {normalized}")
+        skill_root = Path(loaded.source_path).parent.resolve()
+        target = (skill_root / normalized).resolve()
+        try:
+            target.relative_to(skill_root)
+        except ValueError as exc:
+            raise KeyError(f"resource escapes skill root: {normalized}") from exc
+        if not target.is_file():
+            raise KeyError(f"resource not found: {normalized}")
+        try:
+            return target.read_text(encoding="utf-8")[:max_chars]
+        except (OSError, UnicodeError) as exc:
+            raise KeyError(f"resource unreadable: {normalized}: {exc}") from exc
 
     def select_for(self, *, agent_id: str, run_type: str, job_focus: Optional[str],
                    overrides: Dict[str, str],
@@ -266,16 +383,37 @@ class SkillManager:
         return skills
 
     @staticmethod
-    def render(skills: List[SkillDefinition]) -> str:
+    def render(skills: List[SkillDefinition], *, summary_only: bool = True) -> str:
+        """Render metadata unless an individual definition is already loaded."""
         blocks = []
         for skill in skills:
             tools = (", ".join(skill.required_tools) if skill.required_tools
                      else "（未声明）")
-            blocks.append(
-                f"技能 {skill.name}（{skill.skill_id}@{skill.version}"
-                f"#{skill.hash}）：\n{skill.description}\n"
-                f"{skill.instructions}\nallowedTools: {tools}")
+            if summary_only or not skill.loaded:
+                blocks.append(
+                    f"[可用技能] {skill.name}（{skill.skill_id}@{skill.version}）："
+                    f" {skill.description or '无描述'}"
+                    f"\n  allowedTools: {tools}"
+                    f"\n  → 需要时调用 load_skill(skill_id=\"{skill.skill_id}\")")
+            else:
+                blocks.append(
+                    f"技能 {skill.name}（{skill.skill_id}@{skill.version}"
+                    f"#{skill.hash}）：\n{skill.description}\n"
+                    f"{skill.instructions}\nallowedTools: {tools}")
         return "\n\n".join(blocks)
+
+    @staticmethod
+    def render_progressive(catalog: List[SkillDefinition],
+                           loaded: List[SkillDefinition]) -> str:
+        loaded_ids = {s.skill_id for s in loaded}
+        metadata = [s for s in catalog if s.skill_id not in loaded_ids]
+        blocks: List[str] = []
+        if metadata:
+            blocks.append(SkillManager.render(metadata, summary_only=True))
+        if loaded:
+            blocks.append("[已加载技能指令]\n" +
+                          SkillManager.render(loaded, summary_only=False))
+        return "\n\n".join(b for b in blocks if b)
 
     def versions_used(self, selections: Dict[str, List[SkillDefinition]]) -> Dict[str, str]:
         used = {}
@@ -305,6 +443,8 @@ class SkillManager:
                 "requiredMcp": list(skill.required_mcp),
                 "sourcePath": skill.source_path,
                 "adminOnly": skill.skill_id in ADMIN_ONLY_SKILLS,
+                "disclosureState": "METADATA",
+                "instructionsLoaded": False,
             }
             if skill.deprecated or skill.skill_id in ADMIN_ONLY_SKILLS:
                 deprecated.append(item)
@@ -322,29 +462,98 @@ class SkillManager:
             "skills": skills,
             "deprecatedSkills": deprecated if include_deprecated else [],
             "advertisedTools": ["load_skill", "execute_skill", "read_skill_resource"],
+            "disclosure": {
+                "startup": "name+description",
+                "activation": "SKILL.md",
+                "resources": "on-demand",
+            },
         }
+
+    async def emit_catalog(self, emitter: Any, agent_id: str,
+                           skills: List[SkillDefinition]) -> None:
+        for skill in skills:
+            event_id = f"skill-catalog-{uuid.uuid4().hex[:16]}"
+            await emitter.emit("skill.catalog", agent_id=agent_id,
+                               tool_name=skill.skill_id, payload={
+                                   **self._event_base(skill, agent_id, event_id),
+                                   "lifecycleStage": "CATALOG_EXPOSED",
+                                   "reason": "metadata_available",
+                                   "description": skill.description,
+                                   "disclosureState": "METADATA",
+                               })
 
     async def emit_selection(self, emitter: Any, agent_id: str,
                              skills: List[SkillDefinition],
-                             *, trigger_reason: str = "policy_match") -> None:
-        """Emit skill lifecycle for Trace — Skill is not a tool execution.
+                             *, trigger_reason: str = "agent_input_match") -> None:
+        """Emit skill.selected only — marks skills as AVAILABLE for this agent.
 
-        Events: skill.selected → skill.applied (no fake started/completed tool
-        lifecycle). RunTraceBridge must consume these as Agent annotations.
+        skill.applied is emitted later by executor when LLM actually calls
+        load_skill, implementing true progressive loading.
         """
         for skill in skills:
-            base = {
-                "skillId": skill.skill_id,
-                "skillVersion": skill.version,
-                "skillHash": skill.hash,
-                "agentId": agent_id,
-                "triggerReason": trigger_reason,
-            }
+            event_id = f"skill-select-{uuid.uuid4().hex[:16]}"
+            base = self._event_base(skill, agent_id, event_id)
             await emitter.emit("skill.selected", agent_id=agent_id,
-                               tool_name=skill.skill_id, payload=base)
-            await emitter.emit("skill.applied", agent_id=agent_id,
                                tool_name=skill.skill_id, payload={
-                                   **base, "injected": True})
+                                   **base,
+                                   "lifecycleStage": "SELECTED",
+                                   "triggerReason": trigger_reason,
+                                   "disclosureState": "METADATA",
+                               })
+
+    async def emit_loaded(self, emitter: Any, agent_id: str,
+                          skill: SkillDefinition, *,
+                          tool_call_id: str,
+                          reason: str = "llm_requested") -> None:
+        await emitter.emit("skill.loaded", agent_id=agent_id,
+                           tool_name=skill.skill_id, payload={
+                               **self._event_base(skill, agent_id, tool_call_id),
+                               "lifecycleStage": "LOADED",
+                               "reason": reason,
+                               "disclosureState": "INSTRUCTIONS",
+                               "resourcesAdvertised": list(skill.resource_paths),
+                           })
+
+    async def emit_applied(self, emitter: Any, agent_id: str,
+                           skill: SkillDefinition, *,
+                           tool_call_id: str,
+                           reason: str = "instructions_in_model_context") -> None:
+        """Emit only after loaded instructions were included in a model turn."""
+        await emitter.emit("skill.applied", agent_id=agent_id,
+                           tool_name=skill.skill_id, payload={
+                               **self._event_base(skill, agent_id, tool_call_id),
+                               "lifecycleStage": "APPLIED",
+                               "triggerReason": reason,
+                               "injected": True})
+
+    async def emit_skipped(self, emitter: Any, agent_id: str,
+                           skill: SkillDefinition, *, reason: str) -> None:
+        event_id = f"skill-skip-{uuid.uuid4().hex[:16]}"
+        await emitter.emit("skill.skipped", agent_id=agent_id,
+                           tool_name=skill.skill_id, payload={
+                               **self._event_base(skill, agent_id, event_id),
+                               "lifecycleStage": "SKIPPED",
+                               "reason": reason,
+                               "disclosureState": (
+                                   "INSTRUCTIONS" if skill.loaded else "METADATA"),
+                           })
+
+    @staticmethod
+    def _event_base(skill: SkillDefinition, agent_id: str,
+                    tool_call_id: str) -> Dict[str, Any]:
+        return {
+            "toolCallId": tool_call_id,
+            "skillId": skill.skill_id,
+            "skillVersion": skill.version,
+            "skillHash": skill.hash,
+            "agentId": agent_id,
+            "occurredAt": _utc_now(),
+        }
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z")
 
 
 default_skill_manager = SkillManager()

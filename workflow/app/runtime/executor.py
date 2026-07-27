@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import re
 import time
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.runtime.agents import AgentDefinition, AgentRegistry, default_agent_registry
 from app.runtime.context import ContextManager
 from app.runtime.coordinator import Coordinator, TERMINAL_AGENTS
 from app.runtime.events import RuntimeEmitter
-from app.runtime.llm import LlmError, ResilientLlmClient, extract_json_object
+from app.runtime.llm import (
+    LlmError,
+    LlmToolCall,
+    LlmTurn,
+    ResilientLlmClient,
+    extract_json_object,
+)
 from app.runtime.loop_guard import LoopGuard
 from app.runtime.memory import (
     CONTROL_PLANE_ERROR_CODES,
@@ -38,6 +47,51 @@ from app.runtime.tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
 
+_SOURCE_URL = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z")
+
+
+def _collect_source_urls(*values: Any, limit: int = 12) -> List[str]:
+    """Collect bounded HTTP(S) provenance from nested MCP args/results."""
+    found: List[str] = []
+    seen = set()
+
+    def visit(value: Any, depth: int = 0) -> None:
+        if len(found) >= limit or depth > 6:
+            return
+        if isinstance(value, dict):
+            for nested in value.values():
+                visit(nested, depth + 1)
+                if len(found) >= limit:
+                    break
+            return
+        if isinstance(value, (list, tuple)):
+            for nested in value:
+                visit(nested, depth + 1)
+                if len(found) >= limit:
+                    break
+            return
+        if not isinstance(value, str):
+            return
+        for match in _SOURCE_URL.finditer(value[:20000]):
+            url = match.group(0).rstrip(".,;:!?)]}")
+            if url and url not in seen:
+                seen.add(url)
+                found.append(url)
+                if len(found) >= limit:
+                    break
+
+    for item in values:
+        visit(item)
+        if len(found) >= limit:
+            break
+    return found
+
+
 # EXP-7: adaptive replan fires when a group's average confidence drops below
 # this. Sweepable per deployment without an image rebuild.
 import os as _os
@@ -47,8 +101,7 @@ REPLAN_CONFIDENCE_THRESHOLD = float(_os.getenv("REPLAN_CONFIDENCE_THRESHOLD", "0
 AGENT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容）：
 {
   "thought": "简要计划（一两句）",
-  "toolCalls": [{"tool": "工具名", "arguments": {...}}]  // 需要工具时给出，不需要为 []
-  ,"output": {                                            // 完成本职责时给出，否则为 null
+  "output": {                                             // 完成本职责时给出，否则为 null
     "summary": "一句话结论",
     "claims": [{"section": "technical_findings|project_findings|risks|evidence|recommendations|resume_facts|jd_requirements",
                  "value": [...] 或 {...}}],
@@ -57,12 +110,12 @@ AGENT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容）：
     "requestedNextAction": "可选，建议下一步"
   },
   "done": true/false
-}"""
+}
+工具调用必须使用模型原生 function/tool calls；禁止在 JSON 中嵌套 toolCalls。"""
 
 REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；精简表达）：
 {
   "thought": "简要计划",
-  "toolCalls": [],
   "output": {
     "summary": "面试官视角的一句话结论",
     "confidence": 0.0-1.0,
@@ -96,17 +149,6 @@ EMIT_DECISION_TOOL = {
             "type": "object",
             "properties": {
                 "thought": {"type": "string", "description": "简要计划"},
-                "toolCalls": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "tool": {"type": "string"},
-                            "arguments": {"type": "object"},
-                        },
-                        "required": ["tool"],
-                    },
-                },
                 "output": {
                     "type": "object",
                     "properties": {
@@ -132,7 +174,6 @@ EMIT_DECISION_TOOL = {
         },
     },
 }
-FORCE_EMIT_DECISION = {"type": "function", "function": {"name": "emit_decision"}}
 
 # ReportAgent: strong schema for structured report (Markdown is rendered offline).
 _SOURCE_REF_SCHEMA = {
@@ -214,17 +255,6 @@ EMIT_REPORT_TOOL = {
             "type": "object",
             "properties": {
                 "thought": {"type": "string"},
-                "toolCalls": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "tool": {"type": "string"},
-                            "arguments": {"type": "object"},
-                        },
-                        "required": ["tool"],
-                    },
-                },
                 "output": {
                     "type": "object",
                     "properties": {
@@ -311,6 +341,17 @@ class RunExecutor:
         self.registry = registry or default_agent_registry
         self.policy = PolicyBundle.from_config(request.policyId, request.policyConfig)
         self.budget = RunBudget()
+        global_llm_limit = max(0, int(self.policy.maxLlmCalls))
+        terminal_reserve = min(
+            max(0, int(self.policy.terminalLlmReserve)),
+            max(0, global_llm_limit - 1))
+        control_reserve = min(
+            max(0, int(self.policy.controlPlaneLlmReserve)),
+            max(0, global_llm_limit - terminal_reserve - 1))
+        self.budget.configure_llm_budget(
+            global_llm_limit,
+            {"terminal": terminal_reserve, "control": control_reserve},
+            scope_limits={"control": control_reserve})
         # Optional: only runs launched through the service carry a live pause
         # event (kept optional so sync test construction needs no event loop).
         self.pause_event = pause_event
@@ -323,6 +364,8 @@ class RunExecutor:
         run_context = {
             "resumeText": request.resumeText or "",
             "jobDescription": request.jobDescription or "",
+            "userMessage": request.userMessage or "",
+            "recentMessages": list(request.recentMessages or []),
         }
         self.llm = llm or ResilientLlmClient(
             emitter, self.budget, self.policy.maxLlmCalls,
@@ -362,6 +405,7 @@ class RunExecutor:
         self._tool_failed_this_group = False
         self._missing_artifacts: List[str] = []
         self.plan_meta: Dict[str, Any] = {}
+        self.revision_reuse: Dict[str, Any] = {}
         # conflict arbitration runs exactly once (ruling is final)
         self._arbitrated = False
         # populated by _restore_snapshot on resume
@@ -375,6 +419,7 @@ class RunExecutor:
             registry = get_mcp_registry_sync()
             if registry is not None:
                 self.tools.attach_mcp(registry)
+                self._mcp_attach_pending = bool(registry.needs_probe())
             else:
                 # Lazy probe will run on first execute; schedule soft attach.
                 self._mcp_attach_pending = True
@@ -432,6 +477,16 @@ class RunExecutor:
         if not resumed:
             await self.emitter.emit("run.progress", payload={
                 "stage": "observe", "message": "加载记忆与上下文"})
+            self.revision_reuse = self._reuse_previous_revision_artifacts()
+            if self.revision_reuse:
+                await self.emitter.emit("run.progress", payload={
+                    "stage": "revision_reuse",
+                    "message": (
+                        f"revision #{request.revision} 复用 "
+                        f"{len(self.revision_reuse['reusedArtifacts'])} 个旧产物，"
+                        f"失效 {len(self.revision_reuse['invalidatedArtifacts'])} 个"),
+                    **self.revision_reuse,
+                })
             # Specialists/Report: USER/CONVERSATION PREFERENCE/CONVERSATION/EPISODIC
             # only — never FAILURE (control-plane noise must not enter evaluation).
             self.memory_hits = await self.memory.search(
@@ -524,6 +579,8 @@ class RunExecutor:
                 "artifactEdges": planned.get("artifactEdges") or [],
                 "goalArtifacts": planned.get("goalArtifacts") or [],
                 "optionalArtifacts": planned.get("optionalArtifacts") or [],
+                "presentArtifacts": planned.get("presentArtifacts") or [],
+                "revisionReuse": dict(self.revision_reuse),
                 "budget": self.budget_plan,
             }
             await self.emitter.emit("agent.selected", agent_id="CoordinatorAgent", payload={
@@ -537,6 +594,10 @@ class RunExecutor:
                 "skippedBecause": self.plan_meta["skippedBecause"],
                 "artifactEdges": self.plan_meta["artifactEdges"],
                 "goalArtifacts": self.plan_meta["goalArtifacts"],
+                "presentArtifacts": self.plan_meta["presentArtifacts"],
+                "revisionReuse": dict(self.revision_reuse),
+                "llmBudget": self.budget.llm_audit(
+                    self.policy.maxLlmCalls),
                 "planMode": request.planMode,
                 "memoryHits": len(self.memory_hits),
                 "memoryNotes": [str(h.get("content", ""))[:120]
@@ -674,46 +735,48 @@ class RunExecutor:
             return True
         except asyncio.CancelledError:
             raise
-        except BudgetExceeded:
+        except BudgetExceeded as exc:
+            if (definition.agent_id not in TERMINAL_AGENTS
+                    and exc.kind in {"llmReservation", "llmScopeLimit"}):
+                await self._after_agent_failure(
+                    definition, exc, agent_started)
+                return False
             raise
         except Exception as exc:  # noqa: BLE001 - agent failure boundary
             await self._after_agent_failure(definition, exc, agent_started)
             return False
 
     async def _run_parallel(self, definitions: List[AgentDefinition]) -> bool:
-        """Independent specialists run concurrently against read-only state
-        views; outputs are merged sequentially afterwards so no coroutine
-        ever mutates the blackboard concurrently."""
-        group_start = time.monotonic()
+        """Specialists run sequentially to avoid resource contention on
+        constrained infrastructure. Outputs are merged after each agent."""
+        any_success = False
         for definition in definitions:
             await self.emitter.emit("agent.started", agent_id=definition.agent_id,
                                     payload={"description": definition.description,
                                              "parallelGroup": [d.agent_id for d in definitions],
                                              "position": len(self.executed) + 1,
                                              "planned": len(self.plan)})
-
-        async def guarded(defn: AgentDefinition) -> Tuple[AgentDefinition, Any, float]:
-            t0 = time.monotonic()
+            agent_start = time.monotonic()
             try:
                 output = await asyncio.wait_for(
-                    self._run_agent(defn), timeout=defn.timeout_seconds)
-                return defn, output, t0
-            except (asyncio.CancelledError, BudgetExceeded):
+                    self._run_agent(definition), timeout=definition.timeout_seconds)
+                if isinstance(output, AgentOutput):
+                    conflicts = self.state.apply_output(output)
+                    self._after_agent_success(definition, output, conflicts,
+                                              agent_start, fire_started=False)
+                    any_success = True
+            except asyncio.CancelledError:
+                raise
+            except BudgetExceeded as exc:
+                if (definition.agent_id not in TERMINAL_AGENTS
+                        and exc.kind in {
+                            "llmReservation", "llmScopeLimit"}):
+                    await self._after_agent_failure(
+                        definition, exc, agent_start)
+                    continue
                 raise
             except Exception as exc:  # noqa: BLE001
-                return defn, exc, t0
-
-        results = await asyncio.gather(*(guarded(d) for d in definitions))
-        any_success = False
-        for definition, outcome, agent_start in results:
-            if isinstance(outcome, AgentOutput):
-                conflicts = self.state.apply_output(outcome)
-                self._after_agent_success(definition, outcome, conflicts,
-                                          agent_start,
-                                          fire_started=False)
-                any_success = True
-            else:
-                await self._after_agent_failure(definition, outcome, agent_start)
+                await self._after_agent_failure(definition, exc, agent_start)
         return any_success
 
     def _after_agent_success(self, definition: AgentDefinition, output: AgentOutput,
@@ -760,9 +823,8 @@ class RunExecutor:
             "error": error_text[:300], "durationMs": duration_ms})
         self.guard.check_error(error_text)
         self.degraded_reasons.append(f"{agent_id}_failed")
+        self.executed.append(agent_id)
         if agent_id in TERMINAL_AGENTS:
-            # A failed terminal agent is never re-queued: retrying it burns the
-            # LLM budget on the same failure. Degrade honestly instead.
             self.report_agent_failed = True
             return
         self._ensure_terminal_tail()
@@ -929,11 +991,18 @@ class RunExecutor:
             "skippedBecause": self.plan_meta["skippedBecause"],
             "artifactEdges": self.plan_meta["artifactEdges"],
             "replanned": True, "trigger": trigger,
-            "replanCount": self.replan_count})
+            "replanCount": self.replan_count,
+            "llmBudget": self.budget.llm_audit(
+                self.policy.maxLlmCalls)})
 
     def _has_hard_degradation(self) -> bool:
-        hard = {"run_timeout", "consecutive_failures"}
-        return any(r in hard or r.endswith("_failed") for r in self.degraded_reasons)
+        hard = {"run_timeout", "consecutive_failures", "no_terminal_answer",
+                "report_contract_failed"}
+        terminal_fail = {f"{a}_failed" for a in TERMINAL_AGENTS}
+        for r in self.degraded_reasons:
+            if r in hard or r in terminal_fail or r.endswith("_failed"):
+                return True
+        return False
 
     def _missing_required_goal_artifacts(self) -> List[str]:
         """Run-end closure: required goal artifacts absent → never silent SUCCEEDED.
@@ -994,6 +1063,38 @@ class RunExecutor:
     # pause / resume
     # ------------------------------------------------------------------
 
+    def _reuse_previous_revision_artifacts(self) -> Dict[str, Any]:
+        """Import only non-invalidated artifacts into a fresh revision.
+
+        This is intentionally not checkpoint resume: budgets, executed agents,
+        tool ledgers, and loop-guard state always start clean.
+        """
+        request = self.request
+        snapshot = request.previousSnapshot or {}
+        shared = snapshot.get("sharedState") if isinstance(snapshot, dict) else {}
+        if not isinstance(shared, dict):
+            shared = {}
+        previous = shared.get("artifacts")
+        if not isinstance(previous, dict) and isinstance(snapshot, dict):
+            previous = snapshot.get("artifacts")
+        previous = dict(previous) if isinstance(previous, dict) else {}
+        if request.previousArtifacts:
+            previous.update(request.previousArtifacts)
+        if not previous:
+            return {}
+
+        reusable, expanded = Coordinator.reusable_artifacts(
+            copy.deepcopy(previous), request.invalidatedArtifacts)
+        if reusable:
+            self.state.apply_artifacts(reusable, by_agent="previous_revision")
+        return {
+            "sourceRevision": max(1, int(request.revision or 1) - 1),
+            "targetRevision": int(request.revision or 1),
+            "requestedInvalidations": list(request.invalidatedArtifacts),
+            "invalidatedArtifacts": sorted(expanded),
+            "reusedArtifacts": sorted(reusable.keys()),
+        }
+
     def _pause_boundary(self) -> None:
         """Safe pause point between agent groups: everything committed so far
         is durable in the snapshot; nothing mid-flight is frozen."""
@@ -1020,6 +1121,7 @@ class RunExecutor:
             "skillVersions": default_skill_manager.versions_used(self.skill_selections),
             "policyId": self.policy.policyId,
             "planMeta": dict(self.plan_meta or {}),
+            "revisionReuse": dict(self.revision_reuse),
             "finalAnswer": self.final_answer,
             "degradedReasons": list(self.degraded_reasons),
             "agentTimings": dict(self.agent_timings),
@@ -1061,6 +1163,7 @@ class RunExecutor:
             plan_meta = snapshot.get("planMeta")
             if isinstance(plan_meta, dict):
                 self.plan_meta = dict(plan_meta)
+            self.revision_reuse = dict(snapshot.get("revisionReuse") or {})
             for agent_id in self.executed:
                 self.guard.record_completed_agent(agent_id)
             return True
@@ -1077,11 +1180,15 @@ class RunExecutor:
         the static policy limit when the coordinator did not allocate one."""
         quota = self.budget_plan.get(agent_id) or {}
         value = quota.get(key)
-        return int(value) if isinstance(value, (int, float)) and value > 0 else fallback
+        return int(value) if isinstance(value, (int, float)) and value >= 0 else fallback
 
     async def _run_agent(self, definition: AgentDefinition) -> AgentOutput:
         request = self.request
         agent_id = definition.agent_id
+        if agent_id in TERMINAL_AGENTS:
+            # No control-plane work is legal after the terminal stage starts.
+            # Release unused plan/replan/arbitration capacity to the terminal.
+            self.budget.release_llm_reservation("control")
         prompt = default_prompt_manager.system_for_agent(
             agent_id, self.policy.promptVersions.get(agent_id))
         signals = Coordinator(self.registry, self.policy, None).inspect_signals(
@@ -1095,29 +1202,49 @@ class RunExecutor:
             signals=signals, user_message=request.userMessage or "")
         self.skill_selections[agent_id] = skills
         try:
-            await default_skill_manager.emit_selection(
+            await default_skill_manager.emit_catalog(
                 self.emitter, agent_id, skills)
+            await default_skill_manager.emit_selection(
+                self.emitter, agent_id, skills,
+                trigger_reason="agent_capability_and_input_signals")
         except Exception as exc:  # noqa: BLE001
-            logger.debug("skill event emit skipped: %s", exc)
+            logger.debug("skill catalog/selection emit skipped: %s", exc)
 
-        # Live tool catalog: static definition tools + AVAILABLE MCP route.
-        allowed_tools = set(definition.tools)
-        catalog_description = ""
+        # One live, model-native tool catalog per agent turn. MCP definitions
+        # originate exclusively from successful tools/list discovery.
+        requested_tools = list(definition.tools)
+        if skills:
+            requested_tools.extend(["load_skill", "read_skill_resource"])
+        catalog: List[Dict[str, Any]] = []
+        catalog_exposure_ids: Dict[str, str] = {}
         try:
-            catalog = self.tools.catalog_for_agent(agent_id, list(definition.tools))
-            mcp_entries = []
+            catalog = self.tools.catalog_for_agent(agent_id, requested_tools)
             for entry in catalog:
-                allowed_tools.add(str(entry.get("name") or ""))
                 if entry.get("kind") == "mcp" or entry.get("mcpServer"):
-                    mcp_entries.append(
-                        f"  - {entry['name']}（MCP/{entry.get('mcpServer','?')}）: "
-                        f"{entry.get('description','')[:60]}")
-            if mcp_entries:
-                catalog_description = (
-                    "\n[可用 MCP 工具（外部验证）]\n" + "\n".join(mcp_entries) +
-                    "\n优先使用 MCP 工具进行外部核验，在 toolCalls 中引用。\n")
-        except Exception:  # noqa: BLE001
-            pass
+                    exposure_id = f"catalog-{uuid.uuid4().hex[:16]}"
+                    catalog_exposure_ids[str(entry.get("name") or "")] = exposure_id
+                    await self.emitter.emit(
+                        "tool.progress", agent_id=agent_id,
+                        tool_name=str(entry.get("name") or ""),
+                        payload={
+                            "toolCallId": exposure_id,
+                            "lifecycleStage": "CATALOG_EXPOSED",
+                            "source": "mcp",
+                            "mcpServer": entry.get("mcpServer"),
+                            "toolName": entry.get("name"),
+                            "modelName": entry.get("modelName"),
+                            "description": entry.get("description"),
+                            "inputSchema": entry.get("inputSchema"),
+                            "occurredAt": _utc_now(),
+                        })
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("live tool catalog unavailable: %s", exc)
+            catalog = []
+        model_tools, model_tool_aliases = ToolExecutor.openai_tools(catalog)
+        allowed_tools = set(model_tool_aliases.values())
+        final_tool = (EMIT_REPORT_TOOL if agent_id == "ReportAgent"
+                      else EMIT_DECISION_TOOL)
+        model_tools.append(final_tool)
 
         tool_results_block = ""
         agent_tool_calls = 0
@@ -1128,54 +1255,47 @@ class RunExecutor:
             self._agent_quota(agent_id, "toolQuota",
                               self.policy.toolBudget.maxToolCallsPerAgent))
 
+        # Deterministic parsing / control-plane retrieval may run as harness
+        # preflight. Public MCP never appears here: the model alone proposes
+        # MCP name and arguments from the live schemas above.
         for tool, args in self._pre_steps(definition):
             if agent_tool_calls >= agent_tool_limit:
                 break
+            defn = self.tools.definitions.get(tool)
+            if defn is not None and defn.kind == "mcp":
+                logger.error("ignored invalid hard-coded MCP prestep %s", tool)
+                continue
             guard = self.guard.check_tool_call(ToolExecutor.signature(tool, args))
             if guard.triggered:
                 await self._emit_guard(guard, agent_id)
                 continue
-            # Copilot conversational RAG + TechAgent agentic retrieval: rewrite
-            # on knowledge/resume search presteps for followup/quick_answer.
             rewrite = (
                 tool in ("knowledge_search", "resume_semantic_search")
                 and self.request.runType in ("followup", "quick_answer")
             )
-            call = await self.tools.execute(agent_id, tool, args,
-                                            enable_rewrite=rewrite)
+            try:
+                call = await self.tools.execute(agent_id, tool, args,
+                                                enable_rewrite=rewrite)
+            except Exception as _tool_exc:  # noqa: BLE001
+                from .tools import ToolCallResult
+                call = ToolCallResult(
+                    f"tc-err-{agent_tool_calls}", tool, "FAILED", None,
+                    error=f"{type(_tool_exc).__name__}: {_tool_exc}"[:200])
             agent_tool_calls += 1
             if call.status == "FAILED":
                 self._tool_failed_this_group = True
             tool_results_block += self._format_tool_result(call)
             if call.status == "SUCCEEDED":
-                if tool == "calculate_jd_coverage":
-                    self.state.put_artifact("jdCoverage", call.result)
-                elif tool == "check_timeline":
-                    self.state.put_artifact("timelineCheck", call.result)
-                elif tool == "verify_report_evidence":
-                    self._apply_verification(call.result)
-                elif tool == "parse_resume":
-                    self.state.put_artifact("parsedResume", call.result)
-                    facts = self._resume_facts_from_parse(call.result)
-                    if facts:
-                        self.state.put_artifact("resumeFacts", facts)
-                elif tool == "jd_match_search":
-                    self._store_jd_match_artifacts(call.result)
-                elif tool in ("mcp_fetch_url", "fetch.fetch"):
-                    existing = self.state.artifact("mcpEvidence") or []
-                    existing.append({"tool": tool, "result": call.result,
-                                     "url": (args or {}).get("url", "")})
-                    self.state.put_artifact("mcpEvidence", existing)
-                elif tool.startswith("exa."):
-                    existing = self.state.artifact("mcpEvidence") or []
-                    existing.append({"tool": tool, "result": call.result,
-                                     "query": (args or {}).get("query", "")})
-                    self.state.put_artifact("mcpEvidence", existing)
+                await self._record_tool_success(
+                    agent_id, tool, args, call.result,
+                    tool_call_id=call.tool_call_id)
 
         # Performance fast-path: high-quality deterministic parse → skip LLM.
         if definition.agent_id == "ResumeParserAgent":
             fast = self._maybe_skip_parser_llm(tool_results_block)
             if fast is not None:
+                await self._emit_unapplied_skills(
+                    agent_id, skills, {}, set(), reason="agent_fast_path")
                 self.agent_counters[definition.agent_id] = {
                     "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
                     "fastPath": 1}
@@ -1185,6 +1305,8 @@ class RunExecutor:
         if definition.agent_id == "JDAnalysisAgent":
             fast = self._maybe_skip_jd_llm()
             if fast is not None:
+                await self._emit_unapplied_skills(
+                    agent_id, skills, {}, set(), reason="agent_fast_path")
                 self.agent_counters[definition.agent_id] = {
                     "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
                     "fastPath": 1}
@@ -1194,27 +1316,60 @@ class RunExecutor:
         if definition.agent_id == "EvidenceAgent":
             fast = self._maybe_skip_evidence_llm(tool_results_block)
             if fast is not None:
+                await self._emit_unapplied_skills(
+                    agent_id, skills, {}, set(), reason="agent_fast_path")
                 self.agent_counters[definition.agent_id] = {
                     "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
                     "fastPath": 1}
                 return fast
 
         output: Optional[AgentOutput] = None
-        max_iterations = min(
-            definition.max_iterations, self.policy.maxIterationsPerAgent,
-            self._agent_quota(agent_id, "llmQuota", definition.max_iterations))
+        # A reasoning iteration and a provider-native action/observation turn
+        # are different budget axes.  If they share one counter, a normal
+        # progressive flow such as load_skill -> read_resource -> final answer
+        # can never finish for agents whose decision budget is one or two.
+        # Reserve at most two action follow-up turns; every call still counts
+        # against the run-wide LLM/token/cost limits enforced by the client.
+        max_decision_iterations = min(
+            definition.max_iterations, self.policy.maxIterationsPerAgent)
+        available_tool_turns = min(
+            2, max(0, agent_tool_limit - agent_tool_calls))
+        fallback_turn_limit = max_decision_iterations + available_tool_turns
+        agent_llm_quota = self._agent_quota(
+            agent_id, "llmQuota", fallback_turn_limit)
+        max_action_turns = min(
+            available_tool_turns,
+            self._agent_quota(
+                agent_id, "actionTurnQuota", available_tool_turns),
+            max(0, agent_llm_quota - 1))
+        max_turns = min(
+            fallback_turn_limit, max(0, agent_llm_quota))
         iteration = 0
-        while iteration < max_iterations and output is None:
+        decision_iterations = 0
+        action_turns = 0
+        loaded_skills: Dict[str, Any] = {}
+        loaded_skill_call_ids: Dict[str, str] = {}
+        applied_skill_ids: set = set()
+        native_history: List[Dict[str, Any]] = []
+        while (iteration < max_turns
+               and decision_iterations < max_decision_iterations
+               and output is None):
             iteration += 1
             await self.emitter.emit("agent.progress", agent_id=agent_id, payload={
-                "iteration": iteration, "maxIterations": max_iterations})
+                "iteration": iteration,
+                "maxIterations": max_turns,
+                "decisionIterations": decision_iterations,
+                "decisionIterationLimit": max_decision_iterations,
+                "actionTurns": action_turns,
+                "actionTurnAllowance": max_action_turns,
+            })
             effective_tool_results = tool_results_block
-            if catalog_description and iteration == 1:
-                effective_tool_results = catalog_description + tool_results_block
+            skill_text = default_skill_manager.render_progressive(
+                skills, list(loaded_skills.values()))
             messages = self.context.assemble(
                 system_prompt=prompt.content,
                 policy_instructions=self._policy_instructions(),
-                skill_instructions=default_skill_manager.render(skills),
+                skill_instructions=skill_text,
                 user_request=request.userMessage or "（对当前简历执行你的职责）",
                 current_goal=request.currentGoal or "",
                 shared_state_digest=self.state.view_for(agent_id),
@@ -1224,6 +1379,8 @@ class RunExecutor:
                 tool_results_block=effective_tool_results,
                 output_schema=(REPORT_OUTPUT_SCHEMA if agent_id == "ReportAgent"
                                else AGENT_OUTPUT_SCHEMA))
+            if native_history:
+                messages.extend(native_history)
             audit = getattr(self, "_last_memory_audit", None)
             if audit and audit.get("consumerAgent") == agent_id:
                 await self.emitter.emit("run.progress", agent_id=agent_id, payload={
@@ -1253,64 +1410,250 @@ class RunExecutor:
                 if violations:
                     logger.warning("compaction consistency violations: %s", violations)
 
-            is_terminal = definition.agent_id in TERMINAL_AGENTS
             is_report = definition.agent_id == "ReportAgent"
-            # Specialists + ReportAgent: provider-enforced function calling.
-            # Other terminal agents (optimize/interview) keep json_object mode —
-            # their long markdown answer lives inside the JSON envelope.
-            if is_report:
-                try:
-                    raw = await self.llm.chat(
-                        messages, agent_id=agent_id,
-                        purpose=definition.output_type, max_tokens=4096,
-                        tools=[EMIT_REPORT_TOOL],
-                        tool_choice=FORCE_EMIT_DECISION,
-                        use_quality=True)
-                except LlmError as exc:
-                    if exc.code in ("PROMPT_OR_SCHEMA_ERROR", "EMPTY_FUNCTION_ARGS"):
-                        raw = await self.llm.chat(
-                            messages, agent_id=agent_id,
-                            purpose=definition.output_type, max_tokens=4096,
-                            use_quality=True)
-                    else:
-                        raise
-            elif is_terminal:
-                raw = await self.llm.chat(messages, agent_id=agent_id,
-                                          purpose=definition.output_type,
-                                          max_tokens=3600)
-            else:
-                try:
-                    raw = await self.llm.chat(messages, agent_id=agent_id,
-                                              purpose=definition.output_type,
-                                              max_tokens=4096,
-                                              tools=[EMIT_DECISION_TOOL],
-                                              tool_choice=FORCE_EMIT_DECISION)
-                except LlmError as exc:
-                    if exc.code in ("PROMPT_OR_SCHEMA_ERROR", "EMPTY_FUNCTION_ARGS"):
-                        raw = await self.llm.chat(messages, agent_id=agent_id,
-                                                  purpose=definition.output_type,
-                                                  max_tokens=4096)
-                    else:
-                        raise
+            # A loaded skill is "applied" only when its instructions actually
+            # enter a subsequent model turn.
+            for skill_id, loaded in loaded_skills.items():
+                if skill_id in applied_skill_ids:
+                    continue
+                if loaded.instructions and loaded.instructions[:80] in "\n".join(
+                        str(m.get("content") or "") for m in messages):
+                    await default_skill_manager.emit_applied(
+                        self.emitter, agent_id, loaded,
+                        tool_call_id=loaded_skill_call_ids[skill_id])
+                    applied_skill_ids.add(skill_id)
+
+            turn = await self._chat_native_turn(
+                messages, agent_id=agent_id,
+                purpose=definition.output_type,
+                max_tokens=4096 if not (
+                    definition.agent_id in TERMINAL_AGENTS and not is_report) else 3600,
+                tools=model_tools,
+                use_quality=is_report)
             agent_llm_calls += 1
+            raw = turn.content
+            final_calls: List[Any] = []
+
+            if turn.tool_calls:
+                native_history.append({
+                    "role": "assistant",
+                    "content": turn.content or None,
+                    "tool_calls": [
+                        {
+                            "id": call.tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": call.raw_arguments,
+                            },
+                        }
+                        for call in turn.tool_calls
+                    ],
+                })
+                final_calls = [
+                    call for call in turn.tool_calls
+                    if call.name == "emit_decision"]
+                action_calls = [
+                    call for call in turn.tool_calls
+                    if call.name != "emit_decision"]
+
+                # When actions and a final emission appear together, execute
+                # the actions and explicitly defer the stale final proposal.
+                if action_calls:
+                    action_turn_allowed = action_turns < max_action_turns
+                    if action_turn_allowed:
+                        action_turns += 1
+                    observations = ""
+                    tool_messages: List[Dict[str, Any]] = []
+                    for proposed in turn.tool_calls:
+                        if proposed.name == "emit_decision":
+                            result_payload = {
+                                "success": False,
+                                "deferred": True,
+                                "reason": "tool results must be observed before final output",
+                            }
+                            tool_messages.append({
+                                "role": "tool",
+                                "tool_call_id": proposed.tool_call_id,
+                                "name": proposed.name,
+                                "content": json.dumps(
+                                    result_payload, ensure_ascii=False),
+                            })
+                            continue
+
+                        tool = model_tool_aliases.get(proposed.name, "")
+                        entry = next(
+                            (item for item in catalog
+                             if item.get("name") == tool), {})
+                        defn = self.tools.definitions.get(tool)
+                        source = (
+                            "mcp" if defn and defn.kind == "mcp"
+                            else "skill" if tool in {
+                                "load_skill", "read_skill_resource"}
+                            else defn.kind if defn else "unknown")
+                        if source == "mcp":
+                            # Bind the earlier catalog exposure to the provider
+                            # call id so catalog → proposal → execution → result
+                            # can be queried as one trace chain.
+                            await self.emitter.emit(
+                                "tool.progress", agent_id=agent_id,
+                                tool_name=tool or proposed.name, payload={
+                                    "toolCallId": proposed.tool_call_id,
+                                    "lifecycleStage": "CATALOG_EXPOSED",
+                                    "source": "mcp",
+                                    "mcpServer": entry.get("mcpServer"),
+                                    "toolName": tool or proposed.name,
+                                    "modelName": proposed.name,
+                                    "description": entry.get("description"),
+                                    "inputSchema": entry.get("inputSchema"),
+                                    "originalExposureId": (
+                                        catalog_exposure_ids.get(tool)),
+                                    "occurredAt": _utc_now(),
+                                })
+                        await self.emitter.emit(
+                            "tool.progress", agent_id=agent_id,
+                            tool_name=tool or proposed.name, payload={
+                                "toolCallId": proposed.tool_call_id,
+                                "lifecycleStage": "LLM_PROPOSED",
+                                "source": source,
+                                "mcpServer": (
+                                    entry.get("mcpServer")
+                                    or (defn.mcp_server if defn else None)),
+                                "toolName": tool or proposed.name,
+                                "modelName": proposed.name,
+                                "inputSchema": (
+                                    entry.get("inputSchema")
+                                    or (defn.input_schema if defn else None)),
+                                "arguments": proposed.arguments,
+                                "argumentsParseError": (
+                                    proposed.arguments_error or None),
+                                "occurredAt": _utc_now(),
+                            })
+
+                        if not action_turn_allowed:
+                            result_payload = await self._reject_native_proposal(
+                                agent_id, tool or proposed.name, proposed,
+                                "native action-turn budget exhausted; emit a final decision",
+                                source=source,
+                                mcp_server=entry.get("mcpServer"))
+                        elif proposed.arguments_error:
+                            result_payload = await self._reject_native_proposal(
+                                agent_id, tool or proposed.name, proposed,
+                                f"arguments are not a JSON object: "
+                                f"{proposed.arguments_error}", source=source,
+                                mcp_server=entry.get("mcpServer"))
+                        elif not tool or tool not in allowed_tools:
+                            result_payload = await self._reject_native_proposal(
+                                agent_id, tool or proposed.name, proposed,
+                                "tool was not present in this agent's exposed catalog",
+                                source=source,
+                                mcp_server=entry.get("mcpServer"))
+                        elif agent_tool_calls >= agent_tool_limit:
+                            result_payload = await self._reject_native_proposal(
+                                agent_id, tool, proposed,
+                                "agent tool budget exhausted", source=source,
+                                mcp_server=entry.get("mcpServer"))
+                        elif tool in {"load_skill", "read_skill_resource"}:
+                            result_payload = await self._execute_skill_proposal(
+                                agent_id=agent_id,
+                                tool=tool,
+                                proposed=proposed,
+                                selected_skills=skills,
+                                loaded_skills=loaded_skills,
+                                loaded_skill_call_ids=loaded_skill_call_ids)
+                            agent_tool_calls += 1
+                        else:
+                            args = proposed.arguments
+                            guard = self.guard.check_tool_call(
+                                ToolExecutor.signature(tool, args))
+                            if guard.triggered:
+                                await self._emit_guard(guard, agent_id)
+                                result_payload = await self._reject_native_proposal(
+                                    agent_id, tool, proposed,
+                                    "duplicate call blocked by loop guard",
+                                    source=source,
+                                    mcp_server=entry.get("mcpServer"))
+                            else:
+                                call = await self.tools.execute(
+                                    agent_id, tool, args,
+                                    # The model already authored these native
+                                    # tool arguments. Never spend a hidden
+                                    # provider call rewriting them.
+                                    enable_rewrite=False,
+                                    tool_call_id=proposed.tool_call_id)
+                                agent_tool_calls += 1
+                                if call.status != "SUCCEEDED":
+                                    self._tool_failed_this_group = True
+                                observations += self._format_tool_result(call)
+                                if call.status == "SUCCEEDED":
+                                    await self._record_tool_success(
+                                        agent_id, tool, args, call.result,
+                                        tool_call_id=call.tool_call_id)
+                                result_payload = {
+                                    "success": call.status == "SUCCEEDED",
+                                    "status": call.status,
+                                    "result": call.result if (
+                                        call.status == "SUCCEEDED") else None,
+                                    "error": call.error if (
+                                        call.status != "SUCCEEDED") else None,
+                                }
+                        observations += (
+                            f"\n[MODEL_TOOL_RESULT {tool or proposed.name} "
+                            f"id={proposed.tool_call_id}] "
+                            f"{json.dumps(result_payload, ensure_ascii=False)[:1500]}")
+                        tool_messages.append({
+                            "role": "tool",
+                            "tool_call_id": proposed.tool_call_id,
+                            "name": proposed.name,
+                            "content": json.dumps(
+                                result_payload, ensure_ascii=False)[:12000],
+                        })
+                    native_history.extend(tool_messages)
+                    guard = self.guard.check_observation(observations)
+                    if guard.triggered:
+                        await self._emit_guard(guard, agent_id)
+                    tool_results_block += observations
+                    continue
+
+                # No actions: the final structured function arguments are the
+                # decision payload. A plain content JSON remains a compatibility
+                # fallback for providers without function calling.
+                if final_calls:
+                    raw = final_calls[0].raw_arguments
+
+            decision_iterations += 1
             decision, schema_error = self._parse_decision(raw)
             if decision is None:
-                # Repair with the exact violation fed back, not a generic nag.
-                # Terminal raw-markdown acceptance was removed: ReportAgent must
-                # produce structured JSON or the run fails the report contract.
-                raw = await self.llm.chat(
-                    messages + [{"role": "assistant", "content": raw[:1500]},
-                                {"role": "user",
-                                 "content": ("上面的输出未通过 json schema 校验："
-                                             f"{schema_error[:400]}。"
-                                             "请只输出修正后的 JSON 对象，不要任何其他文本。")}],
-                    agent_id=agent_id, purpose="repair", max_tokens=2048)
-                agent_llm_calls += 1
-                decision, schema_error = self._parse_decision(raw)
-                if decision is None:
-                    raise LlmError("MALFORMED_OUTPUT",
-                                   f"agent 两次输出均未通过 schema 校验: {schema_error[:200]}",
-                                   False)
+                # Repair consumes an ordinary, fully-budgeted next turn.
+                # Never issue a hidden extra LLM call beyond llmQuota.
+                if (decision_iterations < max_decision_iterations
+                        and iteration < max_turns):
+                    repair_message = (
+                        "上面的输出未通过 json schema 校验："
+                        f"{schema_error[:400]}。"
+                        "请使用 emit_decision/emit_report 提交修正后的结构化结果。")
+                    if final_calls:
+                        native_history.append({
+                            "role": "tool",
+                            "tool_call_id": final_calls[0].tool_call_id,
+                            "name": final_calls[0].name,
+                            "content": json.dumps({
+                                "success": False,
+                                "error": schema_error[:400],
+                                "retryable": True,
+                            }, ensure_ascii=False),
+                        })
+                    elif raw:
+                        native_history.append({
+                            "role": "assistant", "content": raw[:1500]})
+                    native_history.append({
+                        "role": "user", "content": repair_message})
+                    continue
+                raise LlmError(
+                    "MALFORMED_OUTPUT",
+                    f"agent output failed schema validation within budget: "
+                    f"{schema_error[:200]}",
+                    False)
 
             thought = str(decision.get("thought") or "")
             if thought:
@@ -1320,42 +1663,22 @@ class RunExecutor:
                     decision["toolCalls"] = []
                     decision["done"] = True
 
-            tool_calls = decision.get("toolCalls") or []
-            if tool_calls and iteration < max_iterations:
-                observations = ""
-                for tool_call in tool_calls[:3]:
-                    tool = str(tool_call.get("tool") or "")
-                    if tool not in allowed_tools:
-                        observations += f"\n[TOOL_RESULT {tool}] 拒绝：不在该 Agent 白名单"
-                        continue
-                    if agent_tool_calls >= agent_tool_limit:
-                        observations += "\n[TOOL_RESULT budget] Agent 工具预算耗尽"
-                        break
-                    args = tool_call.get("arguments") or {}
-                    guard = self.guard.check_tool_call(ToolExecutor.signature(tool, args))
-                    if guard.triggered:
-                        await self._emit_guard(guard, agent_id)
-                        observations += f"\n[TOOL_RESULT {tool}] 跳过：重复调用被 Loop Guard 拦截"
-                        continue
-                    # Agentic retrieval: decision-loop calls get query
-                    # rewriting + multi-query RRF fusion; pre-steps stay
-                    # single-shot to save LLM budget.
-                    call = await self.tools.execute(agent_id, tool, args,
-                                                    enable_rewrite=True)
-                    agent_tool_calls += 1
-                    if call.status == "FAILED":
-                        self._tool_failed_this_group = True
-                    observations += self._format_tool_result(call)
-                    if call.status == "SUCCEEDED":
-                        if tool == "verify_report_evidence":
-                            self._apply_verification(call.result)
-                        elif tool == "jd_match_search":
-                            self._store_jd_match_artifacts(call.result)
-                guard = self.guard.check_observation(observations)
-                if guard.triggered:
-                    await self._emit_guard(guard, agent_id)
-                    decision["done"] = True
-                tool_results_block += observations
+            nested_calls = decision.get("toolCalls") or []
+            if nested_calls:
+                await self.emitter.emit("run.progress", agent_id=agent_id, payload={
+                    "stage": "nested_tool_calls_rejected",
+                    "reason": "tools must use provider-native function calls",
+                    "count": len(nested_calls),
+                    "occurredAt": _utc_now(),
+                })
+                decision["toolCalls"] = []
+                if (not decision.get("output")
+                        and decision_iterations < max_decision_iterations
+                        and iteration < max_turns):
+                    tool_results_block += (
+                        "\n[NATIVE_TOOL_REQUIRED] JSON 内嵌 toolCalls 已拒绝；"
+                        "请使用已提供的原生 function tools。")
+                    continue
 
             # First-class handoff: reuse the requestedNextAction insertion
             # path (dependency + delegation-cycle + budget checks live there),
@@ -1384,17 +1707,317 @@ class RunExecutor:
                         "reason": "handoff 去环：目标 Agent 已执行"})
 
             raw_output = decision.get("output")
-            if raw_output or decision.get("done") or iteration >= max_iterations:
+            if (raw_output or decision.get("done")
+                    or decision_iterations >= max_decision_iterations
+                    or iteration >= max_turns):
                 output = self._build_output(definition, raw_output, tool_results_block)
 
         if output is None:
             output = self._build_output(definition, None, tool_results_block)
+        self.skill_selections[agent_id] = [
+            loaded_skills.get(skill.skill_id, skill) for skill in skills]
+        await self._emit_unapplied_skills(
+            agent_id, skills, loaded_skills, applied_skill_ids,
+            reason="model_did_not_load_or_apply")
         self.agent_counters[definition.agent_id] = {
             "iterations": iteration,
+            "decisionIterations": decision_iterations,
+            "actionTurns": action_turns,
             "llmCalls": agent_llm_calls,
             "toolCalls": agent_tool_calls,
         }
         return output
+
+    async def _chat_native_turn(self, messages: List[Dict[str, Any]], *,
+                                agent_id: str, purpose: str,
+                                max_tokens: int,
+                                tools: List[Dict[str, Any]],
+                                use_quality: bool) -> LlmTurn:
+        """Use native tool calling when supported; preserve test adapters."""
+        chat_turn = getattr(self.llm, "chat_turn", None)
+        if callable(chat_turn):
+            return await chat_turn(
+                messages, agent_id=agent_id, purpose=purpose,
+                max_tokens=max_tokens, tools=tools,
+                tool_choice="auto", use_quality=use_quality)
+        raw = await self.llm.chat(
+            messages, agent_id=agent_id, purpose=purpose,
+            max_tokens=max_tokens, tools=tools, tool_choice=None,
+            use_quality=use_quality)
+        return LlmTurn(content=str(raw or ""), tool_calls=[],
+                       finish_reason="legacy_adapter")
+
+    async def _reject_native_proposal(self, agent_id: str, tool: str,
+                                      proposed: LlmToolCall, reason: str, *,
+                                      source: str,
+                                      mcp_server: Optional[str] = None
+                                      ) -> Dict[str, Any]:
+        now = _utc_now()
+        await self.emitter.emit("tool.failed", agent_id=agent_id,
+                                tool_name=tool, payload={
+                                    "toolCallId": proposed.tool_call_id,
+                                    "lifecycleStage": "ERROR",
+                                    "source": source,
+                                    "mcpServer": mcp_server,
+                                    "toolName": tool,
+                                    "modelName": proposed.name,
+                                    "arguments": proposed.arguments,
+                                    "error": reason,
+                                    "outcome": "REJECTED",
+                                    "occurredAt": now,
+                                    "startedAt": now,
+                                    "endedAt": now,
+                                })
+        return {
+            "success": False,
+            "status": "REJECTED",
+            "error": reason,
+        }
+
+    async def _execute_skill_proposal(
+            self, *, agent_id: str, tool: str, proposed: LlmToolCall,
+            selected_skills: List[Any],
+            loaded_skills: Dict[str, Any],
+            loaded_skill_call_ids: Dict[str, str]) -> Dict[str, Any]:
+        if self.budget.tool_calls >= self.tools.max_tool_calls_run:
+            return await self._reject_native_proposal(
+                agent_id, tool, proposed, "run tool budget exhausted",
+                source="skill")
+        started_at = _utc_now()
+        self.budget.tool_calls += 1
+        await self.emitter.emit("tool.started", agent_id=agent_id,
+                                tool_name=tool, payload={
+                                    "toolCallId": proposed.tool_call_id,
+                                    "lifecycleStage": "EXECUTION_STARTED",
+                                    "source": "skill",
+                                    "kind": "internal",
+                                    "toolName": tool,
+                                    "modelName": proposed.name,
+                                    "arguments": proposed.arguments,
+                                    "occurredAt": started_at,
+                                    "startedAt": started_at,
+                                })
+        skill_id = str(proposed.arguments.get("skill_id") or "").strip()
+        try:
+            selected_ids = {skill.skill_id for skill in selected_skills}
+            if not skill_id or skill_id not in selected_ids:
+                raise KeyError(
+                    f"skill not selected for this agent: {skill_id or '<empty>'}")
+            if tool == "load_skill":
+                loaded = default_skill_manager.load(skill_id)
+                loaded_skills[skill_id] = loaded
+                loaded_skill_call_ids[skill_id] = proposed.tool_call_id
+                await default_skill_manager.emit_loaded(
+                    self.emitter, agent_id, loaded,
+                    tool_call_id=proposed.tool_call_id,
+                    reason="llm_native_tool_call")
+                result: Dict[str, Any] = {
+                    "success": True,
+                    "loaded": True,
+                    "skillId": loaded.skill_id,
+                    "skillVersion": loaded.version,
+                    "resources": list(loaded.resource_paths),
+                    "instructionsInjectedNextTurn": True,
+                }
+            else:
+                loaded = loaded_skills.get(skill_id)
+                if loaded is None:
+                    raise KeyError(
+                        f"load_skill must run before read_skill_resource: {skill_id}")
+                path = str(proposed.arguments.get("path") or "").strip()
+                content = default_skill_manager.read_resource(skill_id, path)
+                result = {
+                    "success": True,
+                    "loaded": True,
+                    "skillId": loaded.skill_id,
+                    "skillVersion": loaded.version,
+                    "path": path,
+                    "content": content,
+                }
+                await self.emitter.emit(
+                    "skill.loaded", agent_id=agent_id,
+                    tool_name=skill_id, payload={
+                        "toolCallId": proposed.tool_call_id,
+                        "skillId": loaded.skill_id,
+                        "skillVersion": loaded.version,
+                        "skillHash": loaded.hash,
+                        "agentId": agent_id,
+                        "lifecycleStage": "RESOURCE_LOADED",
+                        "reason": "llm_requested_reference",
+                        "resourcePath": path,
+                        "disclosureState": "RESOURCE",
+                        "occurredAt": _utc_now(),
+                    })
+            ended_at = _utc_now()
+            await self.emitter.emit("tool.completed", agent_id=agent_id,
+                                    tool_name=tool, payload={
+                                        "toolCallId": proposed.tool_call_id,
+                                        "lifecycleStage": "RESULT",
+                                        "source": "skill",
+                                        "kind": "internal",
+                                        "toolName": tool,
+                                        "modelName": proposed.name,
+                                        "arguments": proposed.arguments,
+                                        "resultPreview": {
+                                            k: v for k, v in result.items()
+                                            if k != "content"},
+                                        "occurredAt": ended_at,
+                                        "startedAt": started_at,
+                                        "endedAt": ended_at,
+                                    })
+            return result
+        except Exception as exc:  # noqa: BLE001
+            ended_at = _utc_now()
+            error = f"{type(exc).__name__}: {exc}"[:500]
+            await self.emitter.emit("tool.failed", agent_id=agent_id,
+                                    tool_name=tool, payload={
+                                        "toolCallId": proposed.tool_call_id,
+                                        "lifecycleStage": "ERROR",
+                                        "source": "skill",
+                                        "kind": "internal",
+                                        "toolName": tool,
+                                        "modelName": proposed.name,
+                                        "arguments": proposed.arguments,
+                                        "error": error,
+                                        "occurredAt": ended_at,
+                                        "startedAt": started_at,
+                                        "endedAt": ended_at,
+                                    })
+            await self.emitter.emit("skill.failed", agent_id=agent_id,
+                                    tool_name=skill_id or tool, payload={
+                                        "toolCallId": proposed.tool_call_id,
+                                        "skillId": skill_id or None,
+                                        "skillVersion": None,
+                                        "agentId": agent_id,
+                                        "lifecycleStage": "ERROR",
+                                        "reason": error,
+                                        "occurredAt": ended_at,
+                                    })
+            return {"success": False, "status": "FAILED", "error": error}
+
+    async def _emit_unapplied_skills(
+            self, agent_id: str, selected: List[Any],
+            loaded: Dict[str, Any], applied_ids: set, *,
+            reason: str) -> None:
+        for metadata in selected:
+            if metadata.skill_id in applied_ids:
+                continue
+            skill = loaded.get(metadata.skill_id, metadata)
+            detail = (
+                "loaded_without_subsequent_model_turn"
+                if metadata.skill_id in loaded
+                else reason)
+            try:
+                await default_skill_manager.emit_skipped(
+                    self.emitter, agent_id, skill, reason=detail)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("skill skipped event emit failed: %s", exc)
+
+    async def _record_tool_success(self, agent_id: str, tool: str,
+                                   args: Dict[str, Any], result: Any, *,
+                                   tool_call_id: str) -> None:
+        """Persist only successful tool material; failures never become evidence."""
+        if isinstance(result, dict) and result.get("success") is False:
+            return
+        if tool == "calculate_jd_coverage":
+            self.state.put_artifact("jdCoverage", result)
+        elif tool == "check_timeline":
+            self.state.put_artifact("timelineCheck", result)
+        elif tool == "verify_report_evidence":
+            self._apply_verification(result)
+        elif tool == "parse_resume":
+            self.state.put_artifact("parsedResume", result)
+            facts = self._resume_facts_from_parse(result)
+            if facts:
+                self.state.put_artifact("resumeFacts", facts)
+        elif tool in ("knowledge_search", "resume_semantic_search"):
+            await self._emit_rag_metrics(
+                agent_id, result, str(args.get("query") or ""),
+                tool_name=tool, tool_call_id=tool_call_id,
+                requested_k=int(args.get("topK") or 5))
+        elif tool == "jd_match_search":
+            self._store_jd_match_artifacts(result)
+
+        defn = self.tools.definitions.get(tool)
+        if defn is not None and defn.kind == "mcp":
+            server = str(defn.mcp_server or "")
+            result_source_urls = _collect_source_urls(result)
+            request_source_urls = _collect_source_urls(
+                args.get("url"), args.get("urls"))
+            source_urls = list(result_source_urls)
+            if server == "fetch" or tool == "exa.web_fetch_exa":
+                # For fetch calls the URL is the actual requested document.
+                # Search-query text, however, is not evidence provenance.
+                source_urls = list(dict.fromkeys(
+                    request_source_urls + result_source_urls))
+            base_entry = {
+                "toolCallId": tool_call_id,
+                "tool": tool,
+                "mcpServer": server,
+                "status": "SUCCEEDED",
+                "query": str(args.get("query") or "")[:500],
+                "url": str(args.get("url") or "")[:1000],
+                "repository": str(
+                    args.get("repoName") or args.get("repository")
+                    or args.get("repo") or "")[:300],
+                "sourceUrls": source_urls,
+                "result": result,
+                "collectedAt": _utc_now(),
+            }
+
+            # Documentation MCPs inform reasoning but are never candidate
+            # facts. DeepWiki additionally requires the locally injected,
+            # candidate-declared repository binding from ToolExecutor.
+            if server in {"deepwiki", "context7", "microsoft-learn"}:
+                if server == "deepwiki":
+                    policy = (
+                        result.get("evidencePolicy")
+                        if isinstance(result, dict) else None)
+                    binding_url = str(
+                        policy.get("sourceUrl") or ""
+                    ) if isinstance(policy, dict) else ""
+                    if (
+                            not isinstance(policy, dict)
+                            or policy.get("evidenceUse") != "context_only"
+                            or policy.get("candidateFactEligible") is not False
+                            or not re.match(
+                                r"^https://github\.com/[^/]+/[^/]+/?$",
+                                binding_url, re.IGNORECASE)):
+                        logger.warning(
+                            "DeepWiki result omitted from state: invalid "
+                            "candidate repository binding")
+                        return
+                    source_urls = [binding_url]
+                    base_entry["sourceUrls"] = source_urls
+                    base_entry["repository"] = str(
+                        policy.get("repository") or "")[:300]
+                base_entry.update({
+                    "evidenceUse": "context_only",
+                    "candidateFactEligible": False,
+                    "sourceBacked": bool(source_urls),
+                })
+                context_items = self.state.artifact("mcpContext") or []
+                context_items.append(base_entry)
+                self.state.put_artifact("mcpContext", context_items)
+                return
+
+            # Public-web output without an HTTP(S) source may still be shown to
+            # the calling model, but it cannot enter the evidence ledger.
+            if not source_urls:
+                logger.info(
+                    "MCP result omitted from mcpEvidence: %s returned no source URL",
+                    tool)
+                return
+
+            base_entry.update({
+                "evidenceUse": "raw_source_for_calibration",
+                "candidateFactEligible": False,
+                "requiresCalibration": True,
+                "sourceBacked": True,
+            })
+            existing = self.state.artifact("mcpEvidence") or []
+            existing.append(base_entry)
+            self.state.put_artifact("mcpEvidence", existing)
 
     @staticmethod
     def _parse_decision(raw: str) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -1471,6 +2094,144 @@ class RunExecutor:
             if answer:
                 self.final_answer = str(answer)
         return output
+
+    async def _emit_rag_metrics(
+            self, agent_id: str, result: Any, query: str = "", *,
+            tool_name: str, tool_call_id: str,
+            requested_k: Any = None) -> None:
+        """Emit measured multi-stage retrieval telemetry.
+
+        Missing provider counters remain ``None``/``NOT_COLLECTED``; the
+        runtime never invents recall, latency stages, cache hits or scores.
+        """
+        if not isinstance(result, dict):
+            return
+        chunks: List[Any] = []
+        for key in ("chunks", "results", "hits", "items"):
+            if isinstance(result.get(key), list):
+                chunks = result[key]
+                break
+        returned_k = len(chunks)
+        queries_used = result.get("queriesUsed") or ([query] if query else [])
+        score_values: List[float] = []
+        doc_ids = set()
+        normalized_chunks = []
+        for chunk in chunks[:10]:
+            if isinstance(chunk, dict):
+                raw_score = next((
+                    chunk.get(key) for key in (
+                        "score", "relevanceScore", "similarity",
+                        "vectorScore", "bm25Score", "rrfScore")
+                    if isinstance(chunk.get(key), (int, float))), None)
+                score = float(raw_score) if raw_score is not None else None
+                if score is not None:
+                    score_values.append(score)
+                doc_id = chunk.get("docId") or chunk.get("documentId") or chunk.get("id") or ""
+                if doc_id:
+                    doc_ids.add(doc_id)
+                content = chunk.get("content") or chunk.get("text") or chunk.get("pageContent") or ""
+                normalized_chunks.append({
+                    "chunkId": chunk.get("chunkId") or chunk.get("id"),
+                    "docId": doc_id or None,
+                    "title": chunk.get("title"),
+                    "source": chunk.get("source") or chunk.get("sourceType"),
+                    "uri": chunk.get("uri") or chunk.get("url"),
+                    "score": round(score, 4) if score is not None else None,
+                    "content": str(content)[:800] if content else None,
+                    "provenance": chunk.get("provenance") or {
+                        "indexName": chunk.get("index")
+                        or chunk.get("collection"),
+                        "sourceId": chunk.get("sourceId"),
+                    },
+                })
+        latency = result.get("_latency") or {}
+        counters = result.get("counters") if isinstance(
+            result.get("counters"), dict) else {}
+        candidate_count = (
+            result.get("candidateCount")
+            if isinstance(result.get("candidateCount"), int)
+            else counters.get("candidateCount")
+            if isinstance(counters.get("candidateCount"), int)
+            else None)
+        ended_at = str(result.get("retrievedAt") or _utc_now())
+        rerank_applied = (
+            result.get("rerankApplied")
+            if isinstance(result.get("rerankApplied"), bool)
+            else result.get("agenticRerank")
+            if isinstance(result.get("agenticRerank"), bool)
+            else None)
+        payload = {
+            "toolCallId": tool_call_id,
+            "toolName": tool_name,
+            "query": query[:200] if query else "",
+            "requestedK": int(requested_k) if isinstance(
+                requested_k, (int, float)) else None,
+            "returnedK": returned_k,
+            "candidateCount": candidate_count,
+            "lexicalHits": result.get("lexicalHits")
+            if isinstance(result.get("lexicalHits"), int) else None,
+            "vectorHits": result.get("vectorHits")
+            if isinstance(result.get("vectorHits"), int) else None,
+            "filteredCount": result.get("filteredCount")
+            if isinstance(result.get("filteredCount"), int) else None,
+            "droppedCount": result.get("droppedCount")
+            if isinstance(result.get("droppedCount"), int) else None,
+            "deduplicatedCount": result.get("deduplicatedCount")
+            if isinstance(result.get("deduplicatedCount"), int) else None,
+            "hitCount": returned_k,
+            "queriesUsed": queries_used[:3],
+            "queryRewriteMode": result.get("queryRewriteMode"),
+            "scores": {
+                "top": round(max(score_values), 4) if score_values else None,
+                "min": round(min(score_values), 4) if score_values else None,
+                "mean": round(sum(score_values) / len(score_values), 4)
+                if score_values else None,
+                "collectedCount": len(score_values),
+            },
+            "uniqueDocuments": len(doc_ids),
+            "docIds": list(doc_ids)[:5],
+            "strategy": result.get("strategy"),
+            "fusionStrategy": result.get("fusion"),
+            "indexName": result.get("indexName"),
+            "source": result.get("source"),
+            "chunks": normalized_chunks,
+            "stages": {
+                "queryRewriteMs": latency.get("rewrite_ms"),
+                "embeddingMs": latency.get("embedding_ms"),
+                "retrievalMs": (
+                    latency.get("retrieval_ms")
+                    if latency.get("retrieval_ms") is not None
+                    else result.get("latencyMs")),
+                "embeddingRetrievalMs": latency.get("embedding_search_ms"),
+                "fusionMs": latency.get("fusion_ms"),
+                "rerankMs": latency.get("rerank_ms"),
+                "totalMs": latency.get("total_ms"),
+            },
+            "counters": counters or None,
+            "rerankApplied": rerank_applied,
+            "rerankProvider": result.get("rerankProvider"),
+            "rerankBeforeTopScore": result.get("rerankBeforeTopScore"),
+            "rerankAfterTopScore": result.get("rerankAfterTopScore"),
+            "rerankLift": result.get("rerankLift"),
+            "cacheHit": result.get("cacheHit")
+            if isinstance(result.get("cacheHit"), bool) else None,
+            "fallback": result.get("fallback")
+            if isinstance(result.get("fallback"), bool) else None,
+            "fallbackStage": result.get("fallbackStage"),
+            "fallbackChain": result.get("fallbackChain")
+            if isinstance(result.get("fallbackChain"), list) else None,
+            "degraded": result.get("degraded")
+            if isinstance(result.get("degraded"), bool) else None,
+            "reason": result.get("reason"),
+            "error": result.get("error"),
+            "retrievedAt": result.get("retrievedAt"),
+            "occurredAt": ended_at,
+            "startedAt": result.get("_startedAt"),
+            "endedAt": ended_at,
+        }
+        await self.emitter.emit(
+            "retrieval.completed", agent_id=agent_id,
+            tool_name=tool_name, payload=payload)
 
     def _store_jd_match_artifacts(self, result: Any) -> None:
         """Persist hybrid JD matches + effectiveJd for Tech coverage / sync."""
@@ -1555,17 +2316,6 @@ class RunExecutor:
             requestedNextAction=None,
             summary=summary[:500])
 
-    def _has_mcp_tool(self, tool_name: str) -> bool:
-        """Check if an MCP tool is available (registered and server healthy)."""
-        if tool_name in self.tools.definitions:
-            defn = self.tools.definitions[tool_name]
-            if defn.kind == "mcp":
-                return True
-            return True
-        if self.tools.mcp_registry is not None:
-            return tool_name in self.tools.mcp_registry.tools
-        return False
-
     def _extract_candidate_urls(self, resume_text: str) -> List[str]:
         """Extract verifiable candidate URLs from resume (GitHub, LinkedIn, blog, portfolio)."""
         import re as _re
@@ -1583,63 +2333,88 @@ class RunExecutor:
                 unique.append(u_clean)
         return unique
 
-    def _build_evidence_search_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
-        """Build a search query for external evidence verification."""
+    async def _build_evidence_search_query_llm(self, resume: str, artifacts: Dict[str, Any],
+                                                agent_id: str) -> str:
+        """Compatibility wrapper with no hidden provider call.
+
+        Native tool arguments are model-authored in the visible agent turn;
+        legacy callers receive the deterministic fallback.
+        """
+        return self._build_evidence_search_query_fallback(resume, artifacts)
+
+    def _build_evidence_search_query_fallback(self, resume: str, artifacts: Dict[str, Any]) -> str:
+        """Regex fallback when LLM unavailable."""
+        import re as _re
         facts = artifacts.get("resumeFacts") or {}
-        name = ""
-        company = ""
+        parts = []
         if isinstance(facts, dict):
             experiences = facts.get("experiences") or []
             if experiences and isinstance(experiences, list):
-                exp = experiences[0] if experiences else {}
-                if isinstance(exp, dict):
-                    company = exp.get("company") or ""
-                    name = facts.get("name") or ""
-        if not name:
-            lines = (resume or "").strip().split("\n")[:5]
-            for line in lines:
-                clean = line.strip()
-                if 2 <= len(clean) <= 6 and not any(c in clean for c in "：:·|"):
-                    name = clean
-                    break
-        if name and company:
-            return f"{name} {company} 工程师"
-        elif name:
-            return f"{name} 技术 GitHub"
-        return ""
+                exp = experiences[0] if isinstance(experiences[0], dict) else {}
+                company = exp.get("company") or ""
+                role = exp.get("role") or exp.get("title") or ""
+                if company and len(company) >= 2:
+                    parts.append(company)
+                if role:
+                    parts.append(role[:20])
+            skills = facts.get("skills") or []
+            if isinstance(skills, list) and skills:
+                top_skills = [s for s in skills[:5]
+                              if isinstance(s, str) and len(s) >= 2]
+                parts.extend(top_skills[:3])
+        if not parts:
+            companies = _re.findall(
+                r"(字节跳动|阿里巴巴|腾讯|美团|百度|京东|华为|快手|小红书|"
+                r"拼多多|网易|滴滴|蚂蚁|[\u4e00-\u9fa5]{2,6}(?:科技|网络|公司))",
+                resume)
+            if companies:
+                parts.append(companies[0])
+            tech = _re.findall(
+                r"\b(Spring\s*Boot|Redis|Kafka|Go|Kubernetes|Docker|"
+                r"MySQL|微服务|分布式|RAG|LLM|Agent)\b", resume, _re.IGNORECASE)
+            parts.extend(tech[:3])
+        if not parts:
+            return ""
+        return " ".join(parts[:4])
+
+    def _build_evidence_search_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
+        """Sync wrapper - used by plan builder. Returns fallback only."""
+        return self._build_evidence_search_query_fallback(resume, artifacts)
 
     def _fallback_search_query(self, resume: str) -> str:
-        """Always produce a search query from resume text for evidence verification."""
+        """Produce a claim-based search query — NEVER use candidate name."""
+        import re as _re
         lines = (resume or "").strip().split("\n")[:30]
-        skills = []
         companies = []
+        techs = []
+        metrics = []
         for line in lines:
             clean = line.strip()
             if not clean:
                 continue
-            import re as _re
             company_match = _re.search(
-                r"([\u4e00-\u9fa5]{2,8}(?:科技|网络|信息|技术|集团|公司|互联网))", clean)
+                r"(字节跳动|阿里巴巴|腾讯|美团|百度|京东|华为|快手|"
+                r"[\u4e00-\u9fa5]{2,6}(?:科技|网络|信息|技术|集团|公司|互联网))",
+                clean)
             if company_match:
                 companies.append(company_match.group(1))
-            skill_match = _re.findall(
-                r"\b(Java|Python|Go|Rust|React|Vue|Spring|K8s|Kubernetes|Docker|"
-                r"微服务|分布式|MySQL|Redis|Kafka|Flink|大数据|AI|机器学习)\b",
+            tech_match = _re.findall(
+                r"\b(Spring\s*Boot|Redis|Kafka|Go|Kubernetes|Docker|"
+                r"MySQL|微服务|分布式|RAG|LLM|Flink|Spark|Vue|React)\b",
                 clean, _re.IGNORECASE)
-            skills.extend(skill_match[:2])
+            techs.extend(tech_match[:2])
+            metric_match = _re.search(
+                r"(QPS|延迟|性能|吞吐|并发).{0,10}(提升|降低|优化).{0,8}\d+",
+                clean)
+            if metric_match:
+                metrics.append(clean[:40])
+        if companies and techs:
+            return f"{companies[0]} {' '.join(techs[:2])} 技术实践"
+        if techs:
+            return f"{' '.join(techs[:3])} 最佳实践 架构"
         if companies:
-            return f"{companies[0]} 技术团队 {' '.join(skills[:2])}"
-        if skills:
-            return f"{' '.join(skills[:3])} 工程师 技术"
-        first_meaningful = ""
-        for line in lines[:5]:
-            clean = line.strip()
-            if 2 <= len(clean) <= 20 and not any(c in clean for c in "：:·|【】{}"):
-                first_meaningful = clean
-                break
-        if first_meaningful:
-            return f"{first_meaningful} 工程师"
-        return "软件工程师 技术能力"
+            return f"{companies[0]} 后端开发 技术栈"
+        return ""
 
     def _fallback_project_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
         """Always produce a project search query from resume content."""
@@ -1664,28 +2439,39 @@ class RunExecutor:
         return "软件开发项目 技术架构 实践"
 
     def _build_project_search_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
-        """Build a search query for project verification."""
+        """Build a search query for project verification using specific claims."""
+        import re as _re
         facts = artifacts.get("resumeFacts") or {}
         if isinstance(facts, dict):
             projects = facts.get("projects") or []
             if projects and isinstance(projects, list):
-                proj = projects[0] if projects else {}
-                if isinstance(proj, dict):
-                    proj_name = proj.get("name") or proj.get("title") or ""
-                    tech = proj.get("techStack") or proj.get("tech") or ""
-                    if proj_name and len(proj_name) > 3:
-                        query = proj_name
-                        if isinstance(tech, list):
-                            query += " " + " ".join(tech[:2])
-                        elif isinstance(tech, str):
-                            query += " " + tech[:30]
-                        return query.strip()
-        candidate_urls = self._extract_candidate_urls(resume)
-        if candidate_urls:
-            import re as _re
-            gh_match = _re.search(r"github\.com/([^/\s]+)", " ".join(candidate_urls))
-            if gh_match:
-                return f"github {gh_match.group(1)} projects"
+                proj = projects[0] if isinstance(projects[0], dict) else {}
+                proj_name = proj.get("name") or proj.get("title") or ""
+                tech = proj.get("techStack") or proj.get("tech") or ""
+                if proj_name and len(proj_name) > 3:
+                    query = proj_name
+                    if isinstance(tech, list):
+                        query += " " + " ".join(tech[:2])
+                    elif isinstance(tech, str):
+                        query += " " + tech[:30]
+                    return query.strip()
+        proj_lines = _re.findall(
+            r"(?:项目[名称]*[:：]\s*|(?:\d+)[.、]\s*)(.{4,30}?)(?:\s*[\(（]|$)",
+            resume[:1500])
+        if proj_lines:
+            proj_name = proj_lines[0].strip()
+            techs = _re.findall(
+                r"\b(Go|Java|Python|Redis|Kafka|Flink|Spring|Vue|React|"
+                r"Kubernetes|Docker|ClickHouse|gRPC)\b",
+                resume[:800], _re.IGNORECASE)
+            if techs:
+                return f"{proj_name} {' '.join(list(dict.fromkeys(techs))[:2])} 架构"
+            return f"{proj_name} 技术架构 实现"
+        techs = _re.findall(
+            r"\b(Spring\s*Boot|Redis|Kafka|Go|Kubernetes|Docker|"
+            r"Flink|ClickHouse|gRPC|微服务)\b", resume[:1000], _re.IGNORECASE)
+        if techs:
+            return f"{' '.join(list(dict.fromkeys(techs))[:3])} 高并发 架构设计"
         return ""
 
     def _maybe_skip_evidence_llm(self, tool_results_block: str) -> Optional[AgentOutput]:
@@ -1699,7 +2485,7 @@ class RunExecutor:
             return None
         if "verify_report_evidence" not in tool_results_block:
             return None
-        if "mcp_fetch_url" in tool_results_block or "fetch.fetch" in tool_results_block:
+        if "fetch.fetch" in tool_results_block:
             return None
         if "exa.web_search_exa" in tool_results_block:
             return None
@@ -2228,9 +3014,9 @@ class RunExecutor:
         # ResumeParserAgent: skip re-parse when preflight already populated facts.
         if definition.agent_id == "ResumeParserAgent" and resume and not parsed_already:
             steps.append(("parse_resume", {"resumeText": resume}))
-        elif definition.agent_id == "JDAnalysisAgent" and resume \
-                and "jdMatches" not in artifacts:
-            steps.append(("jd_match_search", {"resumeText": resume}))
+        elif definition.agent_id == "JDAnalysisAgent" and resume:
+            if "jdMatches" not in artifacts:
+                steps.append(("jd_match_search", {"resumeText": resume}))
         elif definition.agent_id == "RiskAgent" and resume \
                 and "timelineCheck" not in artifacts:
             steps.append(("check_timeline", {"resumeText": resume}))
@@ -2253,41 +3039,14 @@ class RunExecutor:
                                "jdText": (artifacts.get("effectiveJd")
                                           or request.jobDescription or ""),
                                "claims": claims}))
-            candidate_urls = self._extract_candidate_urls(resume)
-            has_mcp_fetch = self._has_mcp_tool("fetch.fetch") or self._has_mcp_tool("mcp_fetch_url")
-            fetch_tool_name = "fetch.fetch" if self._has_mcp_tool("fetch.fetch") else "mcp_fetch_url"
-            has_exa = self._has_mcp_tool("exa.web_search_exa")
-            if candidate_urls and has_mcp_fetch:
-                for url in candidate_urls[:2]:
-                    steps.append((fetch_tool_name, {"url": url, "maxLength": 4000}))
-            if has_exa:
-                search_query = self._build_evidence_search_query(resume, artifacts)
-                if not search_query:
-                    search_query = self._fallback_search_query(resume)
-                if search_query:
-                    steps.append(("exa.web_search_exa",
-                                  {"query": search_query, "numResults": 3,
-                                   "type": "neural"}))
-        elif definition.agent_id == "ProjectAgent" and resume:
-            has_exa = self._has_mcp_tool("exa.web_search_exa")
-            has_mcp_fetch = self._has_mcp_tool("fetch.fetch") or self._has_mcp_tool("mcp_fetch_url")
-            fetch_tool_name = "fetch.fetch" if self._has_mcp_tool("fetch.fetch") else "mcp_fetch_url"
-            if has_exa:
-                project_query = self._build_project_search_query(resume, artifacts)
-                if not project_query:
-                    project_query = self._fallback_project_query(resume, artifacts)
-                if project_query:
-                    steps.append(("exa.web_search_exa",
-                                  {"query": project_query, "numResults": 3,
-                                   "type": "neural"}))
-            candidate_urls = self._extract_candidate_urls(resume)
-            if candidate_urls and has_mcp_fetch:
-                for url in candidate_urls[:1]:
-                    steps.append((fetch_tool_name, {"url": url, "maxLength": 5000}))
         elif definition.agent_id == "ResumeOptimizeAgent" and resume:
             steps.append(("resume_lint", {"resumeText": resume}))
-        # Copilot 对话式 RAG：followup/quick_answer 只有 ReportAgent，回答前
-        # 自动检索知识库标准与简历证据，命中不足时报告里如实说明。
+        # Knowledge RAG: inject relevant evaluation guidelines from KB
+        if definition.agent_id in ("ReportAgent", "TechAgent") and resume:
+            kb_query = self._build_knowledge_query(definition.agent_id, resume, artifacts, request)
+            if kb_query:
+                steps.append(("knowledge_search", {"query": kb_query}))
+        # Copilot 对话式 RAG
         if definition.agent_id == "ReportAgent" \
                 and request.runType in ("followup", "quick_answer") \
                 and (request.userMessage or "").strip():
@@ -2296,6 +3055,24 @@ class RunExecutor:
             if resume:
                 steps.append(("resume_semantic_search", {"query": query}))
         return steps
+
+    def _build_knowledge_query(self, agent_id: str, resume: str,
+                               artifacts: Dict[str, Any],
+                               request: Any) -> str:
+        """Build a query to retrieve relevant KB evaluation guidelines."""
+        import re as _re
+        jd = (artifacts.get("effectiveJd") or
+              getattr(request, "jobDescription", "") or "")
+        if agent_id == "TechAgent":
+            techs = _re.findall(
+                r"\b(Java|Python|Go|Spring|Redis|Kafka|Docker|K8s|"
+                r"RAG|LLM|微服务|分布式|前端|后端|AI)\b",
+                jd + " " + resume[:500], _re.IGNORECASE)
+            if techs:
+                return f"技术评估 {' '.join(list(dict.fromkeys(techs))[:3])} 标准"
+            return "技术能力评估标准 评分规范"
+        # ReportAgent: retrieve overall evaluation policy
+        return "简历评估 评分标准 录用建议 风险判断"
 
     def _apply_verification(self, result: Any) -> None:
         if not isinstance(result, dict):
@@ -2359,14 +3136,29 @@ class RunExecutor:
             }
         except Exception:  # noqa: BLE001
             pass
-        lines = []
+        lines = ["[相关记忆]"]
+        insights = []
+        anchors = []
+        context = []
         for hit in used[: self.policy.memoryRetrieval.topK]:
-            scope = hit.get("ownerScope") or hit.get("scope") or "?"
-            lines.append(
-                f"- [{hit.get('type')}|{scope}|src={hit.get('source') or '?'}|"
-                f"置信{hit.get('confidence')}] "
-                f"{str(hit.get('content', ''))[:200]}")
-        return "\n".join(lines)
+            content = str(hit.get("content", ""))[:400]
+            source = hit.get("source") or "?"
+            if "对比锚点" in content or source == "cross_candidate_anchor":
+                anchors.append(f"  {content}")
+            elif "评估洞察" in content or "证据" in content or source == "evaluation_insight":
+                insights.append(f"  {content}")
+            else:
+                context.append(f"  [{hit.get('type')}|src={source}] {content}")
+        if insights:
+            lines.append("# 历史评估洞察")
+            lines.extend(insights[:3])
+        if anchors:
+            lines.append("# 同岗位对比基准")
+            lines.extend(anchors[:3])
+        if context:
+            lines.append("# 上下文")
+            lines.extend(context[:2])
+        return "\n".join(lines) if len(lines) > 1 else ""
 
     @staticmethod
     def _format_tool_result(call: Any) -> str:
@@ -2408,13 +3200,15 @@ class RunExecutor:
     def _conversation_summary(self) -> str:
         arts = self.state.artifacts()
         parts = [f"目标: {(self.request.currentGoal or self.request.userMessage or '')[:150]}"]
-        if arts.get("technicalFindings"):
+        tf = arts.get("technicalFindings")
+        if tf and isinstance(tf, list):
             parts.append("技术结论: " + "; ".join(
-                str(e.get("text", ""))[:80] for e in (arts.get("technicalFindings") or [])[:3]
+                str(e.get("text", ""))[:80] for e in tf[:3]
                 if isinstance(e, dict)))
-        if arts.get("risks"):
+        rf = arts.get("risks")
+        if rf and isinstance(rf, list):
             parts.append("风险: " + "; ".join(
-                str(e.get("text", ""))[:80] for e in (arts.get("risks") or [])[:3]
+                str(e.get("text", ""))[:80] for e in rf[:3]
                 if isinstance(e, dict)))
         if arts.get("conflicts"):
             parts.append(f"未决冲突 {len(arts.get('conflicts') or [])} 项")
@@ -2433,38 +3227,208 @@ class RunExecutor:
         return found[:2]
 
     async def _write_memories(self, summary: str) -> None:
+        await self.emitter.emit("agent.started", agent_id="MemoryService",
+                                payload={"description": "评估记忆持久化"})
         try:
             arts = self.state.artifacts()
             final_report = arts.get("finalReport") or {}
 
-            # 1) EPISODIC: candidate profile facts (reusable on re-evaluation)
+            # 0a) WORKING: raw input context for this run only.
+            resume_text = self.request.resumeText or ""
+            parse_output = arts.get("parsedResume") \
+                if isinstance(arts.get("parsedResume"), dict) else {}
+            resume_facts = arts.get("resumeFacts") \
+                if isinstance(arts.get("resumeFacts"), dict) else {}
+            parsed = {**parse_output, **resume_facts}
+            if resume_text:
+                name = ""
+                if isinstance(parsed, dict):
+                    name = parsed.get("name") or parsed.get("candidateName") or ""
+                input_snapshot = (
+                    f"候选人: {name or '未知'}. "
+                    f"简历长度: {len(resume_text)}字. "
+                    f"JD: {(self.request.jobDescription or '')[:100] or '未提供'}. "
+                    f"运行类型: {self.request.runType}. "
+                    f"关键词: {resume_text[:200]}"
+                )
+                await self.memory.write(
+                    type_="WORKING", owner_scope="RUN",
+                    content=input_snapshot[:500],
+                    structured={
+                        "factKey": "run_input_context",
+                        "memoryKind": "working",
+                        "candidateName": name,
+                        "resumeLength": len(resume_text),
+                        "runType": self.request.runType,
+                        "hasJd": bool((self.request.jobDescription or "").strip()),
+                        "topSkills": (parsed.get("skills") or [])[:8]
+                                     if isinstance(parsed, dict) else [],
+                    },
+                    source="run_input", confidence=1.0)
+
+            # 0b) SEMANTIC: durable candidate facts extracted from the actual
+            # resume. This is deliberately not an evaluation conclusion.
+            semantic_written = False
+            if isinstance(parsed, dict):
+                candidate_skills = [
+                    str(item).strip() for item in (parsed.get("skills") or [])
+                    if str(item).strip()
+                ][:16]
+                raw_projects = parsed.get("projects") or parsed.get("projectNames") or []
+                project_names = []
+                for project in raw_projects[:8] if isinstance(raw_projects, list) else []:
+                    value = project.get("name") if isinstance(project, dict) else project
+                    if str(value or "").strip():
+                        project_names.append(str(value).strip()[:100])
+                raw_experiences = parsed.get("experiences") or []
+                experiences = []
+                for experience in (
+                        raw_experiences[:6] if isinstance(raw_experiences, list) else []):
+                    value = experience.get("raw") \
+                        if isinstance(experience, dict) else experience
+                    if str(value or "").strip():
+                        experiences.append(str(value).strip()[:140])
+                raw_education = parsed.get("education") or []
+                education = []
+                for item in raw_education[:4] if isinstance(raw_education, list) else []:
+                    value = item.get("raw") if isinstance(item, dict) else item
+                    if str(value or "").strip():
+                        education.append(str(value).strip()[:140])
+                candidate_name = str(
+                    parsed.get("name") or parsed.get("candidateName") or "").strip()
+                if candidate_name or candidate_skills or project_names \
+                        or experiences or education:
+                    fact_parts = []
+                    if candidate_name:
+                        fact_parts.append(f"候选人={candidate_name[:80]}")
+                    if candidate_skills:
+                        fact_parts.append(f"技能={', '.join(candidate_skills[:10])}")
+                    if project_names:
+                        fact_parts.append(f"项目={'; '.join(project_names[:4])}")
+                    if experiences:
+                        fact_parts.append(f"经历={'; '.join(experiences[:3])}")
+                    if education:
+                        fact_parts.append(f"教育={'; '.join(education[:2])}")
+                    await self.memory.write(
+                        type_="SEMANTIC", owner_scope="CONVERSATION",
+                        content=("候选人事实: " + " | ".join(fact_parts))[:900],
+                        structured={
+                            "factKey": "candidate_profile",
+                            "memoryKind": "candidate_fact",
+                            "candidateName": candidate_name,
+                            "skills": candidate_skills,
+                            "projects": project_names,
+                            "experiences": experiences,
+                            "education": education,
+                            "sourceArtifact": (
+                                "resumeFacts" if resume_facts else "parsedResume"),
+                        },
+                        source="candidate_fact",
+                        source_id=(
+                            f"candidate_profile:{self.request.conversationId}"),
+                        confidence=float(parsed.get("confidence") or 0.85),
+                        ttl_days=180)
+                    semantic_written = True
+
+            # 0c) WORKING: evidence & verification context.
+            evidence_ledger = arts.get("evidence_ledger") or arts.get("evidenceLedger") or {}
+            if isinstance(evidence_ledger, dict) and evidence_ledger:
+                verified = [k for k, v in evidence_ledger.items()
+                            if isinstance(v, dict) and v.get("verified")]
+                unverified = [k for k, v in evidence_ledger.items()
+                              if isinstance(v, dict) and not v.get("verified")]
+                await self.memory.write(
+                    type_="WORKING", owner_scope="RUN",
+                    content=(f"证据核验: {len(verified)}项已验证, {len(unverified)}项未验证. "
+                             f"已验证: {'; '.join(verified[:4])}"),
+                    structured={
+                        "factKey": "evidence_context",
+                        "memoryKind": "working",
+                        "verifiedCount": len(verified),
+                        "unverifiedCount": len(unverified),
+                        "verified": verified[:5],
+                        "unverified": unverified[:5],
+                    },
+                    source="evidence_agent", confidence=0.9)
+
+            # 1) EPISODIC: evidence-chain insight (NOT conclusion reiteration)
             if isinstance(final_report, dict) and final_report.get("recommendation"):
                 rec = final_report["recommendation"]
                 dims = final_report.get("dimensions") or []
-                dim_summary = "; ".join(
-                    f"{d.get('name','?')}={d.get('score','?')}" for d in dims[:4]
-                    if isinstance(d, dict))
                 strengths = final_report.get("strengths") or []
                 risks = final_report.get("risks") or []
-                risk_summary = "; ".join(
-                    r.get("claim", "")[:60] for r in risks[:3]
-                    if isinstance(r, dict))
                 candidate_id = self.request.conversationId or "unknown"
+                name = ""
+                if isinstance(parsed, dict):
+                    name = parsed.get("name") or parsed.get("candidateName") or ""
+
+                # Extract key evidence from agent outputs
+                agent_outputs = arts.get("agentOutputs") or []
+                key_evidence = []
+                for ao in (agent_outputs[-8:] if isinstance(agent_outputs, list) else []):
+                    if isinstance(ao, dict) and ao.get("findings"):
+                        for f in (ao["findings"][:2] if isinstance(ao["findings"], list) else []):
+                            if isinstance(f, dict) and f.get("evidence"):
+                                key_evidence.append(
+                                    f"[{ao.get('agentId','?')}] {f.get('claim','')[:40]} "
+                                    f"\u2190 证据: {f['evidence'][:60]}")
+
+                # JD gap specifics
+                jd_reqs = arts.get("jdRequirements") or arts.get("effectiveJd") or {}
+                must_haves = (jd_reqs.get("mustHave") or jd_reqs.get("requirements") or []) \
+                    if isinstance(jd_reqs, dict) else []
+                candidate_skills = (parsed.get("skills") or []) if isinstance(parsed, dict) else []
+                missing = [req for req in must_haves[:5]
+                           if isinstance(req, str) and not any(
+                               req.lower() in s.lower() for s in candidate_skills)]
+
+                evidence_text = "\n".join(key_evidence[:4]) if key_evidence else "无具体证据链"
+                gap_text = f"JD核心缺口: {', '.join(missing[:3])}" if missing else "JD要求基本覆盖"
+
+                probes = final_report.get("interviewProbes") or []
+                probe_summary = "; ".join(
+                    p.get("question", "")[:40] for p in probes[:3]
+                    if isinstance(p, dict) and p.get("question"))
 
                 await self.memory.write(
                     type_="EPISODIC", owner_scope="CONVERSATION",
-                    content=(f"候选人评估结论: 推荐={rec}. "
-                             f"维度评分: {dim_summary}. "
-                             f"优势: {'; '.join(s[:40] for s in strengths[:3])}. "
-                             f"风险: {risk_summary}"),
+                    content=(f"[评估洞察] {name or '候选人'} \u2192 {rec}\n"
+                             f"关键证据:\n{evidence_text}\n"
+                             f"{gap_text}\n"
+                             f"面试验证重点: {probe_summary[:80] if probe_summary else '待定'}"),
                     structured={
-                        "factKey": f"evaluation_result:{candidate_id}",
+                        "factKey": f"evaluation_insight:{candidate_id}",
                         "recommendation": rec,
-                        "dimensions": dims[:4],
+                        "keyEvidence": key_evidence[:4],
+                        "jdGaps": missing[:3],
                         "riskCount": len(risks),
-                        "dataQuality": final_report.get("dataQuality"),
                     },
-                    source="evaluation_result", confidence=0.9)
+                    source="evaluation_insight", confidence=0.9)
+
+                # 1b) EPISODIC: cross-candidate comparison anchor
+                job_focus = self.request.jobDescription or ""
+                if job_focus and final_report.get("overallScore"):
+                    jd_score = next(
+                        (d.get("score") for d in dims
+                         if isinstance(d, dict) and "JD" in (d.get("name") or "").upper()),
+                        None)
+                    await self.memory.write(
+                        type_="EPISODIC", owner_scope="USER",
+                        content=(f"[对比锚点] 岗位={job_focus[:30]} | "
+                                 f"候选人={name or '?'} | "
+                                 f"总分={final_report.get('overallScore')} | "
+                                 f"JD匹配={jd_score or '?'} | "
+                                 f"推荐={rec} | "
+                                 f"最大gap={missing[0] if missing else '无'}"),
+                        structured={
+                            "factKey": "comparison_anchor",
+                            "jobFocus": job_focus[:50],
+                            "candidateName": name,
+                            "overallScore": final_report.get("overallScore"),
+                            "recommendation": rec,
+                            "topGap": missing[0] if missing else None,
+                        },
+                        source="cross_candidate_anchor", confidence=0.9)
 
             # 2) EPISODIC: key technical findings (for cross-candidate comparison)
             tech_findings = arts.get("technicalFindings") or []
@@ -2512,8 +3476,8 @@ class RunExecutor:
                         source="evaluation_result", confidence=0.85)
 
             # 5) EPISODIC: execution profile for adaptive budget
-            agent_timings = getattr(self, "_agent_timings", {})
-            agent_counters = getattr(self, "_agent_counters", {})
+            agent_timings = getattr(self, "agent_timings", {})
+            agent_counters = getattr(self, "agent_counters", {})
             if agent_timings or agent_counters:
                 agent_llm_calls = {a: c.get("llmCalls", 0)
                                    for a, c in agent_counters.items() if isinstance(c, dict)}
@@ -2531,6 +3495,8 @@ class RunExecutor:
                         "agentLlmCalls": agent_llm_calls,
                         "agentToolCalls": agent_tool_calls,
                         "totalLlmCalls": self.budget.llm_calls,
+                        "providerLlmCallsByScope": dict(
+                            self.budget.llm_calls_by_scope),
                         "totalToolCalls": self.budget.tool_calls,
                         "totalTokens": getattr(self.budget, "total_tokens", 0),
                         "elapsedSeconds": self.budget.elapsed_seconds(),
@@ -2538,21 +3504,52 @@ class RunExecutor:
                         "runType": self.request.runType,
                     },
                     source="execution_profile", confidence=0.95)
-                self._emit_progress("memory_write", {
-                    "writes": ["evaluation_result", "execution_profile", "interview_probes"],
-                    "count": 5,
-                })
+
+            # Emit memory write event
+            write_types = ["run_input_context"]
+            if semantic_written:
+                write_types.append("candidate_profile")
+            if evidence_ledger:
+                write_types.append("evidence_context")
+            if isinstance(final_report, dict) and final_report.get("recommendation"):
+                write_types.extend(["evaluation_result", "interview_probes"])
+            if tech_findings:
+                write_types.append("tech_findings")
+            if risks_found:
+                write_types.append("risks")
+            if agent_timings or agent_counters:
+                write_types.append("execution_profile")
+            if write_types:
+                await self.emitter.emit(
+                    "run.progress", agent_id="MemoryService",
+                    tool_name="memory_write",
+                    payload={
+                        "stage": "memory_write",
+                        "writes": write_types,
+                        "count": len(write_types),
+                        "message": f"写入 {len(write_types)} 条记忆: {'+'.join(write_types[:3])}",
+                    })
 
             # 6) User preferences (unchanged)
             for preference in self._explicit_preferences():
                 await self.memory.write(
-                    type_="PREFERENCE", owner_scope="USER",
+                    type_="SEMANTIC", owner_scope="USER",
                     content=f"{preference['kind']}: {preference['text']}",
                     structured=preference,
                     source="user_explicit", confidence=0.9)
 
+            await self.emitter.emit(
+                "agent.completed", agent_id="MemoryService",
+                payload={"durationMs": 0, "llmCalls": 0, "toolCalls": 0,
+                         "summary": f"记忆写入完成",
+                         "confidence": 1.0})
         except Exception as exc:  # noqa: BLE001
             logger.info("memory write-back skipped: %s", exc)
+            await self.emitter.emit(
+                "agent.completed", agent_id="MemoryService",
+                payload={"durationMs": 0, "llmCalls": 0, "toolCalls": 0,
+                         "summary": f"记忆写入跳过: {exc}",
+                         "confidence": 0.0})
 
     def _result(self, status: str, answer: str, *, error_code: Optional[str] = None,
                 error_message: Optional[str] = None,
@@ -2568,6 +3565,12 @@ class RunExecutor:
         missing_goals = list(missing_goal_artifacts or [])
         metrics = {
             "llmCalls": self.budget.llm_calls,
+            "llmBudget": self.budget.llm_audit(
+                self.policy.maxLlmCalls),
+            "logicalAgentLlmTurns": sum(
+                int(counter.get("llmCalls", 0))
+                for counter in self.agent_counters.values()
+                if isinstance(counter, dict)),
             "toolCalls": self.budget.tool_calls,
             "promptTokens": self.budget.prompt_tokens,
             "completionTokens": self.budget.completion_tokens,

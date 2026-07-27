@@ -46,6 +46,23 @@ class TurnPolicyServiceEligibilityTest {
         TurnDecision stop = service.decide(session(), active("RUNNING"), null, "停止");
         assertEquals(TurnDisposition.CONTROL, stop.disposition());
         assertEquals("CANCEL", stop.controlAction());
+
+        TurnDecision negated = service.decide(
+                session(), active("RUNNING"), null, "不要停止，继续跑");
+        assertEquals(TurnDisposition.CONTROL, negated.disposition());
+        assertEquals("RESUME", negated.controlAction());
+    }
+
+    @Test
+    void explicitEnglishResumeRequiresRunObjectButSupportsNaturalPhrases() {
+        TurnDecision resume = service.decide(
+                session(), active(RunStatus.PAUSED.name()), null, "resume this run");
+        assertEquals(TurnDisposition.CONTROL, resume.disposition());
+        assertEquals("RESUME", resume.controlAction());
+
+        TurnDecision document = service.decide(
+                session(), null, null, "please review this resume");
+        assertEquals(TurnDisposition.DIRECT_REPLY, document.disposition());
     }
 
     @Test
@@ -60,14 +77,21 @@ class TurnPolicyServiceEligibilityTest {
     }
 
     @Test
-    void factMergesIntoQueuedRunOtherwiseRevises() {
+    void factMergesIntoQueuedRunOtherwiseSupersedesConsumedRevision() {
         AgentRun queued = active(RunStatus.QUEUED.name());
         TurnDecision merge = service.decide(session(), null, queued, "补充：我还有 Kafka 实战经验");
         assertEquals(TurnDisposition.MERGE_CONTEXT, merge.disposition());
 
         TurnDecision revise = service.decide(session(), active("RUNNING"), null,
                 "补充：我还有 Kafka 实战经验");
-        assertEquals(TurnDisposition.CREATE_REVISION, revise.disposition());
+        assertEquals(TurnDisposition.SUPERSEDE_RUN, revise.disposition());
+    }
+
+    @Test
+    void pausedRevisionIsSupersededByNewEvaluationIntent() {
+        TurnDecision decision = service.decide(session(), active(RunStatus.PAUSED.name()), null,
+                "重点评估前端工程化能力");
+        assertEquals(TurnDisposition.SUPERSEDE_RUN, decision.disposition());
     }
 
     @Test

@@ -19,10 +19,11 @@ def test_mcp_config_resolves_shared_file():
     assert path is not None, "config/mcp-servers.json should resolve"
     cfg = load_mcp_config()
     assert "exa" in (cfg.get("mcpServers") or {})
-    assert "firecrawl" in (cfg.get("mcpServers") or {})
     assert "context7" in (cfg.get("mcpServers") or {})
-    github = (cfg.get("optionalMcpServers") or {}).get("github") or {}
-    assert github.get("healthStatusWhenMissingEnv") == "AUTH_REQUIRED"
+    assert "deepwiki" in (cfg.get("mcpServers") or {})
+    assert "microsoft-learn" in (cfg.get("mcpServers") or {})
+    assert "fetch" in (cfg.get("mcpServers") or {})
+    assert (cfg.get("optionalMcpServers") or {}) == {}
 
 
 def test_skills_load_from_backend_resources():

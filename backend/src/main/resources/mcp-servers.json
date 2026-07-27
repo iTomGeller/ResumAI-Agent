@@ -12,28 +12,13 @@
       "default": true,
       "transport": "streamable-http",
       "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
-      "description": "Official Exa hosted MCP; keyless free tier",
+      "description": "Official Exa hosted MCP; real keyless web search and page fetch with rate limits",
       "allowedTools": ["web_search_exa", "web_fetch_exa"],
       "toolPrefix": "exa",
       "evidence": {
         "provider": "exa",
         "kind": "public-web",
-        "subjectBinding": "unverified",
-        "requiresSourceUrl": true
-      }
-    },
-    "firecrawl": {
-      "enabled": true,
-      "default": true,
-      "transport": "streamable-http",
-      "url": "https://mcp.firecrawl.dev/v2/mcp",
-      "description": "Official Firecrawl hosted MCP; keyless search/scrape are rate limited",
-      "allowedTools": ["firecrawl_search", "firecrawl_scrape", "firecrawl_map"],
-      "toolPrefix": "firecrawl",
-      "evidence": {
-        "provider": "firecrawl",
-        "kind": "public-web",
-        "subjectBinding": "unverified",
+        "subjectBinding": "candidate-declared-identifiers-only",
         "requiresSourceUrl": true
       }
     },
@@ -42,13 +27,43 @@
       "default": true,
       "transport": "streamable-http",
       "url": "https://mcp.context7.com/mcp",
-      "description": "Official Context7 docs MCP for library version/capability lookup",
+      "description": "Official Context7 remote MCP for current framework and library documentation",
       "allowedTools": ["resolve-library-id", "query-docs"],
       "toolPrefix": "context7",
       "evidence": {
         "provider": "context7",
         "kind": "framework-docs",
-        "subjectBinding": "not_candidate_evidence",
+        "subjectBinding": "not-candidate-evidence",
+        "requiresSourceUrl": false
+      }
+    },
+    "deepwiki": {
+      "enabled": true,
+      "default": true,
+      "transport": "streamable-http",
+      "url": "https://mcp.deepwiki.com/mcp",
+      "description": "Official Cognition DeepWiki public MCP for documentation of candidate-declared public repositories",
+      "allowedTools": ["read_wiki_structure", "read_wiki_contents", "ask_question"],
+      "toolPrefix": "deepwiki",
+      "evidence": {
+        "provider": "deepwiki",
+        "kind": "repository-docs",
+        "subjectBinding": "candidate-declared-repository-only",
+        "requiresSourceUrl": true
+      }
+    },
+    "microsoft-learn": {
+      "enabled": true,
+      "default": true,
+      "transport": "streamable-http",
+      "url": "https://learn.microsoft.com/api/mcp",
+      "description": "Official public Microsoft Learn MCP; unauthenticated current documentation and code samples",
+      "allowedTools": ["microsoft_docs_search", "microsoft_docs_fetch", "microsoft_code_sample_search"],
+      "toolPrefix": "microsoft-learn",
+      "evidence": {
+        "provider": "microsoft-learn",
+        "kind": "framework-docs",
+        "subjectBinding": "not-candidate-evidence",
         "requiresSourceUrl": false
       }
     },
@@ -58,7 +73,7 @@
       "transport": "stdio",
       "command": "python",
       "args": ["-m", "mcp_server_fetch"],
-      "description": "MCP reference fetch stdio fallback; allowlisted candidate-declared URLs only",
+      "description": "Official MCP reference fetch server; candidate-declared public URLs only",
       "allowedTools": ["fetch"],
       "toolPrefix": "fetch",
       "whitelistOnly": true,
@@ -70,67 +85,48 @@
       }
     }
   },
-  "optionalMcpServers": {
-    "github": {
-      "enabled": false,
-      "default": false,
-      "requiredEnv": ["GITHUB_TOKEN"],
-      "transport": "streamable-http",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer ${GITHUB_TOKEN}",
-        "X-MCP-Toolsets": "repos,users",
-        "X-MCP-Readonly": "true"
-      },
-      "description": "GitHub official remote MCP; AUTH_REQUIRED without GITHUB_TOKEN — never pretend enabled",
-      "healthStatusWhenMissingEnv": "AUTH_REQUIRED"
-    },
-    "tavily": {
-      "enabled": false,
-      "default": false,
-      "transport": "streamable-http",
-      "url": "https://mcp.tavily.com/mcp",
-      "optionalEnv": ["TAVILY_API_KEY"],
-      "headers": {
-        "Authorization": "Bearer ${TAVILY_API_KEY}"
-      },
-      "description": "Official Tavily search/extract MCP; optional alternative provider"
-    },
-    "brave-search": {
-      "enabled": false,
-      "default": false,
-      "requiredEnv": ["BRAVE_API_KEY"],
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
-      "env": {
-        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
-      },
-      "description": "Official Brave Search MCP; requires Node.js 22+ and BRAVE_API_KEY"
-    },
-    "time": {
-      "enabled": false,
-      "default": false,
-      "transport": "stdio",
-      "command": "uvx",
-      "args": ["mcp-server-time"],
-      "description": "Official MCP reference time server"
-    },
-    "arxiv": {
-      "enabled": false,
-      "default": false,
-      "transport": "stdio",
-      "command": "uvx",
-      "args": ["arxiv-mcp-server"],
-      "description": "Maintainer-published arXiv MCP for technical-paper evidence"
-    }
-  },
+  "optionalMcpServers": {},
   "agentToolRouting": {
-    "JDAnalysisAgent": ["firecrawl.firecrawl_scrape", "firecrawl.firecrawl_search", "firecrawl.firecrawl_map", "context7.resolve-library-id", "context7.query-docs"],
-    "TechAgent": ["context7.resolve-library-id", "context7.query-docs"],
-    "ProjectAgent": ["exa.web_search_exa", "exa.web_fetch_exa", "firecrawl.firecrawl_scrape", "firecrawl.firecrawl_search", "firecrawl.firecrawl_map", "mcp_fetch_url", "fetch.fetch"],
-    "EvidenceAgent": [],
+    "JDAnalysisAgent": [
+      "context7.resolve-library-id",
+      "context7.query-docs",
+      "microsoft-learn.microsoft_docs_search",
+      "microsoft-learn.microsoft_docs_fetch",
+      "exa.web_search_exa"
+    ],
+    "TechAgent": [
+      "context7.resolve-library-id",
+      "context7.query-docs",
+      "microsoft-learn.microsoft_docs_search",
+      "microsoft-learn.microsoft_code_sample_search",
+      "exa.web_search_exa"
+    ],
+    "ProjectAgent": [
+      "exa.web_search_exa",
+      "exa.web_fetch_exa",
+      "deepwiki.read_wiki_structure",
+      "deepwiki.read_wiki_contents",
+      "deepwiki.ask_question",
+      "fetch.fetch"
+    ],
+    "EvidenceAgent": [
+      "exa.web_search_exa",
+      "exa.web_fetch_exa",
+      "deepwiki.read_wiki_structure",
+      "deepwiki.read_wiki_contents",
+      "deepwiki.ask_question",
+      "fetch.fetch"
+    ],
+    "RiskAgent": [
+      "exa.web_search_exa",
+      "fetch.fetch"
+    ],
     "ReportAgent": [],
-    "InterviewQuestionAgent": ["context7.resolve-library-id", "context7.query-docs"]
+    "InterviewQuestionAgent": [
+      "context7.resolve-library-id",
+      "context7.query-docs",
+      "microsoft-learn.microsoft_docs_search",
+      "microsoft-learn.microsoft_code_sample_search"
+    ]
   }
 }

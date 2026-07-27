@@ -17,6 +17,13 @@ import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryOpsResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryUsageView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.ObservabilityView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.PlanDebugView;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagChunkView;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagOpsResponse;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagOpsSummary;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagQualityView;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagRetrievalView;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagStageAggregateView;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagStageTimingView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.RunDebugDetailResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.RunDebugSummary;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.SkillAggUsage;
@@ -37,7 +44,10 @@ import com.resumai.agent.service.RunMemoryUsageService;
 import com.resumai.agent.service.run.AgentRuntimeClient;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -60,6 +70,12 @@ public class OpsDebugService {
 
     public static final List<String> TOOL_EVENT_TYPES = List.of(
             "tool.started", "tool.completed", "tool.failed");
+
+    public static final List<String> RETRIEVAL_EVENT_TYPES = List.of(
+            "retrieval.started", "retrieval.completed", "retrieval.failed");
+
+    public static final Set<String> RETRIEVAL_TOOL_NAMES = Set.of(
+            "knowledge_search", "resume_semantic_search", "jd_match_search");
 
     private static final Set<String> BUSINESS_ARTIFACT_KEYS = Set.of(
             "resumeFacts", "parsedResume", "technicalFindings", "finalReport",
@@ -279,6 +295,98 @@ public class OpsDebugService {
                 source, reachable, root, count, activeCount, deprecatedCount, advertised,
                 manifest, events, bySkill, runtimeError,
                 "默认展示 Python runtime ACTIVE skills；选择/应用来自 run_event。");
+    }
+
+    /**
+     * Builds a call-centric RAG read model from the immutable run event ledger.
+     *
+     * <p>{@code tool.started/completed/failed} is the invocation source of
+     * truth; optional {@code retrieval.*} events enrich it with stage and
+     * ranking telemetry. This means failures and historical calls remain
+     * visible even when an older runtime did not emit a retrieval summary.</p>
+     */
+    public RagOpsResponse rag(int limit, String runId, String agentId, String outcome) {
+        int cap = Math.max(1, Math.min(limit, 500));
+        List<String> types = new ArrayList<>(TOOL_EVENT_TYPES);
+        types.addAll(RETRIEVAL_EVENT_TYPES);
+        QueryWrapper<RunEvent> q = new QueryWrapper<RunEvent>()
+                .in("event_type", types)
+                .in("tool_name", RETRIEVAL_TOOL_NAMES)
+                .orderByDesc("create_time")
+                .orderByDesc("seq")
+                .last("limit " + Math.min(cap * 12, 6000));
+        if (StringUtils.hasText(runId)) {
+            q.eq("run_id", runId.trim());
+        }
+        if (StringUtils.hasText(agentId)) {
+            q.eq("agent_id", agentId.trim());
+        }
+        return assembleRag(runEventMapper.selectList(q), cap, outcome);
+    }
+
+    RagOpsResponse assembleRag(List<RunEvent> rawEvents, int limit, String outcomeFilter) {
+        int cap = Math.max(1, Math.min(limit, 500));
+        List<RunEvent> events = rawEvents == null ? new ArrayList<>() : new ArrayList<>(rawEvents);
+        events.sort(Comparator
+                .comparing(RunEvent::getCreateTime,
+                        Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparing(RunEvent::getSeq,
+                        Comparator.nullsFirst(Comparator.naturalOrder())));
+
+        List<RagDraft> drafts = new ArrayList<>();
+        Map<String, RagDraft> byCallId = new HashMap<>();
+        for (RunEvent event : events) {
+            String eventType = event.getEventType() == null ? "" : event.getEventType();
+            if (!TOOL_EVENT_TYPES.contains(eventType)
+                    && !RETRIEVAL_EVENT_TYPES.contains(eventType)) {
+                continue;
+            }
+            Map<String, Object> payload = asMap(parseJson(event.getPayload()));
+            String payloadTool = firstText(payload, "toolName", "tool", "retrievalTool");
+            String toolName = StringUtils.hasText(payloadTool) ? payloadTool : event.getToolName();
+            if (!RETRIEVAL_TOOL_NAMES.contains(toolName)) {
+                continue;
+            }
+            String toolCallId = firstText(payload, "toolCallId", "callId", "invocationId");
+            RagDraft draft = null;
+            if (StringUtils.hasText(toolCallId)) {
+                draft = byCallId.get(callKey(event.getRunId(), toolCallId));
+            }
+            if (draft == null && !"tool.started".equals(eventType)
+                    && !"retrieval.started".equals(eventType)) {
+                boolean wantsTelemetry = eventType.startsWith("retrieval.");
+                draft = findCompatibleDraft(drafts, event, toolName, wantsTelemetry, payload);
+            }
+            if (draft == null) {
+                draft = new RagDraft(event, toolName, toolCallId);
+                drafts.add(draft);
+            }
+            if (StringUtils.hasText(toolCallId)) {
+                draft.toolCallId = toolCallId;
+                byCallId.put(callKey(event.getRunId(), toolCallId), draft);
+            }
+
+            if ("tool.started".equals(eventType) || "retrieval.started".equals(eventType)) {
+                draft.mergeStarted(event, payload);
+            } else if ("tool.completed".equals(eventType) || "tool.failed".equals(eventType)) {
+                draft.mergeCompleted(event, payload, "tool.failed".equals(eventType));
+            } else {
+                draft.mergeRetrieval(event, payload, "retrieval.failed".equals(eventType));
+            }
+        }
+
+        List<RagRetrievalView> items = drafts.stream()
+                .map(RagDraft::toView)
+                .filter(item -> !StringUtils.hasText(outcomeFilter)
+                        || outcomeFilter.trim().equalsIgnoreCase(item.outcome()))
+                .sorted(Comparator
+                        .comparing(OpsDebugService::ragSortTime,
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(RagRetrievalView::seq,
+                                Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(cap)
+                .toList();
+        return buildRagResponse(items);
     }
 
     public MemoryOpsResponse memory(int limit, String scope, String source, String runId,
@@ -559,7 +667,9 @@ public class OpsDebugService {
                     row.getLexicalScore() != null ? row.getLexicalScore().doubleValue() : null,
                     row.getRecencyScore() != null ? row.getRecencyScore().doubleValue() : null,
                     row.getFinalScore() != null ? row.getFinalScore().doubleValue() : null,
-                    row.getDecision(), row.getIgnoredReason(), row.getCreateTime(),
+                    row.getDecision(), row.getIgnoredReason(),
+                    localTimestamp(row.getCreateTime()),
+                    row.getCreateTime(),
                     entry != null ? entry.getType() : null,
                     entry != null ? entry.getOwnerScope() : null,
                     entry != null ? entry.getSource() : null,
@@ -656,14 +766,40 @@ public class OpsDebugService {
     private McpInvocationView toMcpInvocation(RunEvent event, Object payload) {
         Map<?, ?> p = payload instanceof Map<?, ?> map ? map : Map.of();
         String type = event.getEventType() == null ? "" : event.getEventType();
-        String outcome = type.endsWith("failed") ? "FAILED"
-                : type.endsWith("completed") ? "SUCCESS" : "RUNNING";
+        String outcome;
+        Object payloadOutcome = p.get("outcome");
+        if (payloadOutcome instanceof String po && !po.isBlank()) {
+            outcome = po;
+        } else if (type.endsWith("failed")) {
+            outcome = "FAILED";
+        } else if (type.endsWith("completed")) {
+            Object rp = p.get("resultPreview");
+            String rpStr = rp instanceof String s ? s : (rp != null ? rp.toString() : "");
+            outcome = rpStr.contains("\"success\":false") || rpStr.contains("\"success\": false")
+                    ? "FAILED" : "SUCCESS";
+        } else {
+            outcome = "RUNNING";
+        }
+        String fallbackTime = eventTime(event);
+        String occurredAt = firstNonBlank(
+                firstTextDeep(p, "occurredAt", "timestamp"),
+                fallbackTime);
+        String startedAt = firstTextDeep(p, "startedAt", "startTime");
+        String endedAt = firstTextDeep(p, "endedAt", "completedAt", "endTime");
+        if (!StringUtils.hasText(startedAt) && type.endsWith("started")) {
+            startedAt = occurredAt;
+        }
+        if (!StringUtils.hasText(endedAt)
+                && (type.endsWith("completed") || type.endsWith("failed"))) {
+            endedAt = occurredAt;
+        }
         return new McpInvocationView(
                 event.getRunId(), event.getTraceId(), event.getSeq(),
                 str(p.get("toolCallId")),
                 str(p.get("mcpServer")),
                 event.getToolName(),
                 event.getAgentId(),
+                str(p.get("lifecycleStage")),
                 outcome,
                 longOrNull(p.get("durationMs")),
                 intOrNull(p.get("retryCount")),
@@ -671,6 +807,9 @@ public class OpsDebugService {
                 redact(p.get("arguments")),
                 redact(p.get("resultPreview")),
                 str(redact(p.get("error"))),
+                occurredAt,
+                startedAt,
+                endedAt,
                 event.getCreateTime());
     }
 
@@ -692,11 +831,27 @@ public class OpsDebugService {
                 ? list.stream().map(String::valueOf).toList()
                 : (p.get("requiredMcp") instanceof List<?> list2
                 ? list2.stream().map(String::valueOf).toList() : List.of());
+        String fallbackTime = eventTime(event);
+        String occurredAt = firstNonBlank(
+                firstTextDeep(p, "occurredAt", "timestamp"),
+                fallbackTime);
+        String startedAt = firstTextDeep(p, "startedAt", "startTime");
+        String endedAt = firstTextDeep(p, "endedAt", "completedAt", "endTime");
+        String type = event.getEventType() == null ? "" : event.getEventType();
+        if (!StringUtils.hasText(startedAt) && type.endsWith("started")) {
+            startedAt = occurredAt;
+        }
+        if (!StringUtils.hasText(endedAt)
+                && (type.endsWith("completed") || type.endsWith("applied")
+                || type.endsWith("failed"))) {
+            endedAt = occurredAt;
+        }
         return new SkillUsageView(
                 event.getRunId(), skillId, event.getAgentId(), event.getEventType(),
                 str(p.get("triggerReason")),
                 str(p.get("skillVersion")),
-                runHash, runHash, manifestHash, drift, required, payload, event.getCreateTime());
+                runHash, runHash, manifestHash, drift, required, payload,
+                occurredAt, startedAt, endedAt, event.getCreateTime());
     }
 
     private ErrorDiagnosticView toError(RunEvent event, Object payload, boolean rootCause) {
@@ -794,7 +949,14 @@ public class OpsDebugService {
         item.put("version", row.getVersion());
         item.put("updateTime", row.getUpdateTime());
         item.put("createTime", row.getCreateTime());
+        item.put("occurredAt", localTimestamp(row.getCreateTime()));
         return item;
+    }
+
+    private String localTimestamp(LocalDateTime value) {
+        return value != null
+                ? value.atZone(ZoneId.systemDefault()).toInstant().toString()
+                : null;
     }
 
     private boolean isBenchmarkMemory(MemoryEntryRow row) {
@@ -814,6 +976,793 @@ public class OpsDebugService {
                 || content.contains("RUNTIME_START_FAILED")
                 || (("FAILURE".equalsIgnoreCase(type) || "SYSTEM".equalsIgnoreCase(type))
                 && (content.contains("ORPHANED") || content.contains("RUNTIME_START_FAILED")));
+    }
+
+    private RagOpsResponse buildRagResponse(List<RagRetrievalView> items) {
+        int volume = items.size();
+        int successCount = (int) items.stream()
+                .filter(item -> "SUCCESS".equals(item.outcome())).count();
+        int terminalCount = (int) items.stream()
+                .filter(item -> "SUCCESS".equals(item.outcome())
+                        || "FAILED".equals(item.outcome())).count();
+        int zeroHitCount = (int) items.stream()
+                .filter(item -> Boolean.TRUE.equals(item.zeroHit())).count();
+        int zeroHitEligibleCount = (int) items.stream()
+                .filter(item -> item.zeroHit() != null).count();
+        int errorCount = (int) items.stream()
+                .filter(item -> "FAILED".equals(item.outcome())
+                        || StringUtils.hasText(item.error())).count();
+        int degradedCount = (int) items.stream()
+                .filter(item -> Boolean.TRUE.equals(item.degraded())).count();
+        int cacheHitCount = (int) items.stream()
+                .filter(item -> Boolean.TRUE.equals(item.cacheHit())).count();
+        int completeTelemetryCount = (int) items.stream()
+                .filter(RagRetrievalView::telemetryComplete).count();
+
+        List<Double> totalLatencies = items.stream()
+                .map(item -> item.stages() != null ? item.stages().totalMs() : null)
+                .filter(OpsDebugService::isFiniteNonNegative)
+                .sorted()
+                .toList();
+        List<Double> topScores = items.stream()
+                .map(RagRetrievalView::topScore)
+                .filter(OpsDebugService::isFinite)
+                .toList();
+        List<Double> returned = items.stream()
+                .map(RagRetrievalView::returnedK)
+                .filter(v -> v != null)
+                .map(Integer::doubleValue)
+                .toList();
+        List<Double> fillRatios = items.stream()
+                .filter(item -> item.requestedK() != null && item.requestedK() > 0
+                        && item.returnedK() != null)
+                .map(item -> Math.min(1.0,
+                        (double) item.returnedK() / item.requestedK()))
+                .toList();
+        List<Double> rerankLifts = items.stream()
+                .map(RagRetrievalView::rerankLift)
+                .filter(OpsDebugService::isFinite)
+                .toList();
+
+        List<RagStageAggregateView> stageBreakdown = List.of(
+                stageAggregate("query_rewrite", items,
+                        item -> item.stages() != null ? item.stages().queryRewriteMs() : null),
+                stageAggregate("embedding", items,
+                        item -> item.stages() != null ? item.stages().embeddingMs() : null),
+                stageAggregate("retrieval", items,
+                        item -> item.stages() != null ? item.stages().retrievalMs() : null),
+                stageAggregate("embedding+retrieval", items,
+                        item -> item.stages() != null ? item.stages().embeddingRetrievalMs() : null),
+                stageAggregate("fusion", items,
+                        item -> item.stages() != null ? item.stages().fusionMs() : null),
+                stageAggregate("rerank", items,
+                        item -> item.stages() != null ? item.stages().rerankMs() : null))
+                .stream().filter(stage -> stage.samples() > 0).toList();
+        RagStageAggregateView bottleneck = stageBreakdown.stream()
+                .max(Comparator.comparing(stage ->
+                        stage.averageMs() != null ? stage.averageMs() : -1D))
+                .orElse(null);
+
+        RagOpsSummary summary = new RagOpsSummary(
+                volume,
+                terminalCount,
+                successCount,
+                zeroHitCount,
+                zeroHitEligibleCount,
+                errorCount,
+                degradedCount,
+                cacheHitCount,
+                rate(successCount, terminalCount),
+                rate(zeroHitCount, zeroHitEligibleCount),
+                percentile(totalLatencies, 0.50),
+                percentile(totalLatencies, 0.90),
+                average(topScores),
+                average(returned),
+                average(fillRatios),
+                average(rerankLifts),
+                rerankLifts.size(),
+                bottleneck != null ? bottleneck.stage() : null,
+                bottleneck != null ? bottleneck.averageMs() : null,
+                stageBreakdown,
+                completeTelemetryCount);
+
+        Map<String, Object> semantics = new LinkedHashMap<>();
+        semantics.put("rankingScores",
+                "retriever/reranker relevance scores are online ranking proxies, not precision or recall");
+        semantics.put("topKFillRate",
+                "returnedK/requestedK is a capacity proxy; it does not prove relevance");
+        semantics.put("precisionRecall",
+                "reported only when the event explicitly references a labelled ground-truth set");
+        semantics.put("groundedness",
+                "reported only when a named judge completed successfully");
+        semantics.put("missingValues",
+                "null means the runtime did not collect that field; zero is never substituted");
+
+        List<String> warnings = new ArrayList<>();
+        if (items.isEmpty()) {
+            warnings.add("No retrieval invocation events matched the current filters.");
+        } else if (completeTelemetryCount < items.size()) {
+            warnings.add((items.size() - completeTelemetryCount)
+                    + " invocation(s) use legacy or partial telemetry; missing values remain null.");
+        }
+        if (items.stream().noneMatch(item -> item.quality() != null
+                && item.quality().groundTruthAvailable())) {
+            warnings.add("No labelled relevance set is attached; dashboard relevance values are proxies.");
+        }
+        return new RagOpsResponse(
+                "rag-observability.v2",
+                LocalDateTime.now(),
+                items.size(),
+                summary,
+                items,
+                semantics,
+                warnings);
+    }
+
+    private RagStageAggregateView stageAggregate(
+            String name,
+            List<RagRetrievalView> items,
+            java.util.function.Function<RagRetrievalView, Double> extractor) {
+        List<Double> values = items.stream()
+                .map(extractor)
+                .filter(OpsDebugService::isFiniteNonNegative)
+                .sorted()
+                .toList();
+        List<Double> shares = new ArrayList<>();
+        for (RagRetrievalView item : items) {
+            Double stage = extractor.apply(item);
+            if (!isFiniteNonNegative(stage) || item.stages() == null) {
+                continue;
+            }
+            double knownTotal = sumKnownStages(item.stages());
+            if (knownTotal > 0) {
+                shares.add(stage / knownTotal);
+            }
+        }
+        return new RagStageAggregateView(
+                name, values.size(), average(values), percentile(values, 0.90), average(shares));
+    }
+
+    private static double sumKnownStages(RagStageTimingView stages) {
+        double sum = 0D;
+        for (Double value : List.of(
+                valueOrZero(stages.queryRewriteMs()),
+                valueOrZero(stages.embeddingMs()),
+                valueOrZero(stages.retrievalMs()),
+                valueOrZero(stages.embeddingRetrievalMs()),
+                valueOrZero(stages.fusionMs()),
+                valueOrZero(stages.rerankMs()))) {
+            sum += value;
+        }
+        return sum;
+    }
+
+    private static double valueOrZero(Double value) {
+        return isFiniteNonNegative(value) ? value : 0D;
+    }
+
+    private static Double rate(int numerator, int denominator) {
+        return denominator > 0 ? (double) numerator / denominator : null;
+    }
+
+    private static Double average(List<Double> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        return values.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
+    }
+
+    private static Double percentile(List<Double> sortedValues, double quantile) {
+        if (sortedValues == null || sortedValues.isEmpty()) {
+            return null;
+        }
+        int index = (int) Math.ceil(quantile * sortedValues.size()) - 1;
+        return sortedValues.get(Math.max(0, Math.min(index, sortedValues.size() - 1)));
+    }
+
+    private static boolean isFinite(Double value) {
+        return value != null && Double.isFinite(value);
+    }
+
+    private static boolean isFiniteNonNegative(Double value) {
+        return isFinite(value) && value >= 0D;
+    }
+
+    private static String ragSortTime(RagRetrievalView item) {
+        if (StringUtils.hasText(item.endedAt())) {
+            return item.endedAt();
+        }
+        if (StringUtils.hasText(item.occurredAt())) {
+            return item.occurredAt();
+        }
+        return item.startedAt();
+    }
+
+    private RagDraft findCompatibleDraft(List<RagDraft> drafts, RunEvent event,
+                                         String toolName, boolean wantsTelemetry,
+                                         Map<String, Object> payload) {
+        String incomingQuery = wantsTelemetry
+                ? firstTextDeep(payload, "query", "queryText", "originalQuery") : null;
+        for (int i = drafts.size() - 1; i >= 0; i--) {
+            RagDraft draft = drafts.get(i);
+            if (!sameText(draft.runId, event.getRunId())
+                    || !sameText(draft.agentId, event.getAgentId())
+                    || !sameText(draft.toolName, toolName)) {
+                continue;
+            }
+            String draftQuery = firstTextDeep(draft.data,
+                    "query", "queryText", "originalQuery");
+            if (wantsTelemetry && StringUtils.hasText(incomingQuery)
+                    && StringUtils.hasText(draftQuery)
+                    && !incomingQuery.equals(draftQuery)) {
+                continue;
+            }
+            if (wantsTelemetry ? !draft.hasRetrievalTelemetry : draft.endedAt == null) {
+                return draft;
+            }
+        }
+        return null;
+    }
+
+    private static String callKey(String runId, String toolCallId) {
+        return String.valueOf(runId) + "|" + toolCallId;
+    }
+
+    private static boolean sameText(String left, String right) {
+        return String.valueOf(left).equals(String.valueOf(right));
+    }
+
+    private final class RagDraft {
+        private final String runId;
+        private final String traceId;
+        private final String agentId;
+        private final String toolName;
+        private Integer seq;
+        private String toolCallId;
+        private String occurredAt;
+        private String startedAt;
+        private String endedAt;
+        private String retrievedAt;
+        private Long durationMs;
+        private String outcome = "RUNNING";
+        private Boolean cacheHit;
+        private String error;
+        private boolean hasRetrievalTelemetry;
+        private final Map<String, Object> data = new LinkedHashMap<>();
+
+        private RagDraft(RunEvent event, String toolName, String toolCallId) {
+            this.runId = event.getRunId();
+            this.traceId = event.getTraceId();
+            this.agentId = event.getAgentId();
+            this.toolName = toolName;
+            this.toolCallId = toolCallId;
+            this.seq = event.getSeq();
+            this.occurredAt = eventTime(event);
+        }
+
+        private void mergeStarted(RunEvent event, Map<String, Object> payload) {
+            mergeData(payload);
+            mergeData(asMap(payload.get("arguments")));
+            seq = minSeq(seq, event.getSeq());
+            String payloadTime = firstTextDeep(payload,
+                    "startedAt", "startTime", "occurredAt", "timestamp");
+            startedAt = firstNonBlank(payloadTime, eventTime(event));
+            occurredAt = firstNonBlank(
+                    firstTextDeep(payload, "occurredAt", "timestamp"),
+                    occurredAt);
+        }
+
+        private void mergeCompleted(RunEvent event, Map<String, Object> payload, boolean failed) {
+            mergeData(payload);
+            Object preview = firstValueDeep(payload, "result", "resultPreview", "output");
+            if (preview instanceof Map<?, ?> map) {
+                mergeData(castObjectMap(map));
+            } else if (preview instanceof String text) {
+                Object parsed = parseJson(text);
+                if (parsed instanceof Map<?, ?> map) {
+                    mergeData(castObjectMap(map));
+                }
+            }
+            String payloadTime = firstTextDeep(payload,
+                    "endedAt", "completedAt", "endTime", "occurredAt", "timestamp");
+            endedAt = firstNonBlank(payloadTime, eventTime(event));
+            occurredAt = firstNonBlank(
+                    firstTextDeep(payload, "occurredAt", "timestamp"),
+                    occurredAt);
+            durationMs = firstLongDeep(payload, "durationMs", "latencyMs");
+            cacheHit = firstBooleanDeep(payload, "cacheHit");
+            error = firstNonBlank(firstTextDeep(payload,
+                    "error", "errorMessage", "failureReason"), error);
+            Object resultSuccess = firstValueDeep(data, "success");
+            outcome = failed || Boolean.FALSE.equals(resultSuccess)
+                    ? "FAILED" : normalizeOutcome(firstTextDeep(payload, "outcome", "status"), "SUCCESS");
+        }
+
+        private void mergeRetrieval(RunEvent event, Map<String, Object> payload, boolean failed) {
+            hasRetrievalTelemetry = true;
+            mergeData(payload);
+            String payloadTime = firstTextDeep(payload,
+                    "occurredAt", "retrievedAt", "timestamp");
+            retrievedAt = firstNonBlank(
+                    firstTextDeep(payload, "retrievedAt", "retrievalTime"),
+                    retrievedAt);
+            occurredAt = firstNonBlank(payloadTime, eventTime(event));
+            if (endedAt == null) {
+                endedAt = firstNonBlank(
+                        firstTextDeep(payload, "endedAt", "completedAt"),
+                        eventTime(event));
+            }
+            if (durationMs == null) {
+                durationMs = firstLongDeep(payload, "durationMs", "latencyMs");
+            }
+            cacheHit = firstNonNullBoolean(
+                    firstBooleanDeep(payload, "cacheHit"), cacheHit);
+            error = firstNonBlank(firstTextDeep(payload,
+                    "error", "errorMessage", "failureReason"), error);
+            if (failed || Boolean.FALSE.equals(firstValueDeep(payload, "success"))) {
+                outcome = "FAILED";
+            } else if (!"FAILED".equals(outcome)) {
+                outcome = normalizeOutcome(firstTextDeep(payload, "outcome", "status"), "SUCCESS");
+            }
+            seq = maxSeq(seq, event.getSeq());
+        }
+
+        private void mergeData(Map<String, Object> source) {
+            if (source == null) {
+                return;
+            }
+            source.forEach((key, value) -> {
+                if (meaningful(value)) {
+                    data.put(key, value);
+                }
+            });
+        }
+
+        private RagRetrievalView toView() {
+            String query = firstTextDeep(data, "query", "queryText", "originalQuery");
+            List<String> queriesUsed = stringListDeep(data, "queriesUsed", "rewrittenQueries");
+            if (queriesUsed.isEmpty() && StringUtils.hasText(query)) {
+                queriesUsed = List.of(query);
+            }
+
+            List<RagChunkView> chunks = ragChunks(data);
+            Integer requestedK = firstIntegerDeep(data,
+                    "requestedK", "topK", "top_k", "limit");
+            Integer returnedK = firstIntegerDeep(data,
+                    "returnedK", "hitCount", "hitsReturned", "resultCount");
+            Object rawChunkNode = firstValueDeep(data,
+                    "chunks", "results", "hits", "items", "selectedChunks");
+            if (returnedK == null && rawChunkNode instanceof List<?> list) {
+                returnedK = list.size();
+            }
+            Integer uniqueDocuments = firstIntegerDeep(data,
+                    "uniqueDocuments", "uniqueDocumentCount", "documentCount");
+            if (uniqueDocuments == null && !chunks.isEmpty()) {
+                long distinct = chunks.stream()
+                        .map(RagChunkView::documentId)
+                        .filter(StringUtils::hasText)
+                        .distinct().count();
+                uniqueDocuments = distinct > 0 ? (int) distinct : null;
+            }
+
+            List<Double> scoreSamples = chunks.stream()
+                    .map(RagChunkView::score)
+                    .filter(OpsDebugService::isFinite)
+                    .toList();
+            Double topScore = firstDoubleDeep(data,
+                    "topRelevanceScore", "topScore", "maxScore", "afterTopScore");
+            if (topScore == null && !scoreSamples.isEmpty()) {
+                topScore = scoreSamples.stream().max(Double::compareTo).orElse(null);
+            }
+            Double meanScore = firstDoubleDeep(data, "meanScore", "averageScore", "avgScore");
+            if (meanScore == null) {
+                meanScore = average(scoreSamples);
+            }
+            Double minScore = firstDoubleDeep(data, "minScore");
+            if (minScore == null && !scoreSamples.isEmpty()) {
+                minScore = scoreSamples.stream().min(Double::compareTo).orElse(null);
+            }
+            Double spread = firstDoubleDeep(data, "scoreSpread");
+            if (spread == null && topScore != null && minScore != null) {
+                spread = topScore - minScore;
+            }
+
+            RagStageTimingView stages = ragStages(data, durationMs);
+            Long resolvedDuration = durationMs;
+            if (resolvedDuration == null && stages.totalMs() != null) {
+                resolvedDuration = Math.round(stages.totalMs());
+            }
+
+            Boolean rerankApplied = firstBooleanDeep(data,
+                    "rerankApplied", "agenticRerank", "reranked");
+            String strategy = firstTextDeep(data, "strategy", "retrievalStrategy");
+            String fusion = firstTextDeep(data, "fusionStrategy", "fusion");
+            if (rerankApplied == null && StringUtils.hasText(strategy)
+                    && strategy.toLowerCase(Locale.ROOT).contains("rerank")) {
+                rerankApplied = true;
+            }
+            Double beforeTop = firstDoubleDeep(data,
+                    "rerankBeforeTopScore", "beforeTopScore");
+            Double afterTop = firstDoubleDeep(data,
+                    "rerankAfterTopScore", "afterTopScore");
+            Double rerankLift = firstDoubleDeep(data, "rerankLift");
+            if (rerankLift == null && beforeTop != null && afterTop != null) {
+                rerankLift = afterTop - beforeTop;
+            }
+
+            Boolean fallback = firstBooleanDeep(data,
+                    "fallback", "fallbackUsed", "usedFallback");
+            String fallbackStage = firstTextDeep(data, "fallbackStage");
+            List<String> fallbackChain = stringListDeep(data, "fallbackChain");
+            Boolean degraded = firstBooleanDeep(data, "degraded");
+            String degradationReason = firstTextDeep(data,
+                    "degradationReason", "fallbackReason", "degradedReason", "errorType");
+            if (degraded == null && (Boolean.TRUE.equals(fallback) || StringUtils.hasText(error))) {
+                degraded = true;
+            }
+            if (fallback == null && StringUtils.hasText(fallbackStage)) {
+                fallback = !"hybrid".equalsIgnoreCase(fallbackStage)
+                        && !"vector".equalsIgnoreCase(fallbackStage);
+            }
+
+            Integer scoreSampleSize = firstIntegerDeep(data, "scoreSampleSize");
+            if (scoreSampleSize == null && !scoreSamples.isEmpty()) {
+                scoreSampleSize = scoreSamples.size();
+            }
+            RagQualityView quality = ragQuality(data);
+            boolean telemetryComplete = hasRetrievalTelemetry
+                    && requestedK != null
+                    && returnedK != null
+                    && StringUtils.hasText(strategy)
+                    && stages.totalMs() != null;
+            String resolvedRetrievedAt = firstNonBlank(
+                    firstTextDeep(data, "retrievedAt", "retrievalTime"), retrievedAt);
+            String resolvedOccurredAt = firstNonBlank(
+                    firstTextDeep(data, "occurredAt", "timestamp"),
+                    firstNonBlank(resolvedRetrievedAt,
+                            firstNonBlank(endedAt, firstNonBlank(startedAt, occurredAt))));
+            String resolvedStart = firstNonBlank(
+                    firstTextDeep(data, "startedAt", "startTime"), startedAt);
+            String resolvedEnd = firstNonBlank(
+                    firstTextDeep(data, "endedAt", "completedAt", "endTime"), endedAt);
+            Boolean zeroHit = returnedK != null ? returnedK == 0 : null;
+
+            return new RagRetrievalView(
+                    runId, traceId, seq, toolCallId, toolName, agentId,
+                    query, truncate(query, 160), queriesUsed, outcome,
+                    resolvedOccurredAt, resolvedStart, resolvedEnd, resolvedRetrievedAt,
+                    resolvedDuration,
+                    strategy, fusion,
+                    firstTextDeep(data, "indexName", "index", "collectionName", "collection"),
+                    firstTextDeep(data, "source", "sourceType", "backend"),
+                    requestedK, returnedK, uniqueDocuments,
+                    firstIntegerDeep(data, "candidateCount", "retrievedCandidateCount"),
+                    firstIntegerDeep(data, "lexicalHits"),
+                    firstIntegerDeep(data, "vectorHits"),
+                    firstIntegerDeep(data, "filteredCount", "filterCount"),
+                    firstIntegerDeep(data, "droppedCount", "dropCount"),
+                    firstIntegerDeep(data, "deduplicatedCount", "dedupCount"),
+                    zeroHit, topScore, meanScore, minScore, spread, scoreSampleSize,
+                    rerankApplied, beforeTop, afterTop, rerankLift,
+                    cacheHit, fallback, fallbackStage, fallbackChain,
+                    degraded, degradationReason, error, stages, chunks, quality,
+                    telemetryComplete);
+        }
+    }
+
+    private static RagStageTimingView ragStages(Map<String, Object> data, Long durationMs) {
+        Object stageNode = firstValueDeep(data, "stageTimings", "stages", "latency");
+        Map<String, Object> stages = asMap(stageNode);
+        Double rewrite = firstDouble(stages, data,
+                "queryRewriteMs", "query_rewrite_ms", "rewrite_ms", "rewriteMs");
+        Double embedding = firstDouble(stages, data,
+                "embeddingMs", "embedding_ms");
+        Double retrieval = firstDouble(stages, data,
+                "retrievalMs", "retrieveMs", "retrieval_ms", "retrieve_ms", "search_ms");
+        Double embeddingRetrieval = firstDouble(stages, data,
+                "embeddingRetrievalMs", "embedding_retrieval_ms",
+                "embedding_search_ms", "embeddingSearchMs");
+        Double fusion = firstDouble(stages, data,
+                "fusionMs", "fusion_ms");
+        Double rerank = firstDouble(stages, data,
+                "rerankMs", "rerank_ms");
+        Double total = firstDouble(stages, data,
+                "totalMs", "total_ms", "pipelineMs", "pipeline_ms");
+        if (total == null && durationMs != null) {
+            total = durationMs.doubleValue();
+        }
+        return new RagStageTimingView(
+                rewrite, embedding, retrieval, embeddingRetrieval, fusion, rerank, total);
+    }
+
+    private static List<RagChunkView> ragChunks(Map<String, Object> data) {
+        Object raw = firstValueDeep(data,
+                "chunks", "results", "hits", "items", "snippets", "selectedChunks");
+        if (!(raw instanceof List<?> list)) {
+            return List.of();
+        }
+        List<RagChunkView> chunks = new ArrayList<>();
+        int fallbackRank = 0;
+        for (Object item : list) {
+            fallbackRank++;
+            if (item instanceof String text) {
+                chunks.add(new RagChunkView(
+                        null, null, null, null, null, null, null,
+                        fallbackRank, truncate(text, 500), null));
+                continue;
+            }
+            if (!(item instanceof Map<?, ?> rawMap)) {
+                continue;
+            }
+            Map<String, Object> map = castObjectMap(rawMap);
+            Object provenance = firstValueDeep(map, "provenance", "metadata");
+            Double score = firstDoubleDeep(map,
+                    "finalScore", "retrievalScore", "score", "relevanceScore",
+                    "similarity", "rerankScore", "rrfScore", "vectorScore", "bm25Score");
+            String scoreType = firstPresentKey(map,
+                    "finalScore", "retrievalScore", "score", "relevanceScore",
+                    "similarity", "rerankScore", "rrfScore", "vectorScore", "bm25Score");
+            Integer rank = firstIntegerDeep(map, "rank", "rankNo", "position");
+            chunks.add(new RagChunkView(
+                    firstTextDeep(map, "chunkId", "segmentId", "id"),
+                    firstTextDeep(map, "documentId", "docId"),
+                    firstTextDeep(map, "title", "documentTitle"),
+                    firstTextDeep(map, "source", "sourceType", "channel"),
+                    firstTextDeep(map, "sourceUri", "uri", "url"),
+                    score,
+                    scoreType,
+                    rank != null ? rank : fallbackRank,
+                    truncate(firstTextDeep(map,
+                            "preview", "content", "text", "pageContent", "snippet"), 500),
+                    provenance));
+        }
+        return chunks;
+    }
+
+    private static RagQualityView ragQuality(Map<String, Object> data) {
+        Map<String, Object> quality = asMap(firstValueDeep(data,
+                "quality", "qualityMetrics", "evaluation"));
+        String groundTruthProvenance = firstText(quality, data,
+                "groundTruthDatasetId", "labelSetId", "relevanceLabelSetId",
+                "groundTruthId", "groundTruthProvenance");
+        String groundTruthStatus = firstText(quality, data,
+                "groundTruthStatus", "groundTruthEvaluationStatus",
+                "labelSetStatus", "labelEvaluationStatus", "evaluationStatus");
+        boolean groundTruthAvailable = StringUtils.hasText(groundTruthProvenance)
+                && isSuccessfulEvaluationStatus(groundTruthStatus);
+        String judgeSource = firstText(quality, data,
+                "judgeSource", "judgeName", "evaluator");
+        String judgeStatus = firstText(quality, data, "judgeStatus", "evaluationStatus");
+        boolean judgeCompleted = StringUtils.hasText(judgeSource)
+                && isSuccessfulEvaluationStatus(judgeStatus);
+        Double precisionAtK = groundTruthAvailable
+                ? firstDouble(quality, data, "precisionAtK", "precision_at_k")
+                : null;
+        Double recallAtK = groundTruthAvailable
+                ? firstDouble(quality, data, "recallAtK", "recall_at_k")
+                : null;
+        Double groundedness = judgeCompleted
+                ? firstDouble(quality, data, "groundedness", "faithfulness")
+                : null;
+        String note;
+        if (groundTruthAvailable || judgeCompleted) {
+            note = "Only explicitly labelled/judged metrics are shown; ranking scores remain proxies.";
+        } else {
+            note = "No labelled relevance set or completed judge is attached; precision, recall and groundedness are not reported.";
+        }
+        return new RagQualityView(
+                groundTruthAvailable,
+                judgeSource,
+                precisionAtK,
+                recallAtK,
+                groundedness,
+                "retriever_or_reranker_score_proxy",
+                note);
+    }
+
+    private static boolean isSuccessfulEvaluationStatus(String status) {
+        return StringUtils.hasText(status)
+                && Set.of("SUCCESS", "SUCCEEDED", "COMPLETED", "OK")
+                .contains(status.trim().toUpperCase(Locale.ROOT));
+    }
+
+    private static Double firstDouble(Map<String, Object> preferred,
+                                      Map<String, Object> fallback,
+                                      String... keys) {
+        Double value = firstDoubleDeep(preferred, keys);
+        return value != null ? value : firstDoubleDeep(fallback, keys);
+    }
+
+    private static String firstText(Map<String, Object> preferred,
+                                    Map<String, Object> fallback,
+                                    String... keys) {
+        String value = firstTextDeep(preferred, keys);
+        return StringUtils.hasText(value) ? value : firstTextDeep(fallback, keys);
+    }
+
+    private static Boolean firstBoolean(Map<String, Object> preferred,
+                                        Map<String, Object> fallback,
+                                        String... keys) {
+        Boolean value = firstBooleanDeep(preferred, keys);
+        return value != null ? value : firstBooleanDeep(fallback, keys);
+    }
+
+    private static String firstText(Map<String, Object> map, String... keys) {
+        return firstTextDeep(map, keys);
+    }
+
+    private static Object firstValueDeep(Object root, String... keys) {
+        for (String key : keys) {
+            Object found = findKey(root, key, 0);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private static Object findKey(Object node, String key, int depth) {
+        if (!(node instanceof Map<?, ?> map) || depth > 4) {
+            return null;
+        }
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (key.equalsIgnoreCase(String.valueOf(entry.getKey()))
+                    && meaningful(entry.getValue())) {
+                return entry.getValue();
+            }
+        }
+        for (Object value : map.values()) {
+            if (value instanceof Map<?, ?>) {
+                Object nested = findKey(value, key, depth + 1);
+                if (nested != null) {
+                    return nested;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String firstTextDeep(Object root, String... keys) {
+        Object value = firstValueDeep(root, keys);
+        if (value == null || value instanceof Map<?, ?> || value instanceof List<?>) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private static Integer firstIntegerDeep(Object root, String... keys) {
+        Object value = firstValueDeep(root, keys);
+        return intOrNull(value);
+    }
+
+    private static Long firstLongDeep(Object root, String... keys) {
+        Object value = firstValueDeep(root, keys);
+        return longOrNull(value);
+    }
+
+    private static Double firstDoubleDeep(Object root, String... keys) {
+        Object value = firstValueDeep(root, keys);
+        if (value instanceof Number number) {
+            double parsed = number.doubleValue();
+            return Double.isFinite(parsed) ? parsed : null;
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            double parsed = Double.parseDouble(String.valueOf(value));
+            return Double.isFinite(parsed) ? parsed : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static Boolean firstBooleanDeep(Object root, String... keys) {
+        Object value = firstValueDeep(root, keys);
+        if (value instanceof Boolean flag) {
+            return flag;
+        }
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        if ("true".equalsIgnoreCase(text) || "1".equals(text)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(text) || "0".equals(text)) {
+            return false;
+        }
+        return null;
+    }
+
+    private static List<String> stringListDeep(Object root, String... keys) {
+        Object value = firstValueDeep(root, keys);
+        if (value instanceof List<?> list) {
+            return list.stream()
+                    .filter(item -> item != null && StringUtils.hasText(String.valueOf(item)))
+                    .map(String::valueOf)
+                    .toList();
+        }
+        if (value instanceof String text && StringUtils.hasText(text)) {
+            return List.of(text);
+        }
+        return List.of();
+    }
+
+    private static String firstPresentKey(Map<String, Object> map, String... keys) {
+        for (String key : keys) {
+            Object value = findKey(map, key, 0);
+            if (value != null) {
+                return key;
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, Object> asMap(Object raw) {
+        if (raw instanceof Map<?, ?> map) {
+            return castObjectMap(map);
+        }
+        return Map.of();
+    }
+
+    private static boolean meaningful(Object value) {
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof String text) {
+            return !text.isBlank();
+        }
+        if (value instanceof Map<?, ?> map) {
+            return !map.isEmpty();
+        }
+        if (value instanceof List<?> list) {
+            return !list.isEmpty();
+        }
+        return true;
+    }
+
+    private static String normalizeOutcome(String raw, String fallback) {
+        if (!StringUtils.hasText(raw)) {
+            return fallback;
+        }
+        String normalized = raw.trim().toUpperCase(Locale.ROOT);
+        if (Set.of("SUCCESS", "SUCCEEDED", "COMPLETED", "OK").contains(normalized)) {
+            return "SUCCESS";
+        }
+        if (Set.of("FAILED", "FAILURE", "ERROR", "TIMED_OUT", "TIMEOUT").contains(normalized)) {
+            return "FAILED";
+        }
+        if (Set.of("RUNNING", "STARTED", "PENDING").contains(normalized)) {
+            return "RUNNING";
+        }
+        return fallback;
+    }
+
+    private static Boolean firstNonNullBoolean(Boolean first, Boolean second) {
+        return first != null ? first : second;
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        return StringUtils.hasText(first) ? first : second;
+    }
+
+    private static String eventTime(RunEvent event) {
+        return event != null && event.getCreateTime() != null
+                ? event.getCreateTime().toString() : null;
+    }
+
+    private static Integer minSeq(Integer left, Integer right) {
+        if (left == null) return right;
+        if (right == null) return left;
+        return Math.min(left, right);
+    }
+
+    private static Integer maxSeq(Integer left, Integer right) {
+        if (left == null) return right;
+        if (right == null) return left;
+        return Math.max(left, right);
     }
 
     private static List<String> castStringList(Object raw) {

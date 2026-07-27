@@ -297,6 +297,12 @@ public class ConversationService {
                                                        ConversationTurnRequest request,
                                                        int activeRevision) {
         AgentRun active = runQueueService.findActiveRun(session.getId());
+        if (active == null) {
+            // A paused run is still the active immutable revision. Evaluation-
+            // changing input must supersede it instead of leaving a stale
+            // checkpoint that can later overwrite the new intent.
+            active = runQueueService.findPausedRun(session.getId());
+        }
         AgentRun pending = runQueueService.findPendingRun(session.getId());
         TurnDecision decision = turnPolicyService.decide(session, active, pending, request.content());
 
@@ -322,13 +328,18 @@ public class ConversationService {
                 request.content(), activeRevision, null, null,
                 Map.of("disposition", decision.disposition().name(), "control", action));
         AgentRun active = runQueueService.findActiveRun(session.getId());
+        AgentRun paused = runQueueService.findPausedRun(session.getId());
         String message;
         String interruptedRunId = null;
         if ("CANCEL".equals(action)) {
-            if (active != null) {
-                runLifecycleService.cancelActiveRun(active, "user_cancelled", "用户在对话中要求停止");
-                interruptedRunId = active.getRunId();
-                message = "已请求停止当前任务，取消完成后会通知你。";
+            AgentRun target = active != null ? active : paused;
+            if (target != null) {
+                runLifecycleService.cancelActiveRun(
+                        target, "user_cancelled", "用户在对话中要求停止");
+                interruptedRunId = target.getRunId();
+                message = active != null
+                        ? "已请求停止当前任务，取消完成后会通知你。"
+                        : "已立即取消暂停中的任务。";
             } else {
                 AgentRun pending = runQueueService.findPendingRun(session.getId());
                 if (pending != null && runQueueService.cancelQueued(pending.getRunId(), "user_cancelled")) {
@@ -340,16 +351,23 @@ public class ConversationService {
             }
         } else if ("PAUSE".equals(action) && active != null) {
             try {
-                runtimeClient.pauseRun(active.getRunId(), "user_paused");
-                interruptedRunId = active.getRunId();
+                AgentRun pausing = runLifecycleService.pauseActiveRun(
+                        active, "用户在对话中要求暂停");
+                interruptedRunId = pausing.getRunId();
                 message = "已请求暂停；当前节点结束后会在安全边界写入 checkpoint。";
             } catch (Exception e) {
                 log.warn("pause via conversation failed run={}: {}", active.getRunId(), e.getMessage());
                 message = "暂停请求失败：" + e.getMessage();
             }
-        } else if ("RESUME".equals(action) && active != null) {
-            message = "已请求从 checkpoint 继续当前任务。";
-            interruptedRunId = active.getRunId();
+        } else if ("RESUME".equals(action) && paused != null) {
+            try {
+                AgentRun resumed = runLifecycleService.resumePausedRun(paused);
+                message = "已从 checkpoint 继续当前任务。";
+                interruptedRunId = resumed.getRunId();
+            } catch (Exception e) {
+                log.warn("resume via conversation failed run={}: {}", paused.getRunId(), e.getMessage());
+                message = "继续任务失败：" + e.getMessage();
+            }
         } else {
             message = "当前没有可执行该控制指令的任务。";
         }
@@ -475,19 +493,48 @@ public class ConversationService {
         int resultingRevision = activeRevision + 1;
         session.setActiveRevision(resultingRevision);
         session.setCurrentGoal(trimTo(request.content(), 1900));
+        String requestedCategory = inferRequestedCategory(request.content());
+        if (StringUtils.hasText(requestedCategory)) {
+            session.setJobCategory(requestedCategory);
+        }
+        String requestedJd = extractExplicitJd(request.content());
+        if (StringUtils.hasText(requestedJd)) {
+            session.setJobDescription(requestedJd);
+        }
         session.setUpdateTime(LocalDateTime.now());
         writeSession(session);
 
         String runType = evaluationRunType(request.content(), session.getJobCategory());
+        AgentRun activeInterrupted = supersede
+                ? runQueueService.findActiveRun(session.getId()) : null;
+        if (activeInterrupted != null) {
+            // Propagate cancellation to the Python worker immediately. Merely
+            // flipping MySQL to CANCELLING would let the stale revision keep
+            // spending tokens until the watchdog grace period elapsed.
+            runLifecycleService.cancelActiveRun(
+                    activeInterrupted,
+                    "superseded_by_new_revision",
+                    "运行中的旧 revision 已被用户新意图替代");
+        }
+        AgentRun pausedInterrupted = runQueueService.findPausedRun(session.getId());
+        if (pausedInterrupted != null) {
+            runLifecycleService.cancelActiveRun(
+                    pausedInterrupted,
+                    "superseded_by_new_revision",
+                    "暂停中的旧 revision 已被用户新意图替代");
+        }
         RunQueueService.SubmitResult submit = runQueueService.submitEvaluationRun(
                 session.getId(), session.getUserId(), session.getActiveTraceId(),
                 resultingRevision, runType, supersede, request.content(), userMessage.getId());
         runSchedulerService.kick();
 
         AgentRun run = submit.run();
+        AgentRun interruptedRun = submit.interruptedRun() != null
+                ? submit.interruptedRun()
+                : activeInterrupted != null ? activeInterrupted : pausedInterrupted;
         int queuePosition = runQueueService.queuePosition(run);
         String receipt;
-        if (submit.interruptedRun() != null) {
+        if (interruptedRun != null) {
             receipt = "已自动替换当前评估并基于最新指令重新分析（Run " + shortId(run.getRunId()) + "）。";
         } else if (queuePosition > 1 || runQueueService.findActiveRun(session.getId()) != null) {
             receipt = "已创建评估 revision v" + resultingRevision + "（Run "
@@ -504,7 +551,7 @@ public class ConversationService {
                 receipt, session.getActiveTraceId(), resultingRevision, null,
                 decision.invalidatedArtifacts(),
                 run.getRunId(), run.getStatus(), queuePosition, null,
-                submit.interruptedRun() != null ? submit.interruptedRun().getRunId() : null,
+                interruptedRun != null ? interruptedRun.getRunId() : null,
                 decision.disposition().name(), decision.reason(), null,
                 List.of(),
                 List.of(Map.of("type", "OPEN_REPORT", "label", "打开决策报告")),

@@ -228,25 +228,23 @@ def test_query_rewrite_degrades_to_single_query_without_llm():
     run(scenario())
 
 
-def test_enable_rewrite_flag_reaches_dispatch():
-    """enable_rewrite=True 必须真正触发 query_rewrite（此前参数写了但未接线）。"""
+def test_rewrite_stage_never_spends_a_hidden_provider_call():
+    """RAG 保留 rewrite 阶段指标，但模型生成的 query 必须原样执行。"""
     from app.runtime.events import NullEmitter as _NullEmitter
     from app.runtime.models import RunBudget
     from app.runtime.tools import ToolExecutor
 
-    class RewriteLlm(FakeLlm):
+    class AuditLlm(FakeLlm):
         async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
                        temperature=0.2, json_mode=True, tools=None, tool_choice=None,
                        use_quality=False):
             self.calls.append({"agent": agent_id, "purpose": purpose})
-            if purpose == "query_rewrite":
-                return json.dumps({"queries": ["Kafka 消息队列经验", "异步解耦实践"]})
             return await super().chat(
                 messages, agent_id=agent_id, purpose=purpose,
                 max_tokens=max_tokens, temperature=temperature,
                 json_mode=json_mode, tools=tools, tool_choice=tool_choice)
 
-    llm = RewriteLlm()
+    llm = AuditLlm()
     tools = ToolExecutor(
         _NullEmitter("r", "c", "t"), RunBudget(), BuiltinToolRegistry(),
         max_tool_calls_run=10, tool_timeout_seconds=10,
@@ -268,11 +266,13 @@ def test_enable_rewrite_flag_reaches_dispatch():
                 "ReportAgent", "knowledge_search",
                 {"query": "评分依据"}, enable_rewrite=True)
             assert call.status == "SUCCEEDED"
-            assert any(c["purpose"] == "query_rewrite" for c in llm.calls)
+            assert not any(c["purpose"] == "query_rewrite" for c in llm.calls)
             result = call.result
             assert isinstance(result, dict)
-            assert result.get("fusion") == "rrf_multi_query" or len(
-                result.get("queriesUsed", [])) >= 1
+            assert result.get("queriesUsed") == ["评分依据"]
+            assert result.get("queryRewriteMode") == "deterministic_passthrough"
+            assert isinstance(result.get("_latency"), dict)
+            assert "rewrite_ms" in result["_latency"]
         finally:
             gateway.java_knowledge_search = original
 
@@ -341,6 +341,26 @@ def test_agent_failure_degrades_not_hangs():
     assert result["answer"], "degraded run still answers from remaining agents"
     assert any(e["eventType"] == "agent.failed" for e in emitter.events)
     assert any("TechAgent" in r for r in result["metrics"]["degradedReasons"])
+
+
+def test_specialist_budget_rejection_preserves_terminal_execution():
+    class ReservedTerminalLlm(FakeLlm):
+        async def chat(self, messages, *, agent_id, purpose="", max_tokens=2048,
+                       temperature=0.2, **kwargs):
+            if agent_id == "TechAgent":
+                raise BudgetExceeded(
+                    "llmReservation", "protectedForOthers=2")
+            return await super().chat(
+                messages, agent_id=agent_id, purpose=purpose,
+                max_tokens=max_tokens, temperature=temperature, **kwargs)
+
+    request = make_request(run_type="tech_match")
+    llm = ReservedTerminalLlm()
+    executor, _ = make_executor(request, llm=llm)
+    result = run(executor.execute())
+    assert result["status"] == "PARTIAL_SUCCESS"
+    assert any(call["agent"] == "ReportAgent" for call in llm.calls)
+    assert "TechAgent_failed" in result["metrics"]["degradedReasons"]
 
 
 def test_tool_whitelist_enforced_per_agent():
@@ -444,7 +464,13 @@ def test_pause_snapshot_and_resume_skips_completed_agents():
                                llm=FakeLlm(delay=0.05),
                                pause_event=pause_event)
         task = asyncio.create_task(executor.execute())
-        await asyncio.sleep(0.12)
+        # Wait for a real checkpoint boundary instead of relying on wall-clock
+        # timing: planning/probing work legitimately changes across runtimes.
+        for _ in range(100):
+            if any(event["eventType"] == "agent.completed"
+                   for event in emitter.events):
+                break
+            await asyncio.sleep(0.02)
         pause_event.set()
         result = await task
         assert result["status"] == "PAUSED"

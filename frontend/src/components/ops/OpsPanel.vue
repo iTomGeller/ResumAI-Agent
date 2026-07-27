@@ -5,12 +5,13 @@ import ErrorDiagnostic from './ErrorDiagnostic.vue';
 import McpInspector from './McpInspector.vue';
 import MemoryInspector from './MemoryInspector.vue';
 import PlanBudgetPanel from './PlanBudgetPanel.vue';
+import RagInspector from './RagInspector.vue';
 import RunExplorer from './RunExplorer.vue';
 import RunTimeline from './RunTimeline.vue';
 import SkillInspector from './SkillInspector.vue';
 import PolicyLabPanel from './PolicyLabPanel.vue';
 
-type OpsTab = 'runs' | 'memory' | 'policyLab' | 'policy' | 'mcp' | 'skills' | 'observability';
+type OpsTab = 'runs' | 'memory' | 'policyLab' | 'policy' | 'mcp' | 'skills' | 'rag' | 'observability';
 
 const props = defineProps<{ initialTab?: OpsTab }>();
 const activeTab = ref<OpsTab>(props.initialTab || 'runs');
@@ -30,6 +31,7 @@ const tabs: Array<{ id: OpsTab; label: string }> = [
   { id: 'memory', label: 'Memory' },
   { id: 'mcp', label: 'MCP' },
   { id: 'skills', label: 'Skills' },
+  { id: 'rag', label: 'RAG' },
   { id: 'policyLab', label: 'Policy Lab' },
   { id: 'policy', label: 'Policy Optimization Lab' },
   { id: 'observability', label: 'Observability' },
@@ -42,6 +44,7 @@ const endpointByTab: Record<OpsTab, string> = {
   policy: '/api/ops/policy',
   mcp: '/api/ops/mcp',
   skills: '/api/ops/skills',
+  rag: '/api/ops/rag',
   observability: '/api/ops/observability',
 };
 
@@ -334,6 +337,10 @@ async function onMemoryFilter(payload: { runId: string; decision: string }) {
 
       <div v-else-if="activeTab === 'skills'" class="ops-panel">
         <SkillInspector :panel="panel.skills" :inventory-class="inventoryClass" />
+      </div>
+
+      <div v-else-if="activeTab === 'rag'" class="ops-panel">
+        <RagInspector />
       </div>
 
       <div v-else-if="activeTab === 'observability'" class="ops-panel">

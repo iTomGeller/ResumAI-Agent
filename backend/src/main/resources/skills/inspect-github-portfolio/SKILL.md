@@ -1,6 +1,7 @@
 ---
 name: inspect-github-portfolio
-description: 使用已配置且真实成功返回的 GitHub MCP 或 API 结果评估候选人的公开作品集。简历含 GitHub 链接，或用户要求分析仓库质量、贡献和岗位相关性时使用。
+description: 使用免密公网 MCP 对候选人明确声明的 GitHub 公开作品集做来源核验。简历含 GitHub 链接，或用户要求分析仓库质量、贡献和岗位相关性时使用。
+allowed-tools: deepwiki.read_wiki_structure deepwiki.read_wiki_contents deepwiki.ask_question exa.web_search_exa exa.web_fetch_exa fetch.fetch
 ---
 
 # Inspect GitHub Portfolio
@@ -25,12 +26,14 @@ description: 使用已配置且真实成功返回的 GitHub MCP 或 API 结果�
   "repositories": [{"url": "", "signals": [], "requirementIds": [], "sourceRefs": []}],
   "supportedClaims": [],
   "caveats": [],
-  "toolHealth": {"github": "success"}
+  "toolHealth": {"deepwiki": "success", "exa": "not_called", "fetch": "not_called"}
 }
 ```
 
 ## 证据边界
 
+- DeepWiki 的 wiki / 问答是 AI 生成的仓库理解上下文，只能辅助定位；
+  不得直接作为候选人事实，事实必须回到候选人声明的仓库 URL 或可定位源码页面。
 - 没有明确关联时不得声称账号属于候选人。
 - star、fork、语言占比和提交次数不能单独证明工程质量。
 - commit 不能证明全部代码由候选人独立完成，也不能替代工作表现。

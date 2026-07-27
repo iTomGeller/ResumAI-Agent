@@ -26,6 +26,15 @@ class AgentRunRequest(BaseModel):
     # restores shared state / budgets / executed agents from this snapshot and
     # never re-runs completed non-idempotent steps.
     resumeSnapshot: Optional[Dict[str, Any]] = None
+    # Cross-revision reuse is deliberately separate from pause/resume. A new
+    # revision imports only reusable artifacts from the previous successful
+    # run; it never inherits executed-agent, budget, or tool-call state.
+    previousSnapshot: Optional[Dict[str, Any]] = None
+    previousArtifacts: Dict[str, Any] = Field(default_factory=dict)
+    # Logical artifact names (snake_case) and canonical state keys (camelCase)
+    # are both accepted. The executor expands downstream dependencies before
+    # planning, so stale derived results cannot survive a changed input/focus.
+    invalidatedArtifacts: List[str] = Field(default_factory=list)
     # Present when this run mirrors a legacy resume_task evaluation.
     sourceTaskTraceId: Optional[str] = None
     # Plan-approval mode: pause right after the Coordinator produced the plan
@@ -59,8 +68,8 @@ class ContextBudget(BaseModel):
 
 
 class MemoryRetrieval(BaseModel):
-    topK: int = 5
-    minConfidence: float = 0.35
+    topK: int = 8
+    minConfidence: float = 0.12
 
 
 class EvidenceVerification(BaseModel):
@@ -91,6 +100,11 @@ class PolicyBundle(BaseModel):
     optionalArtifacts: List[str] = Field(default_factory=list)
     maxAgentCount: int = 6
     maxLlmCalls: int = 12
+    # Provider-call reservations live inside maxLlmCalls; they are not extra
+    # budget. Control-plane calls have a hard ceiling, while the terminal
+    # reserve cannot be consumed by specialists.
+    controlPlaneLlmReserve: int = 4
+    terminalLlmReserve: int = 2
     # Cost budget axis (CNY, real token pricing); 0 disables the cap.
     maxCostCny: float = 1.0
     # Hard cumulative token ceiling (prompt + completion) enforced before
@@ -367,6 +381,10 @@ class RunBudget(BaseModel):
     """
 
     llm_calls: int = 0
+    llm_limit: int = 0
+    llm_calls_by_scope: Dict[str, int] = Field(default_factory=dict)
+    llm_reservations: Dict[str, int] = Field(default_factory=dict)
+    llm_scope_limits: Dict[str, int] = Field(default_factory=dict)
     tool_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -381,19 +399,134 @@ class RunBudget(BaseModel):
     def elapsed_seconds(self) -> float:
         return time.monotonic() - self.started_at
 
+    def configure_llm_budget(
+            self, limit: int, reservations: Dict[str, int],
+            scope_limits: Optional[Dict[str, int]] = None) -> None:
+        """Configure reservations *within* one global provider-call limit."""
+        self.llm_limit = max(0, int(limit))
+        remaining = self.llm_limit
+        normalized: Dict[str, int] = {}
+        for scope, requested in (reservations or {}).items():
+            amount = min(max(0, int(requested)), remaining)
+            normalized[str(scope)] = amount
+            remaining -= amount
+        self.llm_reservations = normalized
+        self.llm_scope_limits = {
+            str(scope): min(
+                max(0, int(value)),
+                normalized.get(str(scope), max(0, int(value))))
+            for scope, value in (scope_limits or {}).items()
+        }
+
+    def release_llm_reservation(self, scope: str) -> None:
+        """Release only the unused portion; historical usage stays auditable."""
+        used = int(self.llm_calls_by_scope.get(scope, 0))
+        if scope in self.llm_reservations:
+            self.llm_reservations[scope] = min(
+                self.llm_reservations[scope], used)
+        if scope in self.llm_scope_limits:
+            self.llm_scope_limits[scope] = min(
+                self.llm_scope_limits[scope], used)
+
+    def claim_llm_call(self, max_calls: int, scope: str) -> int:
+        """Atomically account one actual provider request.
+
+        A scope may use its own reservation or unreserved capacity, but never
+        another scope's outstanding reservation. Hard-limited control-plane
+        scopes cannot spill into the specialist/terminal pool.
+        """
+        scope = str(scope or "unclassified")
+        limit = self.llm_limit if self.llm_limit > 0 else max(0, int(max_calls))
+        used_by_scope = int(self.llm_calls_by_scope.get(scope, 0))
+        scope_limit = self.llm_scope_limits.get(scope)
+        if scope_limit is not None and used_by_scope >= scope_limit:
+            raise BudgetExceeded(
+                "llmScopeLimit", f"scope={scope} limit={scope_limit}")
+        if self.llm_calls >= limit:
+            raise BudgetExceeded("maxLlmCalls", f"limit={limit}")
+
+        own_outstanding = max(
+            0, int(self.llm_reservations.get(scope, 0)) - used_by_scope)
+        other_outstanding = sum(
+            max(0, int(reserved)
+                - int(self.llm_calls_by_scope.get(other_scope, 0)))
+            for other_scope, reserved in self.llm_reservations.items()
+            if other_scope != scope
+        )
+        remaining_global = limit - self.llm_calls
+        if own_outstanding <= 0 and remaining_global <= other_outstanding:
+            raise BudgetExceeded(
+                "llmReservation",
+                f"scope={scope} protectedForOthers={other_outstanding}")
+
+        self.llm_calls += 1
+        self.llm_calls_by_scope[scope] = used_by_scope + 1
+        return self.llm_calls
+
+    def available_agent_llm_calls(self, max_calls: int) -> int:
+        """Calls assignable to planned agents after control reservations."""
+        limit = self.llm_limit if self.llm_limit > 0 else max(0, int(max_calls))
+        remaining = max(0, limit - self.llm_calls)
+        non_agent_outstanding = sum(
+            max(0, int(reserved)
+                - int(self.llm_calls_by_scope.get(scope, 0)))
+            for scope, reserved in self.llm_reservations.items()
+            if scope != "terminal" and not scope.startswith("agent:")
+        )
+        return max(0, remaining - non_agent_outstanding)
+
+    def llm_audit(self, max_calls: Optional[int] = None) -> Dict[str, Any]:
+        limit = self.llm_limit if self.llm_limit > 0 else max(
+            0, int(max_calls or 0))
+        return {
+            "limit": limit,
+            "used": self.llm_calls,
+            "remaining": max(0, limit - self.llm_calls),
+            "callsByScope": dict(self.llm_calls_by_scope),
+            "reservations": dict(self.llm_reservations),
+            "scopeLimits": dict(self.llm_scope_limits),
+            "agentAssignableRemaining": self.available_agent_llm_calls(limit),
+        }
+
     def restore(self, counters: Dict[str, Any]) -> None:
         self.llm_calls = int(counters.get("llmCalls", 0))
+        if "llmLimit" in counters:
+            self.llm_limit = int(counters.get("llmLimit", 0))
+        scopes = counters.get("llmCallsByScope")
+        if isinstance(scopes, dict):
+            self.llm_calls_by_scope = {
+                str(k): int(v) for k, v in scopes.items()}
+        else:
+            self.llm_calls_by_scope = {"legacy": self.llm_calls}
+            # Old checkpoints predate control accounting; planning already
+            # happened, so do not strand capacity behind that reservation.
+            self.release_llm_reservation("control")
+        reservations = counters.get("llmReservations")
+        if isinstance(reservations, dict):
+            self.llm_reservations = {
+                str(k): int(v) for k, v in reservations.items()}
+        limits = counters.get("llmScopeLimits")
+        if isinstance(limits, dict):
+            self.llm_scope_limits = {
+                str(k): int(v) for k, v in limits.items()}
         self.tool_calls = int(counters.get("toolCalls", 0))
         self.prompt_tokens = int(counters.get("promptTokens", 0))
         self.completion_tokens = int(counters.get("completionTokens", 0))
+        self.prompt_cache_hit_tokens = int(
+            counters.get("promptCacheHitTokens", 0))
         self.cost_cny = float(counters.get("costCny", 0.0))
 
     def snapshot(self) -> Dict[str, Any]:
         return {
             "llmCalls": self.llm_calls,
+            "llmLimit": self.llm_limit,
+            "llmCallsByScope": dict(self.llm_calls_by_scope),
+            "llmReservations": dict(self.llm_reservations),
+            "llmScopeLimits": dict(self.llm_scope_limits),
             "toolCalls": self.tool_calls,
             "promptTokens": self.prompt_tokens,
             "completionTokens": self.completion_tokens,
+            "promptCacheHitTokens": self.prompt_cache_hit_tokens,
             "costCny": round(self.cost_cny, 6),
         }
 

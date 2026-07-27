@@ -1,7 +1,7 @@
 ---
 name: retrieve-public-candidate-evidence
-description: 集中定义 Exa/Firecrawl/fetch 对候选人声明 URL 的绑定、域名白名单、超时/限流与 not_checked 契约。仅在简历含显式外链、用户要求公网核验，或 ground-project-claims / inspect-github-portfolio 需要外部证据时使用。
-allowed-tools: exa.web_search_exa exa.web_fetch_exa firecrawl.firecrawl_search firecrawl.firecrawl_scrape firecrawl.firecrawl_map mcp_fetch_url fetch.fetch
+description: 集中定义免密 Exa、DeepWiki 和 fetch 对候选人声明 URL 的绑定、超时/限流与 not_checked 契约。仅在简历含显式外链、用户要求公网核验，或项目证据核验需要外部来源时使用。
+allowed-tools: exa.web_search_exa exa.web_fetch_exa deepwiki.read_wiki_structure deepwiki.read_wiki_contents deepwiki.ask_question fetch.fetch
 ---
 
 # Retrieve Public Candidate Evidence
@@ -19,10 +19,10 @@ allowed-tools: exa.web_search_exa exa.web_fetch_exa firecrawl.firecrawl_search f
 ## 工具优先级
 
 1. **Exa**（`exa.web_search_exa` / `exa.web_fetch_exa`）：发现与抓取候选人声明页面。
-2. **Firecrawl**（仅 `firecrawl_search` / `firecrawl_scrape` / `firecrawl_map`）：抓取用户给出的 JD 页或作品集；禁止 crawl/extract/browser。
-3. **stdio fetch**（`mcp_fetch_url` / `fetch.fetch`）：Exa/Firecrawl 熔断或限流时的白名单兜底，不承担搜索。
+2. **DeepWiki**（`deepwiki.*`）：仅查询候选人已声明的公开仓库；用仓库结构/内容辅助定位，不把 AI 生成的仓库说明当成独立候选人事实。
+3. **stdio fetch**（`fetch.fetch`）：远程 MCP 熔断或限流时的白名单兜底，不承担搜索。其描述和参数 schema 必须来自实时 `tools/list`，不使用本地别名。
 
-GitHub Official MCP 无 `GITHUB_TOKEN` 时状态为 `AUTH_REQUIRED`，不得伪装已启用；此前用 Exa/Firecrawl/fetch 核验公开 GitHub 页。
+生产 MCP 清单只允许免 OAuth、免 API Key 的服务；公开 GitHub 页通过 Exa、DeepWiki 或白名单 fetch 核验。
 
 ## URL 绑定与白名单
 
@@ -38,7 +38,6 @@ GitHub Official MCP 无 `GITHUB_TOKEN` 时状态为 `AUTH_REQUIRED`，不得伪�
 | 工具成功且带回 source URL | `toolStatus=success`，保留 url/title/publishedAt/provider |
 | 超时、熔断、5xx | `toolStatus=failed`，claim 标 `not_checked` |
 | 429 / RATE_LIMITED | `toolStatus=unavailable`，claim 标 `not_checked`，可降级到下一工具 |
-| AUTH_REQUIRED | `toolStatus=unavailable`，不得编造仓库/贡献 |
 | 空结果 | `emptyOrFailedResult=unavailable`，禁止合成证据 |
 
 `not_checked` **绝不能**降级为 `unsupported` 或履历造假风险。
@@ -58,12 +57,12 @@ GitHub Official MCP 无 `GITHUB_TOKEN` 时状态为 `AUTH_REQUIRED`，不得伪�
     "identityLinkage": "explicit_resume_link"
   }],
   "notChecked": [],
-  "toolHealth": {"exa": "success", "firecrawl": "not_called", "fetch": "not_called"}
+  "toolHealth": {"exa": "success", "deepwiki": "not_called", "fetch": "not_called"}
 }
 ```
 
 ## 边界
 
 - 所有公网结果必须带 `sourceUrl`；无 URL 的片段不得进入候选人证据台账。
-- Context7 框架文档不是候选人证据，不得经本 Skill 写入。
+- Context7 / Microsoft Learn 框架文档不是候选人证据，不得经本 Skill 写入。
 - ReportAgent 不得直接调用公网 MCP；只消费 Evidence 校准后的 ledger。

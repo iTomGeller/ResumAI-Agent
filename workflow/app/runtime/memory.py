@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
+import hashlib
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import httpx
@@ -11,11 +13,20 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Consumer whitelist: specialists / Report / Risk never retrieve FAILURE or
-# GLOBAL control-plane noise. Coordinator (and policy evolution) may.
-SPECIALIST_TYPES = frozenset({"CONVERSATION", "EPISODIC", "PREFERENCE"})
-COORDINATOR_TYPES = frozenset({"CONVERSATION", "EPISODIC", "PREFERENCE", "FAILURE"})
-EVALUATION_SCOPES = frozenset({"USER", "CONVERSATION"})
+# Canonical taxonomy. Legacy names are accepted only at the API boundary and
+# are normalized before filtering, prompting or trace emission.
+CANONICAL_TYPES = frozenset({"SEMANTIC", "EPISODIC", "PROCEDURAL", "WORKING"})
+LEGACY_TYPE_MAP = {
+    "CONVERSATION": "WORKING",
+    "SHORT_TERM": "WORKING",
+    "PREFERENCE": "SEMANTIC",
+    "USER_PREFERENCE": "SEMANTIC",
+    "HR_FEEDBACK": "SEMANTIC",
+    "DOMAIN": "SEMANTIC",
+    "FAILURE": "EPISODIC",
+}
+SPECIALIST_TYPES = frozenset({"SEMANTIC", "EPISODIC", "PROCEDURAL"})
+COORDINATOR_TYPES = CANONICAL_TYPES
 CONTROL_PLANE_ERROR_CODES = frozenset({
     "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED", "START_STUCK",
 })
@@ -39,6 +50,37 @@ class MemoryDecision(BaseModel):
     finalScore: Optional[float] = None
     decision: Literal["USED", "IGNORED"] = "USED"
     ignoredReason: Optional[str] = None
+    memoryType: Optional[str] = None
+    taxonomy: Optional[str] = None
+    namespace: Optional[str] = None
+    reason: Optional[str] = None
+    occurredAt: Optional[str] = None
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def canonical_taxonomy(raw_type: Any) -> str:
+    value = str(raw_type or "").strip().upper()
+    return LEGACY_TYPE_MAP.get(value, value)
+
+
+def _safe_namespace(hit: Dict[str, Any]) -> str:
+    supplied = str(hit.get("namespace") or "").strip()
+    if supplied:
+        return supplied
+    scope = str(hit.get("ownerScope") or hit.get("scope") or "UNKNOWN").upper()
+    owner = (hit.get("runId") if scope == "RUN"
+             else hit.get("conversationId") if scope == "CONVERSATION"
+             else hit.get("userId") if scope == "USER"
+             else "global")
+    if scope == "GLOBAL":
+        return "global"
+    if owner:
+        digest = hashlib.sha256(str(owner).encode("utf-8")).hexdigest()[:12]
+        return f"{scope.lower()}/{digest}"
+    return scope.lower()
 
 
 def allows_failure(consumer_agent: Optional[str]) -> bool:
@@ -71,8 +113,34 @@ def is_control_plane_memory(hit: Dict[str, Any]) -> bool:
     return any(code in content for code in CONTROL_PLANE_ERROR_CODES)
 
 
+def is_failure_episode(hit: Dict[str, Any]) -> bool:
+    raw_type = str(hit.get("storedType") or hit.get("type") or "").upper()
+    source = str(hit.get("source") or "").lower()
+    source_id = str(hit.get("sourceId") or "")
+    structured = hit.get("structuredContent") or {}
+    return (
+        raw_type == "FAILURE"
+        or source in {"control_plane", "failed_run"}
+        or source_id.startswith("failure:")
+        or (isinstance(structured, dict)
+            and (str(structured.get("outcome") or "").upper() == "FAILURE"
+                 or str(structured.get("category") or "").upper() == "CONTROL_PLANE"))
+    )
+
+
 def allowed_types_for(consumer_agent: Optional[str]) -> frozenset[str]:
-    return COORDINATOR_TYPES if allows_failure(consumer_agent) else SPECIALIST_TYPES
+    key = str(consumer_agent or "Specialist").replace("-", "").replace("_", "").lower()
+    if key.startswith("policy"):
+        return frozenset({"PROCEDURAL", "EPISODIC"})
+    if key in {"coordinator", "coordinatoragent"}:
+        return COORDINATOR_TYPES
+    if "resumeparser" in key or "conversation" in key:
+        return frozenset({"SEMANTIC", "WORKING"})
+    if "jdanalysis" in key or key == "jdagent":
+        return frozenset({"SEMANTIC", "PROCEDURAL", "WORKING"})
+    if "report" in key or "risk" in key:
+        return frozenset({"EPISODIC", "SEMANTIC", "PROCEDURAL"})
+    return SPECIALIST_TYPES
 
 
 def _score_fields(hit: Dict[str, Any]) -> Dict[str, Optional[float]]:
@@ -122,6 +190,8 @@ def decisions_from_hits(
             continue
         rank += 1
         scores = _score_fields(hit)
+        taxonomy = canonical_taxonomy(
+            hit.get("taxonomy") or hit.get("memoryType") or hit.get("type"))
         rows.append(MemoryDecision(
             memoryId=mid,
             consumerAgent=consumer_agent,
@@ -132,6 +202,12 @@ def decisions_from_hits(
             finalScore=scores["finalScore"],
             decision="USED",
             ignoredReason=None,
+            memoryType=taxonomy,
+            taxonomy=taxonomy,
+            namespace=_safe_namespace(hit),
+            reason=str(hit.get("reason") or hit.get("selectionReason")
+                       or "selected_for_agent_context"),
+            occurredAt=str(hit.get("occurredAt") or _utc_now_iso()),
         ))
     for hit in ignored:
         mid = str(hit.get("memoryId") or "").strip()
@@ -139,6 +215,8 @@ def decisions_from_hits(
             continue
         rank += 1
         scores = _score_fields(hit)
+        taxonomy = canonical_taxonomy(
+            hit.get("taxonomy") or hit.get("memoryType") or hit.get("type"))
         rows.append(MemoryDecision(
             memoryId=mid,
             consumerAgent=consumer_agent,
@@ -149,6 +227,11 @@ def decisions_from_hits(
             finalScore=scores["finalScore"],
             decision="IGNORED",
             ignoredReason=str(hit.get("ignoredReason") or "") or None,
+            memoryType=taxonomy,
+            taxonomy=taxonomy,
+            namespace=_safe_namespace(hit),
+            reason=str(hit.get("ignoredReason") or "excluded_by_consumer_policy"),
+            occurredAt=str(hit.get("occurredAt") or _utc_now_iso()),
         ))
     return rows
 
@@ -171,18 +254,24 @@ def filter_hits_for_consumer(
 
     for hit in hits:
         reason: Optional[str] = None
-        hit_type = str(hit.get("type") or "").upper()
+        hit_type = canonical_taxonomy(
+            hit.get("taxonomy") or hit.get("memoryType") or hit.get("type"))
         scope = str(hit.get("ownerScope") or hit.get("scope") or "").upper()
         source = str(hit.get("source") or "")
 
         if hit_type and hit_type not in allowed_types:
             reason = f"type_not_allowed_for_{consumer_agent}"
-        elif evaluation_safe and scope and scope not in EVALUATION_SCOPES:
-            reason = f"scope_{scope}_excluded_for_evaluation"
+        elif is_control_plane_memory(hit) and not allows_failure(consumer_agent):
+            reason = "control_plane_not_injectable"
+        elif is_failure_episode(hit) and not allows_failure(consumer_agent):
+            reason = "failure_reserved_for_coordinator"
+        elif scope == "GLOBAL" and hit_type != "PROCEDURAL" and not (
+                allows_failure(consumer_agent) and is_failure_episode(hit)):
+            reason = f"scope_{scope}_excluded_for_{consumer_agent}"
+        elif scope == "RUN" and hit_type != "WORKING":
+            reason = "run_scope_requires_working_memory"
         elif not include_benchmark and is_benchmark_source(source):
             reason = "benchmark_source_excluded"
-        elif hit_type == "FAILURE" and not allows_failure(consumer_agent):
-            reason = "failure_reserved_for_coordinator"
         elif is_control_plane_memory(hit) and (
                 evaluation_safe or consumer_agent in REPORT_OR_RISK):
             reason = "control_plane_not_injectable"
@@ -192,6 +281,11 @@ def filter_hits_for_consumer(
         if reason:
             ignored.append({
                 **hit,
+                "type": hit_type,
+                "memoryType": hit_type,
+                "taxonomy": hit_type,
+                "namespace": _safe_namespace(hit),
+                "occurredAt": hit.get("occurredAt") or _utc_now_iso(),
                 "consumerAgent": consumer_agent,
                 "used": False,
                 "ignoredReason": reason,
@@ -199,6 +293,11 @@ def filter_hits_for_consumer(
         else:
             used.append({
                 **hit,
+                "type": hit_type,
+                "memoryType": hit_type,
+                "taxonomy": hit_type,
+                "namespace": _safe_namespace(hit),
+                "occurredAt": hit.get("occurredAt") or _utc_now_iso(),
                 "consumerAgent": consumer_agent,
                 "used": True,
                 "ignoredReason": None,
@@ -214,16 +313,27 @@ def memory_trace_entries(
     """Compact trace rows: memoryId/type/scope/source/consumer/used|reason."""
     rows: List[Dict[str, Any]] = []
     for hit in used + ignored:
+        taxonomy = canonical_taxonomy(
+            hit.get("taxonomy") or hit.get("memoryType") or hit.get("type"))
         rows.append({
             "memoryId": hit.get("memoryId"),
-            "type": hit.get("type"),
+            "type": taxonomy,
+            "memoryType": taxonomy,
+            "taxonomy": taxonomy,
             "scope": hit.get("ownerScope") or hit.get("scope"),
+            "namespace": _safe_namespace(hit),
             "source": hit.get("source"),
             "consumerAgent": consumer_agent,
             "used": bool(hit.get("used")),
             "ignoredReason": hit.get("ignoredReason"),
+            "reason": (hit.get("ignoredReason")
+                       or hit.get("reason")
+                       or hit.get("selectionReason")
+                       or ("selected_for_agent_context"
+                           if hit.get("used") else "not_selected")),
             "confidence": hit.get("confidence"),
             "relevance": hit.get("relevance") or hit.get("score"),
+            "occurredAt": hit.get("occurredAt") or _utc_now_iso(),
         })
     return rows
 
@@ -286,7 +396,7 @@ class MemoryClient:
             return [
                 h for h in hits
                 if not is_benchmark_source(h.get("source"))
-                and str(h.get("type") or "").upper() != "FAILURE"
+                and not is_failure_episode(h)
             ]
         except Exception as exc:  # noqa: BLE001
             logger.info("memory search unavailable: %s", exc)
@@ -314,6 +424,11 @@ class MemoryClient:
                     "finalScore": d.finalScore,
                     "decision": d.decision,
                     "ignoredReason": d.ignoredReason,
+                    "memoryType": d.memoryType,
+                    "taxonomy": d.taxonomy,
+                    "namespace": d.namespace,
+                    "reason": d.reason,
+                    "occurredAt": d.occurredAt or _utc_now_iso(),
                 }
                 for d in decisions
             ],
@@ -335,8 +450,11 @@ class MemoryClient:
                     structured: Optional[Dict[str, Any]] = None, source: str = "model_generated",
                     source_id: Optional[str] = None, confidence: float = 0.5,
                     ttl_days: Optional[int] = None) -> Optional[str]:
-        # Mirror backend rule: PREFERENCE never writes GLOBAL.
-        if type_.upper() == "PREFERENCE" and owner_scope.upper() == "GLOBAL":
+        type_ = canonical_taxonomy(type_)
+        if type_ == "WORKING":
+            owner_scope = "RUN"
+        # Candidate/user semantic facts never write into a global namespace.
+        if type_ == "SEMANTIC" and owner_scope.upper() == "GLOBAL":
             owner_scope = "USER"
         body = {
             "type": type_,
@@ -381,7 +499,15 @@ class NullMemoryClient(MemoryClient):
                      include_benchmark_sources: bool = False) -> List[Dict[str, Any]]:
         hits = self.canned
         if types:
-            hits = [h for h in hits if h.get("type") in types]
+            failure_only = any(str(t).upper() == "FAILURE" for t in types)
+            requested = {canonical_taxonomy(t) for t in types}
+            hits = [
+                h for h in hits
+                if canonical_taxonomy(
+                    h.get("taxonomy") or h.get("memoryType") or h.get("type"))
+                in requested
+                and (not failure_only or is_failure_episode(h))
+            ]
         if consumer_agent:
             used, _ = filter_hits_for_consumer(
                 hits, consumer_agent,
@@ -391,7 +517,7 @@ class NullMemoryClient(MemoryClient):
             hits = [
                 h for h in hits
                 if (include_benchmark_sources or not is_benchmark_source(h.get("source")))
-                and str(h.get("type") or "").upper() != "FAILURE"
+                and not is_failure_episode(h)
             ]
         return hits[:top_k]
 
@@ -412,7 +538,10 @@ class NullMemoryClient(MemoryClient):
                     structured: Optional[Dict[str, Any]] = None, source: str = "model_generated",
                     source_id: Optional[str] = None, confidence: float = 0.5,
                     ttl_days: Optional[int] = None) -> Optional[str]:
-        if type_.upper() == "PREFERENCE" and owner_scope.upper() == "GLOBAL":
+        type_ = canonical_taxonomy(type_)
+        if type_ == "WORKING":
+            owner_scope = "RUN"
+        if type_ == "SEMANTIC" and owner_scope.upper() == "GLOBAL":
             owner_scope = "USER"
         self.writes.append({
             "type": type_, "ownerScope": owner_scope, "content": content,

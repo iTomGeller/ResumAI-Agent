@@ -7,13 +7,17 @@ import { computed, ref, watch } from 'vue';
  * 右栏是选中 span 的详情面板（目标 / 判断 / 入参出参 / tokens / 耗时）。
  */
 
-type ToolCategory = 'mcp' | 'skill' | 'builtin' | 'retrieval' | 'llm' | 'tool' | 'external';
+type ToolCategory = 'mcp' | 'skill' | 'memory' | 'builtin' | 'retrieval' | 'llm' | 'tool' | 'external';
 
 interface ToolCallView {
   toolCallId?: string;
   name?: string;
   status?: string;
   durationMs?: number;
+  occurredAt?: string;
+  startedAt?: string;
+  endedAt?: string;
+  timeSource?: string;
   input?: string;
   result?: string;
   output?: string;
@@ -23,6 +27,13 @@ interface ToolCallView {
   mcpServer?: string;
   skillId?: string;
   skillVersion?: string;
+  lifecycleStage?: string;
+  disclosureState?: string;
+  proposalSource?: string;
+  proposalOccurredAt?: string;
+  modelGeneratedArguments?: string;
+  modelToolName?: string;
+  lifecycle?: string[];
 }
 
 interface RoundView {
@@ -32,6 +43,11 @@ interface RoundView {
   title?: string;
   tokens?: number;
   durationMs?: number;
+  occurredAt?: string;
+  startedAt?: string;
+  endedAt?: string;
+  timestamp?: string;
+  timeSource?: string;
   model?: string;
   error?: string;
   hasToolCalls?: boolean;
@@ -50,11 +66,15 @@ interface AgentView {
   phase?: number;
   status?: string;
   durationMs?: number;
+  occurredAt?: string;
+  startedAt?: string;
+  endedAt?: string;
   llmCalls?: number;
   toolCalls?: number;
   confidence?: number;
   output?: string;
   rounds?: RoundView[];
+  executionMode?: string;
 }
 
 interface HistoricalAttempt {
@@ -111,6 +131,8 @@ interface SpanRow {
   sub?: string;
   status?: string;
   durationMs?: number;
+  occurredAt?: string;
+  endedAt?: string;
   tokens?: number;
   parallel?: boolean;
   badge?: ToolCategory;
@@ -125,8 +147,17 @@ const FILTERS: Array<{ id: ToolCategory | 'all'; label: string }> = [
   { id: 'builtin', label: 'BUILTIN' },
   { id: 'mcp', label: 'MCP' },
   { id: 'skill', label: 'SKILL' },
+  { id: 'memory', label: 'MEMORY' },
   { id: 'retrieval', label: 'RETRIEVAL' },
 ];
+
+const availableFilters = computed(() => {
+  const badgesInData = new Set<string>();
+  for (const row of spans.value) {
+    if (row.badge) badgesInData.add(row.badge);
+  }
+  return FILTERS.filter(f => f.id === 'all' || badgesInData.has(f.id));
+});
 
 const selectedId = ref<string>('');
 const collapsed = ref<Set<string>>(new Set());
@@ -160,13 +191,16 @@ function normalizeCategory(raw?: string, toolName?: string, isLlm = false): Tool
   const value = (raw || '').toLowerCase();
   if (value === 'sandbox') return 'builtin';
   if (value === 'gateway') return 'external';
-  if (value === 'mcp' || value === 'skill' || value === 'builtin'
+  if (value === 'mcp' || value === 'skill' || value === 'memory' || value === 'builtin'
       || value === 'retrieval' || value === 'llm' || value === 'external') {
     return value as ToolCategory;
   }
   const name = toolName || '';
   if (name.startsWith('mcp_') || name.includes('.')) return 'mcp';
-  if (name === 'execute_skill' || name === 'list_skills' || name === 'load_skill') return 'skill';
+  if (name === 'execute_skill' || name === 'list_skills'
+      || name === 'load_skill' || name === 'read_skill_resource'
+      || name.startsWith('skill:')) return 'skill';
+  if (name === 'memory_search' || name === 'memory_write') return 'memory';
   if (['parse_resume', 'check_timeline', 'calculate_jd_coverage', 'locate_evidence',
     'verify_report_evidence', 'resume_lint', 'validate_report_schema'].includes(name)) {
     return 'builtin';
@@ -186,7 +220,7 @@ function badgeLabel(badge?: ToolCategory): string {
 
 function roundBadge(round: RoundView): ToolCategory {
   const tool = round.toolCalls?.[0];
-  const isTool = round.type === 'tool' || round.hasToolCalls;
+  const isTool = ['tool', 'skill', 'memory'].includes(round.type || '') || round.hasToolCalls;
   return normalizeCategory(
     round.category || tool?.category || tool?.origin,
     tool?.name,
@@ -213,6 +247,8 @@ const spans = computed<SpanRow[]>(() => {
       status: group.some((a) => a.status === 'FAILED') ? 'FAILED'
         : group.some((a) => a.status === 'RUNNING') ? 'RUNNING' : 'SUCCESS',
       durationMs: groupDuration,
+      occurredAt: group.map((a) => a.startedAt || a.occurredAt).filter(Boolean).sort()[0],
+      endedAt: group.map((a) => a.endedAt).filter(Boolean).sort().at(-1),
       parallel,
     });
     if (collapsed.value.has(groupId)) return;
@@ -226,12 +262,15 @@ const spans = computed<SpanRow[]>(() => {
         sub: purpose(agent),
         status: agent.status,
         durationMs: agent.durationMs,
+        occurredAt: agent.startedAt || agent.occurredAt,
+        endedAt: agent.endedAt,
         agent,
       });
       if (collapsed.value.has(agentId)) return;
       (agent.rounds || []).forEach((round, ri) => {
         const roundId = `${agentId}-r-${ri}`;
-        const isTool = round.type === 'tool' || !!round.hasToolCalls;
+        const isTool = ['tool', 'skill', 'memory'].includes(round.type || '')
+          || !!round.hasToolCalls;
         const badge = roundBadge(round);
         rows.push({
           id: roundId,
@@ -241,6 +280,9 @@ const spans = computed<SpanRow[]>(() => {
           status: round.error ? 'FAILED'
             : round.toolCalls?.some((t) => t.status === 'FAILED') ? 'FAILED' : 'SUCCESS',
           durationMs: round.durationMs ?? round.toolCalls?.[0]?.durationMs,
+          occurredAt: round.startedAt || round.occurredAt || round.timestamp
+            || round.toolCalls?.[0]?.startedAt || round.toolCalls?.[0]?.occurredAt,
+          endedAt: round.endedAt || round.toolCalls?.[0]?.endedAt,
           tokens: round.tokens,
           badge,
           agent,
@@ -255,8 +297,20 @@ const spans = computed<SpanRow[]>(() => {
 
 const filteredSpans = computed(() => {
   if (kindFilter.value === 'all') return spans.value;
+  const matchingAgentIds = new Set<string>();
+  const matchingGroupIds = new Set<string>();
+  for (const row of spans.value) {
+    if ((row.kind === 'tool' || row.kind === 'round') && row.badge === kindFilter.value) {
+      const parts = row.id.split('-r-');
+      const agentId = parts[0];
+      matchingAgentIds.add(agentId);
+      const groupId = agentId.replace(/-a-\d+$/, '');
+      matchingGroupIds.add(groupId);
+    }
+  }
   return spans.value.filter((row) => {
-    if (row.kind === 'group' || row.kind === 'agent') return true;
+    if (row.kind === 'group') return matchingGroupIds.has(row.id);
+    if (row.kind === 'agent') return matchingAgentIds.has(row.id);
     return row.badge === kindFilter.value;
   });
 });
@@ -308,6 +362,28 @@ function fmtMs(ms?: number): string {
   if (ms == null || ms <= 0) return '';
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function fmtTime(value?: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const rendered = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date).replaceAll('/', '-');
+  return `${rendered}.${String(date.getMilliseconds()).padStart(3, '0')}`;
+}
+
+function fmtClock(value?: string): string {
+  const rendered = fmtTime(value);
+  return rendered.includes(' ') ? rendered.split(' ').at(-1) || rendered : rendered;
 }
 
 function statusClass(status?: string): string {
@@ -401,7 +477,7 @@ async function copyText(text?: string) {
     <!-- 类型筛选 -->
     <div class="trace-filters" v-if="spans.length">
       <button
-        v-for="f in FILTERS"
+        v-for="f in availableFilters"
         :key="f.id"
         type="button"
         class="filter-chip"
@@ -435,6 +511,10 @@ async function copyText(text?: string) {
             class="span-kind badge-group"
           >GROUP</span>
           <span
+            v-else-if="row.kind === 'agent' && row.agent?.executionMode === 'deterministic'"
+            class="span-kind badge-builtin"
+          >工具处理</span>
+          <span
             v-else-if="row.kind === 'agent'"
             class="span-kind badge-agent"
           >AGENT</span>
@@ -446,6 +526,12 @@ async function copyText(text?: string) {
           <span class="span-label">{{ row.label }}</span>
           <span class="span-parallel" v-if="row.parallel">∥ 并行</span>
           <span class="span-tokens" v-if="row.tokens">{{ row.tokens }} tok</span>
+          <time
+            v-if="row.occurredAt"
+            class="span-time"
+            :datetime="row.occurredAt"
+            :title="fmtTime(row.occurredAt)"
+          >{{ fmtClock(row.occurredAt) }}</time>
           <span class="span-duration">{{ fmtMs(row.durationMs) }}</span>
         </div>
       </div>
@@ -486,18 +572,41 @@ async function copyText(text?: string) {
           <div class="detail-grid">
             <div v-if="selected.round.tokens"><em>Tokens</em><strong>{{ selected.round.tokens }}</strong></div>
             <div v-if="selected.durationMs"><em>耗时</em><strong>{{ fmtMs(selected.durationMs) }}</strong></div>
+            <div v-if="selected.occurredAt"><em>开始时间（北京时间）</em><strong class="detail-time" :title="selected.occurredAt">{{ fmtTime(selected.occurredAt) }}</strong></div>
+            <div v-if="selected.endedAt"><em>结束时间（北京时间）</em><strong class="detail-time" :title="selected.endedAt">{{ fmtTime(selected.endedAt) }}</strong></div>
             <div v-if="selected.tool?.origin || selected.tool?.category"><em>来源</em><strong>{{ selected.tool?.origin || selected.tool?.category }}</strong></div>
             <div v-if="selected.tool?.mcpServer"><em>MCP</em><strong>{{ selected.tool.mcpServer }}</strong></div>
             <div v-if="selected.tool?.skillId"><em>Skill</em><strong>{{ selected.tool.skillId }}{{ selected.tool.skillVersion ? '@' + selected.tool.skillVersion : '' }}</strong></div>
+            <div v-if="selected.tool?.proposalSource"><em>调用决策</em><strong>{{ selected.tool.proposalSource === 'LLM_NATIVE' ? 'LLM 原生 tool_call' : selected.tool.proposalSource }}</strong></div>
+            <div v-if="selected.tool?.proposalOccurredAt"><em>模型提议时间</em><strong class="detail-time" :title="selected.tool.proposalOccurredAt">{{ fmtTime(selected.tool.proposalOccurredAt) }}</strong></div>
+            <div v-if="selected.tool?.lifecycleStage"><em>Skill 阶段</em><strong>{{ selected.tool.lifecycleStage }}</strong></div>
+            <div v-if="selected.tool?.disclosureState"><em>加载状态</em><strong>{{ selected.tool.disclosureState }}</strong></div>
           </div>
           <div class="detail-block warning" v-if="selected.round.error">
             <div class="detail-block-head"><span>错误</span></div>
             <pre>{{ selected.round.error }}</pre>
           </div>
           <template v-for="(tool, ti) in (selected.round.toolCalls || [])" :key="ti">
+            <div class="detail-lifecycle" v-if="tool.lifecycle?.length">
+              <span v-for="stage in tool.lifecycle" :key="stage">{{ stage }}</span>
+            </div>
+            <div class="detail-call-time" v-if="tool.startedAt || tool.occurredAt || tool.endedAt">
+              <span>调用时间</span>
+              <time
+                v-if="tool.startedAt || tool.occurredAt"
+                :datetime="tool.startedAt || tool.occurredAt"
+                :title="tool.startedAt || tool.occurredAt"
+              >{{ fmtTime(tool.startedAt || tool.occurredAt) }}</time>
+              <span v-if="tool.endedAt">→</span>
+              <time v-if="tool.endedAt" :datetime="tool.endedAt" :title="tool.endedAt">{{ fmtTime(tool.endedAt) }}</time>
+            </div>
             <div class="detail-block" v-if="tool.input">
               <div class="detail-block-head"><span>{{ tool.name }} · 入参</span><button @click="copyText(tool.input)">复制</button></div>
               <pre>{{ pretty(tool.input) }}</pre>
+            </div>
+            <div class="detail-block" v-if="tool.modelGeneratedArguments && tool.proposalSource === 'LLM_NATIVE'">
+              <div class="detail-block-head"><span>{{ tool.modelToolName || tool.name }} · 模型生成参数</span><button @click="copyText(tool.modelGeneratedArguments)">复制</button></div>
+              <pre>{{ pretty(tool.modelGeneratedArguments) }}</pre>
             </div>
             <div class="detail-block" v-if="tool.output || tool.result">
               <div class="detail-block-head"><span>{{ tool.name }} · 返回（{{ tool.status }}，{{ fmtMs(tool.durationMs) || '-' }}）</span><button @click="copyText(tool.output || tool.result)">复制</button></div>
@@ -623,6 +732,7 @@ async function copyText(text?: string) {
 .badge-llm { background: #dbeafe; color: #1d4ed8; }
 .badge-mcp { background: #dcfce7; color: #15803d; }
 .badge-skill { background: #f3e8ff; color: #7e22ce; }
+.badge-memory { background: #fef3c7; color: #92400e; }
 .badge-sandbox { background: #ffedd5; color: #c2410c; }
 .badge-builtin { background: #ecfdf5; color: #047857; }
 .badge-retrieval { background: #eef2ff; color: #4338ca; }
@@ -638,9 +748,11 @@ async function copyText(text?: string) {
 .depth-0 .span-label { font-weight: 600; }
 .span-parallel { flex-shrink: 0; font-size: 10px; color: var(--color-primary); font-weight: 600; }
 .span-tokens { flex-shrink: 0; margin-left: auto; font-size: 11px; color: var(--color-text-secondary); }
+.span-time { flex-shrink: 0; margin-left: auto; font-size: 10px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+.span-tokens + .span-time { margin-left: 6px; }
 .span-duration { flex-shrink: 0; font-size: 11px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
 .span-tokens + .span-duration { margin-left: 6px; }
-.span-row:not(:has(.span-tokens)) .span-duration { margin-left: auto; }
+.span-row:not(:has(.span-tokens)):not(:has(.span-time)) .span-duration { margin-left: auto; }
 
 .span-detail {
   border: 1px solid var(--color-border-light); border-radius: var(--radius-md);
@@ -655,6 +767,18 @@ async function copyText(text?: string) {
 .detail-grid > div { padding: 8px; border-radius: 8px; background: var(--color-bg); display: flex; flex-direction: column; gap: 2px; }
 .detail-grid em { font-style: normal; font-size: 10px; color: var(--color-text-secondary); }
 .detail-grid strong { font-size: 14px; }
+.detail-grid .detail-time { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.detail-call-time {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 8px;
+  color: var(--color-text-secondary); font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.detail-lifecycle {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin: 0 0 8px;
+}
+.detail-lifecycle span {
+  padding: 2px 6px; border-radius: 999px; background: #eef2ff;
+  color: #4338ca; font-size: 9px; font-weight: 700;
+}
 .detail-block { margin-bottom: 10px; border: 1px solid var(--color-border-light); border-radius: 8px; overflow: hidden; }
 .detail-block.warning { border-color: var(--color-danger); }
 .detail-block-head {

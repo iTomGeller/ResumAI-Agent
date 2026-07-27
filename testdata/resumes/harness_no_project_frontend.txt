@@ -1,0 +1,25 @@
+Lin Yue
+Frontend Engineer | 2 years experience
+Email: harness-no-project@example.com
+
+Summary
+Frontend engineer focused on accessible forms, reusable Vue components, and dashboard performance.
+
+Skills
+Vue 3, TypeScript, Vite, Pinia, CSS, Vitest, REST API integration.
+
+Experience
+2024.03 - Present  Analytics Software Company  Frontend Engineer
+- Implemented accessible form components and client-side validation.
+- Added loading, empty, retry, and pagination states to internal dashboards.
+- Wrote component tests and reduced the main bundle through route-level splitting.
+
+2023.07 - 2024.02  Commerce Company  Frontend Intern
+- Fixed UI defects and maintained reusable table components.
+- Worked with designers and backend engineers to clarify API contracts.
+
+Education
+2019.09 - 2023.06  Example University  B.S. Software Engineering
+
+Harness note
+This synthetic fixture intentionally has no project section and no external profile URL. It verifies that Coordinator routing and Skill/MCP selection react to evidence actually present in the resume.

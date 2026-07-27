@@ -69,6 +69,11 @@ public class TurnPolicyService {
                 return new TurnDecision(TurnDisposition.MERGE_CONTEXT, "CONTEXT_ADD",
                         List.of(), null, 0.92, "merge_fact_into_pending", false);
             }
+            if (activeRun != null && isActive(activeRun)) {
+                return new TurnDecision(TurnDisposition.SUPERSEDE_RUN, "CONTEXT_ADD",
+                        List.of("resume_facts", "technical_findings", "final_report"),
+                        null, 0.92, "fact_requires_active_revision_supersede", false);
+            }
             return new TurnDecision(TurnDisposition.CREATE_REVISION, "CONTEXT_ADD",
                     List.of("resume_facts", "technical_findings", "final_report"),
                     null, 0.92, "fact_requires_revision", false);
@@ -120,7 +125,9 @@ public class TurnPolicyService {
     }
 
     private boolean explicitStop(String lower) {
-        if (matchesAny(lower, "不要取消", "别取消", "不用取消", "先不取消", "don't cancel", "do not cancel")) {
+        if (matchesAny(lower, "不要取消", "别取消", "不用取消", "先不取消",
+                "不要停止", "别停止", "不用停止", "先不停止",
+                "don't cancel", "do not cancel", "don't stop", "do not stop")) {
             return false;
         }
         return matchesAny(lower, "取消", "停止", "别跑了", "终止", "停止生成", "cancel", "stop");
@@ -135,7 +142,14 @@ public class TurnPolicyService {
     }
 
     private boolean explicitResume(String lower) {
-        return matchesAny(lower, "继续", "恢复", "接着跑", "resume", "continue");
+        // Bare English "resume" is ambiguous with the résumé document, so
+        // require an explicit run/evaluation object. Chinese control verbs are
+        // unambiguous in this product context.
+        return matchesAny(lower, "继续", "恢复", "接着跑",
+                "resume run", "resume this run", "resume the run",
+                "resume evaluation", "resume assessment",
+                "continue run", "continue this run", "continue the run",
+                "continue evaluation", "continue assessment");
     }
 
     private boolean changesJobOrGoal(String lower) {
@@ -154,7 +168,9 @@ public class TurnPolicyService {
 
     private boolean explicitEvaluationRequest(String lower) {
         return matchesAny(lower, "完整评估", "全面评估", "整体评估", "全面分析",
-                "评估这份简历", "综合评估", "重新分析", "发起评估", "开始评估");
+                "评估这份简历", "综合评估", "重新分析", "发起评估", "开始评估",
+                "full evaluation", "evaluate this", "start evaluation", "run evaluation",
+                "complete assessment", "comprehensive evaluation");
     }
 
     private boolean needsEvidenceTool(String lower) {

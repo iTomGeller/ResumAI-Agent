@@ -448,6 +448,86 @@ def evaluate_policy_output(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def web_search_cn(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Search via Bing China (accessible within mainland China, no API key)."""
+    import urllib.parse
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"success": False, "error": "query is required"}
+    max_results = min(int(args.get("maxResults") or 5), 8)
+    try:
+        import httpx
+        url = f"https://cn.bing.com/search?q={urllib.parse.quote(query)}&count={max_results}"
+        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+            resp = client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            })
+        if resp.status_code >= 400:
+            return {"success": False, "error": f"HTTP {resp.status_code}"}
+        results = []
+        import re as _re
+        for match in _re.finditer(
+                r'<li class="b_algo"[^>]*>.*?<h2><a[^>]*href="([^"]+)"[^>]*>(.*?)</a></h2>'
+                r'.*?<p[^>]*>(.*?)</p>', resp.text, _re.DOTALL):
+            title = _re.sub(r'<[^>]+>', '', match.group(2)).strip()
+            snippet = _re.sub(r'<[^>]+>', '', match.group(3)).strip()
+            results.append({"title": title, "url": match.group(1), "snippet": snippet[:200]})
+            if len(results) >= max_results:
+                break
+        if not results:
+            for match in _re.finditer(r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>',
+                                      resp.text):
+                text = _re.sub(r'<[^>]+>', '', match.group(2)).strip()
+                if text and len(text) > 10 and "bing.com" not in match.group(1):
+                    results.append({"title": text[:100], "url": match.group(1), "snippet": ""})
+                    if len(results) >= max_results:
+                        break
+        return {"success": True, "results": results, "resultCount": len(results),
+                "query": query, "source": "bing_cn"}
+    except Exception as exc:
+        return {"success": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
+def fetch_url_cn(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Fetch a URL directly via httpx (works for GitHub, domestic sites)."""
+    url = str(args.get("url") or "").strip()
+    if not url:
+        return {"success": False, "error": "url is required"}
+    max_length = min(int(args.get("maxLength") or 6000), 12000)
+    allowed_prefixes = (
+        "https://github.com/", "https://api.github.com/",
+        "https://gitee.com/", "https://blog.csdn.net/",
+        "https://juejin.cn/", "https://www.zhihu.com/",
+        "https://segmentfault.com/", "https://leetcode.cn/",
+    )
+    if not any(url.startswith(p) for p in allowed_prefixes):
+        return {"success": False, "error": f"URL not in allowed list for direct fetch: {url[:80]}",
+                "allowedPrefixes": list(allowed_prefixes)}
+    try:
+        import httpx
+        with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+            resp = client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (compatible; ResumAI-Bot/1.0)",
+                "Accept": "text/html,application/json,text/plain",
+            })
+        if resp.status_code >= 400:
+            return {"success": False, "error": f"HTTP {resp.status_code}", "url": url}
+        content_type = resp.headers.get("content-type", "")
+        if "json" in content_type:
+            text = resp.text[:max_length]
+        else:
+            import re as _re
+            text = _re.sub(r'<script[^>]*>.*?</script>', '', resp.text, flags=_re.DOTALL)
+            text = _re.sub(r'<style[^>]*>.*?</style>', '', text, flags=_re.DOTALL)
+            text = _re.sub(r'<[^>]+>', ' ', text)
+            text = _re.sub(r'\s+', ' ', text).strip()[:max_length]
+        return {"success": True, "text": text, "url": url,
+                "contentLength": len(text), "statusCode": resp.status_code}
+    except Exception as exc:
+        return {"success": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}", "url": url}
+
+
 TOOL_IMPLS = {
     "parse_resume": parse_resume,
     "check_timeline": check_timeline,

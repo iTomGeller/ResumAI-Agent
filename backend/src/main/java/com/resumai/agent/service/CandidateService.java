@@ -337,6 +337,10 @@ public class CandidateService {
                 existing.setDisplayName(hints.displayName());
                 dirty = true;
             }
+            if (origin == DataOrigin.USER_UPLOAD && !DataOrigin.USER_UPLOAD.name().equals(existing.getDataOrigin())) {
+                existing.setDataOrigin(origin.name());
+                dirty = true;
+            }
             if (dirty) {
                 existing.setUpdateTime(LocalDateTime.now());
                 profileMapper.updateById(existing);

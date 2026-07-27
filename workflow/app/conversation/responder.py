@@ -76,7 +76,11 @@ def _local_answer(
         )
 
     lowered = content.lower()
-    if any(k in lowered for k in ("结论", "分数", "推荐", "怎么样", "进度", "到哪")):
+    is_overall_query = any(k in lowered for k in ("结论", "分数", "推荐", "进度", "到哪"))
+    if not is_overall_query and "怎么样" in lowered:
+        is_overall_query = len(content) <= 12 or re.search(
+            r"(候选人|这个人|这份简历|这个候选|他|她).{0,4}怎么样$", content) is not None
+    if is_overall_query:
         report = snapshot.get("structuredReport") or snapshot.get("report") or {}
         if isinstance(report, dict) and report.get("recommendation"):
             rec = report["recommendation"]
@@ -102,8 +106,24 @@ def _local_answer(
             return CopilotAnswer(
                 turnId=request.turnId,
                 answer=answer,
-                citations=[SourceRef(sourceType="REPORT", sourceId="structured",
+                citations=[SourceRef(sourceType="SESSION", sourceId="structured",
                                      quote=f"recommendation={rec}")],
+                actions=[CopilotAction(type="OPEN_REPORT", label="查看完整报告")],
+                suggestions=["为什么给这个分数？", "主要风险详情", "面试该问什么？"],
+            )
+        summary = str(snapshot.get("summary") or "").strip()
+        if summary:
+            first_sentence = next(
+                (part.strip() for part in re.split(r"(?<=[。！？!?])", summary)
+                 if part.strip()),
+                summary[:140],
+            )[:160]
+            return CopilotAnswer(
+                turnId=request.turnId,
+                answer=f"当前评估摘要：{first_sentence}\n详细证据和面试追问见决策报告页。",
+                citations=[SourceRef(
+                    sourceType="SESSION", sourceId="summary",
+                    quote=first_sentence[:120])],
                 actions=[CopilotAction(type="OPEN_REPORT", label="查看完整报告")],
                 suggestions=["为什么给这个分数？", "主要风险详情", "面试该问什么？"],
             )

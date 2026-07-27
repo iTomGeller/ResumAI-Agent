@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -17,6 +18,29 @@ from app.runtime.models import BudgetExceeded, RunBudget
 logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+@dataclass(frozen=True)
+class LlmToolCall:
+    """One provider-native function proposal.
+
+    ``raw_arguments`` is preserved for the assistant history sent back to the
+    provider. ``arguments`` is parsed but never repaired or synthesized by the
+    runtime.
+    """
+
+    tool_call_id: str
+    name: str
+    arguments: Dict[str, Any] = field(default_factory=dict)
+    raw_arguments: str = "{}"
+    arguments_error: str = ""
+
+
+@dataclass(frozen=True)
+class LlmTurn:
+    content: str
+    tool_calls: List[LlmToolCall] = field(default_factory=list)
+    finish_reason: str = ""
 
 
 class LlmError(RuntimeError):
@@ -81,6 +105,8 @@ class ResilientLlmClient:
     the literal word "json" via the output schema), not just by prompting.
     """
 
+    _shared_client: Optional[httpx.AsyncClient] = None
+
     def __init__(self, emitter: RuntimeEmitter, budget: RunBudget,
                  max_llm_calls: int, llm_timeout_seconds: int,
                  breaker: Optional[CircuitBreaker] = None,
@@ -89,7 +115,7 @@ class ResilientLlmClient:
         self.emitter = emitter
         self.budget = budget
         self.max_llm_calls = max_llm_calls
-        self.llm_timeout_seconds = llm_timeout_seconds
+        self.llm_timeout_seconds = min(llm_timeout_seconds, 60)
         self.max_cost_cny = max_cost_cny
         self.max_total_tokens = max_total_tokens
         self.breaker = breaker or _shared_breaker
@@ -99,19 +125,45 @@ class ResilientLlmClient:
         self.fallback_model = os.getenv("DEEPSEEK_FALLBACK_MODEL", "").strip() or self.model
         self.api_key = settings.deepseek_api_key
 
+    @classmethod
+    def _get_client(cls, timeout_seconds: float) -> httpx.AsyncClient:
+        if cls._shared_client is None or cls._shared_client.is_closed:
+            cls._shared_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10.0, read=timeout_seconds,
+                                      write=30.0, pool=10.0),
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=8),
+            )
+        return cls._shared_client
+
+    @staticmethod
+    def _budget_scope(agent_id: str, purpose: str) -> str:
+        purpose_key = str(purpose or "").strip().lower()
+        if agent_id == "CoordinatorAgent" or purpose_key in {
+                "plan", "replan", "arbitration"}:
+            return "control"
+        if agent_id in {
+                "ReportAgent", "ResumeOptimizeAgent",
+                "InterviewQuestionAgent"}:
+            return "terminal"
+        return f"agent:{agent_id or 'unknown'}"
+
     async def chat(self, messages: List[Dict[str, str]], *, agent_id: str,
                    purpose: str = "", max_tokens: int = 2048,
                    temperature: float = 0.2, json_mode: bool = True,
                    tools: Optional[List[Dict[str, Any]]] = None,
                    tool_choice: Optional[Dict[str, Any]] = None,
-                   use_quality: bool = False) -> str:
-        """When ``tools``/``tool_choice`` force a function call, the returned
-        string is the function's arguments JSON — provider-side schema
-        enforcement, one layer stronger than json_object mode."""
+                   use_quality: bool = False,
+                   _return_turn: bool = False,
+                   budget_scope: str = "") -> Any:
+        """LLM chat completion.
+
+        The legacy string return remains the default. Native agent loops call
+        :meth:`chat_turn` so every provider tool call (name, id and model-made
+        arguments) is preserved instead of flattening the first call into a
+        JSON string.
+        """
         if not self.api_key:
             raise LlmError("NO_API_KEY", "DeepSeek API key not configured; fail closed", False)
-        if self.budget.llm_calls >= self.max_llm_calls:
-            raise BudgetExceeded("maxLlmCalls", f"limit={self.max_llm_calls}")
         if self.max_cost_cny > 0 and self.budget.cost_cny >= self.max_cost_cny:
             raise BudgetExceeded("maxCostCny",
                                  f"spent={self.budget.cost_cny:.4f} limit={self.max_cost_cny}")
@@ -121,36 +173,76 @@ class ResilientLlmClient:
         if not self.breaker.allow():
             raise LlmError("CIRCUIT_OPEN", "LLM circuit breaker open", False)
 
-        self.budget.llm_calls += 1
+        scope = budget_scope or self._budget_scope(agent_id, purpose)
         model = self.quality_model if use_quality else self.model
-        await self.emitter.emit("llm.started", agent_id=agent_id, payload={
-            "model": model, "purpose": purpose, "callIndex": self.budget.llm_calls,
-            "useQuality": use_quality})
+
+        # --- CONTEXT AUDIT (temporary) ---
+        _audit = {"agent": agent_id, "budgetScope": scope}
+        _full_text = "\n".join(m.get("content", "") for m in messages if m.get("content"))
+        _audit["total_chars"] = len(_full_text)
+        _audit["has_memory"] = "记忆" in _full_text or "memory" in _full_text.lower() or "[历史评估]" in _full_text
+        _audit["has_skill"] = "[SKILL " in _full_text or "load_skill" in _full_text
+        _native_tool_blob = json.dumps(tools or [], ensure_ascii=False).lower()
+        _audit["has_mcp"] = (
+            "model context protocol" in _native_tool_blob
+            or '"mcpserver"' in _native_tool_blob
+            or any(bool(message.get("tool_calls"))
+                   for message in messages if isinstance(message, dict))
+        )
+        _audit["has_knowledge"] = "知识库" in _full_text or "knowledge" in _full_text.lower() or "[KB:" in _full_text
+        _audit["has_tools"] = bool(tools)
+        _audit["tool_count"] = len(tools) if tools else 0
+        _audit["msg_count"] = len(messages)
+        _audit["sys_chars"] = len(messages[0].get("content", "")) if messages else 0
+        import time as _time_mod
+        # --- END AUDIT ---
 
         attempts = 0
         max_retries = 2
         delay = 1.5
         last_error: Optional[Exception] = None
         effective_max_tokens = max_tokens
-        forcing_function = bool(tools and tool_choice)
         while attempts <= max_retries:
             attempts += 1
+            try:
+                call_index = self.budget.claim_llm_call(
+                    self.max_llm_calls, scope)
+            except BudgetExceeded as exc:
+                await self.emitter.emit(
+                    "llm.failed", agent_id=agent_id, payload={
+                        "error": str(exc),
+                        "attempts": attempts - 1,
+                        "budgetScope": scope,
+                        "budgetRejected": True,
+                        "budget": self.budget.llm_audit(
+                            self.max_llm_calls)})
+                raise
+            _call_start = _time_mod.perf_counter()
+            _audit["call#"] = call_index
+            _audit["providerAttempt"] = attempts
+            print(f"LLM_CONTEXT_AUDIT | {_audit}", flush=True)
+            await self.emitter.emit("llm.started", agent_id=agent_id, payload={
+                "model": model,
+                "purpose": purpose,
+                "callIndex": call_index,
+                "providerAttempt": attempts,
+                "budgetScope": scope,
+                "budget": self.budget.llm_audit(self.max_llm_calls),
+                "useQuality": use_quality})
             started = time.monotonic()
             try:
-                content, usage, finish_reason = await self._invoke(
+                turn, usage, finish_reason = await self._invoke(
                     messages, model, effective_max_tokens, temperature,
-                    json_mode and not forcing_function, tools=tools,
+                    json_mode and not tools, tools=tools,
                     tool_choice=tool_choice)
-                if forcing_function and not content.strip():
-                    # A forced function call must produce arguments.
-                    raise LlmError("EMPTY_FUNCTION_ARGS",
-                                   "forced tool call returned no arguments", True)
-                if json_mode and not forcing_function and not content.strip():
-                    # Known DeepSeek JSON-mode failure mode: occasional empty
-                    # content. Treat as retryable instead of returning garbage.
+                content = turn.content
+                if json_mode and not tools and not content.strip():
                     raise LlmError("EMPTY_JSON_CONTENT",
                                    "JSON mode returned empty content", True)
-                if json_mode and finish_reason == "length":
+                if tools and not turn.tool_calls and not content.strip():
+                    raise LlmError("EMPTY_TOOL_TURN",
+                                   "model returned neither content nor tool calls", True)
+                if json_mode and not tools and finish_reason == "length":
                     # Truncated mid-JSON: the payload can never parse. Retry
                     # once with a doubled output budget before giving up.
                     if effective_max_tokens < 8192:
@@ -181,13 +273,32 @@ class ResilientLlmClient:
                     calibrate(estimated, prompt_tokens)
                 except Exception:  # noqa: BLE001 - calibration is best-effort
                     pass
+                _call_elapsed = int((_time_mod.perf_counter() - _call_start) * 1000)
+                print(f"LLM_LATENCY | agent={agent_id} call#={call_index} "
+                      f"elapsed_ms={_call_elapsed} prompt_tokens={prompt_tokens} "
+                      f"completion_tokens={completion_tokens} model={model}", flush=True)
                 await self.emitter.emit("llm.completed", agent_id=agent_id, payload={
                     "model": model,
+                    "callIndex": call_index,
+                    "budgetScope": scope,
                     "durationMs": int((time.monotonic() - started) * 1000),
                     "promptTokens": prompt_tokens,
                     "completionTokens": completion_tokens,
                     "promptCacheHitTokens": cache_hit_tokens,
-                    "attempts": attempts})
+                    "attempts": attempts,
+                    "finishReason": finish_reason,
+                    "toolCallCount": len(turn.tool_calls),
+                    "toolNames": [call.name for call in turn.tool_calls],
+                })
+                if _return_turn:
+                    return turn
+                if turn.tool_calls:
+                    # Compatibility for older forced-function callers.
+                    raw_arguments = turn.tool_calls[0].raw_arguments
+                    if not raw_arguments.strip():
+                        raise LlmError("EMPTY_FUNCTION_ARGS",
+                                       "function call returned empty arguments", True)
+                    return raw_arguments
                 return content
             except asyncio.CancelledError:
                 raise
@@ -210,6 +321,7 @@ class ResilientLlmClient:
                 retry_reason = "CONNECT_TIMEOUT"
             await self.emitter.emit("llm.retrying", agent_id=agent_id, payload={
                 "attempt": attempts, "maxRetries": max_retries,
+                "callIndex": call_index, "budgetScope": scope,
                 "reason": retry_reason,
                 "error": str(last_error)[:200]})
             await asyncio.sleep(delay + random.uniform(0, 0.6))
@@ -218,17 +330,38 @@ class ResilientLlmClient:
                 model = self.fallback_model
 
         await self.emitter.emit("llm.failed", agent_id=agent_id, payload={
-            "error": str(last_error)[:300], "attempts": attempts})
+            "error": str(last_error)[:300], "attempts": attempts,
+            "budgetScope": scope,
+            "budget": self.budget.llm_audit(self.max_llm_calls)})
         if isinstance(last_error, LlmError):
             raise last_error
         raise LlmError("UNKNOWN", str(last_error), False)
+
+    async def chat_turn(self, messages: List[Dict[str, Any]], *, agent_id: str,
+                        purpose: str = "", max_tokens: int = 2048,
+                        temperature: float = 0.2,
+                        tools: Optional[List[Dict[str, Any]]] = None,
+                        tool_choice: Optional[Any] = None,
+                        use_quality: bool = False,
+                        budget_scope: str = "") -> LlmTurn:
+        """Return one provider-native assistant turn including all tool calls."""
+        turn = await self.chat(
+            messages, agent_id=agent_id, purpose=purpose,
+            max_tokens=max_tokens, temperature=temperature,
+            json_mode=False, tools=tools, tool_choice=tool_choice,
+            use_quality=use_quality, _return_turn=True,
+            budget_scope=budget_scope)
+        if not isinstance(turn, LlmTurn):
+            raise LlmError("MALFORMED_RESPONSE",
+                           "native tool turn was not preserved", False)
+        return turn
 
     async def _invoke(self, messages: List[Dict[str, str]], model: str,
                       max_tokens: int, temperature: float,
                       json_mode: bool, *,
                       tools: Optional[List[Dict[str, Any]]] = None,
-                      tool_choice: Optional[Dict[str, Any]] = None
-                      ) -> tuple[str, Dict[str, int], str]:
+                      tool_choice: Optional[Any] = None
+                      ) -> tuple[LlmTurn, Dict[str, int], str]:
         url = f"{self.base_url}/chat/completions"
         timeout = httpx.Timeout(
             connect=10.0, read=float(self.llm_timeout_seconds),
@@ -241,23 +374,25 @@ class ResilientLlmClient:
             "stream": False,
         }
         if tools:
-            # Provider-side schema enforcement: the forced function's
-            # parameters ARE the decision schema.
             body["tools"] = tools
-            if tool_choice:
+            body["thinking"] = {"type": "disabled"}
+            if tool_choice is not None:
                 body["tool_choice"] = tool_choice
         elif json_mode:
             body["response_format"] = {"type": "json_object"}
             body["thinking"] = {"type": "disabled"}
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
+        elif max_tokens <= 200:
+            body["thinking"] = {"type": "disabled"}
+        client = self._get_client(float(self.llm_timeout_seconds))
+        response = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=timeout,
+        )
         if response.status_code >= 400:
             retryable = response.status_code in RETRYABLE_STATUS
             code = "RATE_LIMITED" if response.status_code == 429 else (
@@ -275,20 +410,51 @@ class ResilientLlmClient:
             choice = data["choices"][0]
             message = choice["message"]
             content = message.get("content") or ""
-            tool_calls = message.get("tool_calls") or []
-            if tool_calls:
-                # Forced function call: arguments JSON is the payload.
-                arguments = (tool_calls[0].get("function") or {}).get("arguments") or ""
-                if arguments:
-                    content = arguments
+            parsed_tool_calls: List[LlmToolCall] = []
+            for index, raw_call in enumerate(message.get("tool_calls") or []):
+                if not isinstance(raw_call, dict):
+                    continue
+                function = raw_call.get("function") or {}
+                if not isinstance(function, dict):
+                    continue
+                name = str(function.get("name") or "").strip()
+                raw_arguments = function.get("arguments")
+                if isinstance(raw_arguments, dict):
+                    arguments = raw_arguments
+                    raw_arguments_text = json.dumps(
+                        raw_arguments, ensure_ascii=False, separators=(",", ":"))
+                    arguments_error = ""
+                else:
+                    raw_arguments_text = str(raw_arguments or "")
+                    try:
+                        candidate = json.loads(raw_arguments_text or "{}")
+                        if not isinstance(candidate, dict):
+                            raise ValueError("tool arguments must be a JSON object")
+                        arguments = candidate
+                        arguments_error = ""
+                    except (json.JSONDecodeError, ValueError) as exc:
+                        arguments = {}
+                        arguments_error = str(exc)
+                parsed_tool_calls.append(LlmToolCall(
+                    tool_call_id=str(raw_call.get("id") or f"call-{index + 1}"),
+                    name=name,
+                    arguments=arguments,
+                    raw_arguments=raw_arguments_text,
+                    arguments_error=arguments_error,
+                ))
         except (KeyError, IndexError) as exc:
             raise LlmError("MALFORMED_RESPONSE", str(exc), False) from exc
         usage = data.get("usage") or {}
-        return content, {
+        finish_reason = str(choice.get("finish_reason") or "")
+        return LlmTurn(
+            content=content,
+            tool_calls=parsed_tool_calls,
+            finish_reason=finish_reason,
+        ), {
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "prompt_cache_hit_tokens": int(usage.get("prompt_cache_hit_tokens") or 0),
-        }, str(choice.get("finish_reason") or "")
+        }, finish_reason
 
 
 def extract_json_object(raw: str) -> Dict[str, Any]:

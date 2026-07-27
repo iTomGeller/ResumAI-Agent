@@ -51,7 +51,7 @@ _PROMPTS: List[PromptVersion] = [
 1. locate_evidence：定位简历原文中的项目描述
 2. resume_semantic_search：语义检索项目相关证据
 3. exa.web_search_exa（如可用）：搜索候选人声明的开源项目/技术产品，验证其知名度和实际影响力
-4. mcp_fetch_url（如可用）：抓取候选人 GitHub/Gitee 主页，核实开源贡献的星标数、PR 记录、提交频率
+4. fetch.fetch（如实时目录可用）：抓取候选人 GitHub/Gitee 主页，核实开源贡献的星标数、PR 记录、提交频率
 
 如果简历中有 GitHub 链接、开源项目名或技术博客地址，必须使用 MCP 工具验证，标注"已外部验证"或"无法验证"。
 """ + GROUNDING_RULES),
@@ -60,7 +60,7 @@ _PROMPTS: List[PromptVersion] = [
 工具使用策略：
 1. check_timeline：时间线客观校验
 2. exa.web_search_exa（如可用）：搜索候选人名字+公司验证在职声明，搜索量化指标的合理性（如"千万级DAU"的产品是否真实存在）
-3. mcp_fetch_url（如可用）：若有 LinkedIn/GitHub 链接，抓取核对工作经历
+3. fetch.fetch（如实时目录可用）：若有 LinkedIn/GitHub 链接，抓取核对工作经历
 
 对于高风险声明（大公司P级、核心项目负责人、论文发表等），应主动使用搜索工具交叉验证。
 """ + GROUNDING_RULES),
@@ -70,7 +70,7 @@ _PROMPTS: List[PromptVersion] = [
 1. verify_report_evidence：批量核验报告中的结论与简历原文是否一致
 2. locate_evidence：精确定位某条声明的原文出处
 3. exa.web_search_exa（如可用）：搜索候选人的公开信息（GitHub、技术博客、会议演讲），验证外部可核实的声明
-4. mcp_fetch_url（如可用）：直接抓取候选人提供的链接（GitHub/Blog/Portfolio），核验开源贡献和技术内容
+4. fetch.fetch（如实时目录可用）：直接抓取候选人提供的链接（GitHub/Blog/Portfolio），核验开源贡献和技术内容
 
 核验流程：先用 1-2 做内部核验，再用 3-4 做外部核验。无法支撑的结论标记 unsupported 并写入冲突列表，绝不静默删除或改写他人结论。外部核验结果写入 evidence 供 ReportAgent 引用。
 """ + GROUNDING_RULES),

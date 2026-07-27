@@ -14,6 +14,7 @@ external dependency is unavailable.
 import asyncio
 import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
@@ -26,11 +27,28 @@ from app.runtime.context import ContextManager  # noqa: E402
 from app.runtime.coordinator import Coordinator, TERMINAL_AGENTS  # noqa: E402
 from app.runtime.agents import default_agent_registry  # noqa: E402
 from app.runtime.events import NullEmitter  # noqa: E402
+from app.runtime.executor import RunExecutor  # noqa: E402
+from app.runtime.llm import LlmToolCall, LlmTurn  # noqa: E402
 from app.runtime.loop_guard import LoopGuard  # noqa: E402
-from app.runtime.models import ContextBudget, PolicyBundle  # noqa: E402
+from app.runtime.mcp_registry import (  # noqa: E402
+    McpRegistry,
+    McpServerHealth,
+    McpToolInfo,
+)
+from app.runtime.memory import NullMemoryClient  # noqa: E402
+from app.runtime.models import (  # noqa: E402
+    AgentOutput,
+    AgentRunRequest,
+    BudgetExceeded,
+    ContextBudget,
+    PolicyBundle,
+    RunBudget,
+)
 from app.runtime.sandbox_tools_local import run_tool  # noqa: E402
+from app.runtime.skills import SkillManager  # noqa: E402
 from app.runtime.state import SharedState  # noqa: E402
-from app.runtime.models import AgentOutput  # noqa: E402
+from app.runtime.builtin_tools import BuiltinToolRegistry  # noqa: E402
+from app.runtime.tools import ToolExecutor  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -89,6 +107,11 @@ def scenario_coordinator_contracts() -> None:
                               needs_parse=False), "gate")
     check("simple_route_is_rule_based", coordinator.is_simple("timeline_check"))
     check("simple_route_small", len(simple["plan"]) <= 3, detail=str(simple["plan"]))
+    preferred = coordinator._prefer_agent_order(
+        ["ProjectAgent", "TechAgent", "ReportAgent"])
+    check("agent_order_helper_is_callable",
+          preferred == ["TechAgent", "ProjectAgent", "ReportAgent"],
+          detail=str(preferred))
 
 
 def scenario_loop_guard() -> None:
@@ -103,6 +126,35 @@ def scenario_loop_guard() -> None:
     restored.restore_state(exported)
     decision2 = restored.check_tool_call("sig-a")
     check("guard_state_survives_snapshot", decision2.triggered)
+
+
+def scenario_llm_budget_reservations() -> None:
+    budget = RunBudget()
+    budget.configure_llm_budget(
+        12, {"terminal": 2, "control": 4},
+        scope_limits={"control": 4})
+    for _ in range(4):
+        budget.claim_llm_call(12, "control")
+    control_blocked = False
+    try:
+        budget.claim_llm_call(12, "control")
+    except BudgetExceeded:
+        control_blocked = True
+    for _ in range(6):
+        budget.claim_llm_call(12, "agent:TechAgent")
+    specialist_blocked = False
+    try:
+        budget.claim_llm_call(12, "agent:ProjectAgent")
+    except BudgetExceeded:
+        specialist_blocked = True
+    budget.claim_llm_call(12, "terminal")
+    budget.claim_llm_call(12, "terminal")
+    check("control_plane_has_hard_provider_call_ceiling", control_blocked)
+    check("specialists_cannot_consume_terminal_reserve", specialist_blocked)
+    check("all_provider_calls_share_one_global_cap",
+          budget.llm_calls == 12
+          and sum(budget.llm_calls_by_scope.values()) == 12,
+          detail=str(budget.llm_audit(12)))
 
 
 def scenario_context_compaction() -> None:
@@ -168,23 +220,267 @@ def scenario_sandbox_tool_contracts() -> None:
     check("unknown_tool_rejected", unknown.get("success") is False)
 
 
+class _GateMcpClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Dict[str, Any]]] = []
+
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        self.calls.append((name, dict(arguments)))
+        return {
+            "success": True,
+            "isError": False,
+            "text": "source-backed result",
+            "structuredContent": {
+                "items": [{"url": "https://example.test/source"}]},
+        }
+
+
+class _GateNativeLlm:
+    def __init__(self) -> None:
+        self.turn = 0
+        self.tool_choice: Any = None
+        self.seen_tools: list[Dict[str, Any]] = []
+
+    async def chat_turn(self, messages: list[Dict[str, Any]], *,
+                        agent_id: str, purpose: str = "",
+                        max_tokens: int = 2048,
+                        tools: Any = None, tool_choice: Any = None,
+                        use_quality: bool = False) -> LlmTurn:
+        self.turn += 1
+        self.tool_choice = tool_choice
+        self.seen_tools = list(tools or [])
+        if self.turn == 1:
+            remote = next(
+                item["function"] for item in self.seen_tools
+                if item["function"].get("description") == "REMOTE_GATE_DESCRIPTION")
+            arguments = {"query": "model-created project evidence query"}
+            return LlmTurn(
+                content="",
+                tool_calls=[LlmToolCall(
+                    tool_call_id="gate-provider-call-1",
+                    name=remote["name"],
+                    arguments=arguments,
+                    raw_arguments=json.dumps(arguments))],
+                finish_reason="tool_calls")
+        decision = {
+            "thought": "used observed tool result",
+            "output": {
+                "summary": "project evidence checked",
+                "claims": [{
+                    "section": "project_findings",
+                    "value": [{"text": "source-backed result"}],
+                }],
+                "evidence": [],
+                "confidence": 0.8,
+            },
+            "done": True,
+        }
+        return LlmTurn(
+            content="",
+            tool_calls=[LlmToolCall(
+                tool_call_id="gate-final-call-2",
+                name="emit_decision",
+                arguments=decision,
+                raw_arguments=json.dumps(decision))],
+            finish_reason="tool_calls")
+
+
+def scenario_native_mcp_and_progressive_skills() -> None:
+    # agentskills.io disclosure contract: metadata first, body after load,
+    # referenced content only after an explicit resource read.
+    with tempfile.TemporaryDirectory(prefix="resumai-skill-gate-") as temp:
+        package = Path(temp) / "gate-skill"
+        references = package / "references"
+        references.mkdir(parents=True)
+        (package / "SKILL.md").write_text(
+            "---\nname: gate-skill\n"
+            "description: Startup metadata only.\nversion: v1\n---\n\n"
+            "BODY_GATE_SENTINEL\n",
+            encoding="utf-8")
+        (references / "details.md").write_text(
+            "RESOURCE_GATE_SENTINEL", encoding="utf-8")
+        manager = SkillManager(Path(temp))
+        metadata = manager.get("gate-skill")
+        check("skill_catalog_is_metadata_only",
+              metadata.instructions == ""
+              and metadata.hash == "not-loaded"
+              and "BODY_GATE_SENTINEL" not in manager.render([metadata]))
+        loaded = manager.load("gate-skill")
+        check("skill_body_loads_after_activation",
+              loaded.loaded and "BODY_GATE_SENTINEL" in loaded.instructions
+              and loaded.hash != "not-loaded")
+        check("skill_resource_is_on_demand",
+              "RESOURCE_GATE_SENTINEL" not in loaded.instructions
+              and "RESOURCE_GATE_SENTINEL" in manager.read_resource(
+                  "gate-skill", "references/details.md"))
+
+    async def run_native() -> None:
+        request = AgentRunRequest(
+            runId="gate-native", conversationId="gate-conversation",
+            traceId="gate-trace", runType="full_evaluation",
+            userMessage="核验公开项目",
+            resumeText=(
+                "项目经历\nDemo\nhttps://example.test/repo\nPython FastAPI"),
+            jobDescription="Python backend")
+        emitter = NullEmitter(
+            request.runId, request.conversationId, request.traceId)
+        llm = _GateNativeLlm()
+        executor = RunExecutor(
+            request, emitter, memory=NullMemoryClient(),
+            builtin_tools=BuiltinToolRegistry(), llm=llm)
+        client = _GateMcpClient()
+        registry = McpRegistry(config={
+            "mcpServers": {},
+            "optionalMcpServers": {},
+            "agentToolRouting": {"ProjectAgent": ["gate.search"]},
+        })
+        registry.health["gate"] = McpServerHealth(
+            name="gate", status="AVAILABLE",
+            transport="streamable-http", tools=["gate.search"])
+        registry.tools["gate.search"] = McpToolInfo(
+            server="gate", name="remote_search",
+            catalog_name="gate.search",
+            description="REMOTE_GATE_DESCRIPTION",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "model query"}},
+                "required": ["query"],
+            })
+        registry._http_clients["gate"] = client
+        executor.tools.attach_mcp(registry)
+        executor.state.apply_artifacts({
+            "resumeFacts": {"projects": [{"name": "Demo"}]}})
+
+        catalog = executor.tools.catalog_for_agent("ProjectAgent", [])
+        provider_tools, aliases = ToolExecutor.openai_tools(catalog)
+        remote = next(
+            item["function"] for item in provider_tools
+            if item["function"]["description"] == "REMOTE_GATE_DESCRIPTION")
+        check("mcp_tools_list_schema_reaches_model",
+              remote["parameters"].get("required") == ["query"]
+              and aliases.get(remote["name"]) == "gate.search")
+        presteps = executor._pre_steps(
+            default_agent_registry.get("ProjectAgent"))
+        check("mcp_is_not_forced_by_agent",
+              all(not (
+                  executor.tools.definitions.get(name)
+                  and executor.tools.definitions[name].kind == "mcp")
+                  for name, _arguments in presteps))
+
+        output = await executor._run_agent(
+            default_agent_registry.get("ProjectAgent"))
+        check("native_tool_choice_is_auto", llm.tool_choice == "auto")
+        check("model_generated_mcp_arguments",
+              client.calls == [(
+                  "remote_search",
+                  {"query": "model-created project evidence query"})])
+        check("native_mcp_observation_reaches_agent",
+              output.summary == "project evidence checked")
+        chain = [
+            event for event in emitter.events
+            if event.get("payload", {}).get("toolCallId")
+            == "gate-provider-call-1"]
+        stages = [
+            event.get("payload", {}).get("lifecycleStage") for event in chain]
+        expected = [
+            "CATALOG_EXPOSED", "LLM_PROPOSED",
+            "EXECUTION_STARTED", "RESULT",
+        ]
+        check("mcp_trace_keeps_provider_tool_call_id",
+              all(stage in stages for stage in expected)
+              and [stages.index(stage) for stage in expected]
+              == sorted(stages.index(stage) for stage in expected),
+              detail=str(stages))
+
+    asyncio.run(run_native())
+
+
+def scenario_revision_artifact_reuse() -> None:
+    request = AgentRunRequest(
+        runId="gate-revision-2", conversationId="gate-conversation",
+        revision=2, runType="full_evaluation",
+        resumeText="项目经历\nDemo\nPython",
+        jobDescription="new Python JD",
+        previousArtifacts={
+            "resumeFacts": {"projects": [{"name": "Demo"}]},
+            "parsedResume": {"skills": ["Python"]},
+            "jdRequirements": {"must": ["old"]},
+            "technicalFindings": [{"text": "old"}],
+            "projectFindings": [{"text": "old"}],
+            "risks": [{"claim": "timeline"}],
+            "evidence": [{"text": "old"}],
+            "finalReport": {"recommendation": "HIRE"},
+        },
+        invalidatedArtifacts=["jdRequirements"])
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=_GateNativeLlm())
+    reuse = executor._reuse_previous_revision_artifacts()
+    artifacts = executor.state.artifacts()
+    check("revision_reuses_unaffected_artifacts",
+          bool(artifacts.get("resumeFacts")) and bool(artifacts.get("risks")))
+    check("revision_discards_downstream_artifacts",
+          all(not artifacts.get(key) for key in (
+              "jdRequirements", "technicalFindings", "projectFindings",
+              "evidence", "finalReport")),
+          detail=str(reuse.get("invalidatedArtifacts")))
+    planned = Coordinator(
+        default_agent_registry,
+        PolicyBundle.from_config("balanced", {}), None).plan_from_artifacts(
+            run_type="full_evaluation", needs_parse=False,
+            resume_text=request.resumeText or "",
+            job_description=request.jobDescription or "",
+            artifacts=artifacts)
+    check("revision_skips_unaffected_agents",
+          "ResumeParserAgent" not in planned["plan"]
+          and "RiskAgent" not in planned["plan"],
+          detail=str(planned["plan"]))
+
+
 def scenario_turn_routing() -> None:
     cancel = resolve_turn("停止评估", run_status="RUNNING", revision=1, context={})
     check("explicit_cancel_is_deterministic",
           cancel.intent == TurnIntent.CANCEL and cancel.control_action == "CANCEL")
+    pause = resolve_turn("先暂停一下", run_status="RUNNING", revision=1, context={})
+    check("explicit_pause_writes_checkpoint_contract",
+          pause.intent == TurnIntent.PAUSE and pause.control_action == "PAUSE")
+    resume = resolve_turn("继续评估", run_status="PAUSED", revision=1, context={})
+    check("explicit_resume_uses_checkpoint_contract",
+          resume.intent == TurnIntent.RESUME and resume.control_action == "RESUME")
     negation = resolve_turn("不要取消，继续", run_status="RUNNING", revision=1,
                             context={})
     check("negated_cancel_not_triggered", negation.control_action != "CANCEL",
           detail=str(negation.intent))
+    goal = resolve_turn(
+        "目标岗位改成 Python Agent 平台工程师",
+        run_status="RUNNING", revision=1, context={})
+    check("goal_change_creates_selective_revision",
+          goal.intent == TurnIntent.GOAL_CHANGE
+          and goal.affects_evaluation
+          and "resume_parse" not in goal.affected_nodes
+          and "report" in goal.affected_nodes,
+          detail=str(goal.affected_nodes))
+    side = resolve_turn(
+        "顺便告诉我这个分数怎么算？",
+        run_status="RUNNING", revision=1,
+        context={"structuredReport": {"recommendation": "HIRE"}})
+    check("side_question_does_not_interrupt_run",
+          side.intent == TurnIntent.SIDE_QUESTION
+          and not side.affects_evaluation
+          and side.answer_then_resume)
 
 
 def main() -> int:
     print("== unified agent runtime contract gate ==")
     scenario_coordinator_contracts()
     scenario_loop_guard()
+    scenario_llm_budget_reservations()
     scenario_context_compaction()
     scenario_shared_state_conflicts()
     scenario_sandbox_tool_contracts()
+    scenario_native_mcp_and_progressive_skills()
+    scenario_revision_artifact_reuse()
     scenario_turn_routing()
     print(json.dumps({"failures": FAILURES}, ensure_ascii=False))
     return 1 if FAILURES else 0

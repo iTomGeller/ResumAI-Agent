@@ -3,6 +3,7 @@ package com.resumai.agent.api;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpOpsResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryOpsResponse;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagOpsResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.RunDebugDetailResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.RunDebugSummary;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.SkillOpsResponse;
@@ -61,7 +62,7 @@ public class OpsController {
     public Map<String, Object> overview() {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("panels", List.of(
-                "runs", "memory", "policyLab", "mcp", "skills", "observability"));
+                "runs", "memory", "policyLab", "mcp", "skills", "rag", "observability"));
         body.put("role", "developer_console");
         body.put("description", "Run-centric Debug Console：按 run 下钻 MCP/Skills/Memory；Sandbox 仅属 Policy Lab");
         body.put("runtimeReady", runtimeClient.isReady());
@@ -308,6 +309,14 @@ public class OpsController {
         body.put("usageBySkill", resp.usageBySkill());
         body.put("note", resp.note());
         return body;
+    }
+
+    @GetMapping("/rag")
+    public RagOpsResponse rag(@RequestParam(defaultValue = "100") int limit,
+                              @RequestParam(required = false) String runId,
+                              @RequestParam(required = false) String agentId,
+                              @RequestParam(required = false) String outcome) {
+        return opsDebugService.rag(limit, runId, agentId, outcome);
     }
 
     private String isolationMode(SandboxExecutionRow row) {

@@ -7,7 +7,11 @@ import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.dao.AgentRunMapper;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.RunEvent;
+import com.resumai.agent.service.MemoryService;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -177,12 +181,22 @@ public class RunTraceBridgeService {
                 detail = String.valueOf(payload.getOrDefault("error", ""));
                 status = "FAILED";
             }
-            case "skill.selected", "skill.applied" -> {
-                title = type.equals("skill.selected") ? "技能选定" : "技能已注入";
+            case "skill.catalog", "skill.catalog.exposed", "skill.selected",
+                 "skill.loaded", "skill.applied", "skill.skipped", "skill.failed" -> {
+                title = switch (type) {
+                    case "skill.catalog", "skill.catalog.exposed" -> "技能元数据已暴露";
+                    case "skill.selected" -> "技能选定";
+                    case "skill.loaded" -> "技能指令渐进加载";
+                    case "skill.applied" -> "技能已应用";
+                    case "skill.skipped" -> "技能跳过";
+                    default -> "技能失败";
+                };
                 detail = "skill=" + payload.getOrDefault("skillId", event.getToolName())
                         + "@" + payload.getOrDefault("skillVersion", "")
-                        + " reason=" + payload.getOrDefault("triggerReason", "");
-                status = "SUCCESS";
+                        + " stage=" + payload.getOrDefault("lifecycleStage", "")
+                        + " reason=" + payload.getOrDefault(
+                                "reason", payload.getOrDefault("triggerReason", ""));
+                status = "skill.failed".equals(type) ? "FAILED" : "SUCCESS";
             }
             case "skill.started", "skill.completed" -> {
                 // Legacy fake tool lifecycle — treat as applied annotation.
@@ -200,6 +214,23 @@ public class RunTraceBridgeService {
                 title = "上下文压缩";
                 detail = "tokens " + payload.getOrDefault("beforeTokens", "?")
                         + " → " + payload.getOrDefault("afterTokens", "?");
+            }
+            case "memory.read", "memory.selected", "memory.used", "memory.written",
+                 "memory.skipped", "memory.missed" -> {
+                String taxonomy = memoryTaxonomy(payload);
+                title = switch (type) {
+                    case "memory.read" -> "记忆检索";
+                    case "memory.selected" -> "记忆命中";
+                    case "memory.used" -> "记忆已用于 Agent 上下文";
+                    case "memory.written" -> "记忆写入";
+                    case "memory.skipped" -> "记忆跳过";
+                    default -> "记忆未命中";
+                };
+                detail = "type=" + taxonomy
+                        + " namespace=" + payload.getOrDefault("namespace", "unknown")
+                        + " memoryId=" + payload.getOrDefault("memoryId", "")
+                        + " score=" + payload.getOrDefault("score", "-")
+                        + " reason=" + payload.getOrDefault("reason", "");
             }
             case "run.queued", "run.started", "run.progress", "run.cancelling",
                  "run.cancelled", "run.completed", "run.failed", "run.timed_out" -> {
@@ -224,7 +255,7 @@ public class RunTraceBridgeService {
                 status,
                 duration,
                 tokens,
-                event.getCreateTime() != null ? event.getCreateTime() : LocalDateTime.now());
+                eventOccurredAt(payload, event.getCreateTime()));
     }
 
     // ------------------------------------------------------------------
@@ -252,6 +283,7 @@ public class RunTraceBridgeService {
         int memoryHits = 0;
         List<Object> memoryTop = new ArrayList<>();
         Map<String, Object> argsByToolCall = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> proposalByToolCall = new LinkedHashMap<>();
         for (RunEvent event : events) {
             String type = event.getEventType();
             if ("agent.selected".equals(type)) {
@@ -270,12 +302,19 @@ public class RunTraceBridgeService {
                 if (callId != null && payload.get("arguments") != null) {
                     argsByToolCall.put(String.valueOf(callId), payload.get("arguments"));
                 }
+            } else if ("tool.progress".equals(type)) {
+                Map<String, Object> payload = readPayload(event.getPayload());
+                if ("LLM_PROPOSED".equals(payload.get("lifecycleStage"))
+                        && payload.get("toolCallId") != null) {
+                    proposalByToolCall.put(
+                            String.valueOf(payload.get("toolCallId")), payload);
+                }
             } else if ("run.progress".equals(type)) {
                 Map<String, Object> payload = readPayload(event.getPayload());
                 if ("memory".equals(payload.get("stage"))) {
                     memoryHits = intOf(payload.get("memoryHits"));
                     if (payload.get("memoryTop") instanceof List<?> top) {
-                        memoryTop = new ArrayList<>(top);
+                        memoryTop = canonicalMemoryRows(top, event);
                     }
                 }
             }
@@ -305,16 +344,24 @@ public class RunTraceBridgeService {
             switch (event.getEventType()) {
                 case "agent.started" -> {
                     node.put("role", payload.getOrDefault("description", ""));
-                    node.put("startedAt", event.getCreateTime());
+                    node.put("startedAt", temporalValue(
+                            payload, "startedAt", "startAt", "occurredAt",
+                            event.getCreateTime()));
                 }
                 case "agent.completed" -> {
                     node.put("status", "SUCCESS");
                     node.put("durationMs", longOf(payload.get("durationMs")));
                     node.put("output", payload.getOrDefault("summary", ""));
-                    node.put("endedAt", event.getCreateTime());
-                    node.put("llmCalls", payload.getOrDefault("llmCalls", 0));
+                    node.put("endedAt", temporalValue(
+                            payload, "endedAt", "endAt", "occurredAt",
+                            event.getCreateTime()));
+                    int llmCalls = intOf(payload.get("llmCalls"));
+                    node.put("llmCalls", llmCalls);
                     node.put("toolCalls", payload.getOrDefault("toolCalls", 0));
                     node.put("confidence", payload.getOrDefault("confidence", null));
+                    if (llmCalls == 0) {
+                        node.put("executionMode", "deterministic");
+                    }
                 }
                 case "agent.failed" -> {
                     node.put("status", "FAILED");
@@ -332,6 +379,7 @@ public class RunTraceBridgeService {
                     round.put("tokens", prompt + completion);
                     round.put("durationMs", longOf(payload.get("durationMs")));
                     round.put("model", payload.getOrDefault("model", ""));
+                    putTemporalFields(round, payload, event);
                     rounds.get(agent).add(round);
                 }
                 case "llm.retrying", "llm.failed" -> {
@@ -342,6 +390,7 @@ public class RunTraceBridgeService {
                     round.put("title", "llm.failed".equals(event.getEventType())
                             ? "LLM 失败" : "LLM 重试");
                     round.put("error", payload.getOrDefault("error", ""));
+                    putTemporalFields(round, payload, event);
                     rounds.get(agent).add(round);
                 }
                 case "tool.completed", "tool.failed" -> {
@@ -388,20 +437,45 @@ public class RunTraceBridgeService {
                     if (arguments != null) {
                         tool.put("input", preview(arguments, 800));
                     }
+                    Map<String, Object> proposal = proposalByToolCall.get(toolCallId);
+                    if (proposal != null) {
+                        tool.put("proposalSource", "LLM_NATIVE");
+                        tool.put("modelGeneratedArguments",
+                                preview(proposal.get("arguments"), 800));
+                        tool.put("proposalOccurredAt",
+                                temporalValue(proposal, "occurredAt", "startedAt",
+                                        "endedAt", event.getCreateTime()));
+                        tool.put("modelToolName",
+                                proposal.getOrDefault("modelName", event.getToolName()));
+                        tool.put("lifecycle", List.of(
+                                "CATALOG_EXPOSED", "LLM_PROPOSED",
+                                "EXECUTION_STARTED",
+                                "tool.completed".equals(event.getEventType())
+                                        ? "RESULT" : "FAILED"));
+                    }
                     tool.put("result", preview(payload.getOrDefault(
                             "resultPreview", payload.getOrDefault("error", "")), 800));
                     tool.put("output", preview(payload.getOrDefault(
                             "resultPreview", payload.getOrDefault("error", "")), 1600));
+                    putTemporalFields(tool, payload, event);
+                    putTemporalFields(round, payload, event);
                     round.put("category", kind);
                     round.put("toolCalls", List.of(tool));
                     rounds.get(agent).add(round);
                 }
-                case "skill.selected", "skill.applied" -> {
+                case "skill.catalog", "skill.catalog.exposed", "skill.selected" -> {
+                    // Catalog/selection are visible in the flat lifecycle trace.
+                    // The tree starts at LOADED to avoid one skill appearing
+                    // three times before it has influenced an Agent.
+                }
+                case "skill.loaded", "skill.applied", "skill.skipped", "skill.failed" -> {
                     Map<String, Object> round = new LinkedHashMap<>();
                     round.put("roundNum", rounds.get(agent).size() + 1);
                     round.put("type", "skill");
-                    round.put("title", "[Skill] " + payload.getOrDefault("skillId", event.getToolName())
-                            + "@" + payload.getOrDefault("skillVersion", "v1"));
+                    round.put("title", skillLifecycleTitle(
+                            event.getEventType(),
+                            String.valueOf(payload.getOrDefault("skillId", event.getToolName())),
+                            String.valueOf(payload.getOrDefault("skillVersion", "v1"))));
                     round.put("hasToolCalls", true);
                     round.put("category", "skill");
                     Map<String, Object> tool = new LinkedHashMap<>();
@@ -411,10 +485,37 @@ public class RunTraceBridgeService {
                     tool.put("skillId", payload.getOrDefault("skillId", ""));
                     tool.put("skillVersion", payload.getOrDefault("skillVersion", ""));
                     tool.put("skillHash", payload.getOrDefault("skillHash", ""));
-                    tool.put("status", "SUCCESS");
-                    tool.put("result", "injected=true trigger=" + payload.getOrDefault("triggerReason", "policy_match")
+                    tool.put("lifecycleStage", payload.getOrDefault("lifecycleStage", ""));
+                    tool.put("disclosureState", payload.getOrDefault("disclosureState", ""));
+                    tool.put("status", "skill.failed".equals(event.getEventType())
+                            ? "FAILED" : "SUCCESS");
+                    tool.put("result", "stage="
+                            + payload.getOrDefault("lifecycleStage", event.getEventType())
+                            + " reason=" + payload.getOrDefault(
+                                    "reason", payload.getOrDefault("triggerReason", "policy_match"))
                             + " agent=" + payload.getOrDefault("agentId", agent));
+                    putTemporalFields(tool, payload, event);
+                    putTemporalFields(round, payload, event);
                     round.put("toolCalls", List.of(tool));
+                    rounds.get(agent).add(round);
+                }
+                case "memory.read", "memory.selected", "memory.used", "memory.written",
+                     "memory.skipped", "memory.missed" -> {
+                    Map<String, Object> round = new LinkedHashMap<>();
+                    round.put("roundNum", rounds.get(agent).size() + 1);
+                    round.put("type", "memory");
+                    round.put("category", "memory");
+                    String taxonomy = memoryTaxonomy(payload);
+                    round.put("title", memoryRoundTitle(event.getEventType(), taxonomy));
+                    round.put("memoryId", payload.getOrDefault("memoryId", ""));
+                    round.put("memoryType", taxonomy);
+                    round.put("taxonomy", taxonomy);
+                    round.put("namespace", payload.getOrDefault("namespace", "unknown"));
+                    round.put("reason", payload.getOrDefault("reason", ""));
+                    if (payload.get("score") != null) {
+                        round.put("score", payload.get("score"));
+                    }
+                    putTemporalFields(round, payload, event);
                     rounds.get(agent).add(round);
                 }
                 default -> {
@@ -515,6 +616,114 @@ public class RunTraceBridgeService {
         };
     }
 
+    private static String memoryTaxonomy(Map<String, Object> payload) {
+        String supplied = stringOf(payload.get("taxonomy"));
+        if (!StringUtils.hasText(supplied)) {
+            supplied = stringOf(payload.get("memoryType"));
+        }
+        if (!StringUtils.hasText(supplied)) {
+            supplied = stringOf(payload.get("type"));
+        }
+        if ("MULTI".equalsIgnoreCase(supplied)) {
+            return "MULTI";
+        }
+        String canonical = MemoryService.canonicalTaxonomy(supplied);
+        return MemoryService.TYPES.contains(canonical) ? canonical : "UNKNOWN";
+    }
+
+    private static String memoryRoundTitle(String eventType, String taxonomy) {
+        String action = switch (eventType) {
+            case "memory.read" -> "检索";
+            case "memory.selected" -> "命中";
+            case "memory.used" -> "使用";
+            case "memory.written" -> "写入";
+            case "memory.skipped" -> "跳过";
+            default -> "未命中";
+        };
+        return "记忆 " + action + " · " + taxonomy;
+    }
+
+    private static String skillLifecycleTitle(String eventType, String skillId, String version) {
+        String stage = switch (eventType) {
+            case "skill.loaded" -> "渐进加载";
+            case "skill.applied" -> "已应用";
+            case "skill.skipped" -> "已跳过";
+            case "skill.failed" -> "失败";
+            default -> "生命周期";
+        };
+        return "[Skill " + stage + "] " + skillId + "@" + version;
+    }
+
+    private static LocalDateTime eventOccurredAt(Map<String, Object> payload,
+                                                  LocalDateTime fallback) {
+        String raw = stringOf(payload.get("occurredAt"));
+        if (StringUtils.hasText(raw)) {
+            try {
+                return LocalDateTime.ofInstant(Instant.parse(raw), ZoneOffset.UTC);
+            } catch (Exception ignored) {
+                try {
+                    return LocalDateTime.ofInstant(
+                            OffsetDateTime.parse(raw).toInstant(), ZoneOffset.UTC);
+                } catch (Exception ignoredOffset) {
+                    // Use durable event createTime below.
+                }
+            }
+        }
+        return fallback != null ? fallback : LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    private static Object temporalValue(Map<String, Object> payload,
+                                        String primary, String secondary,
+                                        String tertiary, LocalDateTime fallback) {
+        for (String key : List.of(primary, secondary, tertiary)) {
+            Object value = payload.get(key);
+            if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                return value;
+            }
+        }
+        return fallback != null ? fallback : LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    private static void putTemporalFields(Map<String, Object> target,
+                                          Map<String, Object> payload,
+                                          RunEvent event) {
+        Object occurredAt = temporalValue(payload, "occurredAt", "startedAt",
+                "endedAt", event.getCreateTime());
+        target.put("occurredAt", occurredAt);
+        target.put("startedAt", temporalValue(payload, "startedAt", "startAt",
+                "occurredAt", event.getCreateTime()));
+        target.put("endedAt", temporalValue(payload, "endedAt", "endAt",
+                "occurredAt", event.getCreateTime()));
+    }
+
+    private static List<Object> canonicalMemoryRows(List<?> rows, RunEvent event) {
+        List<Object> out = new ArrayList<>();
+        for (Object item : rows) {
+            if (!(item instanceof Map<?, ?> raw)) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : raw.entrySet()) {
+                if (entry.getKey() != null) {
+                    row.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+            String taxonomy = memoryTaxonomy(row);
+            row.put("type", taxonomy);
+            row.put("memoryType", taxonomy);
+            row.put("taxonomy", taxonomy);
+            row.putIfAbsent("occurredAt",
+                    event.getCreateTime() != null
+                            ? String.valueOf(event.getCreateTime())
+                            : Instant.now().toString());
+            // Never carry memory正文 into the observability projection.
+            row.remove("content");
+            row.remove("structuredContent");
+            out.add(row);
+        }
+        return out;
+    }
+
     private static String inferKind(String toolName, String eventType) {
         if (eventType != null && eventType.startsWith("skill.")) {
             return "skill";
@@ -570,6 +779,9 @@ public class RunTraceBridgeService {
         }
         if (type.startsWith("skill.")) {
             return "SKILL_LIFECYCLE";
+        }
+        if (type.startsWith("memory.")) {
+            return "MEMORY_LIFECYCLE";
         }
         if (type.startsWith("tool.")) {
             return "LLM_TOOL_CALL";

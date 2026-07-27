@@ -15,12 +15,17 @@ import com.resumai.agent.domain.entity.AgentExecutionRecord;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ConversationMessage;
 import com.resumai.agent.domain.entity.ConversationSession;
+import com.resumai.agent.domain.entity.MemoryEntryRow;
 import com.resumai.agent.domain.entity.PolicyBundleRow;
 import com.resumai.agent.domain.entity.ToolCallLog;
 import com.resumai.agent.domain.enums.RunStatus;
 import com.resumai.agent.service.MemoryService;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -244,11 +249,108 @@ public class RunLifecycleService {
         payload.put("currentGoal", session.getCurrentGoal());
         payload.put("policyId", bundle.getPolicyId());
         payload.put("policyConfig", readJsonAsMap(bundle.getConfig()));
-        payload.put("recentMessages", recentMessages(run.getConversationId(), 12));
+        List<Map<String, Object>> recent = recentMessages(run.getConversationId(), 12);
+        payload.put("recentMessages", recent);
+        addPreviousRevisionContext(payload, run, recent);
         if (StringUtils.hasText(run.getSourceTaskTraceId())) {
             payload.put("sourceTaskTraceId", run.getSourceTaskTraceId());
         }
         return payload;
+    }
+
+    /**
+     * A new evaluation revision starts with fresh budgets/loop state, but may
+     * import completed artifacts that are not downstream of the changed user
+     * intent. This uses existing agent_run JSON columns, so deployment does not
+     * require a schema migration and Docker volumes remain untouched.
+     */
+    private void addPreviousRevisionContext(Map<String, Object> payload, AgentRun run,
+                                            List<Map<String, Object>> recent) {
+        int revision = run.getRevisionNo() != null ? run.getRevisionNo() : 1;
+        if (revision <= 1) {
+            return;
+        }
+        List<String> invalidated = invalidationsForRevision(run, recent);
+        payload.put("invalidatedArtifacts", invalidated);
+
+        AgentRun previous = runMapper.selectOne(new QueryWrapper<AgentRun>()
+                .eq("conversation_id", run.getConversationId())
+                .lt("revision_no", revision)
+                .in("status", List.of(
+                        RunStatus.SUCCEEDED.name(),
+                        RunStatus.PARTIAL_SUCCESS.name(),
+                        RunStatus.CANCELLED.name()))
+                .and(q -> q.isNotNull("shared_state").or().isNotNull("execution_snapshot"))
+                .orderByDesc("revision_no", "finished_at", "updated_at")
+                .last("limit 1"));
+        if (previous == null) {
+            return;
+        }
+
+        Map<String, Object> previousState = readJsonAsMap(previous.getSharedState());
+        if (previousState.isEmpty() && StringUtils.hasText(previous.getExecutionSnapshot())) {
+            Map<String, Object> checkpoint = readJsonAsMap(previous.getExecutionSnapshot());
+            Object snapshotState = checkpoint.get("sharedState");
+            if (snapshotState instanceof Map<?, ?> map) {
+                Map<String, Object> restored = new LinkedHashMap<>();
+                map.forEach((key, value) -> restored.put(String.valueOf(key), value));
+                previousState = restored;
+            }
+        }
+        Object artifacts = previousState.get("artifacts");
+        if (!(artifacts instanceof Map<?, ?> artifactMap) || artifactMap.isEmpty()) {
+            return;
+        }
+
+        Map<String, Object> previousSnapshot = new LinkedHashMap<>();
+        previousSnapshot.put("runId", previous.getRunId());
+        previousSnapshot.put("revision", previous.getRevisionNo());
+        previousSnapshot.put("status", previous.getStatus());
+        previousSnapshot.put("sharedState", previousState);
+        payload.put("previousSnapshot", previousSnapshot);
+    }
+
+    private List<String> invalidationsForRevision(AgentRun run,
+                                                  List<Map<String, Object>> recent) {
+        String intent = "";
+        String runMessage = run.getUserMessage() != null ? run.getUserMessage().trim() : "";
+        for (int i = recent.size() - 1; i >= 0; i--) {
+            Map<String, Object> message = recent.get(i);
+            if (!"USER".equals(String.valueOf(message.get("role")))) {
+                continue;
+            }
+            String content = String.valueOf(message.getOrDefault("content", "")).trim();
+            String candidateIntent = String.valueOf(
+                    message.getOrDefault("intent", "")).trim();
+            if ((!runMessage.isEmpty() && runMessage.equals(content))
+                    || List.of("GOAL_CHANGE", "CONTEXT_ADD", "EVALUATION_REQUEST")
+                            .contains(candidateIntent)) {
+                intent = candidateIntent;
+                break;
+            }
+        }
+        return switch (intent) {
+            case "GOAL_CHANGE" -> List.of(
+                    "jd_requirements", "technical_findings", "final_report");
+            case "CONTEXT_ADD" -> List.of(
+                    "resume_facts", "technical_findings", "final_report");
+            case "EVALUATION_REQUEST" -> List.of("final_report");
+            default -> fallbackInvalidations(runMessage);
+        };
+    }
+
+    private List<String> fallbackInvalidations(String message) {
+        String lower = message != null ? message.toLowerCase() : "";
+        if (lower.contains("jd") || lower.contains("岗位") || lower.contains("职位")
+                || lower.contains("重点") || lower.contains("权重")) {
+            return List.of("jd_requirements", "technical_findings", "final_report");
+        }
+        if (lower.contains("补充") || lower.contains("新增")
+                || lower.contains("还有") || lower.contains("经历")) {
+            return List.of("resume_facts", "technical_findings", "final_report");
+        }
+        // A revision must never silently reuse its previous final decision.
+        return List.of("final_report");
     }
 
     private List<Map<String, Object>> recentMessages(String conversationId, int limit) {
@@ -292,11 +394,23 @@ public class RunLifecycleService {
             log.info("event for unknown run dropped run={} type={}", runId, eventType);
             return;
         }
+        Map<String, Object> eventPayload = new LinkedHashMap<>(
+                payload != null ? payload : Map.of());
+        boolean hasSourceTimestamp = StringUtils.hasText(stringOf(eventPayload.get("occurredAt")));
+        eventPayload.putIfAbsent("occurredAt", Instant.now().toString());
+        eventPayload.putIfAbsent("timeSource",
+                hasSourceTimestamp ? "RUNTIME" : "INGESTED_FALLBACK");
         if (RunStatus.isTerminal(run.getStatus())) {
-            return; // late event after cancel/timeout — keep for audit only
+            // A late callback must never resurrect a terminal run, but it is
+            // still evidence. Persist it with an explicit fence marker.
+            eventPayload.put("lateEvent", true);
+            eventPayload.put("terminalStatusAtIngest", run.getStatus());
+            eventService.publish(runId, run.getConversationId(), run.getTraceId(),
+                    eventType, agentId, toolName, eventPayload);
+            return;
         }
         eventService.publish(runId, run.getConversationId(), run.getTraceId(),
-                eventType, agentId, toolName, payload);
+                eventType, agentId, toolName, eventPayload);
         UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
         update.eq("run_id", runId)
                 .in("status", RunStatus.ACTIVE)
@@ -324,13 +438,14 @@ public class RunLifecycleService {
         if (dirty) {
             runMapper.update(null, update);
         }
-        recordStructuredEvent(run, eventType, agentId, toolName, payload);
+        recordStructuredEvent(run, eventType, agentId, toolName, eventPayload);
     }
 
     private void recordStructuredEvent(AgentRun run, String eventType, String agentId,
                                        String toolName, Map<String, Object> payload) {
         try {
             if ("agent.started".equals(eventType)) {
+                LocalDateTime occurredAt = eventTime(payload, "startedAt");
                 AgentExecutionRecord record = new AgentExecutionRecord();
                 record.setRunId(run.getRunId());
                 record.setAgentId(agentId);
@@ -338,8 +453,8 @@ public class RunLifecycleService {
                 record.setIterations(0);
                 record.setLlmCalls(0);
                 record.setToolCalls(0);
-                record.setStartedAt(LocalDateTime.now());
-                record.setCreateTime(LocalDateTime.now());
+                record.setStartedAt(occurredAt);
+                record.setCreateTime(occurredAt);
                 executionMapper.insert(record);
             } else if ("agent.completed".equals(eventType) || "agent.failed".equals(eventType)) {
                 AgentExecutionRecord record = executionMapper.selectOne(
@@ -355,7 +470,7 @@ public class RunLifecycleService {
                     record.setToolCalls(intOf(payload.get("toolCalls")));
                     record.setOutput(writeJson(payload.get("output")));
                     record.setErrorMessage(trim(stringOf(payload.get("error")), 1800));
-                    record.setFinishedAt(LocalDateTime.now());
+                    record.setFinishedAt(eventTime(payload, "endedAt"));
                     executionMapper.updateById(record);
                 }
             } else if ("tool.started".equals(eventType) && payload.get("toolCallId") != null) {
@@ -369,8 +484,9 @@ public class RunLifecycleService {
                 call.setRetryCount(intOf(payload.get("retryCount")));
                 call.setIdempotencyKey(stringOf(payload.get("idempotencyKey")));
                 call.setSideEffectLevel(stringOf(payload.get("sideEffectLevel")));
-                call.setStartedAt(LocalDateTime.now());
-                call.setHeartbeatAt(LocalDateTime.now());
+                LocalDateTime occurredAt = eventTime(payload, "startedAt");
+                call.setStartedAt(occurredAt);
+                call.setHeartbeatAt(occurredAt);
                 toolCallMapper.insert(call);
             } else if (("tool.completed".equals(eventType) || "tool.failed".equals(eventType))
                     && payload.get("toolCallId") != null) {
@@ -381,19 +497,41 @@ public class RunLifecycleService {
                     call.setError(trim(stringOf(payload.get("error")), 1800));
                     call.setDurationMs(longOf(payload.get("durationMs")));
                     call.setRetryCount(intOf(payload.get("retryCount")));
-                    call.setFinishedAt(LocalDateTime.now());
+                    call.setFinishedAt(eventTime(payload, "endedAt"));
                     toolCallMapper.updateById(call);
                 }
             } else if ("tool.progress".equals(eventType) && payload.get("toolCallId") != null) {
                 UpdateWrapper<ToolCallLog> update = new UpdateWrapper<>();
                 update.eq("tool_call_id", stringOf(payload.get("toolCallId")))
                         .set("progress", trim(stringOf(payload.get("progress")), 250))
-                        .set("heartbeat_at", LocalDateTime.now());
+                        .set("heartbeat_at", eventTime(payload, "occurredAt"));
                 toolCallMapper.update(null, update);
             }
         } catch (Exception e) {
             log.debug("structured event record failed run={} type={}: {}",
                     run.getRunId(), eventType, e.getMessage());
+        }
+    }
+
+    private LocalDateTime eventTime(Map<String, Object> payload, String preferredField) {
+        String value = stringOf(payload.get(preferredField));
+        if (!StringUtils.hasText(value)) {
+            value = stringOf(payload.get("occurredAt"));
+        }
+        if (!StringUtils.hasText(value)) {
+            return LocalDateTime.now();
+        }
+        try {
+            return OffsetDateTime.parse(value)
+                    .atZoneSameInstant(ZoneId.systemDefault())
+                    .toLocalDateTime();
+        } catch (DateTimeParseException ignored) {
+            try {
+                return LocalDateTime.parse(value);
+            } catch (DateTimeParseException invalidTimestamp) {
+                log.debug("invalid runtime event timestamp '{}'", value);
+                return LocalDateTime.now();
+            }
         }
     }
 
@@ -416,9 +554,35 @@ public class RunLifecycleService {
                     runId, result.status(), run.getStatus());
             return false;
         }
+        if (RunStatus.CANCELLING.name().equals(run.getStatus())) {
+            // Cancellation is authoritative over every racing runtime result,
+            // including PAUSED, FAILED and TIMED_OUT. Preserve callback data
+            // for audit, but never resurrect or reclassify the run.
+            String cancelCode = StringUtils.hasText(run.getErrorCode())
+                    ? run.getErrorCode() : "USER_CANCELLED";
+            String cancelMessage = StringUtils.hasText(run.getCancellationReason())
+                    ? run.getCancellationReason() : "run cancelled";
+            finishInternal(run, RunStatus.CANCELLED, result,
+                    cancelCode, cancelMessage, null);
+            return true;
+        }
         String incoming = result.status() != null ? result.status() : "FAILED";
         if ("PAUSED".equals(incoming)) {
-            return applyPausedResult(run, result);
+            boolean paused = applyPausedResult(run, result);
+            if (!paused) {
+                AgentRun latest = runMapper.selectById(runId);
+                if (latest != null
+                        && RunStatus.CANCELLING.name().equals(latest.getStatus())) {
+                    finishInternal(latest, RunStatus.CANCELLED, result,
+                            StringUtils.hasText(latest.getErrorCode())
+                                    ? latest.getErrorCode() : "USER_CANCELLED",
+                            StringUtils.hasText(latest.getCancellationReason())
+                                    ? latest.getCancellationReason() : "run cancelled",
+                            null);
+                    return true;
+                }
+            }
+            return paused;
         }
         RunStatus terminal = switch (incoming) {
             case "SUCCEEDED", "SUCCESS" -> RunStatus.SUCCEEDED;
@@ -427,13 +591,16 @@ public class RunLifecycleService {
             case "TIMED_OUT" -> RunStatus.TIMED_OUT;
             default -> RunStatus.FAILED;
         };
-        if (RunStatus.CANCELLING.name().equals(run.getStatus())
-                && (terminal == RunStatus.SUCCEEDED || terminal == RunStatus.PARTIAL_SUCCESS)) {
-            // The user asked to stop; a completion racing past the cancel does
-            // not overturn it. Keep the answer for audit but finish CANCELLED.
-            terminal = RunStatus.CANCELLED;
-        }
         finishInternal(run, terminal, result, result.errorCode(), result.errorMessage(), null);
+        AgentRun latest = runMapper.selectById(runId);
+        if (latest != null && RunStatus.CANCELLING.name().equals(latest.getStatus())) {
+            finishInternal(latest, RunStatus.CANCELLED, result,
+                    StringUtils.hasText(latest.getErrorCode())
+                            ? latest.getErrorCode() : "USER_CANCELLED",
+                    StringUtils.hasText(latest.getCancellationReason())
+                            ? latest.getCancellationReason() : "run cancelled",
+                    null);
+        }
         return true;
     }
 
@@ -450,7 +617,16 @@ public class RunLifecycleService {
                 && "AWAITING_PLAN_APPROVAL".equals(snapshot.get("pauseReason"));
         UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
         update.eq("run_id", run.getRunId())
-                .in("status", RunStatus.ACTIVE)
+                // Re-check at CAS time: cancellation may have won after the
+                // initial select. CANCELLING is intentionally excluded.
+                .in("status", List.of(
+                        RunStatus.STARTING.name(),
+                        RunStatus.RUNNING.name(),
+                        RunStatus.WAITING_LLM.name(),
+                        RunStatus.WAITING_TOOL.name(),
+                        RunStatus.WAITING_SANDBOX.name(),
+                        RunStatus.PAUSING.name(),
+                        RunStatus.RESUMING.name()))
                 .set("status", RunStatus.PAUSED.name())
                 .set("execution_snapshot", writeJson(snapshot))
                 .set("updated_at", now)
@@ -605,6 +781,13 @@ public class RunLifecycleService {
 
     /** User-initiated stop of an active run: CAS to CANCELLING then propagate. */
     public AgentRun cancelActiveRun(AgentRun run, String reasonCode, String reasonText) {
+        if (run != null && RunStatus.PAUSED.name().equals(run.getStatus())) {
+            // No Python coroutine is running while paused. Finish locally and
+            // release the conversation permit immediately.
+            finishInternal(run, RunStatus.CANCELLED, null, reasonCode,
+                    reasonText, null);
+            return runMapper.selectById(run.getRunId());
+        }
         UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
         update.eq("run_id", run.getRunId())
                 .in("status", RunStatus.ACTIVE)
@@ -612,6 +795,9 @@ public class RunLifecycleService {
                 .set("status", RunStatus.CANCELLING.name())
                 .set("cancellation_reason", reasonText)
                 .set("updated_at", LocalDateTime.now());
+        if (StringUtils.hasText(reasonCode)) {
+            update.set("error_code", reasonCode);
+        }
         runMapper.update(null, update);
         AgentRun latest = runMapper.selectById(run.getRunId());
         if (RunStatus.CANCELLING.name().equals(latest.getStatus())) {
@@ -621,6 +807,21 @@ public class RunLifecycleService {
                     reasonCode != null ? reasonCode : "user_cancelled");
         }
         return latest;
+    }
+
+    /**
+     * Runtime-originated durable side effects are accepted only while the run
+     * can still finish successfully. The caller performs this check both
+     * before and after a staged write to close the cancellation race.
+     */
+    public boolean acceptsRuntimeMemoryWrite(String runId) {
+        if (!StringUtils.hasText(runId)) {
+            return false;
+        }
+        AgentRun run = runMapper.selectById(runId);
+        return run != null
+                && RunStatus.isActive(run.getStatus())
+                && !RunStatus.CANCELLING.name().equals(run.getStatus());
     }
 
     /** Force a terminal state (watchdog: timeout, orphan, stuck cancel). */
@@ -652,6 +853,10 @@ public class RunLifecycleService {
                 .set("finished_at", now)
                 .set("updated_at", now)
                 .set("current_phase", null);
+        if (terminal != RunStatus.CANCELLED) {
+            // A cancellation CAS that races any other finisher wins.
+            update.ne("status", RunStatus.CANCELLING.name());
+        }
         if (errorCode != null) {
             update.set("error_code", errorCode);
         }
@@ -727,23 +932,65 @@ public class RunLifecycleService {
         eventService.publish(finished.getRunId(), finished.getConversationId(), finished.getTraceId(),
                 eventType, null, null, payload);
 
-        // 4. learning signals + episodic memory
+        // 4. Promote/rollback runtime memory before independent learning hooks.
+        boolean succeeded = terminal == RunStatus.SUCCEEDED
+                || terminal == RunStatus.PARTIAL_SUCCESS;
         try {
-            boolean succeeded = terminal == RunStatus.SUCCEEDED
-                    || terminal == RunStatus.PARTIAL_SUCCESS;
+            if (succeeded) {
+                List<MemoryEntryRow> promoted =
+                        memoryService.promoteRunMemories(finished.getRunId());
+                for (MemoryEntryRow row : promoted) {
+                    Map<String, Object> memoryPayload = new LinkedHashMap<>();
+                    String taxonomy = MemoryService.canonicalTaxonomy(row.getType());
+                    memoryPayload.put("memoryId", row.getMemoryId());
+                    memoryPayload.put("type", taxonomy);
+                    memoryPayload.put("memoryType", taxonomy);
+                    memoryPayload.put("taxonomy", taxonomy);
+                    memoryPayload.put("namespace", MemoryService.namespaceOf(row));
+                    memoryPayload.put("scope", row.getOwnerScope());
+                    memoryPayload.put("source", row.getSource());
+                    memoryPayload.put("agent", "MemoryService");
+                    memoryPayload.put("runId", finished.getRunId());
+                    memoryPayload.put("reason", "promoted_after_accepted_success");
+                    memoryPayload.put("occurredAt", Instant.now().toString());
+                    eventService.publish(
+                            finished.getRunId(), finished.getConversationId(),
+                            finished.getTraceId(), "memory.written",
+                            "MemoryService", "memory_promote", memoryPayload);
+                }
+                memoryService.writeRunEpisode(finished, terminal.name());
+            } else {
+                // Includes CANCELLED: pending durable stages and all RUN-scoped
+                // WORKING scratch/checkpoint/runtime rows are terminal garbage.
+                // PAUSED never enters this terminal branch and retains its
+                // checkpoint for resume.
+                memoryService.archiveRunProducedMemory(finished.getRunId());
+                memoryService.archiveRunWorkingMemory(finished.getRunId());
+            }
+            if (terminal == RunStatus.FAILED || terminal == RunStatus.TIMED_OUT) {
+                memoryService.writeFailureMemory(finished, errorCode, errorMessage);
+            }
+        } catch (Exception e) {
+            log.warn("post-run memory finalization failed run={}: {}",
+                    finished.getRunId(), e.getMessage());
+            if (!succeeded) {
+                try {
+                    memoryService.archiveRunProducedMemory(finished.getRunId());
+                    memoryService.archiveRunWorkingMemory(finished.getRunId());
+                } catch (Exception ignored) {
+                    log.debug("memory rollback retry failed run={}", finished.getRunId());
+                }
+            }
+        }
+        try {
             if (StringUtils.hasText(finished.getPolicyId())) {
                 policyService.recordRunOutcome(finished.getPolicyId(), category(finished),
                         succeeded);
                 rewardService.recordAutoReward(finished, terminal == RunStatus.SUCCEEDED);
             }
-            // EPISODIC only for successful runs with business artifacts;
-            // FAILED/TIMED_OUT archive working memory and write isolated FAILURE.
-            memoryService.writeRunEpisode(finished, terminal.name());
-            if (terminal == RunStatus.FAILED || terminal == RunStatus.TIMED_OUT) {
-                memoryService.writeFailureMemory(finished, errorCode, errorMessage);
-            }
         } catch (Exception e) {
-            log.debug("post-run learning hooks failed run={}: {}", finished.getRunId(), e.getMessage());
+            log.debug("post-run reward hooks failed run={}: {}",
+                    finished.getRunId(), e.getMessage());
         }
         log.info("run finished run={} status={} conversation={}",
                 finished.getRunId(), terminal, finished.getConversationId());

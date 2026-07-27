@@ -18,7 +18,7 @@ class AgentDefinition:
     context_policy: str = "focused"          # focused / wide
     max_iterations: int = 2
     max_tool_calls: int = 5
-    timeout_seconds: int = 240
+    timeout_seconds: int = 120
     failure_policy: str = "degrade"          # degrade / skip / abort
     enabled: bool = True
     output_type: str = "findings"
@@ -51,11 +51,9 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         ("jd_analysis",),
         skills=("normalize-job-description", "jd_requirement_analysis"),
         tools=("jd_match_search", "knowledge_search",
-               "firecrawl.firecrawl_scrape", "firecrawl.firecrawl_search",
-               "firecrawl.firecrawl_map",
                "context7.resolve-library-id", "context7.query-docs"),
-        mcp_servers=("firecrawl", "context7"),
-        max_iterations=1, max_tool_calls=4, timeout_seconds=150,
+        mcp_servers=("context7", "microsoft-learn", "exa"),
+        max_iterations=2, max_tool_calls=4, timeout_seconds=150,
         output_type="jd_requirements",
         requires_artifacts=("resume_facts",),
         produces_artifacts=("jd_requirements",),
@@ -67,7 +65,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
                 "ai_agent_job_evaluation"),
         tools=("calculate_jd_coverage", "resume_semantic_search", "knowledge_search",
                "context7.resolve-library-id", "context7.query-docs"),
-        mcp_servers=("context7",),
+        mcp_servers=("context7", "microsoft-learn", "exa"),
         max_iterations=2, max_tool_calls=5, timeout_seconds=240,
         output_type="technical_findings",
         requires_artifacts=("resume_facts", "jd_requirements"),
@@ -78,12 +76,9 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         ("project_analysis",),
         skills=("ground-project-claims", "retrieve-public-candidate-evidence",
                 "inspect-github-portfolio"),
-        tools=("locate_evidence", "resume_semantic_search", "mcp_fetch_url",
-               "exa.web_search_exa", "exa.web_fetch_exa",
-               "firecrawl.firecrawl_scrape", "firecrawl.firecrawl_search",
-               "firecrawl.firecrawl_map"),
-        mcp_servers=("exa", "firecrawl", "fetch"),
-        max_iterations=2, max_tool_calls=5, timeout_seconds=240,
+        tools=("locate_evidence", "resume_semantic_search"),
+        mcp_servers=("exa", "deepwiki", "fetch"),
+        max_iterations=2, max_tool_calls=6, timeout_seconds=240,
         output_type="project_findings",
         requires_artifacts=("resume_facts",),
         produces_artifacts=("project_findings",),
@@ -93,7 +88,8 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         ("risk_detection", "timeline_check"),
         skills=("risk_pattern_detection", "timeline_risk_analysis"),
         tools=("check_timeline", "timeline_validator"),
-        max_iterations=1, max_tool_calls=3, timeout_seconds=180,
+        mcp_servers=("exa", "fetch"),
+        max_iterations=2, max_tool_calls=4, timeout_seconds=180,
         output_type="risks",
         requires_artifacts=("resume_facts",),
         produces_artifacts=("risks",),
@@ -103,7 +99,8 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         ("evidence_verification",),
         skills=("calibrate-evidence-confidence", "evidence_verification"),
         tools=("verify_report_evidence", "locate_evidence"),
-        max_iterations=1, max_tool_calls=4, timeout_seconds=210,
+        mcp_servers=("exa", "deepwiki", "fetch"),
+        max_iterations=2, max_tool_calls=6, timeout_seconds=210,
         output_type="evidence",
         # Soft deps via AGENT_DEPENDENCIES: only wait for specialists that are
         # actually in the plan (skipped Project/Risk must not block Evidence).
@@ -121,7 +118,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         # 证据再回答。Report 不直接调用公网 MCP。
         tools=("validate_report_schema", "knowledge_search",
                "resume_semantic_search"),
-        max_iterations=1, max_tool_calls=4, timeout_seconds=240,
+        max_iterations=2, max_tool_calls=4, timeout_seconds=240,
         failure_policy="abort", output_type="report",
         # evidence_ledger is preferred when present; followup/quick_answer may
         # produce final_report directly without a full evidence pass.
@@ -143,8 +140,8 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         ("interview_questions",),
         skills=("generate-interview-probes", "interview_question_generation"),
         tools=("context7.resolve-library-id", "context7.query-docs"),
-        mcp_servers=("context7",),
-        max_iterations=1, max_tool_calls=2, timeout_seconds=150,
+        mcp_servers=("context7", "microsoft-learn"),
+        max_iterations=2, max_tool_calls=2, timeout_seconds=150,
         output_type="questions",
         requires_artifacts=("risks",),
         produces_artifacts=("interview_questions",),

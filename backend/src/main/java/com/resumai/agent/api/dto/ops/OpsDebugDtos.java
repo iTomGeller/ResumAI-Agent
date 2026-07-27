@@ -124,6 +124,7 @@ public final class OpsDebugDtos {
             String server,
             String tool,
             String agent,
+            String lifecycleStage,
             String outcome,
             Long durationMs,
             Integer retryCount,
@@ -131,6 +132,9 @@ public final class OpsDebugDtos {
             Object arguments,
             Object resultPreview,
             String error,
+            String occurredAt,
+            String startedAt,
+            String endedAt,
             LocalDateTime createTime
     ) {
     }
@@ -148,6 +152,9 @@ public final class OpsDebugDtos {
             Boolean hashDrift,
             List<String> requiredMcp,
             Object payload,
+            String occurredAt,
+            String startedAt,
+            String endedAt,
             LocalDateTime createTime
     ) {
     }
@@ -164,6 +171,7 @@ public final class OpsDebugDtos {
             Double finalScore,
             String decision,
             String ignoredReason,
+            String occurredAt,
             LocalDateTime createTime,
             String type,
             String ownerScope,
@@ -286,6 +294,152 @@ public final class OpsDebugDtos {
             List<MemoryUsageView> usage,
             Map<String, Object> defaults,
             Map<String, Object> fileStore
+    ) {
+    }
+
+    /**
+     * Stage timings are nullable on purpose. Historical events did not split
+     * embedding from retrieval, so {@code embeddingRetrievalMs} preserves that
+     * combined measurement without pretending that either individual stage was
+     * measured.
+     */
+    public record RagStageTimingView(
+            Double queryRewriteMs,
+            Double embeddingMs,
+            Double retrievalMs,
+            Double embeddingRetrievalMs,
+            Double fusionMs,
+            Double rerankMs,
+            Double totalMs
+    ) {
+    }
+
+    public record RagChunkView(
+            String chunkId,
+            String documentId,
+            String title,
+            String source,
+            String uri,
+            Double score,
+            String scoreType,
+            Integer rank,
+            String preview,
+            Object provenance
+    ) {
+    }
+
+    /**
+     * Precision/recall are populated only when a labelled relevance set is
+     * explicitly attached to the event. Groundedness is populated only when a
+     * named judge completed successfully. Retrieval scores are otherwise
+     * exposed as ranking proxies, never as ground-truth quality metrics.
+     */
+    public record RagQualityView(
+            boolean groundTruthAvailable,
+            String judgeSource,
+            Double precisionAtK,
+            Double recallAtK,
+            Double groundedness,
+            String relevanceScoreSemantics,
+            String note
+    ) {
+    }
+
+    public record RagRetrievalView(
+            String runId,
+            String traceId,
+            Integer seq,
+            String toolCallId,
+            String toolName,
+            String agentId,
+            String query,
+            String querySummary,
+            List<String> queriesUsed,
+            String outcome,
+            String occurredAt,
+            String startedAt,
+            String endedAt,
+            String retrievedAt,
+            Long durationMs,
+            String strategy,
+            String fusionStrategy,
+            String indexName,
+            String source,
+            Integer requestedK,
+            Integer returnedK,
+            Integer uniqueDocuments,
+            Integer candidateCount,
+            Integer lexicalHits,
+            Integer vectorHits,
+            Integer filteredCount,
+            Integer droppedCount,
+            Integer deduplicatedCount,
+            Boolean zeroHit,
+            Double topScore,
+            Double meanScore,
+            Double minScore,
+            Double scoreSpread,
+            Integer scoreSampleSize,
+            Boolean rerankApplied,
+            Double rerankBeforeTopScore,
+            Double rerankAfterTopScore,
+            Double rerankLift,
+            Boolean cacheHit,
+            Boolean fallback,
+            String fallbackStage,
+            List<String> fallbackChain,
+            Boolean degraded,
+            String degradationReason,
+            String error,
+            RagStageTimingView stages,
+            List<RagChunkView> chunks,
+            RagQualityView quality,
+            boolean telemetryComplete
+    ) {
+    }
+
+    public record RagStageAggregateView(
+            String stage,
+            int samples,
+            Double averageMs,
+            Double p90Ms,
+            Double averageShare
+    ) {
+    }
+
+    public record RagOpsSummary(
+            int volume,
+            int terminalCount,
+            int successCount,
+            int zeroHitCount,
+            int zeroHitEligibleCount,
+            int errorCount,
+            int degradedCount,
+            int cacheHitCount,
+            Double successRate,
+            Double zeroHitRate,
+            Double p50LatencyMs,
+            Double p90LatencyMs,
+            Double averageTopScoreProxy,
+            Double averageReturnedK,
+            Double topKFillRateProxy,
+            Double averageRerankLift,
+            int rerankLiftSamples,
+            String bottleneckStage,
+            Double bottleneckAverageMs,
+            List<RagStageAggregateView> stageBreakdown,
+            int completeTelemetryCount
+    ) {
+    }
+
+    public record RagOpsResponse(
+            String schemaVersion,
+            LocalDateTime generatedAt,
+            int count,
+            RagOpsSummary summary,
+            List<RagRetrievalView> items,
+            Map<String, Object> metricSemantics,
+            List<String> warnings
     ) {
     }
 }

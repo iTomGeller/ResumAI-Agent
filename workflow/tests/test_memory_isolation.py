@@ -5,6 +5,9 @@ import asyncio
 
 from app.runtime.memory import (
     NullMemoryClient,
+    allowed_types_for,
+    canonical_taxonomy,
+    decisions_from_hits,
     filter_hits_for_consumer,
     is_benchmark_source,
     is_control_plane_memory,
@@ -128,3 +131,51 @@ def test_null_client_search_excludes_failure_for_specialists():
         assert any(h["memoryId"] == "2" for h in coord)
 
     asyncio.run(_run())
+
+
+def test_canonical_taxonomy_and_agent_routes_are_diverse():
+    assert canonical_taxonomy("PREFERENCE") == "SEMANTIC"
+    assert canonical_taxonomy("CONVERSATION") == "WORKING"
+    assert canonical_taxonomy("FAILURE") == "EPISODIC"
+
+    parser = allowed_types_for("ResumeParserAgent")
+    report = allowed_types_for("ReportAgent")
+    policy = allowed_types_for("PolicyEvolution")
+    assert parser == frozenset({"SEMANTIC", "WORKING"})
+    assert "EPISODIC" in report and "WORKING" not in report
+    assert policy == frozenset({"PROCEDURAL", "EPISODIC"})
+
+
+def test_usage_decision_has_taxonomy_namespace_reason_and_real_time():
+    used = [{
+        "memoryId": "semantic-1",
+        "type": "SEMANTIC",
+        "ownerScope": "CONVERSATION",
+        "namespace": "conversation/abc123",
+        "selectionReason": "query_intent:SEMANTIC",
+        "score": 0.82,
+    }]
+    rows = decisions_from_hits(used, [], "ResumeParserAgent")
+    assert len(rows) == 1
+    assert rows[0].taxonomy == "SEMANTIC"
+    assert rows[0].memoryType == "SEMANTIC"
+    assert rows[0].namespace == "conversation/abc123"
+    assert rows[0].reason == "query_intent:SEMANTIC"
+    assert rows[0].occurredAt and rows[0].occurredAt.endswith("Z")
+
+
+def test_working_memory_is_not_injected_into_report_agent():
+    hits = [
+        {"memoryId": "work-1", "type": "WORKING", "ownerScope": "RUN",
+         "source": "run_input", "content": "current scratch"},
+        {"memoryId": "fact-1", "type": "SEMANTIC", "ownerScope": "CONVERSATION",
+         "source": "candidate_fact", "content": "Java 5 years"},
+        {"memoryId": "episode-1", "type": "EPISODIC",
+         "ownerScope": "CONVERSATION", "source": "evaluation_result",
+         "content": "prior successful evaluation"},
+    ]
+    parser_used, _ = filter_hits_for_consumer(hits, "ResumeParserAgent")
+    report_used, report_ignored = filter_hits_for_consumer(hits, "ReportAgent")
+    assert {h["memoryId"] for h in parser_used} == {"work-1", "fact-1"}
+    assert {h["memoryId"] for h in report_used} == {"fact-1", "episode-1"}
+    assert any(h["memoryId"] == "work-1" for h in report_ignored)

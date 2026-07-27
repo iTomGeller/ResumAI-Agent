@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import httpx
@@ -15,13 +16,30 @@ RUN_EVENT_TYPES = {
     "agent.selected", "agent.started", "agent.progress", "agent.completed", "agent.failed",
     "llm.started", "llm.retrying", "llm.completed", "llm.failed",
     "tool.started", "tool.progress", "tool.completed", "tool.failed",
-    "skill.selected", "skill.applied", "skill.failed",
+    "mcp.catalog.exposed", "mcp.tool.proposed",
+    "skill.catalog", "skill.catalog.exposed", "skill.selected", "skill.loaded",
+    "skill.applied", "skill.skipped", "skill.failed",
+    "retrieval.started", "retrieval.completed", "retrieval.failed",
+    "memory.selected", "memory.used", "memory.written", "memory.skipped",
     # Legacy aliases retained for reading historical events only — do not emit for new runs.
     "skill.started", "skill.completed",
     "sandbox.started", "sandbox.progress", "sandbox.completed", "sandbox.failed",
     "context.compacted",
     "run.cancelling", "run.cancelled", "run.completed", "run.failed", "run.timed_out",
 }
+
+
+def _utc_now_iso() -> str:
+    """Return a stable, sortable source timestamp for the audit timeline."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _event_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    # Copy rather than mutate caller-owned dictionaries.  `occurredAt` is the
+    # runtime occurrence time; the Java `create_time` remains ingestion time.
+    event_payload = dict(payload or {})
+    event_payload.setdefault("occurredAt", _utc_now_iso())
+    return event_payload
 
 
 def _headers() -> Dict[str, str]:
@@ -55,7 +73,7 @@ class RuntimeEmitter:
             "eventType": event_type,
             "agentId": agent_id,
             "toolName": tool_name,
-            "payload": payload or {},
+            "payload": _event_payload(payload),
         }
         await self._post("/api/internal/agent-runs/events", body, attempts=2, timeout=10.0)
 
@@ -113,7 +131,7 @@ class NullEmitter(RuntimeEmitter):
             "eventType": event_type,
             "agentId": agent_id,
             "toolName": tool_name,
-            "payload": payload or {},
+            "payload": _event_payload(payload),
         })
 
     async def emit_result(self, result: Dict[str, Any]) -> bool:

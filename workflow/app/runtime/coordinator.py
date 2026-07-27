@@ -98,6 +98,45 @@ AGENT_DEPENDENCIES: Dict[str, List[str]] = {
 
 PARALLELIZABLE = {"JDAnalysisAgent", "TechAgent", "ProjectAgent", "RiskAgent"}
 
+# Logical planner artifact -> canonical SharedState keys.  The reverse aliases
+# let the Java control plane name invalidations in either representation.
+ARTIFACT_STATE_KEYS: Dict[str, Tuple[str, ...]] = {
+    "parsed_resume": ("parsedResume",),
+    "resume_facts": ("resumeFacts",),
+    "jd_requirements": ("jdRequirements", "effectiveJd", "jdMatches"),
+    "technical_findings": ("technicalFindings", "jdCoverage"),
+    "project_findings": ("projectFindings",),
+    "risks": ("risks", "timelineCheck"),
+    "evidence_ledger": ("evidence", "conflicts", "recommendations"),
+    "final_report": ("finalReport",),
+    "rewrite": ("rewrite",),
+    "interview_questions": ("interviewQuestions",),
+}
+_ARTIFACT_ALIASES = {
+    alias: logical
+    for logical, aliases in ARTIFACT_STATE_KEYS.items()
+    for alias in (logical, *aliases)
+}
+# Transitive data dependencies used when a new conversation revision changes
+# an input or evaluation focus. ReportAgent intentionally has soft runtime
+# dependencies, so this graph makes the otherwise implicit dependencies
+# explicit for invalidation.
+ARTIFACT_INVALIDATION_GRAPH: Dict[str, Tuple[str, ...]] = {
+    "parsed_resume": ("resume_facts",),
+    "resume_facts": (
+        "jd_requirements", "technical_findings", "project_findings", "risks",
+        "evidence_ledger", "final_report", "rewrite", "interview_questions",
+    ),
+    "jd_requirements": (
+        "technical_findings", "project_findings", "evidence_ledger",
+        "final_report",
+    ),
+    "technical_findings": ("evidence_ledger", "final_report"),
+    "project_findings": ("evidence_ledger", "final_report", "rewrite"),
+    "risks": ("evidence_ledger", "final_report", "interview_questions"),
+    "evidence_ledger": ("final_report",),
+}
+
 _PROJECT_HINT = re.compile(
     r"(项目经历|项目经验|project\s*experience|side\s*project|"
     r"个人项目|开源项目|github\.com/)", re.I)
@@ -182,6 +221,37 @@ class Coordinator:
         required = list(dict.fromkeys(required))
         optional = [a for a in dict.fromkeys(optional) if a not in required]
         return required, optional
+
+    @staticmethod
+    def expand_invalidated_artifacts(names: List[str]) -> Set[str]:
+        """Normalize and transitively expand revision invalidations."""
+        pending = [
+            _ARTIFACT_ALIASES.get(str(name or "").strip(),
+                                  str(name or "").strip())
+            for name in (names or [])
+            if str(name or "").strip()
+        ]
+        expanded: Set[str] = set()
+        while pending:
+            artifact = pending.pop(0)
+            if artifact in expanded:
+                continue
+            expanded.add(artifact)
+            pending.extend(ARTIFACT_INVALIDATION_GRAPH.get(artifact, ()))
+        return expanded
+
+    @staticmethod
+    def reusable_artifacts(artifacts: Dict[str, Any],
+                           invalidated: List[str]) -> Tuple[Dict[str, Any], Set[str]]:
+        """Return a copy containing only artifacts safe for a new revision."""
+        expanded = Coordinator.expand_invalidated_artifacts(invalidated)
+        reusable: Dict[str, Any] = {}
+        for key, value in (artifacts or {}).items():
+            logical = _ARTIFACT_ALIASES.get(str(key), str(key))
+            if logical not in expanded:
+                reusable[str(key)] = value
+        return reusable, expanded
+
     def is_simple(self, run_type: str) -> bool:
         return run_type in SIMPLE_RULE_TYPES
 
@@ -278,6 +348,7 @@ class Coordinator:
             signals = {**signals, "needs_parse": True}
         goal, optional_goal = self.resolve_goal_artifacts(run_type, signals=signals)
         present = self._present_artifacts(artifacts or {}, shared or {})
+        initially_present = set(present)
         selected: List[str] = []
         selected_because: Dict[str, str] = {}
         skipped_because: Dict[str, str] = {}
@@ -364,13 +435,17 @@ class Coordinator:
                 "EvidenceAgent", "策略关闭证据核验")
         else:
             # Evidence enabled → force EvidenceAgent for goals that need ledger.
-            if "evidence_ledger" in goal and "EvidenceAgent" not in selected:
+            if ("evidence_ledger" in goal
+                    and "evidence_ledger" not in initially_present
+                    and "EvidenceAgent" not in selected):
                 selected.append("EvidenceAgent")
                 selected_because["EvidenceAgent"] = "证据核验启用，强制 EvidenceAgent"
                 skipped_because.pop("EvidenceAgent", None)
 
         # Full evaluation with projects → force ProjectAgent.
-        if "ProjectAgent" in forced_agents and "ProjectAgent" not in selected:
+        if ("ProjectAgent" in forced_agents
+                and "project_findings" not in initially_present
+                and "ProjectAgent" not in selected):
             selected.append("ProjectAgent")
             selected_because["ProjectAgent"] = "full evaluation 存在项目，强制 ProjectAgent"
             skipped_because.pop("ProjectAgent", None)
@@ -393,7 +468,8 @@ class Coordinator:
             skipped_because=skipped_because,
             artifact_edges=artifact_edges,
             goal_artifacts=goal,
-            optional_artifacts=optional_goal)
+            optional_artifacts=optional_goal,
+            present_artifacts=initially_present)
         return finalized
     async def plan(self, *, run_type: str, user_message: str,
                    conversation_summary: str, shared_digest: str,
@@ -440,7 +516,8 @@ class Coordinator:
                     skipped_because=cached.get("skippedBecause") or base.get("skippedBecause"),
                     artifact_edges=cached.get("artifactEdges") or base.get("artifactEdges"),
                     goal_artifacts=base.get("goalArtifacts"),
-                    optional_artifacts=base.get("optionalArtifacts"))
+                    optional_artifacts=base.get("optionalArtifacts"),
+                    present_artifacts=set(base.get("presentArtifacts") or []))
 
         refined = await self._refine(
             base["plan"], run_type=run_type, user_message=user_message,
@@ -457,7 +534,8 @@ class Coordinator:
                 skipped_because=base.get("skippedBecause") or {},
                 artifact_edges=base.get("artifactEdges") or [],
                 goal_artifacts=base.get("goalArtifacts"),
-                optional_artifacts=base.get("optionalArtifacts"))
+                optional_artifacts=base.get("optionalArtifacts"),
+                present_artifacts=set(base.get("presentArtifacts") or []))
         if use_cache and cache_key and not refined["reason"].startswith("rule_based(llm-error"):
             await cache.set_json(cache_key, {
                 "plan": refined["plan"], "reason": refined["reason"],
@@ -471,20 +549,24 @@ class Coordinator:
             skipped_because=base.get("skippedBecause"),
             artifact_edges=base.get("artifactEdges"),
             goal_artifacts=base.get("goalArtifacts"),
-            optional_artifacts=base.get("optionalArtifacts"))
+            optional_artifacts=base.get("optionalArtifacts"),
+            present_artifacts=set(base.get("presentArtifacts") or []))
 
     def _finalize(self, plan: List[str], reason: str,
                   selected_because: Optional[Dict[str, str]] = None,
                   skipped_because: Optional[Dict[str, str]] = None,
                   artifact_edges: Optional[List[Dict[str, str]]] = None,
                   goal_artifacts: Optional[List[str]] = None,
-                  optional_artifacts: Optional[List[str]] = None) -> Dict[str, Any]:
+                  optional_artifacts: Optional[List[str]] = None,
+                  present_artifacts: Optional[Set[str]] = None) -> Dict[str, Any]:
         ordered = self._order_by_dependencies(plan)
         ordered = self._ensure_unique_terminal(ordered)
         # Plan-time closure: ensure every required goal artifact has a producer
         # still in the plan (or mark it missing — never silently drop).
         goal = list(goal_artifacts or [])
-        missing_producers = self._missing_goal_producers(ordered, goal)
+        present = set(present_artifacts or set())
+        closure_goal = [artifact for artifact in goal if artifact not in present]
+        missing_producers = self._missing_goal_producers(ordered, closure_goal)
         if missing_producers:
             repaired = list(ordered)
             for artifact, producer_id in missing_producers.items():
@@ -498,7 +580,7 @@ class Coordinator:
                             f"closure 补齐 goal artifact {artifact} 的唯一生产者")
             ordered = self._ensure_unique_terminal(self._order_by_dependencies(repaired))
         still_missing = [
-            a for a in goal
+            a for a in closure_goal
             if a not in self._producible_artifacts(ordered)
         ]
         groups = self._parallel_groups(ordered)
@@ -522,54 +604,125 @@ class Coordinator:
             "artifactEdges": artifact_edges or [],
             "goalArtifacts": goal,
             "optionalArtifacts": list(optional_artifacts or []),
+            "presentArtifacts": sorted(present),
             "missingGoalArtifacts": still_missing,
             "planClosureOk": not still_missing,
         }
     def _budget_plan(self, ordered: List[str], terminal: str,
                      execution_history: Optional[List[Dict[str, Any]]] = None,
                      signals: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, int]]:
-        """Adaptive budget allocation driven by historical execution profiles.
-        Falls back to even split when no history is available."""
+        """Allocate hard per-agent ceilings whose sum never exceeds the run cap.
+
+        ``llmQuota`` bounds logical agent turns; retry attempts are separately
+        counted by the run-wide provider-call ledger. ``actionTurnQuota`` is
+        the subset that may contain native tool calls; at least one turn is
+        kept for the final structured decision. Input signals and successful
+        history influence priority, but can never mint calls beyond
+        ``policy.maxLlmCalls``. Runtime control-plane reservations and provider
+        attempts already consumed are subtracted before agent allocation.
+        """
+        if not ordered:
+            return {}
         sig = signals or {}
-        base_llm = self.policy.maxLlmCalls
-        if sig.get("is_rich_resume"):
-            base_llm = min(base_llm + 3, 18)
-        elif sig.get("is_fresh_grad") or not sig.get("has_projects"):
-            base_llm = max(8, base_llm - 2)
-
-        terminal_floor = 2
         others = [a for a in ordered if a != terminal]
-
         hist_ratios = self._extract_budget_ratios(execution_history, others)
-        remaining_llm = max(1, base_llm - terminal_floor)
+        hard_cap = max(0, int(self.policy.maxLlmCalls))
+        runtime_budget = getattr(self.llm, "budget", None)
+        if runtime_budget is not None and hasattr(
+                runtime_budget, "available_agent_llm_calls"):
+            hard_cap = min(
+                hard_cap,
+                runtime_budget.available_agent_llm_calls(hard_cap))
+        quotas = {agent: 0 for agent in ordered}
+        remaining = hard_cap
 
-        budget: Dict[str, Dict[str, int]] = {}
-        if hist_ratios:
-            for agent in others:
-                ratio = hist_ratios.get(agent, 1.0 / max(1, len(others)))
-                budget[agent] = {
-                    "llmQuota": max(1, round(remaining_llm * ratio)),
-                    "toolQuota": min(
-                        max(1, self.policy.toolBudget.maxToolCallsPerRun
-                            // max(1, len(ordered))),
-                        self.policy.toolBudget.maxToolCallsPerAgent),
-                }
-        else:
-            per_agent_llm = max(1, remaining_llm // max(1, len(others)))
-            per_agent_tools = max(1, self.policy.toolBudget.maxToolCallsPerRun
-                                  // max(1, len(ordered)))
-            for agent in others:
-                budget[agent] = {
-                    "llmQuota": per_agent_llm,
-                    "toolQuota": min(per_agent_tools,
-                                     self.policy.toolBudget.maxToolCallsPerAgent),
-                }
-        budget[terminal] = {
-            "llmQuota": terminal_floor,
-            "toolQuota": min(
-                max(1, self.policy.toolBudget.maxToolCallsPerRun // max(1, len(ordered))),
-                self.policy.toolBudget.maxToolCallsPerAgent),
+        # Protect the terminal floor before assigning any specialist turn.
+        # With constrained policies it is better to skip a specialist LLM and
+        # consume its deterministic artifacts than to strand ReportAgent
+        # without a finalization/repair turn.
+        if terminal in quotas and remaining > 0:
+            terminal_floor = min(
+                remaining,
+                max(1, int(self.policy.terminalLlmReserve)))
+            quotas[terminal] = terminal_floor
+            remaining -= terminal_floor
+        for agent in others:
+            if remaining <= 0:
+                break
+            quotas[agent] += 1
+            remaining -= 1
+
+        base_weights = {
+            "ResumeParserAgent": 1.0,
+            "JDAnalysisAgent": 1.5,
+            "TechAgent": 2.5,
+            "ProjectAgent": 3.0,
+            "RiskAgent": 2.0,
+            "EvidenceAgent": 2.25,
+            "ReportAgent": 4.0,
         }
+        weights = {
+            agent: base_weights.get(agent, 1.5) for agent in ordered}
+        if sig.get("has_projects"):
+            weights["ProjectAgent"] = weights.get("ProjectAgent", 3.0) + 3.0
+        if sig.get("has_external_urls"):
+            weights["ProjectAgent"] = weights.get("ProjectAgent", 3.0) + 5.0
+            weights["EvidenceAgent"] = weights.get("EvidenceAgent", 2.25) + 2.0
+        if sig.get("has_jd") or sig.get("has_jd_requirements"):
+            weights["TechAgent"] = weights.get("TechAgent", 2.5) + 2.0
+            weights["JDAnalysisAgent"] = weights.get("JDAnalysisAgent", 1.5) + 1.0
+        if sig.get("has_timeline"):
+            weights["RiskAgent"] = weights.get("RiskAgent", 2.0) + 1.0
+        if hist_ratios:
+            for agent, ratio in hist_ratios.items():
+                weights[agent] = weights.get(agent, 1.5) + 4.0 * ratio
+
+        action_caps: Dict[str, int] = {}
+        total_caps: Dict[str, int] = {}
+        for agent in ordered:
+            try:
+                definition = self.registry.get(agent)
+                decision_cap = max(1, min(
+                    definition.max_iterations,
+                    self.policy.maxIterationsPerAgent))
+                action_cap = min(
+                    2, definition.max_tool_calls,
+                    self.policy.toolBudget.maxToolCallsPerAgent)
+            except KeyError:
+                decision_cap, action_cap = 1, 1
+            action_caps[agent] = max(0, action_cap)
+            total_caps[agent] = decision_cap + max(0, action_cap)
+
+        # Weighted marginal allocation avoids the old rich-resume bug where
+        # per-agent quotas summed to more than the client-wide hard cap.
+        while remaining > 0:
+            eligible = [
+                agent for agent in ordered
+                if quotas[agent] < total_caps[agent]]
+            if not eligible:
+                break
+            agent = max(
+                eligible,
+                key=lambda item: (
+                    weights.get(item, 1.0) / (quotas[item] + 0.5),
+                    -ordered.index(item)))
+            quotas[agent] += 1
+            remaining -= 1
+
+        per_agent_tools = min(
+            max(1, self.policy.toolBudget.maxToolCallsPerRun
+                // max(1, len(ordered))),
+            self.policy.toolBudget.maxToolCallsPerAgent)
+        budget: Dict[str, Dict[str, int]] = {}
+        for agent in ordered:
+            llm_quota = quotas[agent]
+            action_quota = min(
+                action_caps[agent], max(0, llm_quota - 1))
+            budget[agent] = {
+                "llmQuota": llm_quota,
+                "actionTurnQuota": action_quota,
+                "toolQuota": per_agent_tools,
+            }
         return budget
 
     @staticmethod
@@ -631,7 +784,8 @@ class Coordinator:
         terminals = [a for a in plan if a in TERMINAL_AGENTS]
         preferred = [a for a in self.policy.agentOrder if a in body]
         rest = [a for a in body if a not in preferred]
-        return preferred + rest + terminals    @staticmethod
+        return preferred + rest + terminals
+
     @staticmethod
     def _ensure_unique_terminal(plan: List[str]) -> List[str]:
         """Exactly one of Report/Optimize/Interview closes the plan."""
@@ -700,7 +854,7 @@ class Coordinator:
             f"共享状态摘要: {shared_digest[:800]}\n"
             f"候选人信号:\n" + "\n".join(f"  - {s}" for s in signal_lines) + "\n"
             f"历史失败提示: {'; '.join(failure_notes[:3]) or '无'}\n"
-            f"相关记忆: {'; '.join(memory_notes[:3]) or '无'}\n"
+            f"相关记忆: {'; '.join(str(m.get('content','') if isinstance(m, dict) else m)[:80] for m in memory_notes[:3]) or '无'}\n"
             f"可用 Agent 能力目录:\n{self.capability_catalog()}\n"
             f"产物规划基线: {base_plan}\n"
             f"必选 goal artifacts: {goal_artifacts or []}\n"

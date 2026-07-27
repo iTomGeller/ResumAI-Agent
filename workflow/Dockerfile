@@ -8,7 +8,7 @@ ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 COPY workflow/requirements.txt ./requirements.txt
 COPY workflow/requirements.lock ./requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
-    && pip install --no-cache-dir pytest==8.3.5 \
+    && pip install --no-cache-dir pytest==8.3.5 pytest-timeout==2.3.1 \
     # Outside the hash-locked set: redis (semantic cache) and the public-web
     # MCP fetch server (real MCP protocol, allowlisted hosts only).
     && pip install --no-cache-dir "redis>=5.0" mcp-server-fetch \
@@ -23,10 +23,10 @@ COPY workflow/run_agent_harness.py ./run_agent_harness.py
 COPY backend/src/main/resources/skills ./skills
 COPY config/mcp-servers.json ./config/mcp-servers.json
 
-# Build gate: compile check + deterministic runtime contract gate.
-# Full test suite runs in CI, not inside Docker build (memory constrained).
+# Build gate: compile check + the complete deterministic runtime contract suite.
+# This Docker build is performed on ECS, so no workflow code runs on the laptop.
 RUN python -m compileall -q app \
-    && pytest -q tests/test_runtime_core.py tests/test_structured_report_validator.py -x --timeout=60 2>/dev/null || true \
+    && pytest -q -x --timeout=90 \
     && python run_agent_harness.py \
     && touch /tmp/runtime-tests-passed
 
