@@ -207,7 +207,9 @@ fi
 # resume dispatch — avoids ORPHANED_ON_RESTART from mid-flight kills.
 # ------------------------------------------------------------------
 INTERNAL_TOKEN="${WORKFLOW_INTERNAL_TOKEN:-${INTERNAL_TOKEN:-}}"
-BACKEND_DRAIN_URL="http://127.0.0.1:8080/api/internal/agent-runs"
+# Backend is intentionally not published on a host port. Route internal
+# lifecycle calls through the local frontend/nginx /api upstream instead.
+BACKEND_DRAIN_URL="http://127.0.0.1/api/internal/agent-runs"
 drain_api() {
   local method="$1" path="$2" data="${3:-}"
   if [[ -z "$INTERNAL_TOKEN" ]]; then
