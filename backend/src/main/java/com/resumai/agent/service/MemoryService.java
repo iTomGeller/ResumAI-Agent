@@ -80,6 +80,7 @@ public class MemoryService {
     private static final Set<String> TRUSTED_PROCEDURAL_SOURCES = Set.of(
             "approved_policy", "approved_skill", "policy_approval",
             "skill_registry", "system_approved");
+    private static final String RUNTIME_STRATEGY_SOURCE = "runtime_strategy";
 
     private static final Pattern SECRET_PATTERN = Pattern.compile(
             "(sk-[A-Za-z0-9]{16,}|Bearer\\s+[A-Za-z0-9._-]{16,}|password\\s*[:=]\\s*\\S+"
@@ -1085,9 +1086,13 @@ public class MemoryService {
     }
 
     private static boolean isApprovedProcedure(WriteRequest request) {
-        if (TRUSTED_PROCEDURAL_SOURCES.contains(
-                String.valueOf(request.source()).trim().toLowerCase(Locale.ROOT))) {
+        String source = String.valueOf(request.source()).trim().toLowerCase(Locale.ROOT);
+        if (TRUSTED_PROCEDURAL_SOURCES.contains(source)) {
             return true;
+        }
+        if (RUNTIME_STRATEGY_SOURCE.equals(source)) {
+            return isValidatedRuntimeStrategy(
+                    request.structuredContent(), request.runId(), request.ownerScope());
         }
         Map<String, Object> structured = request.structuredContent();
         if (structured == null) {
@@ -1098,14 +1103,42 @@ public class MemoryService {
     }
 
     private boolean isApprovedProcedure(MemoryEntryRow row) {
-        if (TRUSTED_PROCEDURAL_SOURCES.contains(
-                String.valueOf(row.getSource()).trim().toLowerCase(Locale.ROOT))) {
+        String source = String.valueOf(row.getSource()).trim().toLowerCase(Locale.ROOT);
+        if (TRUSTED_PROCEDURAL_SOURCES.contains(source)) {
             return true;
         }
         Object structured = readJson(row.getStructuredContent());
+        if (RUNTIME_STRATEGY_SOURCE.equals(source)) {
+            return structured instanceof Map<?, ?> map
+                    && isValidatedRuntimeStrategy(map, row.getRunId(), row.getOwnerScope());
+        }
         return structured instanceof Map<?, ?> map
                 && (Boolean.TRUE.equals(map.get("approved"))
                     || "APPROVED".equalsIgnoreCase(String.valueOf(map.get("approvalStatus"))));
+    }
+
+    /**
+     * A runtime-learned procedure is accepted only when it is an attributable,
+     * candidate-free observation from a real run.  It stays USER-scoped: the
+     * strategy may be reused for that tenant's later resumes, while candidate
+     * facts remain CONVERSATION-scoped and can never enter this namespace.
+     */
+    private static boolean isValidatedRuntimeStrategy(
+            Map<?, ?> structured, String runId, String ownerScope) {
+        if (structured == null
+                || !"USER".equalsIgnoreCase(String.valueOf(ownerScope))
+                || !StringUtils.hasText(runId)
+                || !runId.equals(String.valueOf(structured.get("derivedFromRunId")))
+                || !"execution_strategy".equals(structured.get("memoryKind"))
+                || !Boolean.TRUE.equals(structured.get("actualExecution"))
+                || !Boolean.TRUE.equals(structured.get("candidateDataExcluded"))) {
+            return false;
+        }
+        Object selectedAgents = structured.get("selectedAgents");
+        Object strategyClass = structured.get("strategyClass");
+        return selectedAgents instanceof List<?> agents
+                && !agents.isEmpty()
+                && StringUtils.hasText(String.valueOf(strategyClass));
     }
 
     private String factKey(WriteRequest request) {

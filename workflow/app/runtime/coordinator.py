@@ -139,7 +139,7 @@ ARTIFACT_INVALIDATION_GRAPH: Dict[str, Tuple[str, ...]] = {
 
 _PROJECT_HINT = re.compile(
     r"(项目经历|项目经验|project\s*experience|side\s*project|"
-    r"个人项目|开源项目|github\.com/)", re.I)
+    r"个人项目|开源项目|项目名称|项目\s*[:：]|github\.com/)", re.I)
 _TIMELINE_HINT = re.compile(
     r"(工作经历|实习经历|education|工作经验|"
     r"\d{4}\s*[./年-]\s*\d{1,2}|\d{4}\s*[-–—]\s*\d{4})", re.I)
@@ -442,12 +442,16 @@ class Coordinator:
                 selected_because["EvidenceAgent"] = "证据核验启用，强制 EvidenceAgent"
                 skipped_because.pop("EvidenceAgent", None)
 
-        # Full evaluation with projects → force ProjectAgent.
+        # Project-bearing full evaluations and project-focused runs must keep
+        # ProjectAgent. This is a hard goal constraint, not an LLM/budget hint:
+        # a user who explicitly asks for project depth must not get a plan that
+        # silently substitutes TechAgent for the project_findings producer.
         if ("ProjectAgent" in forced_agents
                 and "project_findings" not in initially_present
                 and "ProjectAgent" not in selected):
             selected.append("ProjectAgent")
-            selected_because["ProjectAgent"] = "full evaluation 存在项目，强制 ProjectAgent"
+            selected_because["ProjectAgent"] = (
+                f"{run_type} 检测到项目证据，强制产出 project_findings")
             skipped_because.pop("ProjectAgent", None)
 
         # agentOrder is ordering preference only — never an allowlist that
@@ -693,6 +697,22 @@ class Coordinator:
             action_caps[agent] = max(0, action_cap)
             total_caps[agent] = decision_cap + max(0, action_cap)
 
+        # Project/Evidence are the two source-acquisition specialists in a
+        # complete evaluation.  A one-turn quota can only produce their final
+        # decision and makes the advertised MCP/Skill catalog unreachable.
+        # Reserve their second (action-capable) turn before weighted extras,
+        # but only from the already-computed run cap: this never mints budget.
+        for tool_agent in ("ProjectAgent", "EvidenceAgent"):
+            if (
+                    remaining > 0
+                    and tool_agent in quotas
+                    and quotas[tool_agent] > 0
+                    and action_caps[tool_agent] > 0
+                    and quotas[tool_agent] < 2
+                    and quotas[tool_agent] < total_caps[tool_agent]):
+                quotas[tool_agent] += 1
+                remaining -= 1
+
         # Weighted marginal allocation avoids the old rich-resume bug where
         # per-agent quotas summed to more than the client-wide hard cap.
         while remaining > 0:
@@ -933,7 +953,9 @@ class Coordinator:
     def _forced_agents(run_type: str, signals: Dict[str, bool],
                        goal: List[str]) -> Set[str]:
         forced: Set[str] = set()
-        if run_type in FULL_EVAL_TYPES and signals.get("has_projects") \
+        project_depth_run = run_type == "project_analysis"
+        if (run_type in FULL_EVAL_TYPES or project_depth_run) \
+                and signals.get("has_projects") \
                 and "project_findings" in goal:
             forced.add("ProjectAgent")
         if signals.get("evidence_enabled") and "evidence_ledger" in goal:

@@ -667,6 +667,83 @@ def test_report_agent_repairs_done_true_without_structured_report():
         == "NEED_MANUAL_REVIEW"
 
 
+def test_parse_decision_decodes_provider_stringified_output_object():
+    encoded_output = json.dumps({
+        "summary": "provider double encoded this object",
+        "claims": [],
+        "evidence": [],
+        "confidence": 0.8,
+    })
+    raw = json.dumps({
+        "thought": "decode safely",
+        "output": encoded_output,
+        "done": True,
+    })
+
+    decision, error = RunExecutor._parse_decision(raw)
+
+    assert error == ""
+    assert decision is not None
+    assert decision["output"]["summary"] \
+        == "provider double encoded this object"
+    assert decision["output"]["confidence"] == 0.8
+
+
+def test_report_contract_normalizes_interview_probes_alias():
+    request = AgentRunRequest(
+        runId="r-report-probes", conversationId="c-report-probes",
+        traceId="t-report-probes", runType="full_evaluation",
+        resumeText="张三\nJava 后端工程师\n项目：支付平台",
+        jobDescription="Java 高级后端工程师")
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=_ReportFinalizationLlm())
+    probes = [{
+        "id": "probe-1",
+        "priority": "HIGH",
+        "question": "支付平台峰值流量和故障恢复如何验证？",
+        "objective": "核验项目深度",
+        "triggeredBy": "支付平台项目",
+        "evidenceRefs": [],
+        "goodSignals": ["说明压测数据和恢复时间"],
+        "redFlags": ["只有笼统描述"],
+    }]
+    decision = {
+        "thought": "use the established probes alias",
+        "output": {
+            "summary": "alias normalized",
+            "report": {
+                "recommendation": "NEED_MANUAL_REVIEW",
+                "dimensions": [{
+                    "name": "项目深度",
+                    "score": 60,
+                    "status": "PARTIAL",
+                    "rationale": "需要面试核验",
+                    "evidenceRefs": [],
+                }],
+                "strengths": [],
+                "risks": [],
+                "interviewProbes": probes,
+                "dataQuality": "PARTIAL",
+            },
+        },
+        "done": True,
+    }
+
+    error = executor._report_decision_schema_error(decision)
+    output = executor._build_output(
+        default_agent_registry.get("ReportAgent"),
+        decision["output"], "")
+
+    assert error == ""
+    assert decision["output"]["report"]["interviewQuestions"] == probes
+    assert output.summary == "alias normalized"
+    final_report = executor.state.artifact("finalReport")
+    assert final_report["interviewQuestions"][0]["id"] == "probe-1"
+    assert final_report["interviewProbes"][0]["question"] \
+        == "支付平台峰值流量和故障恢复如何验证？"
+
+
 def test_failed_mcp_result_is_error_and_never_evidence():
     request = AgentRunRequest(
         runId="r-fail", conversationId="c-fail", traceId="t-fail",
@@ -971,6 +1048,74 @@ def test_memory_writeback_persists_real_candidate_facts_as_semantic():
         "java", "spring boot", "kafka"]
     assert semantic[0]["structured"]["projects"] == ["支付网关"]
     assert any(row["type"] == "WORKING" for row in memory.writes)
+
+
+def test_memory_writeback_learns_candidate_free_procedure_from_actual_run():
+    request = AgentRunRequest(
+        runId="r-runtime-strategy", conversationId="c-runtime-strategy",
+        runType="full_evaluation",
+        resumeText="候选人 Alice；Java 支付项目",
+        jobDescription="Java 后端工程师")
+    memory = NullMemoryClient()
+    executor = RunExecutor(
+        request, NullEmitter(), memory=memory,
+        builtin_tools=BuiltinToolRegistry(), llm=_NativeMcpLlm())
+    executor.executed = [
+        "JDAnalysisAgent", "TechAgent", "ProjectAgent",
+        "EvidenceAgent", "ReportAgent"]
+    executor.agent_timings = {
+        "JDAnalysisAgent": 100, "TechAgent": 200, "ProjectAgent": 300,
+        "EvidenceAgent": 100, "ReportAgent": 200}
+    executor.agent_counters = {
+        "TechAgent": {"llmCalls": 2, "toolCalls": 1},
+        "ProjectAgent": {"llmCalls": 2, "toolCalls": 1},
+        "EvidenceAgent": {"llmCalls": 1, "toolCalls": 1},
+        "ReportAgent": {"llmCalls": 2, "toolCalls": 0},
+    }
+    executor.state.apply_artifacts({
+        "finalReport": {
+            "recommendation": "INTERVIEW_RECOMMEND",
+            "overallScore": 80,
+        },
+    })
+
+    run(executor._write_memories("done"))
+
+    learned = [
+        row for row in memory.writes
+        if row["type"] == "PROCEDURAL"
+        and row["source"] == "runtime_strategy"]
+    assert len(learned) == 1
+    procedure = learned[0]
+    assert procedure["ownerScope"] == "USER"
+    assert procedure["structured"]["derivedFromRunId"] == "r-runtime-strategy"
+    assert procedure["structured"]["actualExecution"] is True
+    assert procedure["structured"]["candidateDataExcluded"] is True
+    assert procedure["structured"]["strategyClass"] == "PROJECT_EVIDENCE"
+    assert "Alice" not in procedure["content"]
+    assert "Java 后端工程师" not in procedure["content"]
+
+
+def test_procedural_recall_is_focused_and_merged_ahead_of_candidate_memory():
+    request = AgentRunRequest(
+        runId="r-procedure-query", conversationId="c-procedure-query",
+        runType="full_evaluation",
+        userMessage="评估一下",
+        resumeText="项目经历 GitHub 开源仓库",
+        jobDescription="Java 后端")
+    query = RunExecutor._procedural_memory_query(request)
+    assert "执行策略" in query
+    assert "项目" in query
+    assert "证据核验" in query
+
+    merged = RunExecutor._merge_memory_hits(
+        [{"memoryId": "proc-1", "type": "PROCEDURAL"}],
+        [
+            {"memoryId": "episode-1", "type": "EPISODIC"},
+            {"memoryId": "proc-1", "type": "PROCEDURAL"},
+        ],
+        limit=2)
+    assert [row["memoryId"] for row in merged] == ["proc-1", "episode-1"]
 
 
 def test_memory_recall_query_uses_resume_and_jd_not_only_generic_message():

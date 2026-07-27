@@ -451,6 +451,51 @@ class RunExecutor:
         basis = [name for name, text in parts if text and text.strip()]
         return query, basis
 
+    @staticmethod
+    def _procedural_memory_query(request: AgentRunRequest) -> str:
+        """Small candidate-free query for reusable, observed run strategies."""
+        text = " ".join((
+            request.runType or "",
+            request.userMessage or "",
+            request.currentGoal or "",
+            request.resumeText or "",
+        )).lower()
+        cues = ["简历评估", "执行策略", request.runType or "full_evaluation"]
+        if any(token in text for token in (
+                "项目", "github", "开源", "project", "作品集")):
+            cues.extend(["项目", "证据核验"])
+        if any(token in text for token in (
+                "空档", "风险", "离职", "gap", "时间线")):
+            cues.extend(["风险", "时间线"])
+        if request.jobDescription:
+            cues.extend(["JD", "技术匹配"])
+        return " ".join(dict.fromkeys(cues))
+
+    @staticmethod
+    def _merge_memory_hits(
+            procedures: List[Dict[str, Any]],
+            candidate_hits: List[Dict[str, Any]],
+            *,
+            limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Keep a real procedure hit visible without duplicating memory rows."""
+        merged: List[Dict[str, Any]] = []
+        seen = set()
+        for hit in list(procedures) + list(candidate_hits):
+            memory_id = str(hit.get("memoryId") or "")
+            identity = memory_id or (
+                str(hit.get("type") or ""),
+                str(hit.get("source") or ""),
+                str(hit.get("content") or ""),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            merged.append(hit)
+            if len(merged) >= max(1, int(limit)):
+                break
+        return merged
+
     async def execute(self) -> Dict[str, Any]:
         started = time.monotonic()
         try:
@@ -509,15 +554,26 @@ class RunExecutor:
                         f"失效 {len(self.revision_reuse['invalidatedArtifacts'])} 个"),
                     **self.revision_reuse,
                 })
-            # Specialists/Report: USER/CONVERSATION PREFERENCE/CONVERSATION/EPISODIC
-            # only — never FAILURE (control-plane noise must not enter evaluation).
+            # Candidate facts/episodes and reusable execution procedures use
+            # separate queries.  A focused procedural query prevents a long raw
+            # resume from diluting the lexical signal, while the merge remains
+            # bounded and contains only records returned by the durable store.
             memory_query, memory_query_basis = self._memory_retrieval_query(
                 request)
-            self.memory_hits = await self.memory.search(
-                memory_query, types=sorted(SPECIALIST_TYPES),
+            procedure_hits = await self.memory.search(
+                self._procedural_memory_query(request),
+                types=["PROCEDURAL"],
+                top_k=min(2, self.policy.memoryRetrieval.topK),
+                min_confidence=self.policy.memoryRetrieval.minConfidence,
+                consumer_agent="SpecialistAgent")
+            candidate_hits = await self.memory.search(
+                memory_query, types=["SEMANTIC", "EPISODIC"],
                 top_k=self.policy.memoryRetrieval.topK,
                 min_confidence=self.policy.memoryRetrieval.minConfidence,
                 consumer_agent="SpecialistAgent")
+            self.memory_hits = self._merge_memory_hits(
+                procedure_hits, candidate_hits,
+                limit=self.policy.memoryRetrieval.topK)
             # FAILURE is Coordinator / policy-evolution only.
             self.failure_hits = await self.memory.search(
                 memory_query, types=["FAILURE"],
@@ -547,7 +603,7 @@ class RunExecutor:
                             f"（FAILURE 仅 Coordinator {len(self.failure_hits)} 条）"),
                 "memoryHits": len(self.memory_hits),
                 "failureHits": len(self.failure_hits),
-                "queryBasis": memory_query_basis,
+                "queryBasis": memory_query_basis + ["runtime_strategy"],
                 "memoryTypeCounts": type_counts,
                 "memoryTrace": observe_trace[:12],
                 "memoryTop": [
@@ -581,8 +637,11 @@ class RunExecutor:
                 and request.runType in ("full_evaluation", "jd_evaluation",
                                         "backend_eval", "agent_eval",
                                         "resume_optimize", "project_rewrite")
-            execution_profiles = [h for h in self.memory_hits
-                                   if isinstance(h, dict) and h.get("source") == "execution_profile"]
+            execution_profiles = [
+                h for h in self.memory_hits
+                if isinstance(h, dict)
+                and h.get("source") in {"runtime_strategy", "execution_profile"}
+            ]
             planned = await coordinator.plan(
                 run_type=request.runType, user_message=request.userMessage,
                 conversation_summary=request.conversationSummary or "",
@@ -2096,6 +2155,17 @@ class RunExecutor:
         candidate = extract_json_object(raw)
         if not candidate:
             return None, "输出中找不到可解析的 JSON 对象"
+        # Some OpenAI-compatible providers occasionally double-encode a
+        # function argument field and return ``output`` as a JSON string.
+        # Decode only a complete JSON object through the same bounded extractor
+        # used for the outer response; arbitrary prose remains invalid.
+        raw_output = candidate.get("output")
+        if isinstance(raw_output, str):
+            parsed_output = extract_json_object(raw_output)
+            if not parsed_output:
+                return None, "output 是字符串，但其中找不到合法 JSON 对象"
+            candidate = dict(candidate)
+            candidate["output"] = parsed_output
         try:
             validated = AgentDecision.model_validate(candidate)
         except Exception as exc:  # pydantic.ValidationError
@@ -2126,6 +2196,15 @@ class RunExecutor:
         report = output.get("report")
         if not isinstance(report, dict):
             return "ReportAgent structured report 缺失或不是 JSON 对象"
+
+        # ``interviewProbes`` is the established richer runtime field. Accept
+        # it as the compatibility alias of the provider-schema field and
+        # normalize the in-flight decision so persisted output is canonical.
+        probes = report.get("interviewProbes")
+        questions = report.get("interviewQuestions")
+        if isinstance(probes, list) and (
+                not isinstance(questions, list) or not questions):
+            report["interviewQuestions"] = list(probes)
 
         required = (
             "recommendation",
@@ -3339,6 +3418,29 @@ class RunExecutor:
                               "text": match.group("pref").strip()[:120]})
         return found[:2]
 
+    @staticmethod
+    def _runtime_strategy_class(selected_agents: List[str]) -> Tuple[str, str]:
+        selected = set(selected_agents)
+        if {"ProjectAgent", "EvidenceAgent"} <= selected:
+            return (
+                "PROJECT_EVIDENCE",
+                "项目或外部链接场景保留 ProjectAgent 与 EvidenceAgent，并为证据工具调用预留 action turn。",
+            )
+        if "RiskAgent" in selected:
+            return (
+                "RISK_TIMELINE",
+                "履历风险场景保留 RiskAgent，并将时间线结论交给 EvidenceAgent 或 ReportAgent 复核。",
+            )
+        if {"JDAnalysisAgent", "TechAgent"} <= selected:
+            return (
+                "JD_TECH",
+                "JD 技术匹配场景先结构化岗位要求，再由 TechAgent 逐项核对证据。",
+            )
+        return (
+            "BASELINE",
+            "轻量简历评估仅保留满足目标产物所需的最短路由，并由 ReportAgent 收口。",
+        )
+
     async def _write_memories(self, summary: str) -> None:
         await self.emitter.emit("agent.started", agent_id="MemoryService",
                                 payload={"description": "评估记忆持久化"})
@@ -3588,22 +3690,45 @@ class RunExecutor:
                                                   if isinstance(p, dict)]},
                         source="evaluation_result", confidence=0.85)
 
-            # 5) EPISODIC: execution profile for adaptive budget
+            # 5) PROCEDURAL: a candidate-free strategy learned from this actual
+            # execution. Java stages it until terminal acceptance and validates
+            # its provenance before USER-scoped promotion.
             agent_timings = getattr(self, "agent_timings", {})
             agent_counters = getattr(self, "agent_counters", {})
-            if agent_timings or agent_counters:
+            selected_agents = list(dict.fromkeys(
+                self.executed or list(agent_timings.keys())))
+            strategy_written = False
+            if ((agent_timings or agent_counters)
+                    and selected_agents
+                    and isinstance(final_report, dict)
+                    and final_report.get("recommendation")
+                    and not self.report_agent_failed):
                 agent_llm_calls = {a: c.get("llmCalls", 0)
                                    for a, c in agent_counters.items() if isinstance(c, dict)}
                 agent_tool_calls = {a: c.get("toolCalls", 0)
                                     for a, c in agent_counters.items() if isinstance(c, dict)}
+                tool_agents = sorted(
+                    agent for agent, calls in agent_tool_calls.items()
+                    if int(calls or 0) > 0)
+                strategy_class, strategy_hint = self._runtime_strategy_class(
+                    selected_agents)
+                strategy_key = (
+                    f"execution_strategy:{self.request.runType}:{strategy_class}")
                 await self.memory.write(
-                    type_="EPISODIC", owner_scope="USER",
-                    content=(f"执行画像: agents={list(agent_timings.keys())}, "
-                             f"totalLlm={self.budget.llm_calls}, "
-                             f"totalTools={self.budget.tool_calls}, "
-                             f"elapsed={self.budget.elapsed_seconds():.0f}s"),
+                    type_="PROCEDURAL", owner_scope="USER",
+                    content=(
+                        f"简历评估执行策略[{strategy_class}]: {strategy_hint} "
+                        f"已验证路由={' -> '.join(selected_agents)}; "
+                        f"工具参与={','.join(tool_agents) or '无'}"),
                     structured={
-                        "factKey": "execution_profile",
+                        "factKey": strategy_key,
+                        "memoryKind": "execution_strategy",
+                        "strategyClass": strategy_class,
+                        "derivedFromRunId": self.request.runId,
+                        "actualExecution": True,
+                        "candidateDataExcluded": True,
+                        "selectedAgents": selected_agents,
+                        "toolAgents": tool_agents,
                         "agentTimings": agent_timings,
                         "agentLlmCalls": agent_llm_calls,
                         "agentToolCalls": agent_tool_calls,
@@ -3613,10 +3738,13 @@ class RunExecutor:
                         "totalToolCalls": self.budget.tool_calls,
                         "totalTokens": getattr(self.budget, "total_tokens", 0),
                         "elapsedSeconds": self.budget.elapsed_seconds(),
-                        "resumeLength": len(self.request.resumeText or ""),
                         "runType": self.request.runType,
                     },
-                    source="execution_profile", confidence=0.95)
+                    source="runtime_strategy",
+                    source_id=strategy_key,
+                    confidence=0.95,
+                    ttl_days=365)
+                strategy_written = True
 
             # Emit memory write event
             write_types = ["run_input_context"]
@@ -3630,8 +3758,8 @@ class RunExecutor:
                 write_types.append("tech_findings")
             if risks_found:
                 write_types.append("risks")
-            if agent_timings or agent_counters:
-                write_types.append("execution_profile")
+            if strategy_written:
+                write_types.append("runtime_strategy")
             if write_types:
                 await self.emitter.emit(
                     "run.progress", agent_id="MemoryService",

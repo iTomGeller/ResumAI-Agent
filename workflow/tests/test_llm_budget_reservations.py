@@ -124,3 +124,50 @@ def test_budget_snapshot_preserves_scope_accounting():
     assert restored.llm_reservations == {
         "terminal": 2, "control": 3}
     assert restored.llm_scope_limits == {"control": 3}
+
+
+def test_legacy_balanced_db_budget_is_bounded_and_keeps_tools_actionable():
+    legacy_policy = PolicyBundle.from_config("balanced", {
+        "maxLlmCalls": 12,
+        "terminalLlmReserve": 1,
+        "maxIterationsPerAgent": 2,
+        "toolBudget": {
+            "maxToolCallsPerRun": 20,
+            "maxToolCallsPerAgent": 5,
+        },
+    })
+    assert legacy_policy.maxLlmCalls == 16
+    assert legacy_policy.terminalLlmReserve == 3
+    assert PolicyBundle.from_config(
+        "balanced", {"maxLlmCalls": 999}).maxLlmCalls == 18
+
+    budget = RunBudget()
+    budget.configure_llm_budget(
+        legacy_policy.maxLlmCalls,
+        {
+            "terminal": legacy_policy.terminalLlmReserve,
+            "control": legacy_policy.controlPlaneLlmReserve,
+        },
+        scope_limits={"control": legacy_policy.controlPlaneLlmReserve})
+    budget.claim_llm_call(legacy_policy.maxLlmCalls, "control")
+    coordinator = Coordinator(
+        default_agent_registry,
+        legacy_policy,
+        type("BudgetedLlm", (), {"budget": budget})())
+    ordered = [
+        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent",
+        "ProjectAgent", "RiskAgent", "EvidenceAgent", "ReportAgent",
+    ]
+
+    plan = coordinator._budget_plan(
+        ordered,
+        "ReportAgent",
+        signals={"has_projects": True, "has_jd": True})
+
+    assignable = budget.available_agent_llm_calls(
+        legacy_policy.maxLlmCalls)
+    assert sum(row["llmQuota"] for row in plan.values()) <= assignable
+    assert plan["ReportAgent"]["llmQuota"] >= 3
+    assert plan["TechAgent"]["actionTurnQuota"] >= 1
+    assert plan["ProjectAgent"]["actionTurnQuota"] >= 1
+    assert plan["EvidenceAgent"]["actionTurnQuota"] >= 1

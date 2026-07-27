@@ -85,6 +85,11 @@ class TimeoutPolicy(BaseModel):
     sandboxTimeoutSeconds: int = 90
 
 
+_BALANCED_MIN_LLM_CALLS = 16
+_BALANCED_MAX_LLM_CALLS = 18
+_BALANCED_TERMINAL_LLM_RESERVE = 3
+
+
 class PolicyBundle(BaseModel):
     """Parsed policy configuration controlling the outer agent loop."""
 
@@ -132,6 +137,20 @@ class PolicyBundle(BaseModel):
     def from_config(cls, policy_id: str, config: Dict[str, Any]) -> "PolicyBundle":
         data = dict(config or {})
         data["policyId"] = policy_id
+        if str(policy_id or "").strip() == "balanced":
+            # Existing installations legitimately retain the V6 seed row,
+            # whose maxLlmCalls=12 predates the seven-agent runtime and its
+            # control/terminal reservations.  Normalize that legacy DB value
+            # at the runtime boundary instead of mutating a mounted database.
+            #
+            # This is a bounded compatibility contract, not budget inflation:
+            # balanced may use 16..18 calls (deep_analysis already uses 18),
+            # and exactly three are protected for terminal finalization/repair.
+            requested = int(data.get("maxLlmCalls", _BALANCED_MIN_LLM_CALLS))
+            data["maxLlmCalls"] = min(
+                _BALANCED_MAX_LLM_CALLS,
+                max(_BALANCED_MIN_LLM_CALLS, requested))
+            data["terminalLlmReserve"] = _BALANCED_TERMINAL_LLM_RESERVE
         return cls.model_validate(data)
 
 

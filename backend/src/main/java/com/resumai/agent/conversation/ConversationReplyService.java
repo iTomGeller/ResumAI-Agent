@@ -84,6 +84,12 @@ public class ConversationReplyService {
         snapshot.put("revision", session.getActiveRevision());
         snapshot.put("hasResume", StringUtils.hasText(session.getResumeText()));
         snapshot.put("hasJobDescription", StringUtils.hasText(session.getJobDescription()));
+        if (StringUtils.hasText(session.getResumeText())) {
+            snapshot.put("resumeText", clip(session.getResumeText(), 1800));
+        }
+        if (StringUtils.hasText(session.getJobDescription())) {
+            snapshot.put("jobDescription", clip(session.getJobDescription(), 1600));
+        }
         // Include structuredReport from the latest completed run for rich Copilot answers
         Map<String, Object> report = getLatestStructuredReport(session.getId());
         if (report != null && !report.isEmpty()) {
@@ -117,16 +123,46 @@ public class ConversationReplyService {
     private CopilotReply localFallback(String turnId, String content, TurnDecision decision,
                                        ConversationSession session) {
         String answer;
-        Matcher arith = SIMPLE_ARITH.matcher(content == null ? "" : content.trim());
+        String text = content == null ? "" : content.trim();
+        String lower = text.toLowerCase(java.util.Locale.ROOT);
+        List<String> suggestions;
+        Matcher arith = SIMPLE_ARITH.matcher(text);
         if (arith.matches()) {
             answer = evaluateArithmetic(arith);
+            suggestions = defaultSuggestions();
         } else if (decision.needsConfirmation()) {
             answer = "我不完全确定你的意图：是想补充当前评估的信息，还是提出一个新的目标？"
                     + "如果要改评估方向，请明确说“改为……重新评估”。";
-        } else if (content != null
-                && (content.contains("结论") || content.contains("分数")
-                    || content.contains("推荐") || content.contains("怎么样")
-                    || content.contains("候选人") || content.contains("评估"))) {
+            suggestions = List.of("继续当前评估", "改为新目标并重新评估");
+        } else if (isMcpQuestion(lower)) {
+            answer = "MCP 的实际链路是：运行时先完成 initialize 和 tools/list，"
+                    + "把实时工具描述与 input schema 提供给模型；模型选择工具并生成参数后，"
+                    + "运行时再原样发起 tools/call。只记录真实返回，工具不可用会明确报错，"
+                    + "不会用伪造结果兜底。本次短答服务不可用，所以这条回复没有实际调用 MCP。";
+            suggestions = List.of("查看 MCP 工具清单", "查看最近一次 MCP 调用", "重试原问题");
+        } else if (isCheckpointQuestion(lower)) {
+            answer = "暂停会先让当前节点到达安全边界并写入 checkpoint；恢复时沿用同一个 Run、"
+                    + "同一个 revision 和该 checkpoint 继续，已完成节点不会整条重跑。"
+                    + "取消与暂停不同：取消会终止该 Run，不能再按暂停流程恢复。"
+                    + "这条说明本身不会改变运行状态。";
+            suggestions = List.of("查看当前运行状态", "暂停当前任务", "恢复暂停任务");
+        } else if (isRevisionQuestion(lower)) {
+            answer = "修改 JD 或评估重点会创建新 revision；进行中的旧 Run 会被标记为已取代，"
+                    + "旧结果不再作为当前结论。系统只失效并重跑受影响节点，未受影响的产物可复用。"
+                    + "这条说明本身不会创建 revision 或 Run，只有明确提交变更或要求重新评估才会执行。";
+            suggestions = List.of("查看当前 revision", "说明新的 JD/评估重点", "查看受影响节点");
+        } else if (isEvidenceGapQuestion(lower)) {
+            answer = "证据不足时不会补猜候选人的能力、经历或分数：相关维度应标记为 UNASSESSED，"
+                    + "保留证据缺口并给出待核验项或面试追问；影响录用判断时转人工复核。"
+                    + "没有可核验证据，就不能给确定性候选人结论。";
+            suggestions = List.of("查看证据缺口", "生成核验问题", "补充候选人材料");
+        } else if (isRetrievalQuestion(lower, decision)) {
+            answer = "本次短答服务不可用，因此没有实际执行 RAG 或公网检索，我不会伪造命中。"
+                    + "正常链路依次是 Query Rewrite、候选召回、融合去重和重排；"
+                    + "详情会记录各阶段耗时、候选数、返回数、Top Score 与降级原因。"
+                    + "要获取具体证据，请稍后重试原问题。";
+            suggestions = List.of("重试这次证据检索", "查看 RAG 各阶段指标", "查看证据缺口");
+        } else if (isCandidateResultQuestion(lower)) {
             Map<String, Object> report = getLatestStructuredReport(session.getId());
             if (report != null && report.containsKey("recommendation")) {
                 String rec = String.valueOf(report.getOrDefault("recommendation", ""));
@@ -139,17 +175,72 @@ public class ConversationReplyService {
                 };
                 answer = buildRichReportAnswer(report, recLabel);
             } else {
-                answer = "当前还没有可用的评估结果。发起完整评估后，可在决策报告页查看证据化结论。";
+                answer = "当前没有可用的证据化评估报告，因此不能可靠地给候选人打分或给出录用建议，"
+                        + "我也不会根据零散上下文猜测结论。完成评估后，可在决策报告页查看证据链与结论。";
             }
+            suggestions = defaultSuggestions();
         } else {
             answer = "已收到。这是对话回复，不会启动完整评估流水线。"
                     + "若要重新评估，请明确说明岗位/事实变更；若要停止任务，请说“停止”。";
+            suggestions = defaultSuggestions();
         }
-        List<String> suggestions = List.of(
+        return new CopilotReply(turnId, answer, List.of(), List.of(), suggestions);
+    }
+
+    private List<String> defaultSuggestions() {
+        return List.of(
                 "为什么给这个分数？",
                 "主要风险是什么？",
                 "改为目标岗位后重新评估");
-        return new CopilotReply(turnId, answer, List.of(), List.of(), suggestions);
+    }
+
+    private boolean isMcpQuestion(String lower) {
+        return containsAny(lower, "mcp", "tools/list", "tools/call", "tool schema",
+                "工具描述", "工具参数", "模型选工具", "调用工具");
+    }
+
+    private boolean isCheckpointQuestion(String lower) {
+        return containsAny(lower, "checkpoint", "check point", "检查点", "断点续跑",
+                "暂停后", "恢复后", "如何暂停", "怎么暂停", "暂停和恢复", "暂停/恢复",
+                "pause/resume", "resume run", "恢复运行");
+    }
+
+    private boolean isRevisionQuestion(String lower) {
+        return containsAny(lower, "revision", "修改jd", "修改 jd", "更新jd", "更新 jd",
+                "jd 变更", "评估重点", "重点变更", "废弃旧结果", "已取代",
+                "受影响节点", "重跑哪些");
+    }
+
+    private boolean isEvidenceGapQuestion(String lower) {
+        return containsAny(lower, "证据不足", "证据不够", "缺少证据", "没有证据",
+                "证据缺口", "信息不足", "材料不足", "无法验证", "不能验证",
+                "未验证", "insufficient evidence", "unverified");
+    }
+
+    private boolean isRetrievalQuestion(String lower, TurnDecision decision) {
+        return "EVIDENCE_QUERY".equalsIgnoreCase(decision.intent())
+                || containsAny(lower, "rag", "检索", "召回", "重排", "rerank",
+                        "query rewrite", "向量搜索", "向量检索", "知识库");
+    }
+
+    private boolean isCandidateResultQuestion(String lower) {
+        return containsAny(lower, "结论", "分数", "推荐", "怎么样", "候选人", "评估");
+    }
+
+    private boolean containsAny(String value, String... terms) {
+        for (String term : terms) {
+            if (value.contains(term)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String clip(String value, int limit) {
+        if (value == null || value.length() <= limit) {
+            return value;
+        }
+        return value.substring(0, limit);
     }
 
     @SuppressWarnings("unchecked")

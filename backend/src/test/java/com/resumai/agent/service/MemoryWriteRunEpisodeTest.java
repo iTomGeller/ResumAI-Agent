@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -163,6 +164,44 @@ class MemoryWriteRunEpisodeTest {
                 semanticOtherSource.getContentHash());
         assertNotEquals(semanticConversation.getContentHash(),
                 ordinaryWorking.getContentHash());
+    }
+
+    @Test
+    void runtimeStrategyMustBeRealAttributableAndUserScoped() {
+        MemoryEntryMapper mapper = mock(MemoryEntryMapper.class);
+        MemoryVectorService vector = mock(MemoryVectorService.class);
+        MemoryService svc = new MemoryService(mapper, new ObjectMapper(), vector);
+        when(mapper.selectOne(any())).thenReturn(null);
+        Map<String, Object> observed = Map.of(
+                "factKey", "execution_strategy:full_evaluation:JD_TECH",
+                "memoryKind", "execution_strategy",
+                "strategyClass", "JD_TECH",
+                "derivedFromRunId", "run-actual",
+                "actualExecution", true,
+                "candidateDataExcluded", true,
+                "selectedAgents", List.of(
+                        "JDAnalysisAgent", "TechAgent", "ReportAgent"));
+
+        MemoryEntryRow accepted = svc.write(new MemoryService.WriteRequest(
+                "PROCEDURAL", "USER", "u1", "c1", "run-actual",
+                "简历评估执行策略[JD_TECH]: 已验证路由", observed,
+                "runtime_strategy", "execution_strategy:JD_TECH",
+                0.95, "NORMAL", 365));
+
+        assertEquals("PROCEDURAL", accepted.getType());
+        assertEquals("USER", accepted.getOwnerScope());
+        assertThrows(IllegalArgumentException.class, () -> svc.write(
+                new MemoryService.WriteRequest(
+                        "PROCEDURAL", "GLOBAL", "u1", "c1", "run-actual",
+                        "不能提升为全局事实", observed,
+                        "runtime_strategy", "bad-global",
+                        0.95, "NORMAL", 365)));
+        assertThrows(IllegalArgumentException.class, () -> svc.write(
+                new MemoryService.WriteRequest(
+                        "PROCEDURAL", "USER", "u1", "c1", "different-run",
+                        "伪造运行来源", observed,
+                        "runtime_strategy", "bad-run",
+                        0.95, "NORMAL", 365)));
     }
 
     @Test

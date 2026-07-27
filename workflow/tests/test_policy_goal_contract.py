@@ -69,6 +69,81 @@ def test_full_eval_with_projects_forces_project_agent():
     assert "project_findings" in planned["goalArtifacts"]
 
 
+def test_project_analysis_with_project_evidence_keeps_full_project_chain():
+    """Regression from ECS: `项目：...` plus a project-depth revision was
+    misclassified as no project, producing Tech→Evidence→Report."""
+    coordinator = _coordinator({
+        "evidenceVerification": {"enabled": True},
+        "maxAgentCount": 3,
+        "maxLlmCalls": 8,
+    })
+    planned = coordinator.plan_from_artifacts(
+        run_type="project_analysis",
+        needs_parse=False,
+        resume_text=(
+            "李明，5年Java后端经验。"
+            "项目：支付网关，负责幂等、限流与对账。"
+            "项目：Agent评估平台，负责RAG、MCP与Trace。"
+        ),
+        job_description="高级Java Agent平台后端工程师",
+        artifacts={"resumeFacts": {"skills": ["Java", "Kafka"]}},
+    )
+
+    plan = planned["plan"]
+    assert "project_findings" in planned["goalArtifacts"], planned
+    assert "ProjectAgent" in plan, planned
+    assert "EvidenceAgent" in plan, planned
+    assert "ReportAgent" in plan, planned
+    assert plan.index("ProjectAgent") < plan.index("EvidenceAgent")
+    assert plan.index("EvidenceAgent") < plan.index("ReportAgent")
+    assert "ProjectAgent" not in (planned.get("skippedBecause") or {})
+    assert planned["budgetPlan"]["ProjectAgent"]["llmQuota"] >= 1
+    assert planned["planClosureOk"] is True
+
+
+def test_project_analysis_without_project_evidence_may_skip_project_agent():
+    coordinator = _coordinator({
+        "evidenceVerification": {"enabled": True},
+        "maxAgentCount": 3,
+    })
+    planned = coordinator.plan_from_artifacts(
+        run_type="project_analysis",
+        needs_parse=False,
+        resume_text="技能：Java、Redis。工作经历：2022-2025 后端工程师。",
+        job_description="Java后端工程师",
+        artifacts={"resumeFacts": {"skills": ["Java", "Redis"]}},
+    )
+
+    assert "ProjectAgent" not in planned["plan"]
+    assert "project_findings" not in planned["goalArtifacts"]
+    assert "project_findings" in planned["optionalArtifacts"]
+
+
+def test_finalize_repairs_project_agent_dropped_by_external_planner():
+    """The final closure is the last fence against an LLM/cache/budget-derived
+    plan that omitted the required project_findings producer."""
+    coordinator = _coordinator({
+        "evidenceVerification": {"enabled": True},
+        "maxAgentCount": 3,
+    })
+    finalized = coordinator._finalize(
+        ["EvidenceAgent", "ReportAgent"],
+        "external_planner_wrongly_dropped_project",
+        goal_artifacts=[
+            "resume_facts", "project_findings",
+            "evidence_ledger", "final_report",
+        ],
+        present_artifacts={"resume_facts"},
+    )
+
+    assert finalized["plan"] == [
+        "ProjectAgent", "EvidenceAgent", "ReportAgent",
+    ]
+    assert finalized["missingGoalArtifacts"] == []
+    assert finalized["planClosureOk"] is True
+    assert finalized["budgetPlan"]["ProjectAgent"]["llmQuota"] >= 1
+
+
 def test_evidence_enabled_forces_evidence_agent():
     coordinator = _coordinator({
         "evidenceVerification": {"enabled": True},
