@@ -594,7 +594,7 @@ class _ReportRepairLlm:
                 str(message.get("content") or "") for message in messages)
             self.saw_report_error = (
                 "structured report" in message_text
-                and "必须提交结构化 report" in message_text
+                and "缺失" in message_text
             )
             decision = {
                 "thought": "repair the missing structured report",
