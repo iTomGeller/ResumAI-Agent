@@ -369,6 +369,19 @@ if docker image inspect docker.m.daocloud.io/prom/prometheus:v2.53.0 >/dev/null 
 else
   log "optional Prometheus/Grafana images not cached; skip without pulling"
 fi
+# The original backend was launched outside the current Compose project and
+# therefore cannot be recreated in place despite sharing the same fixed name.
+# Remove only that orphan application container; named data/log/upload
+# volumes are preserved and immediately remounted by the current service.
+if docker inspect ai-resume-backend >/dev/null 2>&1; then
+  BACKEND_PROJECT="$(docker inspect -f \
+    '{{index .Config.Labels "com.docker.compose.project"}}' \
+    ai-resume-backend 2>/dev/null || true)"
+  if [[ "$BACKEND_PROJECT" != "resumai" ]]; then
+    log "remove legacy unowned backend container (named volumes preserved)"
+    docker rm -f ai-resume-backend >/dev/null
+  fi
+fi
 $COMPOSE up -d ai-resume-workflow ai-resume-backend ai-resume-frontend
 # Stop leftover sandbox manager if previous deploy started it without profile.
 if docker ps --format '{{.Names}}' | grep -q '^resumai-sandbox-manager$'; then
