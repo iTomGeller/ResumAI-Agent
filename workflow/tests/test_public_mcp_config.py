@@ -62,7 +62,12 @@ def test_routes_never_reference_removed_synthetic_cn_web_tools() -> None:
 
 
 def test_backend_classpath_fallback_matches_the_shared_runtime_config() -> None:
-    root = Path(__file__).resolve().parents[2]
+    workflow_root = Path(__file__).resolve().parents[1]
+    root = (
+        workflow_root.parent
+        if (workflow_root.parent / "config" / "mcp-servers.json").is_file()
+        else workflow_root
+    )
     shared = json.loads(
         (root / "config" / "mcp-servers.json").read_text(encoding="utf-8"))
     classpath = json.loads(

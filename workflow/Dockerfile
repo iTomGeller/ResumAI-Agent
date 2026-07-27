@@ -22,6 +22,7 @@ COPY workflow/tests ./tests
 COPY workflow/run_agent_harness.py ./run_agent_harness.py
 COPY backend/src/main/resources/skills ./skills
 COPY config/mcp-servers.json ./config/mcp-servers.json
+COPY backend/src/main/resources/mcp-servers.json ./backend/src/main/resources/mcp-servers.json
 
 # Build gate: compile check + the complete deterministic runtime contract suite.
 # This Docker build is performed on ECS, so no workflow code runs on the laptop.
