@@ -311,7 +311,9 @@ class SkillManager:
                 selected_ids.append(skill_id)
 
         # Every turn: conversation routing (Coordinator / first specialist).
-        if agent_id in ("CoordinatorAgent", "ResumeParserAgent", "ReportAgent"):
+        if agent_id in ("CoordinatorAgent", "ResumeParserAgent") or (
+                agent_id == "ReportAgent"
+                and run_type in ("followup", "quick_answer")):
             add("route-conversation-turn")
 
         if agent_id == "ResumeParserAgent":

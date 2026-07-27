@@ -16,8 +16,10 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,7 +38,14 @@ DEFAULT_RESUMES = (
     ROOT / "testdata" / "resumes" / "harness_no_project_frontend.txt",
     ROOT / "testdata" / "resumes" / "product_manager_llm.pdf",
 )
-TASK_TERMINAL = {"SUCCESS", "FAILED", "CANCELLED", "TIMEOUT"}
+TASK_TERMINAL = {
+    "SUCCESS",
+    "PARTIAL_SUCCESS",
+    "FAILED",
+    "CANCELLED",
+    "SUPERSEDED",
+    "TIMEOUT",
+}
 CANONICAL_MEMORY_TYPES = {"SEMANTIC", "EPISODIC", "PROCEDURAL", "WORKING"}
 
 
@@ -52,7 +61,8 @@ class Evaluation:
     route_mode: str
     skills: List[str]
     memory_types: List[str]
-    memory_audit: List[Dict[str, Any]]
+    memory_usage: List[Dict[str, Any]]
+    memory_entries: List[Dict[str, Any]]
     mcp_calls: List[Dict[str, Any]]
     rag_events: List[Dict[str, Any]]
 
@@ -158,6 +168,143 @@ def valid_timestamp(value: str) -> bool:
         return False
 
 
+def event_happened_before(first: Dict[str, Any],
+                          second: Dict[str, Any]) -> bool:
+    """Order lifecycle events without relying on API response ordering."""
+    try:
+        first_seq = int(first.get("seq"))
+        second_seq = int(second.get("seq"))
+        return first_seq < second_seq
+    except (TypeError, ValueError):
+        pass
+    try:
+        first_at = datetime.fromisoformat(
+            occurrence(first).replace("Z", "+00:00"))
+        second_at = datetime.fromisoformat(
+            occurrence(second).replace("Z", "+00:00"))
+        return first_at <= second_at
+    except ValueError:
+        return False
+
+
+def verified_mcp_executions(
+        events: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return MCP calls proven to have executed, grouped by provider call id.
+
+    CATALOG_EXPOSED and LLM_PROPOSED are useful lifecycle evidence, but neither
+    proves an external call happened.  A verified invocation must have a
+    timestamped EXECUTION_STARTED followed by a timestamped terminal RESULT
+    for the same toolCallId, MCP server and tool.
+    """
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for event in events:
+        call_id = str(event.get("toolCallId") or "").strip()
+        if call_id:
+            grouped.setdefault(call_id, []).append(event)
+
+    verified: List[Dict[str, Any]] = []
+    for call_id, chain in grouped.items():
+        starts = [
+            event for event in chain
+            if str(event.get("lifecycleStage") or "").upper()
+            == "EXECUTION_STARTED"
+            and valid_timestamp(occurrence(event))
+        ]
+        results = [
+            event for event in chain
+            if str(event.get("lifecycleStage") or "").upper() == "RESULT"
+            and valid_timestamp(occurrence(event))
+        ]
+        match = None
+        for started in starts:
+            started_server = str(
+                started.get("server") or started.get("mcpServer") or ""
+            ).strip()
+            started_tool = str(
+                started.get("tool") or started.get("toolName") or ""
+            ).strip()
+            if not started_server or not started_tool:
+                continue
+            for result in results:
+                result_server = str(
+                    result.get("server") or result.get("mcpServer") or ""
+                ).strip()
+                result_tool = str(
+                    result.get("tool") or result.get("toolName") or ""
+                ).strip()
+                if (
+                    result_server == started_server
+                    and result_tool == started_tool
+                    and event_happened_before(started, result)
+                ):
+                    match = (started, result, started_server, started_tool)
+                    break
+            if match:
+                break
+        if not match:
+            continue
+        started, result, server, tool = match
+        verified.append({
+            "toolCallId": call_id,
+            "server": server,
+            "tool": tool,
+            "startedAt": occurrence(started),
+            "resultAt": occurrence(result),
+            "outcome": str(result.get("outcome") or "SUCCESS"),
+        })
+    return sorted(
+        verified,
+        key=lambda call: (
+            call["startedAt"], call["server"], call["tool"],
+            call["toolCallId"]),
+    )
+
+
+def is_real_used_memory(row: Dict[str, Any]) -> bool:
+    """A persisted, attributable USED decision; never infer use from writes."""
+    return (
+        str(row.get("decision") or "").upper() == "USED"
+        and bool(str(row.get("memoryId") or "").strip())
+        and valid_timestamp(occurrence(row))
+    )
+
+
+def memory_routing_signature(
+        rows_: Sequence[Dict[str, Any]]) -> tuple:
+    """Routing policy shape, deliberately independent of record identity."""
+    signature = set()
+    for row in rows_:
+        consumer = str(
+            row.get("consumerAgent") or row.get("agentId") or ""
+        ).strip()
+        taxonomy = canonical_memory_type(row)
+        decision = str(row.get("decision") or "").upper()
+        if consumer and taxonomy and decision in {"USED", "IGNORED"}:
+            signature.add((consumer, taxonomy, decision))
+    return tuple(sorted(signature))
+
+
+def memory_record_selection_signature(
+        rows_: Sequence[Dict[str, Any]]) -> tuple:
+    """Content-derived identities of USED records, never volatile memory IDs."""
+    selected = set()
+    for row in rows_:
+        if not is_real_used_memory(row):
+            continue
+        content = re.sub(
+            r"\s+", " ", str(row.get("contentPreview") or "").strip().casefold())
+        if not content:
+            # Without observable content the harness cannot honestly claim
+            # that two opaque record IDs represent different selections.
+            continue
+        selected.add((
+            str(row.get("ownerScope") or "").strip().casefold(),
+            str(row.get("source") or "").strip().casefold(),
+            hashlib.sha256(content.encode("utf-8")).hexdigest()[:16],
+        ))
+    return tuple(sorted(selected))
+
+
 def flatten_rounds(tree: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     for agent in tree.get("executionTree") or []:
         if not isinstance(agent, dict):
@@ -224,9 +371,8 @@ def evaluate_one(base: str, resume: Path, *, timeout_seconds: int,
 
     memory_usage = rows(memory, "usage")
     memory_entries = rows(memory, "entries")
-    memory_audit = memory_usage + memory_entries
     memory_types = set(summary["memoryTypes"])
-    for row in memory_audit:
+    for row in memory_usage:
         value = canonical_memory_type(row)
         if value:
             memory_types.add(value)
@@ -246,7 +392,8 @@ def evaluate_one(base: str, resume: Path, *, timeout_seconds: int,
         route_mode=summary["routeMode"],
         skills=summary["skills"],
         memory_types=sorted(memory_types),
-        memory_audit=memory_audit,
+        memory_usage=memory_usage,
+        memory_entries=memory_entries,
         mcp_calls=rows(mcp, "recentCalls", "invocations"),
         rag_events=rag_events,
     )
@@ -288,7 +435,7 @@ def check_report(base: str, evaluations: Sequence[Evaluation]) -> Dict[str, Any]
             if not valid_timestamp(occurrence(event)):
                 failures.append(
                     f"{evaluation.resume}: RAG event has no source timestamp")
-        for event in evaluation.memory_audit:
+        for event in evaluation.memory_usage + evaluation.memory_entries:
             if not valid_timestamp(occurrence(event)):
                 failures.append(
                     f"{evaluation.resume}: Memory audit row has no source timestamp")
@@ -301,25 +448,55 @@ def check_report(base: str, evaluations: Sequence[Evaluation]) -> Dict[str, Any]
 
     route_variants = {tuple(evaluation.agents) for evaluation in evaluations}
     skill_variants = {tuple(evaluation.skills) for evaluation in evaluations}
-    memory_variants = {
-        tuple(sorted(
-            (
-                str(row.get("consumerAgent") or row.get("agentId") or ""),
-                canonical_memory_type(row),
-                str(row.get("memoryId") or ""),
-                str(row.get("decision") or row.get("used") or ""),
-            )
-            for row in evaluation.memory_audit
-        ))
+    used_memory_by_run = {
+        evaluation.run_id: [
+            row for row in evaluation.memory_usage
+            if is_real_used_memory(row)
+        ]
         for evaluation in evaluations
+    }
+    used_memory_runs = {
+        evaluation.run_id
+        for evaluation in evaluations
+        if used_memory_by_run[evaluation.run_id]
+    }
+    memory_routing_by_run = {
+        evaluation.run_id: memory_routing_signature(evaluation.memory_usage)
+        for evaluation in evaluations
+        if evaluation.run_id in used_memory_runs
+    }
+    memory_selection_by_run = {
+        evaluation.run_id: memory_record_selection_signature(
+            used_memory_by_run[evaluation.run_id])
+        for evaluation in evaluations
+        if evaluation.run_id in used_memory_runs
+    }
+    memory_routing_variants = {
+        signature for signature in memory_routing_by_run.values() if signature
+    }
+    memory_selection_variants = {
+        signature for signature in memory_selection_by_run.values()
+        if signature
+    }
+    selected_record_semantics = {
+        record
+        for signature in memory_selection_variants
+        for record in signature
     }
     all_memory_types = {
-        memory_type
+        canonical_memory_type(row)
         for evaluation in evaluations
-        for memory_type in evaluation.memory_types
+        for row in evaluation.memory_usage
+        if canonical_memory_type(row)
     }
-    all_mcp_calls = [
-        call for evaluation in evaluations for call in evaluation.mcp_calls
+    verified_mcp_by_run = {
+        evaluation.run_id: verified_mcp_executions(evaluation.mcp_calls)
+        for evaluation in evaluations
+    }
+    all_verified_mcp = [
+        call
+        for calls in verified_mcp_by_run.values()
+        for call in calls
     ]
     lifecycle_events = {str(event.get("eventType") or "") for event in skill_events}
 
@@ -327,15 +504,30 @@ def check_report(base: str, evaluations: Sequence[Evaluation]) -> Dict[str, Any]
         failures.append("Coordinator selected the same agent set for every resume")
     if len(skill_variants) < 2:
         failures.append("Skill selection did not vary across resumes")
-    if len(memory_variants) < 2:
-        failures.append("Memory routing/selection did not vary across resumes")
+    if len(used_memory_runs) < 2:
+        failures.append(
+            "fewer than two resumes produced a real USED memory retrieval; "
+            "created entries do not count as memory usage")
+    if len(memory_routing_variants) < 2:
+        failures.append(
+            "Memory routing did not vary across USED runs when compared by "
+            "consumer/taxonomy/decision")
+    if (
+        len(memory_selection_variants) < 2
+        or len(selected_record_semantics) < 2
+    ):
+        failures.append(
+            "Memory record selection was not semantically diverse across "
+            "USED runs; memoryId differences do not count")
     if not (all_memory_types & (CANONICAL_MEMORY_TYPES - {"EPISODIC"})):
         failures.append("all observed Memory usage is EPISODIC")
     unknown_memory = all_memory_types - CANONICAL_MEMORY_TYPES
     if unknown_memory:
         failures.append(f"non-canonical Memory taxonomy leaked: {unknown_memory}")
-    if not all_mcp_calls:
-        failures.append("no resume produced a real MCP invocation")
+    if not all_verified_mcp:
+        failures.append(
+            "no real MCP execution was proven by a matching toolCallId "
+            "EXECUTION_STARTED -> RESULT chain")
     if not ({"skill.loaded", "skill.applied"} & lifecycle_events):
         failures.append("Skills were advertised/selected but never progressively loaded")
 
@@ -372,19 +564,47 @@ def check_report(base: str, evaluations: Sequence[Evaluation]) -> Dict[str, Any]
     if not available_real:
         failures.append("no real MCP server is AVAILABLE after live probe")
 
-    cases = [{
-        "resume": evaluation.resume,
-        "traceId": evaluation.trace_id,
-        "runId": evaluation.run_id,
-        "status": evaluation.status,
-        "routeMode": evaluation.route_mode,
-        "agents": evaluation.agents,
-        "skills": evaluation.skills,
-        "memoryTypes": evaluation.memory_types,
-        "memoryAuditCount": len(evaluation.memory_audit),
-        "mcpCallCount": len(evaluation.mcp_calls),
-        "ragEventCount": len(evaluation.rag_events),
-    } for evaluation in evaluations]
+    cases = []
+    for evaluation in evaluations:
+        routing_signature = memory_routing_by_run.get(evaluation.run_id, ())
+        selection_signature = memory_selection_by_run.get(
+            evaluation.run_id, ())
+        verified_mcp = verified_mcp_by_run.get(evaluation.run_id, [])
+        cases.append({
+            "resume": evaluation.resume,
+            "traceId": evaluation.trace_id,
+            "runId": evaluation.run_id,
+            "status": evaluation.status,
+            "routeMode": evaluation.route_mode,
+            "agents": evaluation.agents,
+            "skills": evaluation.skills,
+            "memoryTypes": evaluation.memory_types,
+            "memoryUsageCount": len(evaluation.memory_usage),
+            "usedMemoryCount": len(used_memory_by_run[evaluation.run_id]),
+            "memoryEntryCount": len(evaluation.memory_entries),
+            "memoryRoutingSignature": [
+                {
+                    "consumer": consumer,
+                    "taxonomy": taxonomy,
+                    "decision": decision,
+                }
+                for consumer, taxonomy, decision in routing_signature
+            ],
+            "selectedMemoryRecords": [
+                {
+                    "ownerScope": owner_scope,
+                    "source": source,
+                    "contentFingerprint": content_fingerprint,
+                }
+                for owner_scope, source, content_fingerprint
+                in selection_signature
+            ],
+            # A "call" is counted only after start/result correlation.
+            "mcpCallCount": len(verified_mcp),
+            "mcpLifecycleEventCount": len(evaluation.mcp_calls),
+            "verifiedMcpExecutions": verified_mcp,
+            "ragEventCount": len(evaluation.rag_events),
+        })
     return {
         "base": base,
         "generatedAt": datetime.now().astimezone().isoformat(),
@@ -393,7 +613,10 @@ def check_report(base: str, evaluations: Sequence[Evaluation]) -> Dict[str, Any]
         "availableMcpServers": available_real,
         "routeVariantCount": len(route_variants),
         "skillVariantCount": len(skill_variants),
-        "memoryVariantCount": len(memory_variants),
+        "verifiedMcpExecutionCount": len(all_verified_mcp),
+        "memoryRoutingVariantCount": len(memory_routing_variants),
+        "memoryRecordSelectionVariantCount": len(memory_selection_variants),
+        "selectedMemorySemanticCount": len(selected_record_semantics),
         "memoryTaxonomies": sorted(all_memory_types),
         "skillLifecycleEvents": sorted(lifecycle_events),
         "cases": cases,

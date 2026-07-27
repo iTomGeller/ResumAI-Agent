@@ -701,8 +701,20 @@ class Coordinator:
                 if quotas[agent] < total_caps[agent]]
             if not eligible:
                 break
+            # Distribute action-capable second turns before giving a third or
+            # fourth turn to one high-weight specialist.  The previous pure
+            # weight ratio left Project/Evidence at llmQuota=1, which means
+            # actionTurnQuota=0 and made their advertised MCP tools impossible
+            # to call in production.
+            nonterminal = [
+                agent for agent in eligible if agent != terminal]
+            pool = nonterminal or eligible
+            lowest_quota = min(quotas[agent] for agent in pool)
+            layer = [
+                agent for agent in pool
+                if quotas[agent] == lowest_quota]
             agent = max(
-                eligible,
+                layer,
                 key=lambda item: (
                     weights.get(item, 1.0) / (quotas[item] + 0.5),
                     -ordered.index(item)))

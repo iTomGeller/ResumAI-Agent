@@ -79,6 +79,10 @@ services:
       # Runtime still probes tools/list and exposes only servers with a live
       # client; enabling MCP here never promotes DOWN/config-only tools.
       MCP_TOOLS_ENABLED: ${MCP_TOOLS_ENABLED:-1}
+      # Production must verify initialize -> tools/list.  Keep this explicit
+      # so a stale value in the host .env cannot silently disable all public
+      # MCP tools inside the workflow container.
+      MCP_SKIP_PROBE: "0"
       # EXP-7 replan sensitivity knob (default matches executor fallback)
       REPLAN_CONFIDENCE_THRESHOLD: ${REPLAN_CONFIDENCE_THRESHOLD:-0.55}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}

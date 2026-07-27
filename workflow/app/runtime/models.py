@@ -99,12 +99,12 @@ class PolicyBundle(BaseModel):
     requiredArtifacts: List[str] = Field(default_factory=list)
     optionalArtifacts: List[str] = Field(default_factory=list)
     maxAgentCount: int = 6
-    maxLlmCalls: int = 12
+    maxLlmCalls: int = 16
     # Provider-call reservations live inside maxLlmCalls; they are not extra
     # budget. Control-plane calls have a hard ceiling, while the terminal
     # reserve cannot be consumed by specialists.
     controlPlaneLlmReserve: int = 4
-    terminalLlmReserve: int = 2
+    terminalLlmReserve: int = 3
     # Cost budget axis (CNY, real token pricing); 0 disables the cap.
     maxCostCny: float = 1.0
     # Hard cumulative token ceiling (prompt + completion) enforced before

@@ -429,6 +429,28 @@ class RunExecutor:
 
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _memory_retrieval_query(
+            request: AgentRunRequest) -> Tuple[str, List[str]]:
+        """Build a bounded, evidence-bearing recall query.
+
+        Upload endpoints often provide a generic user message.  Querying only
+        that text makes relevant semantic/procedural memory effectively
+        unreachable, so include bounded JD/resume evidence without persisting
+        or logging the raw query.
+        """
+        parts = [
+            ("user_message", request.userMessage or ""),
+            ("current_goal", request.currentGoal or ""),
+            ("job_description", (request.jobDescription or "")[:1200]),
+            ("resume", (request.resumeText or "")[:1800]),
+        ]
+        query = "\n".join(
+            text.strip() for _, text in parts if text and text.strip()
+        ) or request.runType
+        basis = [name for name, text in parts if text and text.strip()]
+        return query, basis
+
     async def execute(self) -> Dict[str, Any]:
         started = time.monotonic()
         try:
@@ -489,14 +511,16 @@ class RunExecutor:
                 })
             # Specialists/Report: USER/CONVERSATION PREFERENCE/CONVERSATION/EPISODIC
             # only — never FAILURE (control-plane noise must not enter evaluation).
+            memory_query, memory_query_basis = self._memory_retrieval_query(
+                request)
             self.memory_hits = await self.memory.search(
-                request.userMessage, types=sorted(SPECIALIST_TYPES),
+                memory_query, types=sorted(SPECIALIST_TYPES),
                 top_k=self.policy.memoryRetrieval.topK,
                 min_confidence=self.policy.memoryRetrieval.minConfidence,
                 consumer_agent="SpecialistAgent")
             # FAILURE is Coordinator / policy-evolution only.
             self.failure_hits = await self.memory.search(
-                request.userMessage, types=["FAILURE"],
+                memory_query, types=["FAILURE"],
                 top_k=3,
                 min_confidence=self.policy.memoryRetrieval.minConfidence,
                 consumer_agent="CoordinatorAgent")
@@ -523,6 +547,7 @@ class RunExecutor:
                             f"（FAILURE 仅 Coordinator {len(self.failure_hits)} 条）"),
                 "memoryHits": len(self.memory_hits),
                 "failureHits": len(self.failure_hits),
+                "queryBasis": memory_query_basis,
                 "memoryTypeCounts": type_counts,
                 "memoryTrace": observe_trace[:12],
                 "memoryTop": [
@@ -1213,6 +1238,12 @@ class RunExecutor:
         # One live, model-native tool catalog per agent turn. MCP definitions
         # originate exclusively from successful tools/list discovery.
         requested_tools = list(definition.tools)
+        if agent_id == "ReportAgent" and self.request.runType not in (
+                "followup", "quick_answer"):
+            requested_tools = [
+                tool for tool in requested_tools
+                if tool not in {"knowledge_search", "resume_semantic_search"}
+            ]
         if skills:
             requested_tools.extend(["load_skill", "read_skill_resource"])
         catalog: List[Dict[str, Any]] = []
@@ -1337,11 +1368,14 @@ class RunExecutor:
         fallback_turn_limit = max_decision_iterations + available_tool_turns
         agent_llm_quota = self._agent_quota(
             agent_id, "llmQuota", fallback_turn_limit)
+        final_turn_reserve = min(
+            2 if agent_id == "ReportAgent" else 1,
+            max(1, agent_llm_quota))
         max_action_turns = min(
             available_tool_turns,
             self._agent_quota(
                 agent_id, "actionTurnQuota", available_tool_turns),
-            max(0, agent_llm_quota - 1))
+            max(0, agent_llm_quota - final_turn_reserve))
         max_turns = min(
             fallback_turn_limit, max(0, agent_llm_quota))
         iteration = 0
@@ -1423,12 +1457,38 @@ class RunExecutor:
                         tool_call_id=loaded_skill_call_ids[skill_id])
                     applied_skill_ids.add(skill_id)
 
+            # Once the model has consumed its native action turns, remove every
+            # action tool and force the provider-native terminal function.
+            # Rejecting another proposed action would consume the final LLM
+            # turn and strand ReportAgent without a report.
+            force_final = (
+                action_turns >= max_action_turns
+                or iteration >= max_turns
+            )
+            turn_tools = [final_tool] if force_final else model_tools
+            turn_messages = list(messages)
+            tool_choice: Any = "auto"
+            if force_final:
+                terminal_name = str(final_tool["function"]["name"])
+                tool_choice = {
+                    "type": "function",
+                    "function": {"name": terminal_name},
+                }
+                turn_messages.append({
+                    "role": "user",
+                    "content": (
+                        "工具观察阶段已结束。现在必须仅调用 "
+                        f"{terminal_name} 提交最终结构化结果；"
+                        "不要再请求任何检索、Skill 或校验工具。"
+                    ),
+                })
             turn = await self._chat_native_turn(
-                messages, agent_id=agent_id,
+                turn_messages, agent_id=agent_id,
                 purpose=definition.output_type,
                 max_tokens=4096 if not (
                     definition.agent_id in TERMINAL_AGENTS and not is_report) else 3600,
-                tools=model_tools,
+                tools=turn_tools,
+                tool_choice=tool_choice,
                 use_quality=is_report)
             agent_llm_calls += 1
             raw = turn.content
@@ -1623,6 +1683,13 @@ class RunExecutor:
 
             decision_iterations += 1
             decision, schema_error = self._parse_decision(raw)
+            if (decision is not None
+                    and agent_id == "ReportAgent"
+                    and self._requires_score_contract()):
+                report_error = self._report_decision_schema_error(decision)
+                if report_error:
+                    decision = None
+                    schema_error = report_error
             if decision is None:
                 # Repair consumes an ordinary, fully-budgeted next turn.
                 # Never issue a hidden extra LLM call beyond llmQuota.
@@ -1732,17 +1799,18 @@ class RunExecutor:
                                 agent_id: str, purpose: str,
                                 max_tokens: int,
                                 tools: List[Dict[str, Any]],
-                                use_quality: bool) -> LlmTurn:
+                                use_quality: bool,
+                                tool_choice: Any = "auto") -> LlmTurn:
         """Use native tool calling when supported; preserve test adapters."""
         chat_turn = getattr(self.llm, "chat_turn", None)
         if callable(chat_turn):
             return await chat_turn(
                 messages, agent_id=agent_id, purpose=purpose,
                 max_tokens=max_tokens, tools=tools,
-                tool_choice="auto", use_quality=use_quality)
+                tool_choice=tool_choice, use_quality=use_quality)
         raw = await self.llm.chat(
             messages, agent_id=agent_id, purpose=purpose,
-            max_tokens=max_tokens, tools=tools, tool_choice=None,
+            max_tokens=max_tokens, tools=tools, tool_choice=tool_choice,
             use_quality=use_quality)
         return LlmTurn(content=str(raw or ""), tool_calls=[],
                        finish_reason="legacy_adapter")
@@ -2040,6 +2108,51 @@ class RunExecutor:
         if decision.get("handoff") is not None and not decision["handoff"].get("to"):
             decision["handoff"] = None
         return decision, ""
+
+    def _report_decision_schema_error(
+            self, decision: Dict[str, Any]) -> str:
+        """Validate the score-contract payload before accepting ``done=true``.
+
+        ``AgentDecision`` intentionally permits an empty output for specialist
+        agents. ReportAgent cannot use that looser contract: accepting an empty
+        or malformed report here would end the loop and waste the reserved
+        terminal repair turn, eventually producing ``no_terminal_answer``.
+        """
+        output = decision.get("output")
+        if not isinstance(output, dict):
+            return (
+                "ReportAgent structured report 缺失，"
+                "必须提交结构化 report")
+        report = output.get("report")
+        if not isinstance(report, dict):
+            return "ReportAgent structured report 缺失或不是 JSON 对象"
+
+        required = (
+            "recommendation",
+            "dimensions",
+            "strengths",
+            "risks",
+            "interviewQuestions",
+            "dataQuality",
+        )
+        missing = [field for field in required if field not in report]
+        if missing:
+            return (
+                "ReportAgent structured report 缺少必填字段: "
+                + ", ".join(missing)
+            )
+        for field in (
+                "dimensions", "strengths", "risks", "interviewQuestions"):
+            if not isinstance(report.get(field), list):
+                return (
+                    f"ReportAgent structured report 字段 {field} 必须是数组")
+
+        validated = self._validate_structured_report(report)
+        if not validated:
+            return "ReportAgent structured report 未通过运行时语义校验"
+        if report.get("dimensions") and not validated.get("dimensions"):
+            return "ReportAgent structured report 的 dimensions 全部无效"
+        return ""
 
     def _build_output(self, definition: AgentDefinition,
                       raw_output: Optional[Dict[str, Any]],

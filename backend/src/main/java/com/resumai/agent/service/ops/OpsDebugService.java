@@ -64,12 +64,16 @@ import org.springframework.util.StringUtils;
 public class OpsDebugService {
 
     public static final List<String> SKILL_EVENT_TYPES = List.of(
-            "skill.selected", "skill.applied", "skill.failed",
+            "skill.catalog", "skill.catalog.exposed", "skill.selected",
+            "skill.loaded", "skill.applied", "skill.skipped", "skill.failed",
             // Legacy aliases for historical rows only.
             "skill.started", "skill.completed");
 
     public static final List<String> TOOL_EVENT_TYPES = List.of(
             "tool.started", "tool.completed", "tool.failed");
+
+    public static final List<String> MCP_EVENT_TYPES = List.of(
+            "tool.started", "tool.progress", "tool.completed", "tool.failed");
 
     public static final List<String> RETRIEVAL_EVENT_TYPES = List.of(
             "retrieval.started", "retrieval.completed", "retrieval.failed");
@@ -188,7 +192,7 @@ public class OpsDebugService {
             if (SKILL_EVENT_TYPES.contains(type)) {
                 skills.add(toSkillUsage(event, payload));
             }
-            if (TOOL_EVENT_TYPES.contains(type) && isMcpPayload(payload)) {
+            if (MCP_EVENT_TYPES.contains(type) && isMcpPayload(payload)) {
                 mcpCalls.add(toMcpInvocation(event, payload));
             }
             if (type.contains("failed") || type.contains("error") || "run.failed".equals(type)
@@ -245,7 +249,20 @@ public class OpsDebugService {
 
     public McpOpsResponse mcp(boolean probe, String runId, String server, String outcome, int recentLimit) {
         McpInventory inventory = loadMcpInventory(probe);
-        List<McpInvocationView> calls = recentMcpCalls(recentLimit, runId, server, outcome);
+        Set<String> currentServers = inventory.servers().stream()
+                .map(McpInventoryServer::name)
+                .filter(StringUtils::hasText)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        // The unfiltered global dashboard should describe the current runtime,
+        // not mix retired synthetic servers into a live production inventory.
+        // An explicit runId/server remains available for historical forensics.
+        Set<String> allowedServers = !StringUtils.hasText(runId)
+                && !StringUtils.hasText(server) ? currentServers : Set.of();
+        boolean filterToCurrentInventory = !StringUtils.hasText(runId)
+                && !StringUtils.hasText(server);
+        List<McpInvocationView> calls = recentMcpCalls(
+                recentLimit, runId, server, outcome, allowedServers,
+                filterToCurrentInventory);
         return new McpOpsResponse(
                 inventory,
                 new McpInvocationPage(calls.size(), calls),
@@ -686,8 +703,8 @@ public class OpsDebugService {
         }
         Object mcpNode = runtime.get().get("mcp");
         if (!(mcpNode instanceof Map<?, ?> mcpMap)) {
-            return new McpInventory("python_mcp_registry", true, probe, null, List.of(), 0, null,
-                    List.of(), null);
+            return new McpInventory("python_mcp_registry", true, false, null, List.of(), 0, null,
+                    List.of(), "Python runtime response is missing the MCP registry snapshot");
         }
         @SuppressWarnings("unchecked")
         Map<String, Object> mcp = (Map<String, Object>) mcpMap;
@@ -695,7 +712,7 @@ public class OpsDebugService {
         return new McpInventory(
                 String.valueOf(mcp.getOrDefault("source", "python_mcp_registry")),
                 true,
-                Boolean.TRUE.equals(mcp.get("probed")) || probe,
+                Boolean.TRUE.equals(mcp.get("probed")),
                 mcp.get("lastProbeAt"),
                 mcp.getOrDefault("availableTools", List.of()),
                 mcp.getOrDefault("toolCount", 0),
@@ -730,10 +747,13 @@ public class OpsDebugService {
         return out;
     }
 
-    private List<McpInvocationView> recentMcpCalls(int limit, String runId, String server, String outcome) {
+    private List<McpInvocationView> recentMcpCalls(int limit, String runId, String server,
+                                                   String outcome,
+                                                   Set<String> allowedServers,
+                                                   boolean filterToCurrentInventory) {
         int cap = Math.max(1, Math.min(limit, 200));
         QueryWrapper<RunEvent> q = new QueryWrapper<RunEvent>()
-                .in("event_type", TOOL_EVENT_TYPES)
+                .in("event_type", MCP_EVENT_TYPES)
                 .orderByDesc("create_time")
                 .last("limit " + Math.min(cap * 5, 500));
         if (StringUtils.hasText(runId)) {
@@ -747,6 +767,10 @@ public class OpsDebugService {
                 continue;
             }
             McpInvocationView view = toMcpInvocation(event, payload);
+            if (filterToCurrentInventory
+                    && (view.server() == null || !allowedServers.contains(view.server()))) {
+                continue;
+            }
             if (StringUtils.hasText(server) && (view.server() == null
                     || !server.equalsIgnoreCase(view.server()))) {
                 continue;
@@ -848,7 +872,9 @@ public class OpsDebugService {
         }
         return new SkillUsageView(
                 event.getRunId(), skillId, event.getAgentId(), event.getEventType(),
-                str(p.get("triggerReason")),
+                str(p.get("lifecycleStage")),
+                str(p.get("triggerReason") != null
+                        ? p.get("triggerReason") : p.get("reason")),
                 str(p.get("skillVersion")),
                 runHash, runHash, manifestHash, drift, required, payload,
                 occurredAt, startedAt, endedAt, event.getCreateTime());
@@ -865,7 +891,7 @@ public class OpsDebugService {
     }
 
     private Map<String, Object> skillUsageFromEvents(int limit) {
-        int cap = Math.max(1, Math.min(limit, 200));
+        int cap = Math.max(1, Math.min(limit, 500));
         List<RunEvent> events = runEventMapper.selectList(new QueryWrapper<RunEvent>()
                 .in("event_type", SKILL_EVENT_TYPES)
                 .orderByDesc("create_time")
@@ -881,21 +907,33 @@ public class OpsDebugService {
                 continue;
             }
             SkillAggUsage agg = bySkill.get(skillId);
+            long catalog = agg != null ? agg.catalog() : 0L;
             long selected = agg != null ? agg.selected() : 0L;
+            long loaded = agg != null ? agg.loaded() : 0L;
             long applied = agg != null ? agg.applied() : 0L;
+            long skipped = agg != null ? agg.skipped() : 0L;
             long failed = agg != null ? agg.failed() : 0L;
             String type = event.getEventType() == null ? "" : event.getEventType();
-            if ("skill.selected".equals(type) || "skill.started".equals(type)) {
+            if ("skill.catalog".equals(type) || "skill.catalog.exposed".equals(type)) {
+                catalog++;
+            } else if ("skill.selected".equals(type) || "skill.started".equals(type)) {
                 selected++;
+            } else if ("skill.loaded".equals(type)) {
+                loaded++;
             } else if ("skill.applied".equals(type) || "skill.completed".equals(type)) {
                 applied++;
+            } else if ("skill.skipped".equals(type)) {
+                skipped++;
             } else if ("skill.failed".equals(type)) {
                 failed++;
             }
+            String lastRunId = agg != null ? agg.lastRunId() : event.getRunId();
+            LocalDateTime lastAt = agg != null ? agg.lastAt() : event.getCreateTime();
+            String lastHash = agg != null ? agg.lastHash() : view.skillHash();
+            String lastVersion = agg != null ? agg.lastVersion() : view.skillVersion();
             bySkill.put(skillId, new SkillAggUsage(
-                    skillId, selected, applied, failed,
-                    event.getRunId(), event.getCreateTime(),
-                    view.skillHash(), view.skillVersion()));
+                    skillId, catalog, selected, loaded, applied, skipped, failed,
+                    lastRunId, lastAt, lastHash, lastVersion));
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("events", items);

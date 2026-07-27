@@ -116,8 +116,10 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         # knowledge_search / resume_semantic_search: Copilot 追问（followup/
         # quick_answer 只有 ReportAgent）需要对话式 RAG——先查评估标准与简历
         # 证据再回答。Report 不直接调用公网 MCP。
-        tools=("validate_report_schema", "knowledge_search",
-               "resume_semantic_search"),
+        # Final output is already provider-schema constrained and validated
+        # again at the runtime boundary.  The retrieval tools are exposed only
+        # for conversational follow-up, never for a full evaluation summary.
+        tools=("knowledge_search", "resume_semantic_search"),
         max_iterations=2, max_tool_calls=4, timeout_seconds=240,
         failure_policy="abort", output_type="report",
         # evidence_ledger is preferred when present; followup/quick_answer may

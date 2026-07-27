@@ -244,14 +244,16 @@ if docker ps --format '{{.Names}}' | grep -q '^ai-resume-backend$'; then
   if drain_api POST /drain '{"enabled":true}' >/tmp/resumai-drain.json; then
     DRAIN_ARMED=1
   else
-    log "WARN: drain call failed"
+    log "ERROR: drain call failed; refusing to restart a live backend"
+    exit 1
   fi
   DRAIN_WAIT_SEC="${DRAIN_WAIT_SEC:-15}"
+  DRAIN_READY=0
   for ((i=0; i<DRAIN_WAIT_SEC; i+=3)); do
     snap="$(drain_api GET /active 2>/dev/null || echo '')"
     if [[ -z "$snap" ]]; then
-      log "drain probe unavailable — skip wait (backend down)"
-      break
+      log "ERROR: active-run drain probe unavailable; refusing unsafe restart"
+      exit 1
     fi
     echo "$snap" > /tmp/resumai-active.json || true
     ready="$(python3 - <<'PY' 2>/dev/null || echo 0
@@ -264,6 +266,7 @@ except Exception:
 PY
 )"
     if [[ "$ready" == "1" ]]; then
+      DRAIN_READY=1
       log "drain ready (active cleared or all checkpointed) after ${i}s"
       break
     fi
@@ -271,6 +274,10 @@ PY
     log "waiting drain... active=${active_count} elapsed=${i}s"
     sleep 3
   done
+  if [[ "$DRAIN_READY" != "1" ]]; then
+    log "ERROR: active runs did not checkpoint within ${DRAIN_WAIT_SEC}s; refusing unsafe restart"
+    exit 1
+  fi
 else
   log "backend not running yet — skip pre-build drain"
 fi
@@ -434,6 +441,54 @@ for i in $(seq 1 30); do
     exit 1
   fi
 done
+
+log "verify native MCP discovery is enabled and live"
+docker inspect ai-resume-workflow \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -qx 'MCP_SKIP_PROBE=0'
+# Force discovery directly inside the workflow container so the Java Ops
+# client's shorter interactive timeout cannot cancel a legitimate slow probe.
+docker exec ai-resume-workflow sh -c \
+  'curl -fsS --max-time 180 \
+    -H "X-Internal-Token: $WORKFLOW_INTERNAL_TOKEN" \
+    "http://127.0.0.1:8090/internal/ops/runtime?probe=true"' \
+  > /tmp/resumai-mcp-runtime-acceptance.json
+# The public read path is now cheap and must expose the same cached registry.
+curl -fsS --max-time 30 \
+  'http://127.0.0.1/api/ops/mcp?recentLimit=1' \
+  > /tmp/resumai-mcp-acceptance.json
+python3 - <<'PY'
+import json
+
+with open("/tmp/resumai-mcp-runtime-acceptance.json", encoding="utf-8") as fh:
+    runtime_payload = json.load(fh)
+with open("/tmp/resumai-mcp-acceptance.json", encoding="utf-8") as fh:
+    payload = json.load(fh)
+runtime_mcp = runtime_payload.get("mcp") or {}
+expected = {"exa", "context7", "deepwiki", "microsoft-learn", "fetch"}
+servers = payload.get("servers") or []
+names = {str(item.get("name")) for item in servers if isinstance(item, dict)}
+available = {
+    str(item.get("name"))
+    for item in servers
+    if isinstance(item, dict) and item.get("status") == "AVAILABLE"
+}
+if names != expected:
+    raise SystemExit(
+        f"unexpected MCP inventory: expected={sorted(expected)} actual={sorted(names)}")
+if not runtime_mcp.get("probed") or not payload.get("probed"):
+    raise SystemExit("MCP registry did not complete a live initialize/tools/list probe")
+if available != expected:
+    raise SystemExit(
+        f"not every keyless MCP server is live: "
+        f"missing={sorted(expected - available)} "
+        f"available={sorted(available)}")
+if int(payload.get("toolCount") or 0) <= 0:
+    raise SystemExit(f"no live MCP tools: toolCount={payload.get('toolCount')}")
+print(
+    f"MCP live: tools={payload.get('toolCount')} "
+    f"available={','.join(sorted(available))}")
+PY
 
 log "resume scheduler dispatch after deploy"
 if drain_api POST /resume-dispatch >/tmp/resumai-drain-off.json || \

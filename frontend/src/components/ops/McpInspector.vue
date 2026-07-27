@@ -103,7 +103,8 @@ function isoTimestamp(value?: string): string {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(row, idx) in pagedCalls" :key="row.toolCallId || idx">
+          <tr v-for="(row, idx) in pagedCalls"
+              :key="`${row.toolCallId || 'no-call'}-${row.lifecycleStage || row.outcome || 'event'}-${row.occurredAt || row.createTime || idx}`">
             <td class="mono text-xs time-cell">
               <time :datetime="rowTime(row)" :title="isoTimestamp(rowTime(row))">{{ formatTimestamp(rowTime(row)) }}</time>
               <span v-if="row.endedAt" :title="isoTimestamp(row.endedAt)">→ {{ formatTimestamp(row.endedAt) }}</span>

@@ -397,12 +397,18 @@ def test_native_model_proposes_mcp_arguments_and_trace_chain():
 class _RepeatedActionLlm:
     def __init__(self):
         self.turn = 0
+        self.tool_choices = []
+        self.tool_names = []
 
     async def chat_turn(self, messages, *, agent_id, purpose="",
                         max_tokens=2048, tools=None, tool_choice=None,
                         use_quality=False):
         self.turn += 1
-        if self.turn <= 2:
+        self.tool_choices.append(tool_choice)
+        self.tool_names.append([
+            item["function"]["name"] for item in (tools or [])
+        ])
+        if tool_choice == "auto":
             remote = next(
                 item["function"] for item in (tools or [])
                 if item["function"].get("description")
@@ -461,12 +467,204 @@ def test_action_turn_and_total_llm_quota_are_hard_limits():
         default_agent_registry.get("ProjectAgent")))
 
     assert output.summary == "bounded action loop completed"
-    assert llm.turn == 3
+    assert llm.turn == 2
     assert client.calls == [
         ("remote_search", {"query": "attempt-1"})]
+    assert llm.tool_choices == [
+        "auto",
+        {"type": "function", "function": {"name": "emit_decision"}},
+    ]
+    assert llm.tool_names[-1] == ["emit_decision"]
     counters = executor.agent_counters["ProjectAgent"]
-    assert counters["llmCalls"] == 3
+    assert counters["llmCalls"] == 2
     assert counters["actionTurns"] == 1
+
+
+class _ReportFinalizationLlm:
+    def __init__(self):
+        self.turn = 0
+        self.tool_choices = []
+        self.tool_names = []
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.turn += 1
+        names = [item["function"]["name"] for item in (tools or [])]
+        self.tool_choices.append(tool_choice)
+        self.tool_names.append(names)
+        if tool_choice == "auto":
+            arguments = {"skill_id": "audit-job-relevant-evaluation"}
+            return LlmTurn(
+                content="",
+                tool_calls=[LlmToolCall(
+                    tool_call_id="report-skill-load-1",
+                    name="load_skill",
+                    arguments=arguments,
+                    raw_arguments=json.dumps(arguments))],
+                finish_reason="tool_calls")
+        decision = {
+            "thought": "finalize after observing the loaded audit skill",
+            "output": {
+                "summary": "report finalized within the terminal reserve",
+                "report": {
+                    "recommendation": "NEED_MANUAL_REVIEW",
+                    "dimensions": [
+                        {
+                            "name": name,
+                            "score": None,
+                            "status": "UNASSESSED",
+                            "rationale": "test fixture has no evidence",
+                            "evidenceRefs": [],
+                        }
+                        for name in (
+                            "技术能力", "项目深度", "JD匹配", "履历可信度")
+                    ],
+                    "strengths": [],
+                    "risks": [],
+                    "interviewQuestions": [],
+                    "dataQuality": "INSUFFICIENT",
+                    "missingEvidence": ["source evidence"],
+                },
+            },
+            "done": True,
+        }
+        return LlmTurn(
+            content="",
+            tool_calls=[LlmToolCall(
+                tool_call_id="report-final-2",
+                name="emit_decision",
+                arguments=decision,
+                raw_arguments=json.dumps(decision))],
+            finish_reason="tool_calls")
+
+
+def test_report_agent_hides_evaluation_retrieval_and_forces_final_output():
+    request = AgentRunRequest(
+        runId="r-report-final", conversationId="c-report-final",
+        traceId="t-report-final", runType="full_evaluation",
+        resumeText="张三\nJava 后端工程师\n项目：支付平台",
+        jobDescription="Java 高级后端工程师")
+    llm = _ReportFinalizationLlm()
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    executor.budget_plan["ReportAgent"] = {
+        "llmQuota": 3,
+        "actionTurnQuota": 1,
+        "toolQuota": 2,
+    }
+    executor.state.apply_artifacts({
+        "resumeFacts": {"skills": ["Java"], "projects": [{"name": "支付平台"}]},
+        "evidence": [],
+    })
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("ReportAgent")))
+
+    assert output.summary == "report finalized within the terminal reserve"
+    assert "knowledge_search" not in llm.tool_names[0]
+    assert "resume_semantic_search" not in llm.tool_names[0]
+    assert "validate_report_schema" not in llm.tool_names[0]
+    assert "load_skill" in llm.tool_names[0]
+    assert llm.tool_names[1] == ["emit_decision"]
+    assert llm.tool_choices[1] == {
+        "type": "function", "function": {"name": "emit_decision"}}
+
+
+class _ReportRepairLlm:
+    def __init__(self):
+        self.turn = 0
+        self.tool_choices = []
+        self.saw_report_error = False
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.turn += 1
+        self.tool_choices.append(tool_choice)
+        if self.turn == 1:
+            decision = {
+                "thought": "prematurely claim completion",
+                "output": {"summary": "missing structured report"},
+                "done": True,
+            }
+        else:
+            message_text = "\n".join(
+                str(message.get("content") or "") for message in messages)
+            self.saw_report_error = (
+                "structured report" in message_text
+                and "必须提交结构化 report" in message_text
+            )
+            decision = {
+                "thought": "repair the missing structured report",
+                "output": {
+                    "summary": "report repaired inside the terminal reserve",
+                    "report": {
+                        "recommendation": "NEED_MANUAL_REVIEW",
+                        "dimensions": [
+                            {
+                                "name": name,
+                                "score": None,
+                                "status": "UNASSESSED",
+                                "rationale": "test fixture has no evidence",
+                                "evidenceRefs": [],
+                            }
+                            for name in (
+                                "技术能力", "项目深度", "JD匹配", "履历可信度")
+                        ],
+                        "strengths": [],
+                        "risks": [],
+                        "interviewQuestions": [],
+                        "dataQuality": "INSUFFICIENT",
+                        "missingEvidence": ["source evidence"],
+                    },
+                },
+                "done": True,
+            }
+        return LlmTurn(
+            content="",
+            tool_calls=[LlmToolCall(
+                tool_call_id=f"report-repair-{self.turn}",
+                name="emit_decision",
+                arguments=decision,
+                raw_arguments=json.dumps(decision))],
+            finish_reason="tool_calls")
+
+
+def test_report_agent_repairs_done_true_without_structured_report():
+    request = AgentRunRequest(
+        runId="r-report-repair", conversationId="c-report-repair",
+        traceId="t-report-repair", runType="full_evaluation",
+        resumeText="张三\nJava 后端工程师\n项目：支付平台",
+        jobDescription="Java 高级后端工程师")
+    llm = _ReportRepairLlm()
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    executor.budget_plan["ReportAgent"] = {
+        "llmQuota": 2,
+        "actionTurnQuota": 0,
+        "toolQuota": 0,
+    }
+    executor.state.apply_artifacts({
+        "resumeFacts": {"skills": ["Java"], "projects": [{"name": "支付平台"}]},
+        "evidence": [],
+    })
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("ReportAgent")))
+
+    assert llm.turn == 2
+    assert llm.saw_report_error is True
+    assert all(
+        choice == {
+            "type": "function", "function": {"name": "emit_decision"}}
+        for choice in llm.tool_choices)
+    assert output.summary == "report repaired inside the terminal reserve"
+    assert executor.final_answer
+    assert executor.state.artifact("finalReport")["recommendation"] \
+        == "NEED_MANUAL_REVIEW"
 
 
 def test_failed_mcp_result_is_error_and_never_evidence():
@@ -673,6 +871,26 @@ def test_coordinator_order_helper_and_revision_reuse_contract():
         item["actionTurnQuota"] <= max(0, item["llmQuota"] - 1)
         for item in rich_budget.values())
 
+    runtime_budget = RunBudget()
+    runtime_budget.configure_llm_budget(
+        16, {"terminal": 3, "control": 4},
+        scope_limits={"control": 4})
+    runtime_budget.claim_llm_call(16, "control")
+    live_coordinator = Coordinator(
+        default_agent_registry,
+        PolicyBundle.from_config("balanced", {}),
+        type("BudgetedLlm", (), {"budget": runtime_budget})())
+    live_budget = live_coordinator._budget_plan(
+        full_plan, "ReportAgent", signals={
+            "is_rich_resume": True,
+            "has_projects": True,
+            "has_external_urls": True,
+            "has_jd": True,
+        })
+    assert live_budget["ReportAgent"]["llmQuota"] >= 3
+    assert live_budget["ProjectAgent"]["actionTurnQuota"] >= 1
+    assert live_budget["EvidenceAgent"]["actionTurnQuota"] >= 1
+
     previous = {
         "resumeFacts": {"skills": ["Python"], "projects": [{"name": "Demo"}]},
         "parsedResume": {"skills": ["Python"]},
@@ -753,6 +971,24 @@ def test_memory_writeback_persists_real_candidate_facts_as_semantic():
         "java", "spring boot", "kafka"]
     assert semantic[0]["structured"]["projects"] == ["支付网关"]
     assert any(row["type"] == "WORKING" for row in memory.writes)
+
+
+def test_memory_recall_query_uses_resume_and_jd_not_only_generic_message():
+    request = AgentRunRequest(
+        runId="r-memory-query", conversationId="c-memory-query",
+        runType="full_evaluation",
+        userMessage="请评估这份简历",
+        currentGoal="判断 Java 平台岗位匹配度",
+        resumeText="五年 Java、Kafka、Kubernetes 支付平台经验",
+        jobDescription="需要 Java 21、Spring Boot、Kafka")
+
+    query, basis = RunExecutor._memory_retrieval_query(request)
+
+    assert "请评估这份简历" in query
+    assert "Java 21" in query
+    assert "Kubernetes" in query
+    assert basis == [
+        "user_message", "current_goal", "job_description", "resume"]
 
 
 def test_mcp_registry_is_main_thread_safe_and_expands_url_env():
@@ -892,12 +1128,12 @@ def test_degraded_probe_ttl_retries_only_degraded_server(monkeypatch):
     registry._http_clients["healthy"] = healthy_client
     probed = []
 
-    async def fake_probe(name, cfg, *, optional):
+    async def fake_probe(self, name, cfg, *, optional):
         probed.append(name)
-        registry.health[name] = McpServerHealth(
+        self.health[name] = McpServerHealth(
             name=name, status="AVAILABLE", transport="streamable-http")
 
-    registry._probe_server = fake_probe
+    monkeypatch.setattr(McpRegistry, "_probe_server", fake_probe)
     monkeypatch.setattr(
         mcp_runtime.time, "time",
         lambda: 100.0 + DEGRADED_REPROBE_TTL_S + 1.0)
@@ -908,6 +1144,74 @@ def test_degraded_probe_ttl_retries_only_degraded_server(monkeypatch):
     assert registry._http_clients["healthy"] is healthy_client
     assert registry.health["healthy"].status == "AVAILABLE"
     assert registry.health["down"].status == "AVAILABLE"
+
+
+def test_initial_mcp_discovery_probes_servers_concurrently(monkeypatch):
+    registry = McpRegistry(config={
+        "mcpServers": {
+            "one": {"enabled": True},
+            "two": {"enabled": True},
+            "three": {"enabled": True},
+        },
+        "optionalMcpServers": {},
+        "agentToolRouting": {},
+    })
+    started = []
+    all_started = asyncio.Event()
+
+    async def fake_probe(self, name, cfg, *, optional):
+        started.append(name)
+        if len(started) == 3:
+            all_started.set()
+        await all_started.wait()
+        self.health[name] = McpServerHealth(
+            name=name, status="AVAILABLE", transport="streamable-http")
+
+    monkeypatch.setattr(McpRegistry, "_probe_server", fake_probe)
+    monkeypatch.delenv("MCP_SKIP_PROBE", raising=False)
+
+    async def scenario():
+        await asyncio.wait_for(registry.probe_all(), timeout=0.5)
+
+    run(scenario())
+
+    assert set(started) == {"one", "two", "three"}
+    assert registry._probed is True
+
+
+def test_cancelled_forced_probe_keeps_last_healthy_catalog(monkeypatch):
+    registry = McpRegistry(config={
+        "mcpServers": {
+            "one": {"enabled": True},
+            "two": {"enabled": True},
+        },
+        "optionalMcpServers": {},
+        "agentToolRouting": {"ProjectAgent": ["stable.search"]},
+    })
+    registry._probed = True
+    registry.health["stable"] = McpServerHealth(
+        name="stable", status="AVAILABLE", transport="streamable-http")
+    registry.tools["stable.search"] = McpToolInfo(
+        server="stable", name="search", catalog_name="stable.search",
+        description="last known healthy tool", input_schema={"type": "object"})
+
+    async def hanging_probe(self, name, cfg, *, optional):
+        self.health[name] = McpServerHealth(
+            name=name, status="AVAILABLE", transport="streamable-http")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(McpRegistry, "_probe_server", hanging_probe)
+    monkeypatch.delenv("MCP_SKIP_PROBE", raising=False)
+
+    async def scenario():
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                registry.probe_all(force=True), timeout=0.05)
+
+    run(scenario())
+
+    assert set(registry.health) == {"stable"}
+    assert set(registry.tools) == {"stable.search"}
 
 
 def test_runtime_transport_failure_transitions_to_down_for_ttl_reprobe():
@@ -974,3 +1278,85 @@ def test_rerank_telemetry_uses_actual_before_after_scores_only():
     assert result["rerankBeforeTopScore"] == 0.2
     assert result["rerankAfterTopScore"] == 0.7
     assert result["rerankLift"] == 0.5
+
+
+def test_cancelled_degraded_reprobe_preserves_old_health_catalog_and_clients(
+        monkeypatch):
+    from app.runtime import mcp_registry as mcp_runtime
+
+    registry = McpRegistry(config={
+        "mcpServers": {
+            "healthy": {"enabled": True},
+            "down": {"enabled": True},
+        },
+        "optionalMcpServers": {},
+        "agentToolRouting": {},
+    })
+    registry._probed = True
+    registry._last_probe_at = 100.0
+    registry._last_probe_iso = "old-probe"
+    healthy_health = McpServerHealth(
+        name="healthy", status="AVAILABLE", transport="streamable-http",
+        tools=["healthy.search"])
+    degraded_health = McpServerHealth(
+        name="down", status="DOWN", transport="streamable-http",
+        tools=["down.search"], error="last known failure")
+    healthy_tool = McpToolInfo(
+        server="healthy", name="search", catalog_name="healthy.search",
+        description="healthy", input_schema={"type": "object"})
+    degraded_tool = McpToolInfo(
+        server="down", name="search", catalog_name="down.search",
+        description="last known degraded catalog",
+        input_schema={"type": "object"})
+    healthy_client = object()
+    degraded_client = object()
+    registry.health.update({
+        "healthy": healthy_health,
+        "down": degraded_health,
+    })
+    registry.tools.update({
+        "healthy.search": healthy_tool,
+        "down.search": degraded_tool,
+    })
+    registry._http_clients.update({
+        "healthy": healthy_client,
+        "down": degraded_client,
+    })
+    probe_started = asyncio.Event()
+
+    async def hanging_probe(self, name, cfg, *, optional):
+        self.health[name] = McpServerHealth(
+            name=name, status="AVAILABLE", transport="streamable-http",
+            tools=[f"{name}.replacement"])
+        self.tools[f"{name}.replacement"] = McpToolInfo(
+            server=name, name="replacement",
+            catalog_name=f"{name}.replacement",
+            description="staged replacement", input_schema={"type": "object"})
+        self._http_clients[name] = object()
+        probe_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(McpRegistry, "_probe_server", hanging_probe)
+    monkeypatch.setattr(
+        mcp_runtime.time, "time",
+        lambda: 100.0 + DEGRADED_REPROBE_TTL_S + 1.0)
+    monkeypatch.delenv("MCP_SKIP_PROBE", raising=False)
+
+    async def scenario():
+        task = asyncio.create_task(registry.probe_all())
+        await asyncio.wait_for(probe_started.wait(), timeout=0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    run(scenario())
+
+    assert registry.health["healthy"] is healthy_health
+    assert registry.health["down"] is degraded_health
+    assert registry.tools["healthy.search"] is healthy_tool
+    assert registry.tools["down.search"] is degraded_tool
+    assert set(registry.tools) == {"healthy.search", "down.search"}
+    assert registry._http_clients["healthy"] is healthy_client
+    assert registry._http_clients["down"] is degraded_client
+    assert registry._last_probe_at == 100.0
+    assert registry._last_probe_iso == "old-probe"

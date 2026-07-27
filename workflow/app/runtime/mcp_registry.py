@@ -475,42 +475,112 @@ class McpRegistry:
                 if not self.needs_probe():
                     return self.health
                 degraded = [
-                    name for name, health in self.health.items()
+                    (name, all_servers[name], name in optional)
+                    for name, health in self.health.items()
                     if health.status in {"DOWN", "RATE_LIMITED"}
                     and name in all_servers
+                    and isinstance(all_servers.get(name), dict)
                 ]
-                for name in degraded:
-                    cfg = all_servers.get(name)
-                    if not isinstance(cfg, dict):
-                        continue
-                    await self._drop_server_state(name)
+
+                # Re-probe degraded servers in an isolated registry.  The live
+                # health/catalog/client maps remain untouched while network I/O
+                # is in flight, so caller cancellation or an outer timeout
+                # cannot leave a half-replaced degraded server behind.
+                staged = McpRegistry(config=self.config)
+                try:
                     if skip_probe:
-                        self._register_without_probe(name, cfg)
+                        for name, cfg, _ in degraded:
+                            staged._register_without_probe(name, cfg)
                     else:
-                        await self._probe_server(
-                            name, cfg, optional=name in optional)
+                        await asyncio.gather(*(
+                            staged._probe_server(
+                                name, cfg, optional=is_optional)
+                            for name, cfg, is_optional in degraded
+                        ))
+                except BaseException:
+                    await asyncio.gather(*(
+                        client.close()
+                        for client in staged._stdio_clients.values()
+                    ), return_exceptions=True)
+                    raise
+
+                degraded_names = {name for name, _, _ in degraded}
+                next_health = dict(self.health)
+                next_tools = {
+                    catalog_name: info
+                    for catalog_name, info in self.tools.items()
+                    if info.server not in degraded_names
+                }
+                next_http_clients = dict(self._http_clients)
+                next_stdio_clients = dict(self._stdio_clients)
+                previous_stdio = []
+                for name in degraded_names:
+                    next_health.pop(name, None)
+                    next_http_clients.pop(name, None)
+                    old_stdio = next_stdio_clients.pop(name, None)
+                    if old_stdio is not None:
+                        previous_stdio.append(old_stdio)
+                next_health.update(staged.health)
+                next_tools.update(staged.tools)
+                next_http_clients.update(staged._http_clients)
+                next_stdio_clients.update(staged._stdio_clients)
+
+                # No await occurs during the four-map swap, so other event-loop
+                # tasks observe either the complete old state or complete new
+                # state, never a partially re-probed catalog.
+                self.health = next_health
+                self.tools = next_tools
+                self._http_clients = next_http_clients
+                self._stdio_clients = next_stdio_clients
                 self._mark_probe_complete()
                 summary = {k: v.status for k, v in self.health.items()}
                 logger.info(
                     "MCP degraded re-probe: %s (%d tools)",
                     summary, len(self.tools))
+                await asyncio.gather(*(
+                    client.close() for client in previous_stdio
+                ), return_exceptions=True)
                 return self.health
 
-            for stdio in list(self._stdio_clients.values()):
-                await stdio.close()
-            self.health.clear()
-            self.tools.clear()
-            self._http_clients.clear()
-            self._stdio_clients.clear()
-
-            for name, cfg in all_servers.items():
-                if not isinstance(cfg, dict):
-                    continue
-                is_optional = name in optional
+            configured = [
+                (name, cfg, name in optional)
+                for name, cfg in all_servers.items()
+                if isinstance(cfg, dict)
+            ]
+            # Build a complete replacement registry off to the side.  Live
+            # callers continue using the last healthy catalog while a forced
+            # probe is in flight; cancellation/timeout cannot expose a
+            # half-populated tool set.
+            staged = McpRegistry(config=self.config)
+            try:
                 if skip_probe:
-                    self._register_without_probe(name, cfg)
+                    for name, cfg, _ in configured:
+                        staged._register_without_probe(name, cfg)
                 else:
-                    await self._probe_server(name, cfg, optional=is_optional)
+                    # Each remote server has its own bounded request timeout.
+                    # Discover them concurrently so one slow public endpoint
+                    # cannot turn a five-server probe into a sum-of-timeouts
+                    # stall.
+                    await asyncio.gather(*(
+                        staged._probe_server(
+                            name, cfg, optional=is_optional)
+                        for name, cfg, is_optional in configured
+                    ))
+            except BaseException:
+                await asyncio.gather(*(
+                    client.close()
+                    for client in staged._stdio_clients.values()
+                ), return_exceptions=True)
+                raise
+
+            previous_stdio = list(self._stdio_clients.values())
+            self.health = staged.health
+            self.tools = staged.tools
+            self._http_clients = staged._http_clients
+            self._stdio_clients = staged._stdio_clients
+            await asyncio.gather(*(
+                client.close() for client in previous_stdio
+            ), return_exceptions=True)
 
             self._mark_probe_complete()
             summary = {k: v.status for k, v in self.health.items()}

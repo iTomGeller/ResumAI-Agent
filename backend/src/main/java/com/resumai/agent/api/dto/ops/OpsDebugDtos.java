@@ -144,6 +144,7 @@ public final class OpsDebugDtos {
             String skillId,
             String agentId,
             String eventType,
+            String lifecycleStage,
             String triggerReason,
             String skillVersion,
             String skillHash,
@@ -258,8 +259,11 @@ public final class OpsDebugDtos {
 
     public record SkillAggUsage(
             String skillId,
+            long catalog,
             long selected,
+            long loaded,
             long applied,
+            long skipped,
             long failed,
             String lastRunId,
             LocalDateTime lastAt,

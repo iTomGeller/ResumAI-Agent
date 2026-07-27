@@ -71,23 +71,25 @@ function isoTimestamp(value?: string): string {
         </ul>
       </div>
       <div class="card table-wrap">
-        <h3>Selected / Applied / Failed</h3>
+        <h3>Catalog / Selected / Loaded / Applied / Skipped / Failed</h3>
         <table class="ops-table">
           <thead>
-            <tr><th>Skill</th><th>Selected</th><th>Loaded</th><th>Applied</th><th>Failed</th><th>Last Time</th><th>Last Run</th></tr>
+            <tr><th>Skill</th><th>Catalog</th><th>Selected</th><th>Loaded</th><th>Applied</th><th>Skipped</th><th>Failed</th><th>Last Time</th><th>Last Run</th></tr>
           </thead>
           <tbody>
             <tr v-for="row in (panel?.usageBySkill || [])" :key="row.skillId">
               <td>{{ row.skillId }}</td>
+              <td>{{ row.catalog ?? 0 }}</td>
               <td>{{ row.selected ?? 0 }}</td>
               <td>{{ row.loaded ?? 0 }}</td>
               <td>{{ row.applied ?? row.completed ?? 0 }}</td>
+              <td>{{ row.skipped ?? 0 }}</td>
               <td>{{ row.failed ?? 0 }}</td>
               <td class="mono text-xs time-cell"><time :datetime="eventTime(row)" :title="isoTimestamp(eventTime(row))">{{ formatTimestamp(eventTime(row)) }}</time></td>
               <td class="mono text-xs">{{ row.lastRunId || '-' }}</td>
             </tr>
             <tr v-if="!(panel?.usageBySkill || []).length">
-              <td colspan="7" class="text-muted">尚无 skill catalog / selected / loaded / applied 事件</td>
+              <td colspan="9" class="text-muted">尚无 skill catalog / selected / loaded / applied 事件</td>
             </tr>
           </tbody>
         </table>
