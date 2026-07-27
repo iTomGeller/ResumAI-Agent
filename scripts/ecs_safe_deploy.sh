@@ -307,10 +307,15 @@ if [[ ! -s "$JRE_CACHE" ]] || ! tar -tzf "$JRE_CACHE" >/dev/null 2>&1; then
   # Reuse the verified JRE already serving production before attempting a
   # slow cross-border download. The archive keeps one top-level directory
   # because Dockerfile.ecs extracts it with --strip-components=1.
-  if docker exec ai-resume-backend test -x /opt/java/bin/java 2>/dev/null; then
+  if docker exec ai-resume-backend sh -c \
+      'java_bin="$(command -v java)"; test -n "$java_bin" && test -x "$java_bin"' \
+      2>/dev/null; then
     log "export JRE from current healthy backend container"
     JRE_TMP="$(mktemp -d)"
-    docker cp ai-resume-backend:/opt/java "$JRE_TMP/java" >/dev/null
+    # The currently deployed Temurin image stores JAVA_HOME below
+    # /opt/java/openjdk; repack that directory as one top-level "java" entry
+    # for Dockerfile.ecs --strip-components=1 extraction.
+    docker cp ai-resume-backend:/opt/java/openjdk "$JRE_TMP/java" >/dev/null
     tar -czf "$JRE_CACHE" -C "$JRE_TMP" java
     rm -rf "$JRE_TMP"
   else
