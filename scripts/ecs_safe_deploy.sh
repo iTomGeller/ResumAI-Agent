@@ -358,7 +358,17 @@ $COMPOSE --profile build build resumai-sandbox-worker-image || \
 $COMPOSE build ai-resume-workflow ai-resume-backend ai-resume-frontend
 
 log "bring up stack (volumes preserved; neo4j optional under profile graph; sandbox under policy-lab)"
-$COMPOSE up -d mysql redis minio etcd milvus prometheus grafana
+$COMPOSE up -d mysql redis minio etcd milvus
+# Prometheus/Grafana are auxiliary exporters for the Ops UI, not part of the
+# request path. Do not block an application release on a cross-border image
+# CDN when those optional images are not already cached on this ECS.
+if docker image inspect docker.m.daocloud.io/prom/prometheus:v2.53.0 >/dev/null 2>&1 \
+    && docker image inspect docker.m.daocloud.io/grafana/grafana:11.1.0 >/dev/null 2>&1; then
+  $COMPOSE up -d prometheus grafana || \
+    log "WARN: optional Prometheus/Grafana startup failed"
+else
+  log "optional Prometheus/Grafana images not cached; skip without pulling"
+fi
 $COMPOSE up -d ai-resume-workflow ai-resume-backend ai-resume-frontend
 # Stop leftover sandbox manager if previous deploy started it without profile.
 if docker ps --format '{{.Names}}' | grep -q '^resumai-sandbox-manager$'; then
