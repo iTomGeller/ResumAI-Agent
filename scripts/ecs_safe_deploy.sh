@@ -314,10 +314,15 @@ if [[ ! -s "$JRE_CACHE" ]] || ! tar -tzf "$JRE_CACHE" >/dev/null 2>&1; then
       2>/dev/null; then
     log "export JRE from current healthy backend container"
     JRE_TMP="$(mktemp -d)"
-    # The currently deployed Temurin image stores JAVA_HOME below
-    # /opt/java/openjdk; repack that directory as one top-level "java" entry
-    # for Dockerfile.ecs --strip-components=1 extraction.
-    docker cp ai-resume-backend:/opt/java/openjdk "$JRE_TMP/java" >/dev/null
+    CONTAINER_JAVA_HOME="$(docker exec ai-resume-backend sh -c \
+      'java_bin="$(readlink -f "$(command -v java)")"; dirname "$(dirname "$java_bin")"')"
+    case "$CONTAINER_JAVA_HOME" in
+      /opt/java|/opt/java/openjdk) ;;
+      *) echo "unexpected container JAVA_HOME: $CONTAINER_JAVA_HOME" >&2; exit 1 ;;
+    esac
+    # Repack either the legacy /opt/java/openjdk layout or the normalized
+    # /opt/java layout as one top-level entry for --strip-components=1.
+    docker cp "ai-resume-backend:${CONTAINER_JAVA_HOME}" "$JRE_TMP/java" >/dev/null
     tar -czf "$JRE_CACHE" -C "$JRE_TMP" java
     rm -rf "$JRE_TMP"
   else
