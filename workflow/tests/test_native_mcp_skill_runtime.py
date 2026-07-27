@@ -221,7 +221,7 @@ def test_deepwiki_catalog_and_call_require_declared_candidate_repository():
         "ProjectAgent", "deepwiki.ask_question",
         {"repoName": "other/unrelated", "question": "architecture?"},
         tool_call_id="deepwiki-rejected"))
-    assert rejected.status == "FAILED"
+    assert rejected.status == "REJECTED"
     assert client.calls == []
 
     accepted = run(with_repo.execute(
