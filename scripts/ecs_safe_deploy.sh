@@ -77,6 +77,10 @@ verify_fresh_archive_manifest() (
   LC_ALL=C sort -z -o "$actual_files" "$actual_files"
   if ! cmp -s -- "$expected_files" "$actual_files"; then
     echo "source file set differs from committed manifest; sync a fresh archive" >&2
+    echo "file-set delta (< missing from source, > unexpected in source):" >&2
+    comm -3 \
+      <(tr '\0' '\n' < "$expected_files") \
+      <(tr '\0' '\n' < "$actual_files") | head -40 >&2 || true
     return 1
   fi
 
