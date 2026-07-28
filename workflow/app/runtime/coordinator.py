@@ -311,11 +311,14 @@ class Coordinator:
         # A short resume cannot support separate project/risk/public-evidence
         # investigations. Treat it as a fast, evidence-limited assessment;
         # callers can still request those deep modes explicitly.
-        # Keep explicit contract tests and tiny user prompts out of this gate;
-        # the fast path targets a real uploaded resume fragment, not an empty
-        # placeholder.  120–800 chars is the practical “too thin to fan out”
-        # range for production uploads.
-        is_sparse_resume = 120 <= len(text.strip()) < 800
+        # Keep explicit contract tests and structured multi-section resumes out
+        # of this gate; the fast path targets a real uploaded fragment, not an
+        # empty placeholder.  120–800 chars with fewer than seven populated
+        # lines is the practical “too thin to fan out” range.
+        populated_lines = sum(1 for line in text.splitlines() if line.strip())
+        is_sparse_resume = (
+            120 <= len(text.strip()) < 800
+            and not (populated_lines >= 7 and has_projects and has_timeline))
         present = self._present_artifacts(artifacts, shared)
         is_rich_resume = len(text) > 2000 and has_projects and has_timeline
         has_github = bool(re.search(r"github\.com/\w+", text, re.I))
