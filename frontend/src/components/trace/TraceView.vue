@@ -12,6 +12,7 @@ type ToolCategory = 'mcp' | 'skill' | 'memory' | 'builtin' | 'retrieval' | 'llm'
 interface ToolCallView {
   id?: string;
   toolCallId?: string;
+  toolName?: string;
   name?: string;
   status?: string;
   durationMs?: number;
@@ -326,6 +327,7 @@ function contextFromLegacyRound(round: RoundView, index: number): ContextEventVi
 function contextIdentity(event: ContextEventView): string {
   const category = (event.category || event.type || event.origin || event.source || '').toLowerCase();
   const contextId = event.memoryId || event.id;
+  const catalogName = event.modelToolName || event.modelName || event.toolName || event.name;
   if ((category === 'memory' || event.memoryId) && contextId) {
     return `memory|${contextId}`;
   }
@@ -333,8 +335,8 @@ function contextIdentity(event: ContextEventView): string {
     return `skill|${event.skillId || event.name}`;
   }
   if (category === 'mcp' || category === 'tool_catalog'
-    || event.eventType === 'tool.catalog.attached') {
-    return `catalog|${event.mcpServer || event.origin || ''}|${event.modelToolName || event.name || event.eventId || ''}`;
+    || event.eventType === 'tool.catalog.attached' || event.modelName || event.toolName) {
+    return `catalog|${event.mcpServer || ''}|${catalogName || event.eventId || ''}`;
   }
   return event.eventId || [event.eventType, event.category, event.name,
     event.lifecycleStage, eventTime(event)].filter(Boolean).join('|');
@@ -353,7 +355,7 @@ function dedupeContexts(events: ContextEventView[]): ContextEventView[] {
     const meaningful = Boolean(
       event.memoryId || event.memoryType || event.taxonomy
       || event.skillId || event.name || event.title
-      || event.modelName || event.modelToolName);
+      || event.toolName || event.modelName || event.modelToolName);
     if (!meaningful) return;
     const key = contextIdentity(event) || `context-${index}`;
     const previous = merged.get(key);
@@ -491,8 +493,9 @@ function contextLabel(context: ContextEventView): string {
   if (badge === 'skill') {
     return `MODEL_INPUT · Skill ${context.skillId || context.name || ''}`.trim();
   }
-  if (context.eventType === 'tool.catalog.attached' || context.category === 'tool_catalog') {
-    return `MODEL_INPUT · 工具描述 ${context.modelToolName || context.modelName || context.name || ''}`.trim();
+  if (context.eventType === 'tool.catalog.attached' || context.category === 'tool_catalog'
+    || context.toolName || context.modelName) {
+    return `MODEL_INPUT · 工具描述 ${context.modelToolName || context.modelName || context.toolName || context.name || ''}`.trim();
   }
   return `MODEL_INPUT · ${context.title || context.name || '上下文'}`;
 }
