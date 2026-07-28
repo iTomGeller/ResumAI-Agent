@@ -1440,6 +1440,7 @@ class RunExecutor:
         iteration = 0
         decision_iterations = 0
         action_turns = 0
+        borrowed_repair_turns = 0
         loaded_skills: Dict[str, Any] = {}
         loaded_skill_call_ids: Dict[str, str] = {}
         applied_skill_ids: set = set()
@@ -1750,10 +1751,40 @@ class RunExecutor:
                     decision = None
                     schema_error = report_error
             if decision is None:
-                # Repair consumes an ordinary, fully-budgeted next turn.
-                # Never issue a hidden extra LLM call beyond llmQuota.
-                if (decision_iterations < max_decision_iterations
-                        and iteration < max_turns):
+                repair_allowed = (
+                    decision_iterations < max_decision_iterations)
+                # A native action followed by a malformed terminal function
+                # can consume the agent's final planned turn.  When the
+                # run-wide ledger still has assignable capacity, borrow one
+                # explicit repair turn instead of stranding a valid run.
+                # The provider client remains the hard budget authority.
+                runtime_budget = getattr(self.llm, "budget", self.budget)
+                repair_scope = (
+                    "control" if agent_id == "CoordinatorAgent"
+                    else "terminal" if agent_id in TERMINAL_AGENTS
+                    else f"agent:{agent_id}")
+                can_borrow_repair = (
+                    repair_allowed
+                    and bool(final_calls)
+                    and iteration >= max_turns
+                    and borrowed_repair_turns < 1
+                    and runtime_budget.available_llm_calls_for_scope(
+                        self.policy.maxLlmCalls, repair_scope) > 0
+                )
+                if can_borrow_repair:
+                    borrowed_repair_turns += 1
+                    max_turns += 1
+                    await self.emitter.emit(
+                        "run.progress", agent_id=agent_id, payload={
+                            "stage": "budget_reallocated",
+                            "reason": "malformed_native_final",
+                            "borrowedRepairTurns": borrowed_repair_turns,
+                            "plannedLlmQuota": agent_llm_quota,
+                            "effectiveTurnLimit": max_turns,
+                            "schemaError": schema_error[:200],
+                            "occurredAt": _utc_now(),
+                        })
+                if repair_allowed and iteration < max_turns:
                     repair_message = (
                         "上面的输出未通过 json schema 校验："
                         f"{schema_error[:400]}。"
@@ -1851,6 +1882,7 @@ class RunExecutor:
             "actionTurns": action_turns,
             "llmCalls": agent_llm_calls,
             "toolCalls": agent_tool_calls,
+            "borrowedRepairTurns": borrowed_repair_turns,
         }
         return output
 
@@ -2123,9 +2155,12 @@ class RunExecutor:
                     "candidateFactEligible": False,
                     "sourceBacked": bool(source_urls),
                 })
-                context_items = self.state.artifact("mcpContext") or []
-                context_items.append(base_entry)
-                self.state.put_artifact("mcpContext", context_items)
+                # Append one fresh item through the state boundary. Reusing
+                # the canonical list and then writing that same list back
+                # makes apply_artifacts iterate and append to one object,
+                # which can grow forever on the second successful MCP call.
+                self.state.apply_artifacts({"mcpContext": [base_entry]},
+                                           by_agent=agent_id)
                 return
 
             # Public-web output without an HTTP(S) source may still be shown to
@@ -2142,9 +2177,8 @@ class RunExecutor:
                 "requiresCalibration": True,
                 "sourceBacked": True,
             })
-            existing = self.state.artifact("mcpEvidence") or []
-            existing.append(base_entry)
-            self.state.put_artifact("mcpEvidence", existing)
+            self.state.apply_artifacts({"mcpEvidence": [base_entry]},
+                                       by_agent=agent_id)
 
     @staticmethod
     def _parse_decision(raw: str) -> Tuple[Optional[Dict[str, Any]], str]:

@@ -51,6 +51,21 @@ def test_reservations_are_inside_one_global_hard_cap():
     }
 
 
+def test_scope_availability_does_not_misreport_terminal_reserve_as_repair():
+    budget = RunBudget()
+    budget.configure_llm_budget(
+        3, {"terminal": 2, "control": 0},
+        scope_limits={"control": 0})
+    budget.claim_llm_call(3, "agent:TechAgent")
+
+    # Aggregate planning still sees the terminal pool, but a specialist
+    # repair cannot borrow either protected terminal call.
+    assert budget.available_agent_llm_calls(3) == 2
+    assert budget.available_llm_calls_for_scope(
+        3, "agent:TechAgent") == 0
+    assert budget.available_llm_calls_for_scope(3, "terminal") == 2
+
+
 def test_coordinator_allocates_only_agent_assignable_remaining_calls():
     budget = RunBudget()
     budget.configure_llm_budget(
@@ -170,4 +185,46 @@ def test_legacy_balanced_db_budget_is_bounded_and_keeps_tools_actionable():
     assert plan["ReportAgent"]["llmQuota"] >= 3
     assert plan["TechAgent"]["actionTurnQuota"] >= 1
     assert plan["ProjectAgent"]["actionTurnQuota"] >= 1
+    assert plan["EvidenceAgent"]["actionTurnQuota"] >= 1
+
+
+def test_external_url_budget_keeps_skill_mcp_and_final_turns_inside_cap():
+    policy = PolicyBundle.from_config("balanced", {
+        "maxLlmCalls": 12,
+        "terminalLlmReserve": 1,
+        "maxIterationsPerAgent": 2,
+        "toolBudget": {
+            "maxToolCallsPerRun": 20,
+            "maxToolCallsPerAgent": 5,
+        },
+    })
+    budget = RunBudget()
+    budget.configure_llm_budget(
+        policy.maxLlmCalls,
+        {
+            "terminal": policy.terminalLlmReserve,
+            "control": policy.controlPlaneLlmReserve,
+        },
+        scope_limits={"control": policy.controlPlaneLlmReserve})
+    budget.claim_llm_call(policy.maxLlmCalls, "control")
+    coordinator = Coordinator(
+        default_agent_registry, policy,
+        type("BudgetedLlm", (), {"budget": budget})())
+    ordered = [
+        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent",
+        "ProjectAgent", "RiskAgent", "EvidenceAgent", "ReportAgent",
+    ]
+
+    plan = coordinator._budget_plan(
+        ordered, "ReportAgent",
+        signals={
+            "has_projects": True,
+            "has_external_urls": True,
+            "has_jd": True,
+        })
+
+    assert sum(row["llmQuota"] for row in plan.values()) <= (
+        budget.available_agent_llm_calls(policy.maxLlmCalls))
+    assert plan["ProjectAgent"]["llmQuota"] >= 3
+    assert plan["ProjectAgent"]["actionTurnQuota"] >= 2
     assert plan["EvidenceAgent"]["actionTurnQuota"] >= 1

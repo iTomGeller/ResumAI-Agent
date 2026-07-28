@@ -26,6 +26,19 @@ import static java.util.stream.Collectors.joining;
 public class SkillProvider {
 
     private static final Logger log = LoggerFactory.getLogger(SkillProvider.class);
+    /**
+     * Reviewed candidate-evaluation catalog. Compatibility aliases and
+     * developer/admin packages may stay on disk, but the Java control-plane
+     * compatibility API must expose the same small catalog as the Python
+     * production runtime.
+     */
+    private static final Set<String> PRODUCTION_SKILLS = Set.of(
+            "route-conversation-turn",
+            "plan-evaluation-revision",
+            "evaluate-candidate-evidence",
+            "retrieve-public-candidate-evidence",
+            "calibrate-and-explain-decision"
+    );
 
     @Value("${app.skills.path:skills}")
     private String skillsRootPath;
@@ -49,6 +62,8 @@ public class SkillProvider {
             cachedSkills = dirs
                     .filter(Files::isDirectory)
                     .filter(dir -> Files.exists(dir.resolve("SKILL.md")))
+                    .filter(dir -> PRODUCTION_SKILLS.contains(
+                            dir.getFileName().toString()))
                     .map(this::parseSkillDirectory)
                     .filter(Objects::nonNull)
                     .toList();
@@ -193,26 +208,6 @@ public class SkillProvider {
         result.put("loaded", true);
         result.put("task", task != null ? task : "");
         result.put("instructionsDigest", compact(skill.fullInstructions(), 800));
-        if ("evidence_synthesis".equals(skillName)) {
-            result.put("evidenceWeights", Map.of(
-                    "resume_text", 0.45,
-                    "jd_match", 0.20,
-                    "rag", 0.15,
-                    "project_depth", 0.10,
-                    "risk", 0.10
-            ));
-            result.put("conflicts", List.of());
-            result.put("missingEvidence", List.of(
-                    "quantified_metrics",
-                    "project_ownership_boundary",
-                    "production_incident_evidence"
-            ));
-            result.put("reportHints", List.of(
-                    "Separate candidate facts from rubric/knowledge-base standards.",
-                    "Prioritize concrete project questions over generic capability questions.",
-                    "Surface evidence gaps explicitly."
-            ));
-        }
         return result;
     }
 

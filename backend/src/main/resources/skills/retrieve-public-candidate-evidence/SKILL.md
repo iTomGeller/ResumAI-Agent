@@ -11,7 +11,7 @@ allowed-tools: exa.web_search_exa exa.web_fetch_exa deepwiki.read_wiki_structure
 ## 何时启用
 
 - 简历或用户消息中存在**显式**个人主页 / 博客 / GitHub / Gitee / 作品集 URL。
-- `ground-project-claims` 或 `inspect-github-portfolio` 需要外部核验。
+- `evaluate-candidate-evidence` 产出的项目或技术 claim 需要外部核验。
 - 用户明确要求“上网核验 / 打开这个链接”。
 
 无显式 URL 且用户未要求公网核验时：**不要调用**本 Skill 关联工具。

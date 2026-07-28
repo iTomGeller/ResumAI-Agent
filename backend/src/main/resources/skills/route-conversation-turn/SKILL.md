@@ -26,7 +26,7 @@ description: 路由持续简历评估对话中的每条用户消息。用户补�
 2. 识别事实纠正，例如“刚才项目人数说错了”。
 3. 识别输入或目标变化，例如换 JD、换岗位、增加评估重点。
 4. 识别临时岔题。能独立回答且不改变主任务时选择 `answer_then_resume`。
-5. 识别对现有结果的解释或质疑，路由到 `explain-evaluation-decision`。
+5. 识别对现有结果的解释或质疑，路由到 `calibrate-and-explain-decision`。
 6. 仅在不同解释会造成不同写入、取消或大范围重跑时请求确认。
 
 ## 意图与动作
@@ -56,7 +56,7 @@ description: 路由持续简历评估对话中的每条用户消息。用户补�
   "goalMutation": "none",
   "controlAction": "answer_then_resume",
   "answerThenResume": true,
-  "targetSkill": "explain-evaluation-decision",
+  "targetSkill": "calibrate-and-explain-decision",
   "affectedArtifacts": [],
   "needsConfirmation": false,
   "clarificationQuestion": null,

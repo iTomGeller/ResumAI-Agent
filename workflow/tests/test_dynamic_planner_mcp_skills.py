@@ -11,7 +11,11 @@ from app.runtime.coordinator import GOAL_ARTIFACTS, TASK_PIPELINES, Coordinator
 from app.runtime.agents import default_agent_registry
 from app.runtime.mcp_registry import load_mcp_config, resolve_mcp_config_path
 from app.runtime.models import PolicyBundle
-from app.runtime.skills import resolve_skills_root, SkillManager
+from app.runtime.skills import (
+    PRODUCTION_SKILLS,
+    SkillManager,
+    resolve_skills_root,
+)
 
 
 def test_mcp_config_resolves_shared_file():
@@ -30,17 +34,69 @@ def test_skills_load_from_backend_resources():
     root = resolve_skills_root()
     assert root is not None
     manager = SkillManager(root)
-    ids = set(manager.list_ids())
-    assert "retrieve-public-candidate-evidence" in ids
-    assert "handle-knowledge-no-evidence" in ids
-    assert "calibrate-evidence-confidence" in ids
+    # Resources can retain compatibility/admin packages, but the model-facing
+    # production catalog is deliberately the five reviewed capabilities.
+    active_ids = {skill.skill_id for skill in manager.catalog()}
+    assert active_ids == set(PRODUCTION_SKILLS)
+    manifest = manager.runtime_manifest(include_deprecated=True)
+    assert manifest["activeCount"] == 5
+    assert {skill["skillId"] for skill in manifest["skills"]
+            if not skill["deprecated"]} == set(PRODUCTION_SKILLS)
+    assert manifest["advertisedTools"] == [
+        "load_skill", "read_skill_resource"]
+
     selected = manager.select_for(
         agent_id="ReportAgent", run_type="full_evaluation",
         job_focus=None, overrides={},
         signals={"has_jd": True, "has_projects": True})
-    names = {s.skill_id for s in selected}
-    assert "handle-knowledge-no-evidence" in names
-    assert "calibrate-evidence-confidence" in names
+    assert [skill.skill_id for skill in selected] == [
+        "calibrate-and-explain-decision"]
+
+
+def test_skill_selection_is_one_or_two_and_revision_aware():
+    manager = SkillManager(resolve_skills_root())
+    why = manager.select_for(
+        agent_id="ReportAgent", run_type="followup",
+        job_focus=None, overrides={},
+        signals={}, user_message="为什么项目深度只有 60 分？")
+    assert [skill.skill_id for skill in why] == [
+        "route-conversation-turn", "calibrate-and-explain-decision"]
+
+    revision = manager.select_for(
+        agent_id="ReportAgent", run_type="followup",
+        job_focus=None, overrides={},
+        signals={}, user_message="把 JD 换成 AI 产品经理并重新评估")
+    assert [skill.skill_id for skill in revision] == [
+        "route-conversation-turn", "plan-evaluation-revision"]
+
+    for agent_id in (
+            "ResumeParserAgent", "JDAnalysisAgent", "TechAgent",
+            "ProjectAgent", "RiskAgent", "EvidenceAgent",
+            "ReportAgent", "ResumeOptimizeAgent",
+            "InterviewQuestionAgent"):
+        selected = manager.select_for(
+            agent_id=agent_id, run_type="full_evaluation",
+            job_focus=None, overrides={},
+            signals={
+                "has_jd": True,
+                "has_jd_requirements": True,
+                "has_projects": True,
+                "has_timeline": True,
+                "has_external_urls": True,
+            })
+        assert len(selected) <= 2
+        assert all(skill.skill_id in PRODUCTION_SKILLS for skill in selected)
+
+
+def test_project_external_url_selects_one_explainable_skill():
+    manager = SkillManager(resolve_skills_root())
+    selected = manager.select_for(
+        agent_id="ProjectAgent", run_type="full_evaluation",
+        job_focus=None, overrides={},
+        signals={"has_projects": True, "has_external_urls": True})
+
+    assert [skill.skill_id for skill in selected] == [
+        "retrieve-public-candidate-evidence"]
 
 
 def test_artifact_planner_is_primary_not_task_pipelines():

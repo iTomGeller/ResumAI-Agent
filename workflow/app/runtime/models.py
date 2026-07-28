@@ -494,6 +494,31 @@ class RunBudget(BaseModel):
         )
         return max(0, remaining - non_agent_outstanding)
 
+    def available_llm_calls_for_scope(self, max_calls: int,
+                                      scope: str) -> int:
+        """Return calls this exact scope can claim without stealing reserves.
+
+        Aggregate agent capacity intentionally includes the terminal pool for
+        planning. Runtime repair, however, must know whether *this* specialist
+        can make another provider request before it emits a reallocation event.
+        """
+        scope = str(scope or "unclassified")
+        limit = self.llm_limit if self.llm_limit > 0 else max(0, int(max_calls))
+        remaining_global = max(0, limit - self.llm_calls)
+        used_by_scope = int(self.llm_calls_by_scope.get(scope, 0))
+        other_outstanding = sum(
+            max(0, int(reserved)
+                - int(self.llm_calls_by_scope.get(other_scope, 0)))
+            for other_scope, reserved in self.llm_reservations.items()
+            if other_scope != scope
+        )
+        available = max(0, remaining_global - other_outstanding)
+        scope_limit = self.llm_scope_limits.get(scope)
+        if scope_limit is not None:
+            available = min(
+                available, max(0, int(scope_limit) - used_by_scope))
+        return available
+
     def llm_audit(self, max_calls: Optional[int] = None) -> Dict[str, Any]:
         limit = self.llm_limit if self.llm_limit > 0 else max(
             0, int(max_calls or 0))

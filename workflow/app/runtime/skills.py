@@ -14,21 +14,58 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Deprecated aliases kept on disk for admin/compat but not injected into the
-# candidate-evaluation main runtime path.
-DEPRECATED_SKILLS = {
-    "intent_routing",
+# Deliberately small production catalog. These five packages map one-to-one
+# to runtime capabilities we can explain and verify. Other packages may remain
+# on disk for compatibility/admin use, but are never advertised to a
+# candidate-evaluation model.
+PRODUCTION_SKILLS = frozenset({
+    "route-conversation-turn",
+    "plan-evaluation-revision",
+    "evaluate-candidate-evidence",
+    "retrieve-public-candidate-evidence",
+    "calibrate-and-explain-decision",
+})
+
+# Skills that are admin-only / not part of candidate evaluation.
+ADMIN_ONLY_SKILLS = frozenset({
     "webapp-testing",
     "mcp-builder",
     "skill-creator",
-}
+})
 
-# Skills that are admin-only / not part of candidate evaluation.
-ADMIN_ONLY_SKILLS = {"webapp-testing", "mcp-builder", "skill-creator"}
+# Compatibility/domain packages intentionally kept as resources but hidden
+# from the production catalog. Unknown dynamically installed packages are
+# likewise non-production until explicitly reviewed into PRODUCTION_SKILLS.
+DEPRECATED_SKILLS = frozenset({
+    "assess-ats-compatibility",
+    "assess-technical-evidence",
+    "audit-job-relevant-evaluation",
+    "calibrate-evidence-confidence",
+    "compare-target-roles",
+    "evidence_synthesis",
+    "explain-evaluation-decision",
+    "generate-interview-probes",
+    "ground-project-claims",
+    "handle-knowledge-no-evidence",
+    "inspect-github-portfolio",
+    "intent_routing",
+    "normalize-job-description",
+    "project_depth_analysis",
+    "risk_pattern_detection",
+    "tech_stack_assessment",
+    *ADMIN_ONLY_SKILLS,
+})
+
+_REVISION_HINT = re.compile(
+    r"(修改|更换|换成|改成|调整|重新评估|重跑|补充.{0,8}(事实|证据)|"
+    r"(简历|JD|岗位|职位|目标|重点|权重|rubric).{0,8}(改|换|调整|更新)|"
+    r"\b(change|replace|update|revise|rerun)\b)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -153,7 +190,8 @@ def _load_skill_dir(skill_dir: Path) -> Optional[SkillDefinition]:
     allowed = tuple(
         t for t in re.split(r"\s+", meta.get("allowed-tools", "").strip()) if t)
     version = meta.get("version") or "v1"
-    deprecated = skill_id in DEPRECATED_SKILLS or skill_id in ADMIN_ONLY_SKILLS \
+    deprecated = skill_id not in PRODUCTION_SKILLS \
+        or skill_id in DEPRECATED_SKILLS or skill_id in ADMIN_ONLY_SKILLS \
         or meta.get("status", "").lower() == "deprecated"
     status = "DEPRECATED" if deprecated else "ACTIVE"
     return SkillDefinition(
@@ -305,10 +343,17 @@ class SkillManager:
         selected_ids: List[str] = []
 
         def add(skill_id: str) -> None:
-            if skill_id and skill_id not in selected_ids and skill_id in self._by_id:
-                if skill_id in ADMIN_ONLY_SKILLS:
-                    return
-                selected_ids.append(skill_id)
+            if not skill_id or skill_id in selected_ids \
+                    or skill_id not in PRODUCTION_SKILLS \
+                    or skill_id not in self._by_id:
+                return
+            try:
+                skill = self.get(skill_id)
+            except KeyError:
+                return
+            if skill.deprecated or skill.status != "ACTIVE":
+                return
+            selected_ids.append(skill_id)
 
         # Every turn: conversation routing (Coordinator / first specialist).
         if agent_id in ("CoordinatorAgent", "ResumeParserAgent") or (
@@ -316,65 +361,69 @@ class SkillManager:
                 and run_type in ("followup", "quick_answer")):
             add("route-conversation-turn")
 
-        if agent_id == "ResumeParserAgent":
-            add("assess-ats-compatibility")
-
-        if agent_id == "JDAnalysisAgent":
-            if signals.get("has_jd") or run_type in (
-                    "full_evaluation", "jd_evaluation", "jd_gap",
-                    "backend_eval", "agent_eval"):
-                add("normalize-job-description")
+        is_revision_turn = bool(_REVISION_HINT.search(user_message or ""))
+        if agent_id == "CoordinatorAgent" and is_revision_turn:
+            add("plan-evaluation-revision")
 
         if agent_id == "TechAgent":
             if signals.get("has_jd_requirements") or signals.get("has_jd") \
                     or run_type in ("tech_match", "jd_gap", "full_evaluation",
                                     "jd_evaluation", "backend_eval", "agent_eval"):
-                add("assess-technical-evidence")
+                add("evaluate-candidate-evidence")
 
         if agent_id == "ProjectAgent":
-            if signals.get("has_projects", True):
-                add("ground-project-claims")
             if signals.get("has_external_urls"):
+                # This package already contains the URL binding, provider
+                # priority and not_checked contract.  Advertising the two
+                # overlapping GitHub/project packages as well made the model
+                # spend its only action turn loading three Skills instead of
+                # selecting a live MCP tool.  Keep one explainable capability
+                # for the external-evidence branch; the ProjectAgent prompt
+                # still owns ordinary project-depth reasoning.
                 add("retrieve-public-candidate-evidence")
-                add("inspect-github-portfolio")
+            elif signals.get("has_projects", True):
+                add("evaluate-candidate-evidence")
 
         if agent_id == "RiskAgent":
             if signals.get("has_timeline", True) or run_type in (
                     "risk_check", "timeline_check", "interview_questions"):
-                add("risk_pattern_detection")
+                add("evaluate-candidate-evidence")
 
         if agent_id == "EvidenceAgent":
-            add("calibrate-evidence-confidence")
+            add("calibrate-and-explain-decision")
+            if signals.get("has_external_urls"):
+                add("retrieve-public-candidate-evidence")
 
         if agent_id == "ReportAgent":
-            add("calibrate-evidence-confidence")
-            add("audit-job-relevant-evaluation")
-            add("handle-knowledge-no-evidence")
-            if run_type not in ("followup", "quick_answer"):
-                add("generate-interview-probes")
-            if run_type in ("followup", "quick_answer") or "为什么" in (user_message or "") \
-                    or "依据" in (user_message or ""):
-                add("explain-evaluation-decision")
-            if signals.get("compare_roles"):
-                add("compare-target-roles")
+            if run_type in ("followup", "quick_answer"):
+                if is_revision_turn:
+                    add("plan-evaluation-revision")
+                else:
+                    add("calibrate-and-explain-decision")
+            else:
+                # Interview probes, relevance auditing and no-evidence
+                # behavior are schema/system-policy contracts. Keeping them
+                # as three more Skills only competes for the action budget.
+                add("calibrate-and-explain-decision")
+            if run_type not in ("followup", "quick_answer") and (
+                    "为什么" in (user_message or "")
+                    or "依据" in (user_message or "")):
+                add("calibrate-and-explain-decision")
 
         if agent_id == "InterviewQuestionAgent":
-            add("generate-interview-probes")
+            add("calibrate-and-explain-decision")
 
         if agent_id == "ResumeOptimizeAgent":
-            add("ground-project-claims")
+            add("evaluate-candidate-evidence")
 
-        if run_type in ("followup", "quick_answer") and agent_id == "ReportAgent":
-            add("plan-evaluation-revision")
-
-        # Policy / focus overrides (still capped).
+        # Legacy DB overrides cannot resurrect hidden aliases.
         override = overrides.get(agent_id)
         if override:
             add(override)
 
-        # Hard cap: never flood the prompt.
+        # Hard cap: expose one or two precise candidates, never a skill dump.
         skills: List[SkillDefinition] = []
-        for skill_id in selected_ids[:4]:
+        for skill_id in selected_ids[:2]:
             try:
                 skill = self.get(skill_id)
             except KeyError:
@@ -463,7 +512,10 @@ class SkillManager:
             "deprecatedCount": len(deprecated),
             "skills": skills,
             "deprecatedSkills": deprecated if include_deprecated else [],
-            "advertisedTools": ["load_skill", "execute_skill", "read_skill_resource"],
+            # Python production runtime supports progressive load/read only.
+            # The legacy Java execute_skill compatibility endpoint is not a
+            # model tool in this runtime and must not be advertised as one.
+            "advertisedTools": ["load_skill", "read_skill_resource"],
             "disclosure": {
                 "startup": "name+description",
                 "activation": "SKILL.md",

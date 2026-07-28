@@ -33,6 +33,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "CoordinatorAgent": AgentDefinition(
         "CoordinatorAgent", "协调者", "分析用户目标并动态选择 Agent 流水线",
         ("planning", "routing", "replanning"),
+        skills=("route-conversation-turn", "plan-evaluation-revision"),
         tools=(), max_iterations=1, max_tool_calls=0, timeout_seconds=60,
         failure_policy="degrade", output_type="plan",
         requires_artifacts=(), produces_artifacts=("execution_plan",),
@@ -40,7 +41,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "ResumeParserAgent": AgentDefinition(
         "ResumeParserAgent", "简历解析", "简历结构化与事实提取",
         ("resume_parsing",),
-        skills=("assess-ats-compatibility", "resume_parsing"),
+        skills=("route-conversation-turn",),
         tools=("parse_resume",),
         max_iterations=1, max_tool_calls=2, timeout_seconds=150,
         output_type="resume_facts",
@@ -49,7 +50,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "JDAnalysisAgent": AgentDefinition(
         "JDAnalysisAgent", "JD 分析", "岗位要求提取与归一化",
         ("jd_analysis",),
-        skills=("normalize-job-description", "jd_requirement_analysis"),
+        skills=(),
         tools=("jd_match_search", "knowledge_search",
                "context7.resolve-library-id", "context7.query-docs"),
         mcp_servers=("context7", "microsoft-learn", "exa"),
@@ -61,8 +62,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "TechAgent": AgentDefinition(
         "TechAgent", "技术评估", "技能与 JD 匹配、深度信号评估",
         ("tech_evaluation",),
-        skills=("assess-technical-evidence", "java_backend_evaluation",
-                "ai_agent_job_evaluation"),
+        skills=("evaluate-candidate-evidence",),
         tools=("calculate_jd_coverage", "resume_semantic_search", "knowledge_search",
                "context7.resolve-library-id", "context7.query-docs"),
         mcp_servers=("context7", "microsoft-learn", "exa"),
@@ -74,8 +74,8 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "ProjectAgent": AgentDefinition(
         "ProjectAgent", "项目分析", "项目复杂度、贡献与真实性",
         ("project_analysis",),
-        skills=("ground-project-claims", "retrieve-public-candidate-evidence",
-                "inspect-github-portfolio"),
+        skills=("evaluate-candidate-evidence",
+                "retrieve-public-candidate-evidence"),
         tools=("locate_evidence", "resume_semantic_search"),
         mcp_servers=("exa", "deepwiki", "fetch"),
         max_iterations=2, max_tool_calls=6, timeout_seconds=240,
@@ -86,7 +86,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "RiskAgent": AgentDefinition(
         "RiskAgent", "风险审查", "时间线与履历风险检测",
         ("risk_detection", "timeline_check"),
-        skills=("risk_pattern_detection", "timeline_risk_analysis"),
+        skills=("evaluate-candidate-evidence",),
         tools=("check_timeline", "timeline_validator"),
         mcp_servers=("exa", "fetch"),
         max_iterations=2, max_tool_calls=4, timeout_seconds=180,
@@ -97,7 +97,8 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "EvidenceAgent": AgentDefinition(
         "EvidenceAgent", "证据核验", "对结论逐条核验并记录冲突",
         ("evidence_verification",),
-        skills=("calibrate-evidence-confidence", "evidence_verification"),
+        skills=("calibrate-and-explain-decision",
+                "retrieve-public-candidate-evidence"),
         tools=("verify_report_evidence", "locate_evidence"),
         mcp_servers=("exa", "deepwiki", "fetch"),
         max_iterations=2, max_tool_calls=6, timeout_seconds=210,
@@ -110,9 +111,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "ReportAgent": AgentDefinition(
         "ReportAgent", "报告生成", "汇总证据生成最终回答",
         ("report_generation",),
-        skills=("audit-job-relevant-evaluation", "calibrate-evidence-confidence",
-                "generate-interview-probes", "handle-knowledge-no-evidence",
-                "report_generation", "explain-evaluation-decision"),
+        skills=("calibrate-and-explain-decision",),
         # knowledge_search / resume_semantic_search: Copilot 追问（followup/
         # quick_answer 只有 ReportAgent）需要对话式 RAG——先查评估标准与简历
         # 证据再回答。Report 不直接调用公网 MCP。
@@ -130,7 +129,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "ResumeOptimizeAgent": AgentDefinition(
         "ResumeOptimizeAgent", "简历优化", "事实不变前提下的改写",
         ("resume_rewrite",),
-        skills=("ground-project-claims", "resume_rewrite"),
+        skills=("evaluate-candidate-evidence",),
         tools=("resume_lint", "locate_evidence"),
         max_iterations=2, max_tool_calls=4, timeout_seconds=240,
         output_type="rewrite",
@@ -140,7 +139,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "InterviewQuestionAgent": AgentDefinition(
         "InterviewQuestionAgent", "面试追问", "针对风险与缺口生成追问",
         ("interview_questions",),
-        skills=("generate-interview-probes", "interview_question_generation"),
+        skills=("calibrate-and-explain-decision",),
         tools=("context7.resolve-library-id", "context7.query-docs"),
         mcp_servers=("context7", "microsoft-learn"),
         max_iterations=2, max_tool_calls=2, timeout_seconds=150,

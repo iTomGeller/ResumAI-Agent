@@ -700,15 +700,24 @@ class Coordinator:
         # Project/Evidence are the two source-acquisition specialists in a
         # complete evaluation.  A one-turn quota can only produce their final
         # decision and makes the advertised MCP/Skill catalog unreachable.
-        # Reserve their second (action-capable) turn before weighted extras,
-        # but only from the already-computed run cap: this never mints budget.
-        for tool_agent in ("ProjectAgent", "EvidenceAgent"):
-            if (
+        #
+        # An explicit candidate URL needs one additional Project turn:
+        # metadata -> load the selected Skill -> model-selected MCP call ->
+        # final decision.  This remains native ``tool_choice=auto``; only the
+        # already-computed run budget is routed toward the evidenced need.
+        # Without this floor production traces stopped after Skill loading and
+        # incorrectly reported the URL as "not checked" despite a live catalog.
+        action_floors = {
+            "ProjectAgent": 3 if sig.get("has_external_urls") else 2,
+            "EvidenceAgent": 2,
+        }
+        for tool_agent, floor in action_floors.items():
+            while (
                     remaining > 0
                     and tool_agent in quotas
                     and quotas[tool_agent] > 0
                     and action_caps[tool_agent] > 0
-                    and quotas[tool_agent] < 2
+                    and quotas[tool_agent] < floor
                     and quotas[tool_agent] < total_caps[tool_agent]):
                 quotas[tool_agent] += 1
                 remaining -= 1

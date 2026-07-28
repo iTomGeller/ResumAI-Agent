@@ -261,10 +261,17 @@ def test_deepwiki_wiki_text_is_context_not_candidate_evidence():
         "ProjectAgent", "deepwiki.ask_question",
         {"repoName": "acme/payment-gateway", "question": "architecture?"},
         call.result, tool_call_id=call.tool_call_id))
+    run(executor._record_tool_success(
+        "ProjectAgent", "deepwiki.ask_question",
+        {"repoName": "acme/payment-gateway", "question": "ownership?"},
+        call.result, tool_call_id="deepwiki-context-2"))
 
     assert not executor.state.artifact("mcpEvidence")
     context = executor.state.artifact("mcpContext")
-    assert context and context[0]["evidenceUse"] == "context_only"
+    assert len(context) == 2
+    assert [item["toolCallId"] for item in context] == [
+        "deepwiki-context", "deepwiki-context-2"]
+    assert context[0]["evidenceUse"] == "context_only"
     assert context[0]["candidateFactEligible"] is False
     assert context[0]["sourceUrls"] == [
         "https://github.com/acme/payment-gateway"]
@@ -392,6 +399,127 @@ def test_native_model_proposes_mcp_arguments_and_trace_chain():
     evidence = executor.state.artifact("mcpEvidence")
     assert evidence and evidence[0]["status"] == "SUCCEEDED"
     assert evidence[0]["toolCallId"] == "provider-native-7"
+    run(executor._record_tool_success(
+        "ProjectAgent", "demo.search", {"query": "second query"},
+        {
+            "success": True,
+            "structuredContent": {
+                "items": [{"url": "https://example.test/evidence-2"}]},
+        },
+        tool_call_id="provider-native-repeat"))
+    evidence = executor.state.artifact("mcpEvidence")
+    assert len(evidence) == 2
+    assert [item["toolCallId"] for item in evidence] == [
+        "provider-native-7", "provider-native-repeat"]
+
+
+class _SkillThenNativeMcpLlm:
+    """Reproduces the production external-URL sequence.
+
+    The first turn loads the single selected Skill, the second chooses an MCP
+    function from its live description/schema, and the third emits the result.
+    """
+
+    def __init__(self):
+        self.turn = 0
+        self.tool_choices = []
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.turn += 1
+        self.tool_choices.append(tool_choice)
+        available = list(tools or [])
+        if self.turn == 1:
+            arguments = {
+                "skill_id": "retrieve-public-candidate-evidence"}
+            return LlmTurn(
+                content="",
+                tool_calls=[LlmToolCall(
+                    tool_call_id="load-external-evidence-skill",
+                    name="load_skill",
+                    arguments=arguments,
+                    raw_arguments=json.dumps(arguments))],
+                finish_reason="tool_calls")
+        if self.turn == 2:
+            remote = next(
+                item["function"] for item in available
+                if item["function"].get("description")
+                == "REMOTE_DESCRIPTION_SENTINEL")
+            arguments = {"query": "candidate-declared repository"}
+            return LlmTurn(
+                content="",
+                tool_calls=[LlmToolCall(
+                    tool_call_id="model-selected-mcp-after-skill",
+                    name=remote["name"],
+                    arguments=arguments,
+                    raw_arguments=json.dumps(arguments))],
+                finish_reason="tool_calls")
+        decision = {
+            "thought": "loaded policy then observed the live MCP result",
+            "output": {
+                "summary": "external evidence checked",
+                "claims": [],
+                "evidence": [],
+                "confidence": 0.7,
+            },
+            "done": True,
+        }
+        return LlmTurn(
+            content="",
+            tool_calls=[LlmToolCall(
+                tool_call_id="final-after-mcp",
+                name="emit_decision",
+                arguments=decision,
+                raw_arguments=json.dumps(decision))],
+            finish_reason="tool_calls")
+
+
+def test_external_url_budget_allows_progressive_skill_then_native_mcp():
+    request = AgentRunRequest(
+        runId="r-skill-mcp", conversationId="c-skill-mcp",
+        traceId="t-skill-mcp", runType="full_evaluation",
+        userMessage="核验简历中声明的公开仓库",
+        resumeText=(
+            "项目经历\n公开项目 Example\n"
+            "https://example.test/repo\nPython FastAPI"),
+        jobDescription="Python backend")
+    emitter = NullEmitter(request.runId, request.conversationId, request.traceId)
+    llm = _SkillThenNativeMcpLlm()
+    executor = RunExecutor(
+        request, emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    client = _LiveMcpClient()
+    _attach_demo_mcp(executor.tools, client)
+    executor.budget_plan["ProjectAgent"] = {
+        "llmQuota": 3,
+        "actionTurnQuota": 2,
+        "toolQuota": 2,
+    }
+    executor.state.apply_artifacts({
+        "resumeFacts": {"projects": [{"name": "Example"}]},
+    })
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("ProjectAgent")))
+
+    assert output.summary == "external evidence checked"
+    assert llm.turn == 3
+    assert llm.tool_choices[:2] == ["auto", "auto"]
+    assert client.calls == [(
+        "remote_search", {"query": "candidate-declared repository"})]
+    counters = executor.agent_counters["ProjectAgent"]
+    assert counters["actionTurns"] == 2
+    assert counters["toolCalls"] == 2
+    mcp_chain = [
+        event["payload"]["lifecycleStage"]
+        for event in emitter.events
+        if event.get("payload", {}).get("toolCallId")
+        == "model-selected-mcp-after-skill"
+    ]
+    assert mcp_chain == [
+        "CATALOG_EXPOSED", "LLM_PROPOSED",
+        "EXECUTION_STARTED", "RESULT"]
 
 
 class _RepeatedActionLlm:
@@ -480,6 +608,104 @@ def test_action_turn_and_total_llm_quota_are_hard_limits():
     assert counters["actionTurns"] == 1
 
 
+class _MalformedNativeFinalThenRepairLlm:
+    def __init__(self):
+        self.turn = 0
+        self.messages = []
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.turn += 1
+        self.messages.append(messages)
+        if self.turn == 1:
+            remote = next(
+                item["function"] for item in (tools or [])
+                if item["function"].get("description")
+                == "REMOTE_DESCRIPTION_SENTINEL")
+            arguments = {"query": "candidate repository"}
+            return LlmTurn(
+                content="",
+                tool_calls=[LlmToolCall(
+                    tool_call_id="repair-budget-action",
+                    name=remote["name"],
+                    arguments=arguments,
+                    raw_arguments=json.dumps(arguments))],
+                finish_reason="tool_calls")
+        if self.turn == 2:
+            return LlmTurn(
+                content="",
+                tool_calls=[LlmToolCall(
+                    tool_call_id="malformed-native-final",
+                    name="emit_decision",
+                    arguments={},
+                    raw_arguments='{"thought":',
+                    arguments_error="unexpected end of JSON input")],
+                finish_reason="tool_calls")
+        decision = {
+            "thought": "repaired the provider-native final arguments",
+            "output": {
+                "summary": "native final repaired",
+                "claims": [],
+                "evidence": [],
+                "confidence": 0.7,
+            },
+            "done": True,
+        }
+        return LlmTurn(
+            content="",
+            tool_calls=[LlmToolCall(
+                tool_call_id="repaired-native-final",
+                name="emit_decision",
+                arguments=decision,
+                raw_arguments=json.dumps(decision))],
+            finish_reason="tool_calls")
+
+
+def test_malformed_native_final_borrows_one_traced_repair_turn():
+    """Regression for run-7d52f4c9…: don't strand a repair at llmQuota."""
+    request = AgentRunRequest(
+        runId="r-native-repair", conversationId="c-native-repair",
+        traceId="t-native-repair", runType="full_evaluation",
+        resumeText="项目经历\nExample\nPython",
+        jobDescription="Python backend")
+    emitter = NullEmitter(
+        request.runId, request.conversationId, request.traceId)
+    llm = _MalformedNativeFinalThenRepairLlm()
+    executor = RunExecutor(
+        request, emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    client = _LiveMcpClient()
+    _attach_demo_mcp(executor.tools, client)
+    executor.budget_plan["ProjectAgent"] = {
+        "llmQuota": 2,
+        "actionTurnQuota": 1,
+        "toolQuota": 2,
+    }
+    executor.state.apply_artifacts({
+        "resumeFacts": {"projects": [{"name": "Example"}]},
+    })
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("ProjectAgent")))
+
+    assert output.summary == "native final repaired"
+    assert llm.turn == 3
+    assert any(
+        "json schema" in str(message.get("content") or "")
+        for message in llm.messages[-1])
+    reallocations = [
+        event for event in emitter.events
+        if event["eventType"] == "run.progress"
+        and event["payload"].get("stage") == "budget_reallocated"
+    ]
+    assert len(reallocations) == 1
+    assert reallocations[0]["payload"]["reason"] == "malformed_native_final"
+    counters = executor.agent_counters["ProjectAgent"]
+    assert counters["llmCalls"] == 3
+    assert counters["borrowedRepairTurns"] == 1
+
+
 class _ReportFinalizationLlm:
     def __init__(self):
         self.turn = 0
@@ -494,7 +720,7 @@ class _ReportFinalizationLlm:
         self.tool_choices.append(tool_choice)
         self.tool_names.append(names)
         if tool_choice == "auto":
-            arguments = {"skill_id": "audit-job-relevant-evaluation"}
+            arguments = {"skill_id": "calibrate-and-explain-decision"}
             return LlmTurn(
                 content="",
                 tool_calls=[LlmToolCall(
@@ -832,7 +1058,7 @@ class _ProgressiveSkillLlm:
         self.saw_instructions |= "BODY_SENTINEL" in content
         self.saw_resource |= "RESOURCE_SENTINEL" in content
         if self.turn == 1:
-            arguments = {"skill_id": "ground-project-claims"}
+            arguments = {"skill_id": "evaluate-candidate-evidence"}
             return LlmTurn(
                 content="",
                 tool_calls=[LlmToolCall(
@@ -843,7 +1069,7 @@ class _ProgressiveSkillLlm:
                 finish_reason="tool_calls")
         if self.turn == 2:
             arguments = {
-                "skill_id": "ground-project-claims",
+                "skill_id": "evaluate-candidate-evidence",
                 "path": "references/details.md",
             }
             return LlmTurn(
@@ -877,13 +1103,13 @@ class _ProgressiveSkillLlm:
 def test_progressive_skill_action_turns_are_reserved(monkeypatch, tmp_path):
     from app.runtime import executor as executor_module
 
-    package = tmp_path / "skills" / "ground-project-claims"
+    package = tmp_path / "skills" / "evaluate-candidate-evidence"
     references = package / "references"
     references.mkdir(parents=True)
     (package / "SKILL.md").write_text(
         "---\n"
-        "name: ground-project-claims\n"
-        "description: Project evidence skill metadata.\n"
+        "name: evaluate-candidate-evidence\n"
+        "description: Unified candidate evidence skill metadata.\n"
         "version: v-test\n"
         "---\n\n"
         "BODY_SENTINEL: apply project evidence rules.\n"
@@ -965,7 +1191,7 @@ def test_coordinator_order_helper_and_revision_reuse_contract():
             "has_jd": True,
         })
     assert live_budget["ReportAgent"]["llmQuota"] >= 3
-    assert live_budget["ProjectAgent"]["actionTurnQuota"] >= 1
+    assert live_budget["ProjectAgent"]["actionTurnQuota"] >= 2
     assert live_budget["EvidenceAgent"]["actionTurnQuota"] >= 1
 
     previous = {

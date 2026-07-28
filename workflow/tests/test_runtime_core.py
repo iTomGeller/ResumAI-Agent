@@ -149,6 +149,70 @@ def test_resume_facts_list_does_not_clobber_dict():
     assert clash and clash[-1].get("reason") == "dict_shaped_artifact_type_clash"
 
 
+def test_list_artifact_wrappers_are_normalized_before_evidence_append():
+    """Regression for run-9cf010f9…: model wrapper dicts stay list-shaped."""
+    state = SharedState()
+    state.apply_output(AgentOutput(
+        agentId="TechAgent",
+        type="technical_findings",
+        artifacts={
+            "technicalFindings": {
+                "title": "技术能力",
+                "findings": [
+                    {"text": "Java 项目证据充分"},
+                    "Kafka 仍需追问",
+                ],
+            },
+            "evidence": {
+                "title": "技术证据",
+                "items": [{"text": "简历技能栏"}],
+            },
+        },
+        evidence=[{"text": "TechAgent 直接证据"}],
+    ))
+    state.apply_output(AgentOutput(
+        agentId="ProjectAgent",
+        type="project_findings",
+        claims=[
+            {
+                "section": "project_findings",
+                "value": {
+                    "title": "项目经历",
+                    "findings": [{"text": "存在公开项目链接"}],
+                },
+            },
+            {
+                "section": "risks",
+                "value": {
+                    "title": "风险",
+                    "risks": [{"text": "个人贡献边界待确认"}],
+                },
+            },
+        ],
+        evidence=[{"text": "ProjectAgent 直接证据"}],
+    ))
+
+    for key in (
+            "technicalFindings", "projectFindings", "risks", "evidence"):
+        assert isinstance(state.artifact(key), list), key
+    assert [item["text"] for item in state.artifact("technicalFindings")] == [
+        "Java 项目证据充分", "Kafka 仍需追问"]
+    assert len(state.artifact("evidence")) == 3
+    assert state.artifact("evidence")[-1]["byAgent"] == "ProjectAgent"
+
+
+def test_put_artifact_same_canonical_list_is_idempotent():
+    state = SharedState()
+    state.apply_artifacts({"mcpEvidence": [{"toolCallId": "mcp-1"}]})
+    canonical = state.artifact("mcpEvidence")
+    canonical.append({"toolCallId": "mcp-2"})
+
+    state.put_artifact("mcpEvidence", canonical)
+
+    assert [item["toolCallId"] for item in state.artifact("mcpEvidence")] == [
+        "mcp-1", "mcp-2"]
+
+
 def test_inspect_signals_tolerates_list_resume_facts():
     from app.runtime.agents import default_agent_registry
     from app.runtime.coordinator import Coordinator

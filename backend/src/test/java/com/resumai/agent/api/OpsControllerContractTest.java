@@ -117,24 +117,25 @@ class OpsControllerContractTest {
                         "count", 1,
                         "activeCount", 1,
                         "deprecatedCount", 0,
-                        "advertisedTools", List.of("load_skill"),
+                        "advertisedTools", List.of(
+                                "load_skill", "read_skill_resource"),
                         "skills", List.of()))));
         LocalDateTime newest = LocalDateTime.of(2026, 7, 28, 9, 5);
         String payload = """
-                {"skillId":"audit-job-relevant-evaluation",
+                {"skillId":"calibrate-and-explain-decision",
                  "skillVersion":"v2","skillHash":"hash-v2",
                  "occurredAt":"2026-07-28T01:05:00Z"}
                 """;
         when(events.selectList(any())).thenReturn(List.of(
-                event("skill.applied", "audit-job-relevant-evaluation",
+                event("skill.applied", "calibrate-and-explain-decision",
                         "run-new", newest, payload),
-                event("skill.loaded", "audit-job-relevant-evaluation",
+                event("skill.loaded", "calibrate-and-explain-decision",
                         "run-new", newest.minusSeconds(1), payload),
-                event("skill.selected", "audit-job-relevant-evaluation",
+                event("skill.selected", "calibrate-and-explain-decision",
                         "run-new", newest.minusSeconds(2), payload),
-                event("skill.catalog", "audit-job-relevant-evaluation",
+                event("skill.catalog", "calibrate-and-explain-decision",
                         "run-new", newest.minusSeconds(3), payload),
-                event("skill.skipped", "audit-job-relevant-evaluation",
+                event("skill.skipped", "calibrate-and-explain-decision",
                         "run-old", newest.minusDays(1), payload)));
         OpsDebugService svc = service(events, runtime);
 

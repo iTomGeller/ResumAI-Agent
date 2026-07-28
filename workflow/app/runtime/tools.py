@@ -226,7 +226,7 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
         "调用此工具获取完整的执行指令。",
         {"type": "object", "properties": {
             "skill_id": {"type": "string",
-                         "description": "技能 ID，如 assess-technical-evidence"}},
+                         "description": "生产 Skill ID，如 evaluate-candidate-evidence"}},
          "required": ["skill_id"]},
         {"type": "object", "properties": {
             "instructions": {"type": "string"},

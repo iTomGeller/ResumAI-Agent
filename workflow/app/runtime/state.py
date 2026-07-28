@@ -90,6 +90,28 @@ _DICT_SHAPED_KEYS = frozenset({
     "timelineCheck",
 })
 
+# These sections are consumed with list semantics throughout the runtime.
+# Models may still wrap them in a presentation container such as
+# {"title": "...", "findings": [...]} or {"items": [...]}.  Keep the
+# canonical store shape stable and unwrap those containers at the boundary.
+_LIST_SHAPED_KEYS = frozenset({
+    "technicalFindings",
+    "projectFindings",
+    "risks",
+    "evidence",
+    "conflicts",
+    "recommendations",
+})
+
+_LIST_CONTAINER_FIELDS: Dict[str, tuple[str, ...]] = {
+    "technicalFindings": ("findings", "technicalFindings", "items"),
+    "projectFindings": ("findings", "projectFindings", "items"),
+    "risks": ("risks", "items"),
+    "evidence": ("evidence", "items"),
+    "conflicts": ("conflicts", "items"),
+    "recommendations": ("recommendations", "items"),
+}
+
 
 class SharedState:
     """Run-level blackboard with a single Canonical Artifact Store.
@@ -131,11 +153,23 @@ class SharedState:
             if value is None:
                 continue
             existing = store.get(key)
-            if isinstance(existing, dict) and isinstance(value, dict):
+            if key in _LIST_SHAPED_KEYS:
+                current = _coerce_list_shaped_value(
+                    key, existing, by_agent) if existing is not None else []
+                current.extend(_coerce_list_shaped_value(
+                    key, value, by_agent))
+                store[key] = current
+            elif isinstance(existing, dict) and isinstance(value, dict):
                 merged = dict(existing)
                 merged.update(value)
                 store[key] = merged
             elif isinstance(existing, list) and isinstance(value, list):
+                # A caller may have mutated the canonical list obtained from
+                # artifact() and passed that exact object back. Iterating it
+                # while appending to itself never terminates; the mutation is
+                # already present, so the write is a no-op.
+                if existing is value:
+                    continue
                 for entry in value:
                     normalized = entry if isinstance(entry, dict) else {"text": str(entry)}
                     normalized.setdefault("byAgent", by_agent)
@@ -185,8 +219,8 @@ class SharedState:
                 conflicts.extend(self._merge_into(store, key, value, output.agentId))
             for evidence in output.evidence:
                 if isinstance(evidence, dict):
-                    evidence.setdefault("byAgent", output.agentId)
-                    store.setdefault("evidence", []).append(evidence)
+                    conflicts.extend(self._merge_into(
+                        store, "evidence", evidence, output.agentId))
             self._sync_legacy_mirrors()
             return conflicts
 
@@ -199,8 +233,8 @@ class SharedState:
             conflicts.extend(self._merge_into(store, target, value, output.agentId))
         for evidence in output.evidence:
             if isinstance(evidence, dict):
-                evidence.setdefault("byAgent", output.agentId)
-                store.setdefault("evidence", []).append(evidence)
+                conflicts.extend(self._merge_into(
+                    store, "evidence", evidence, output.agentId))
         self._sync_legacy_mirrors()
         return conflicts
 
@@ -208,6 +242,13 @@ class SharedState:
                     agent_id: str) -> List[str]:
         conflicts: List[str] = []
         existing = store.get(target)
+        if target in _LIST_SHAPED_KEYS:
+            current = _coerce_list_shaped_value(
+                target, existing, agent_id) if existing is not None else []
+            current.extend(_coerce_list_shaped_value(
+                target, value, agent_id))
+            store[target] = current
+            return conflicts
         if existing is None or existing == {} or existing == []:
             if target in _DICT_SHAPED_KEYS and isinstance(value, list):
                 store[target] = _coerce_dict_shaped_list(value, agent_id)
@@ -382,6 +423,13 @@ class SharedState:
             existing = self.data["artifacts"].get(key)
             if existing is None or existing == {} or existing == []:
                 self.data["artifacts"][key] = top
+        # Heal checkpoints created before list-shaped artifact normalization.
+        # This also makes resume-from-checkpoint safe after a model emitted a
+        # wrapper dict for findings/evidence.
+        for key in _LIST_SHAPED_KEYS:
+            if key in self.data["artifacts"]:
+                self.data["artifacts"][key] = _coerce_list_shaped_value(
+                    key, self.data["artifacts"][key], "checkpoint")
         self._sync_legacy_mirrors()
 
     def merge_parallel(self, outputs: List[AgentOutput]) -> List[str]:
@@ -417,6 +465,38 @@ def _coerce_dict_shaped_list(value: List[Any], agent_id: str) -> Dict[str, Any]:
         else:
             items.append({"text": str(entry), "byAgent": agent_id})
     return {"items": items, "source": "coerced_list", "byAgent": agent_id}
+
+
+def _coerce_list_shaped_value(target: str, value: Any,
+                              agent_id: str) -> List[Dict[str, Any]]:
+    """Normalize a list artifact without discarding model wrapper contents."""
+    if value is None:
+        return []
+    wrapper_agent = agent_id
+    if isinstance(value, list):
+        entries = value
+    elif isinstance(value, dict):
+        wrapper_agent = str(value.get("byAgent") or agent_id)
+        entries = None
+        for field in _LIST_CONTAINER_FIELDS.get(target, ("items",)):
+            candidate = value.get(field)
+            if isinstance(candidate, list):
+                entries = candidate
+                break
+        if entries is None:
+            entries = [value]
+    else:
+        entries = [value]
+
+    normalized_entries: List[Dict[str, Any]] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            normalized = dict(entry)
+            normalized.setdefault("byAgent", wrapper_agent)
+        else:
+            normalized = {"text": str(entry), "byAgent": wrapper_agent}
+        normalized_entries.append(normalized)
+    return normalized_entries
 
 
 def _differs(a: Any, b: Any) -> bool:
