@@ -85,7 +85,7 @@ class TimeoutPolicy(BaseModel):
     sandboxTimeoutSeconds: int = 90
 
 
-_BALANCED_MIN_LLM_CALLS = 16
+_BALANCED_MIN_LLM_CALLS = 17
 _BALANCED_MAX_LLM_CALLS = 18
 _BALANCED_TERMINAL_LLM_RESERVE = 3
 
@@ -104,7 +104,7 @@ class PolicyBundle(BaseModel):
     requiredArtifacts: List[str] = Field(default_factory=list)
     optionalArtifacts: List[str] = Field(default_factory=list)
     maxAgentCount: int = 6
-    maxLlmCalls: int = 16
+    maxLlmCalls: int = 17
     # Provider-call reservations live inside maxLlmCalls; they are not extra
     # budget. Control-plane calls have a hard ceiling, while the terminal
     # reserve cannot be consumed by specialists.
@@ -144,7 +144,7 @@ class PolicyBundle(BaseModel):
             # at the runtime boundary instead of mutating a mounted database.
             #
             # This is a bounded compatibility contract, not budget inflation:
-            # balanced may use 16..18 calls (deep_analysis already uses 18),
+            # balanced may use 17..18 calls (deep_analysis already uses 18),
             # and exactly three are protected for terminal finalization/repair.
             requested = int(data.get("maxLlmCalls", _BALANCED_MIN_LLM_CALLS))
             data["maxLlmCalls"] = min(

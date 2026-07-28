@@ -1192,9 +1192,9 @@ def test_coordinator_order_helper_and_revision_reuse_contract():
 
     runtime_budget = RunBudget()
     runtime_budget.configure_llm_budget(
-        16, {"terminal": 3, "control": 4},
+        17, {"terminal": 3, "control": 4},
         scope_limits={"control": 4})
-    runtime_budget.claim_llm_call(16, "control")
+    runtime_budget.claim_llm_call(17, "control")
     live_coordinator = Coordinator(
         default_agent_registry,
         PolicyBundle.from_config("balanced", {}),

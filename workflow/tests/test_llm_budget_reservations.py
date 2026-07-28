@@ -151,7 +151,7 @@ def test_legacy_balanced_db_budget_is_bounded_and_keeps_tools_actionable():
             "maxToolCallsPerAgent": 5,
         },
     })
-    assert legacy_policy.maxLlmCalls == 16
+    assert legacy_policy.maxLlmCalls == 17
     assert legacy_policy.terminalLlmReserve == 3
     assert PolicyBundle.from_config(
         "balanced", {"maxLlmCalls": 999}).maxLlmCalls == 18
