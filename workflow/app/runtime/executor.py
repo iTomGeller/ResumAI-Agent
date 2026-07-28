@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import json
 import logging
 import re
@@ -1284,18 +1285,10 @@ class RunExecutor:
             agent_id=agent_id, run_type=request.runType,
             job_focus=self.policy.jobFocus, overrides=self.policy.skillOverrides,
             signals=signals, user_message=request.userMessage or "")
-        self.skill_selections[agent_id] = skills
-        try:
-            await default_skill_manager.emit_catalog(
-                self.emitter, agent_id, skills)
-            await default_skill_manager.emit_selection(
-                self.emitter, agent_id, skills,
-                trigger_reason="agent_capability_and_input_signals")
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("skill catalog/selection emit skipped: %s", exc)
-
-        # One live, model-native tool catalog per agent turn. MCP definitions
-        # originate exclusively from successful tools/list discovery.
+        # Build the requested surface now, but do not expose Skill/MCP metadata
+        # until we know this agent will actually execute an LLM turn. This
+        # prevents deterministic fast paths from producing phantom standalone
+        # Skill/MCP rows in the trace.
         requested_tools = list(definition.tools)
         if agent_id == "ReportAgent" and self.request.runType not in (
                 "followup", "quick_answer"):
@@ -1305,38 +1298,9 @@ class RunExecutor:
             ]
         if skills:
             requested_tools.extend(["load_skill", "read_skill_resource"])
-        catalog: List[Dict[str, Any]] = []
-        catalog_exposure_ids: Dict[str, str] = {}
-        try:
-            catalog = self.tools.catalog_for_agent(agent_id, requested_tools)
-            for entry in catalog:
-                if entry.get("kind") == "mcp" or entry.get("mcpServer"):
-                    exposure_id = f"catalog-{uuid.uuid4().hex[:16]}"
-                    catalog_exposure_ids[str(entry.get("name") or "")] = exposure_id
-                    await self.emitter.emit(
-                        "tool.progress", agent_id=agent_id,
-                        tool_name=str(entry.get("name") or ""),
-                        payload={
-                            "toolCallId": exposure_id,
-                            "lifecycleStage": "CATALOG_EXPOSED",
-                            "source": "mcp",
-                            "mcpServer": entry.get("mcpServer"),
-                            "toolName": entry.get("name"),
-                            "modelName": entry.get("modelName"),
-                            "description": entry.get("description"),
-                            "inputSchema": entry.get("inputSchema"),
-                            "occurredAt": _utc_now(),
-                        })
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("live tool catalog unavailable: %s", exc)
-            catalog = []
-        model_tools, model_tool_aliases = ToolExecutor.openai_tools(catalog)
-        allowed_tools = set(model_tool_aliases.values())
-        final_tool = (EMIT_REPORT_TOOL if agent_id == "ReportAgent"
-                      else EMIT_DECISION_TOOL)
-        model_tools.append(final_tool)
 
         tool_results_block = ""
+        pre_llm_tool_call_ids: List[str] = []
         agent_tool_calls = 0
         agent_llm_calls = 0
         agent_tool_limit = min(
@@ -1372,6 +1336,7 @@ class RunExecutor:
                     f"tc-err-{agent_tool_calls}", tool, "FAILED", None,
                     error=f"{type(_tool_exc).__name__}: {_tool_exc}"[:200])
             agent_tool_calls += 1
+            pre_llm_tool_call_ids.append(call.tool_call_id)
             if call.status == "FAILED":
                 self._tool_failed_this_group = True
             tool_results_block += self._format_tool_result(call)
@@ -1384,8 +1349,7 @@ class RunExecutor:
         if definition.agent_id == "ResumeParserAgent":
             fast = self._maybe_skip_parser_llm(tool_results_block)
             if fast is not None:
-                await self._emit_unapplied_skills(
-                    agent_id, skills, {}, set(), reason="agent_fast_path")
+                self.skill_selections[agent_id] = []
                 self.agent_counters[definition.agent_id] = {
                     "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
                     "fastPath": 1}
@@ -1395,8 +1359,7 @@ class RunExecutor:
         if definition.agent_id == "JDAnalysisAgent":
             fast = self._maybe_skip_jd_llm()
             if fast is not None:
-                await self._emit_unapplied_skills(
-                    agent_id, skills, {}, set(), reason="agent_fast_path")
+                self.skill_selections[agent_id] = []
                 self.agent_counters[definition.agent_id] = {
                     "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
                     "fastPath": 1}
@@ -1406,12 +1369,55 @@ class RunExecutor:
         if definition.agent_id == "EvidenceAgent":
             fast = self._maybe_skip_evidence_llm(tool_results_block)
             if fast is not None:
-                await self._emit_unapplied_skills(
-                    agent_id, skills, {}, set(), reason="agent_fast_path")
+                self.skill_selections[agent_id] = []
                 self.agent_counters[definition.agent_id] = {
                     "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
                     "fastPath": 1}
                 return fast
+
+        # From this point onward the model really receives the progressive
+        # Skill metadata and live MCP tools/list schemas.
+        self.skill_selections[agent_id] = skills
+        try:
+            await default_skill_manager.emit_catalog(
+                self.emitter, agent_id, skills)
+            await default_skill_manager.emit_selection(
+                self.emitter, agent_id, skills,
+                trigger_reason="agent_capability_and_input_signals")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("skill catalog/selection emit skipped: %s", exc)
+
+        catalog: List[Dict[str, Any]] = []
+        catalog_exposure_ids: Dict[str, str] = {}
+        try:
+            catalog = self.tools.catalog_for_agent(agent_id, requested_tools)
+            for entry in catalog:
+                if entry.get("kind") == "mcp" or entry.get("mcpServer"):
+                    exposure_id = f"catalog-{uuid.uuid4().hex[:16]}"
+                    catalog_exposure_ids[str(entry.get("name") or "")] = exposure_id
+                    await self.emitter.emit(
+                        "tool.progress", agent_id=agent_id,
+                        tool_name=str(entry.get("name") or ""),
+                        payload={
+                            "toolCallId": exposure_id,
+                            "lifecycleStage": "CATALOG_EXPOSED",
+                            "catalogScope": "AGENT_MODEL_INPUT",
+                            "source": "mcp",
+                            "mcpServer": entry.get("mcpServer"),
+                            "toolName": entry.get("name"),
+                            "modelName": entry.get("modelName"),
+                            "description": entry.get("description"),
+                            "inputSchema": entry.get("inputSchema"),
+                            "occurredAt": _utc_now(),
+                        })
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("live tool catalog unavailable: %s", exc)
+            catalog = []
+        model_tools, model_tool_aliases = ToolExecutor.openai_tools(catalog)
+        allowed_tools = set(model_tool_aliases.values())
+        final_tool = (EMIT_REPORT_TOOL if agent_id == "ReportAgent"
+                      else EMIT_DECISION_TOOL)
+        model_tools.append(final_tool)
 
         output: Optional[AgentOutput] = None
         # A reasoning iteration and a provider-native action/observation turn
@@ -1451,11 +1457,18 @@ class RunExecutor:
         loaded_skill_call_ids: Dict[str, str] = {}
         applied_skill_ids: set = set()
         native_history: List[Dict[str, Any]] = []
+        # Memory selection is immutable for this agent execution. Keeping the
+        # audit local avoids cross-agent races when specialists run in parallel;
+        # the same block is intentionally attached to each provider prompt.
+        memory_block, memory_audit = self._memory_context(definition)
+        memory_usage_recorded = False
         while (iteration < max_turns
                and decision_iterations < max_decision_iterations
                and output is None):
             iteration += 1
+            round_id = f"{self.request.runId}:{agent_id}:round:{iteration}"
             await self.emitter.emit("agent.progress", agent_id=agent_id, payload={
+                "roundId": round_id,
                 "iteration": iteration,
                 "maxIterations": max_turns,
                 "decisionIterations": decision_iterations,
@@ -1475,30 +1488,12 @@ class RunExecutor:
                 shared_state_digest=self.state.view_for(agent_id),
                 recent_messages=request.recentMessages,
                 conversation_summary=request.conversationSummary or "",
-                memory_block=self._memory_block(definition),
+                memory_block=memory_block,
                 tool_results_block=effective_tool_results,
                 output_schema=(REPORT_OUTPUT_SCHEMA if agent_id == "ReportAgent"
                                else AGENT_OUTPUT_SCHEMA))
             if native_history:
                 messages.extend(native_history)
-            audit = getattr(self, "_last_memory_audit", None)
-            if audit and audit.get("consumerAgent") == agent_id:
-                await self.emitter.emit("run.progress", agent_id=agent_id, payload={
-                    "stage": "memory_inject",
-                    "message": (f"{agent_id} 注入记忆 {audit.get('usedCount', 0)} 条"
-                                f"（忽略 {audit.get('ignoredCount', 0)}）"),
-                    "memoryTrace": audit.get("memoryTrace") or [],
-                    "usedCount": audit.get("usedCount"),
-                    "ignoredCount": audit.get("ignoredCount"),
-                })
-                decisions = audit.get("decisions") or []
-                if decisions:
-                    try:
-                        await self.memory.record_usage(
-                            consumer_agent=agent_id, decisions=decisions)
-                    except Exception:  # noqa: BLE001
-                        pass
-                self._last_memory_audit = None
             if self.context.needs_compaction(messages):
                 messages = await self.context.compact(
                     messages, reason="context_over_threshold",
@@ -1520,7 +1515,8 @@ class RunExecutor:
                         str(m.get("content") or "") for m in messages):
                     await default_skill_manager.emit_applied(
                         self.emitter, agent_id, loaded,
-                        tool_call_id=loaded_skill_call_ids[skill_id])
+                        tool_call_id=loaded_skill_call_ids[skill_id],
+                        round_id=round_id)
                     applied_skill_ids.add(skill_id)
 
             # Once the model has consumed its native action turns, remove every
@@ -1548,6 +1544,98 @@ class RunExecutor:
                         "不要再请求任何检索、Skill 或校验工具。"
                     ),
                 })
+
+            # Persist memory usage once, at the first prompt that consumes it.
+            # Every later round still declares it as an input attachment below,
+            # without duplicating durable usage rows or sibling trace nodes.
+            if memory_audit and not memory_usage_recorded:
+                decisions = memory_audit.get("decisions") or []
+                for decision in decisions:
+                    decision.roundId = round_id
+                    decision.occurredAt = _utc_now()
+                if decisions:
+                    try:
+                        await self.memory.record_usage(
+                            consumer_agent=agent_id, decisions=decisions)
+                    except Exception:  # noqa: BLE001
+                        pass
+                memory_usage_recorded = True
+
+            turn_model_names = {
+                str(item.get("function", {}).get("name") or "")
+                for item in turn_tools if isinstance(item, dict)
+            }
+            tool_catalog_refs = [
+                {
+                    "toolName": entry.get("name"),
+                    "modelName": entry.get("modelName"),
+                    "source": ("mcp" if entry.get("mcpServer") else
+                               entry.get("kind") or "builtin"),
+                    "mcpServer": entry.get("mcpServer"),
+                    "description": entry.get("description"),
+                    "inputSchema": entry.get("inputSchema"),
+                }
+                for entry in catalog
+                if str(entry.get("modelName") or "") in turn_model_names
+            ]
+            terminal_name = str(final_tool.get("function", {}).get("name") or "")
+            if terminal_name in turn_model_names:
+                tool_catalog_refs.append({
+                    "toolName": terminal_name,
+                    "modelName": terminal_name,
+                    "source": "runtime_terminal",
+                    "mcpServer": None,
+                    "description": final_tool.get("function", {}).get("description"),
+                    "inputSchema": final_tool.get("function", {}).get("parameters"),
+                })
+            memory_refs = [
+                row for row in (memory_audit.get("memoryTrace") or [])
+                if row.get("used")
+            ] if memory_audit else []
+            skill_refs = [{
+                "skillId": skill.skill_id,
+                "skillVersion": (
+                    loaded_skills.get(skill.skill_id, skill).version),
+                "disclosureState": (
+                    "INSTRUCTIONS" if skill.skill_id in loaded_skills
+                    else "METADATA"),
+                "selected": True,
+                "loaded": skill.skill_id in loaded_skills,
+                "applied": skill.skill_id in applied_skill_ids,
+                "instructionsAttached": skill.skill_id in applied_skill_ids,
+                "loadToolCallId": loaded_skill_call_ids.get(skill.skill_id),
+            } for skill in skills]
+            observed_tool_call_ids = list(dict.fromkeys(
+                pre_llm_tool_call_ids + [
+                    str(message.get("tool_call_id") or "")
+                    for message in native_history
+                    if message.get("role") == "tool"
+                    and message.get("tool_call_id")
+                ]))
+            trace_context = {
+                "roundId": round_id,
+                "parentAgentId": agent_id,
+                "contextRole": "MODEL_INPUT",
+            }
+            await self.emitter.emit(
+                "llm.context.attached", agent_id=agent_id, payload={
+                    **trace_context,
+                    "memoryRefs": memory_refs,
+                    "skillRefs": skill_refs,
+                    "toolCatalogRefs": tool_catalog_refs,
+                    "observedToolCallIds": observed_tool_call_ids,
+                    "memoryCount": len(memory_refs),
+                    "skillCount": len(skill_refs),
+                    "memoryAttachedCount": len(memory_refs),
+                    "skillMetadataCount": len(skills),
+                    "skillInstructionCount": sum(
+                        1 for ref in skill_refs
+                        if ref["instructionsAttached"]),
+                    "toolCatalogCount": len(tool_catalog_refs),
+                    "messageCount": len(turn_messages),
+                    "toolChoice": tool_choice,
+                    "occurredAt": _utc_now(),
+                })
             turn = await self._chat_native_turn(
                 turn_messages, agent_id=agent_id,
                 purpose=definition.output_type,
@@ -1559,7 +1647,8 @@ class RunExecutor:
                     definition.agent_id in TERMINAL_AGENTS) else 4096),
                 tools=turn_tools,
                 tool_choice=tool_choice,
-                use_quality=is_report)
+                use_quality=is_report,
+                trace_context=trace_context)
             agent_llm_calls += 1
             raw = turn.content
             final_calls: List[Any] = []
@@ -1628,6 +1717,7 @@ class RunExecutor:
                             await self.emitter.emit(
                                 "tool.progress", agent_id=agent_id,
                                 tool_name=tool or proposed.name, payload={
+                                    **trace_context,
                                     "toolCallId": proposed.tool_call_id,
                                     "lifecycleStage": "CATALOG_EXPOSED",
                                     "source": "mcp",
@@ -1643,6 +1733,7 @@ class RunExecutor:
                         await self.emitter.emit(
                             "tool.progress", agent_id=agent_id,
                             tool_name=tool or proposed.name, payload={
+                                **trace_context,
                                 "toolCallId": proposed.tool_call_id,
                                 "lifecycleStage": "LLM_PROPOSED",
                                 "source": source,
@@ -1665,24 +1756,28 @@ class RunExecutor:
                                 agent_id, tool or proposed.name, proposed,
                                 "native action-turn budget exhausted; emit a final decision",
                                 source=source,
-                                mcp_server=entry.get("mcpServer"))
+                                mcp_server=entry.get("mcpServer"),
+                                trace_context=trace_context)
                         elif proposed.arguments_error:
                             result_payload = await self._reject_native_proposal(
                                 agent_id, tool or proposed.name, proposed,
                                 f"arguments are not a JSON object: "
                                 f"{proposed.arguments_error}", source=source,
-                                mcp_server=entry.get("mcpServer"))
+                                mcp_server=entry.get("mcpServer"),
+                                trace_context=trace_context)
                         elif not tool or tool not in allowed_tools:
                             result_payload = await self._reject_native_proposal(
                                 agent_id, tool or proposed.name, proposed,
                                 "tool was not present in this agent's exposed catalog",
                                 source=source,
-                                mcp_server=entry.get("mcpServer"))
+                                mcp_server=entry.get("mcpServer"),
+                                trace_context=trace_context)
                         elif agent_tool_calls >= agent_tool_limit:
                             result_payload = await self._reject_native_proposal(
                                 agent_id, tool, proposed,
                                 "agent tool budget exhausted", source=source,
-                                mcp_server=entry.get("mcpServer"))
+                                mcp_server=entry.get("mcpServer"),
+                                trace_context=trace_context)
                         elif tool in {"load_skill", "read_skill_resource"}:
                             result_payload = await self._execute_skill_proposal(
                                 agent_id=agent_id,
@@ -1690,7 +1785,8 @@ class RunExecutor:
                                 proposed=proposed,
                                 selected_skills=skills,
                                 loaded_skills=loaded_skills,
-                                loaded_skill_call_ids=loaded_skill_call_ids)
+                                loaded_skill_call_ids=loaded_skill_call_ids,
+                                trace_context=trace_context)
                             agent_tool_calls += 1
                         else:
                             args = proposed.arguments
@@ -1702,7 +1798,8 @@ class RunExecutor:
                                     agent_id, tool, proposed,
                                     "duplicate call blocked by loop guard",
                                     source=source,
-                                    mcp_server=entry.get("mcpServer"))
+                                    mcp_server=entry.get("mcpServer"),
+                                    trace_context=trace_context)
                             else:
                                 call = await self.tools.execute(
                                     agent_id, tool, args,
@@ -1710,7 +1807,8 @@ class RunExecutor:
                                     # tool arguments. Never spend a hidden
                                     # provider call rewriting them.
                                     enable_rewrite=False,
-                                    tool_call_id=proposed.tool_call_id)
+                                    tool_call_id=proposed.tool_call_id,
+                                    trace_context=trace_context)
                                 agent_tool_calls += 1
                                 if call.status != "SUCCEEDED":
                                     self._tool_failed_this_group = True
@@ -1901,29 +1999,54 @@ class RunExecutor:
                                 max_tokens: int,
                                 tools: List[Dict[str, Any]],
                                 use_quality: bool,
-                                tool_choice: Any = "auto") -> LlmTurn:
+                                tool_choice: Any = "auto",
+                                trace_context: Optional[Dict[str, Any]] = None
+                                ) -> LlmTurn:
         """Use native tool calling when supported; preserve test adapters."""
         chat_turn = getattr(self.llm, "chat_turn", None)
         if callable(chat_turn):
-            return await chat_turn(
-                messages, agent_id=agent_id, purpose=purpose,
-                max_tokens=max_tokens, tools=tools,
-                tool_choice=tool_choice, use_quality=use_quality)
-        raw = await self.llm.chat(
-            messages, agent_id=agent_id, purpose=purpose,
-            max_tokens=max_tokens, tools=tools, tool_choice=tool_choice,
-            use_quality=use_quality)
+            kwargs: Dict[str, Any] = {
+                "agent_id": agent_id,
+                "purpose": purpose,
+                "max_tokens": max_tokens,
+                "tools": tools,
+                "tool_choice": tool_choice,
+                "use_quality": use_quality,
+            }
+            parameters = inspect.signature(chat_turn).parameters.values()
+            if ("trace_context" in inspect.signature(chat_turn).parameters
+                    or any(p.kind == inspect.Parameter.VAR_KEYWORD
+                           for p in parameters)):
+                kwargs["trace_context"] = trace_context
+            return await chat_turn(messages, **kwargs)
+        chat = self.llm.chat
+        kwargs = {
+            "agent_id": agent_id,
+            "purpose": purpose,
+            "max_tokens": max_tokens,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "use_quality": use_quality,
+        }
+        parameters = inspect.signature(chat).parameters.values()
+        if ("trace_context" in inspect.signature(chat).parameters
+                or any(p.kind == inspect.Parameter.VAR_KEYWORD
+                       for p in parameters)):
+            kwargs["trace_context"] = trace_context
+        raw = await chat(messages, **kwargs)
         return LlmTurn(content=str(raw or ""), tool_calls=[],
                        finish_reason="legacy_adapter")
 
     async def _reject_native_proposal(self, agent_id: str, tool: str,
                                       proposed: LlmToolCall, reason: str, *,
                                       source: str,
-                                      mcp_server: Optional[str] = None
+                                      mcp_server: Optional[str] = None,
+                                      trace_context: Optional[Dict[str, Any]] = None
                                       ) -> Dict[str, Any]:
         now = _utc_now()
         await self.emitter.emit("tool.failed", agent_id=agent_id,
                                 tool_name=tool, payload={
+                                    **(trace_context or {}),
                                     "toolCallId": proposed.tool_call_id,
                                     "lifecycleStage": "ERROR",
                                     "source": source,
@@ -1947,15 +2070,17 @@ class RunExecutor:
             self, *, agent_id: str, tool: str, proposed: LlmToolCall,
             selected_skills: List[Any],
             loaded_skills: Dict[str, Any],
-            loaded_skill_call_ids: Dict[str, str]) -> Dict[str, Any]:
+            loaded_skill_call_ids: Dict[str, str],
+            trace_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if self.budget.tool_calls >= self.tools.max_tool_calls_run:
             return await self._reject_native_proposal(
                 agent_id, tool, proposed, "run tool budget exhausted",
-                source="skill")
+                source="skill", trace_context=trace_context)
         started_at = _utc_now()
         self.budget.tool_calls += 1
         await self.emitter.emit("tool.started", agent_id=agent_id,
                                 tool_name=tool, payload={
+                                    **(trace_context or {}),
                                     "toolCallId": proposed.tool_call_id,
                                     "lifecycleStage": "EXECUTION_STARTED",
                                     "source": "skill",
@@ -1979,7 +2104,8 @@ class RunExecutor:
                 await default_skill_manager.emit_loaded(
                     self.emitter, agent_id, loaded,
                     tool_call_id=proposed.tool_call_id,
-                    reason="llm_native_tool_call")
+                    reason="llm_native_tool_call",
+                    round_id=(trace_context or {}).get("roundId"))
                 result: Dict[str, Any] = {
                     "success": True,
                     "loaded": True,
@@ -2006,6 +2132,7 @@ class RunExecutor:
                 await self.emitter.emit(
                     "skill.loaded", agent_id=agent_id,
                     tool_name=skill_id, payload={
+                        **(trace_context or {}),
                         "toolCallId": proposed.tool_call_id,
                         "skillId": loaded.skill_id,
                         "skillVersion": loaded.version,
@@ -2020,6 +2147,7 @@ class RunExecutor:
             ended_at = _utc_now()
             await self.emitter.emit("tool.completed", agent_id=agent_id,
                                     tool_name=tool, payload={
+                                        **(trace_context or {}),
                                         "toolCallId": proposed.tool_call_id,
                                         "lifecycleStage": "RESULT",
                                         "source": "skill",
@@ -2040,6 +2168,7 @@ class RunExecutor:
             error = f"{type(exc).__name__}: {exc}"[:500]
             await self.emitter.emit("tool.failed", agent_id=agent_id,
                                     tool_name=tool, payload={
+                                        **(trace_context or {}),
                                         "toolCallId": proposed.tool_call_id,
                                         "lifecycleStage": "ERROR",
                                         "source": "skill",
@@ -2054,6 +2183,7 @@ class RunExecutor:
                                     })
             await self.emitter.emit("skill.failed", agent_id=agent_id,
                                     tool_name=skill_id or tool, payload={
+                                        **(trace_context or {}),
                                         "toolCallId": proposed.tool_call_id,
                                         "skillId": skill_id or None,
                                         "skillVersion": None,
@@ -3345,9 +3475,11 @@ class RunExecutor:
             lines.append(f"岗位侧重: {self.policy.jobFocus}")
         return "\n".join(lines)
 
-    def _memory_block(self, definition: AgentDefinition) -> str:
+    def _memory_context(
+            self, definition: AgentDefinition
+            ) -> Tuple[str, Optional[Dict[str, Any]]]:
         if definition.memory_policy == "none":
-            return ""
+            return "", None
         agent_id = definition.agent_id
         # Coordinator may additionally see FAILURE hits for planning hints;
         # Report/Risk and other specialists only see the evaluation-safe pool.
@@ -3355,23 +3487,18 @@ class RunExecutor:
         if agent_id == "CoordinatorAgent":
             pool = pool + list(self.failure_hits)
         if not pool:
-            return ""
+            return "", None
         used, ignored = filter_hits_for_consumer(pool, agent_id)
         trace = memory_trace_entries(used, ignored, agent_id)
         self.memory_traces.extend(trace)
         decisions = decisions_from_hits(used, ignored, agent_id)
-        # Emit per-agent memory audit so Trace can show used vs ignoredReason.
-        # Persistence happens in async _run_agent after this sync helper returns.
-        try:
-            self._last_memory_audit = {
-                "consumerAgent": agent_id,
-                "usedCount": len(used),
-                "ignoredCount": len(ignored),
-                "memoryTrace": trace[:20],
-                "decisions": decisions,
-            }
-        except Exception:  # noqa: BLE001
-            pass
+        audit = {
+            "consumerAgent": agent_id,
+            "usedCount": len(used),
+            "ignoredCount": len(ignored),
+            "memoryTrace": trace[:20],
+            "decisions": decisions,
+        }
         lines = ["[相关记忆]"]
         insights = []
         anchors = []
@@ -3394,7 +3521,8 @@ class RunExecutor:
         if context:
             lines.append("# 上下文")
             lines.extend(context[:2])
-        return "\n".join(lines) if len(lines) > 1 else ""
+        block = "\n".join(lines) if len(lines) > 1 else ""
+        return block, audit
 
     @staticmethod
     def _format_tool_result(call: Any) -> str:

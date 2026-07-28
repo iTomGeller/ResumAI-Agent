@@ -55,6 +55,7 @@ class MemoryDecision(BaseModel):
     namespace: Optional[str] = None
     reason: Optional[str] = None
     occurredAt: Optional[str] = None
+    roundId: Optional[str] = None
 
 
 def _utc_now_iso() -> str:
@@ -180,6 +181,8 @@ def decisions_from_hits(
     used: List[Dict[str, Any]],
     ignored: List[Dict[str, Any]],
     consumer_agent: str,
+    *,
+    round_id: Optional[str] = None,
 ) -> List[MemoryDecision]:
     """Build MemoryDecision rows with score breakdown for persistence."""
     rows: List[MemoryDecision] = []
@@ -207,7 +210,10 @@ def decisions_from_hits(
             namespace=_safe_namespace(hit),
             reason=str(hit.get("reason") or hit.get("selectionReason")
                        or "selected_for_agent_context"),
-            occurredAt=str(hit.get("occurredAt") or _utc_now_iso()),
+            # This is the time the memory was attached to the consuming
+            # prompt, not the source memory's creation timestamp.
+            occurredAt=_utc_now_iso(),
+            roundId=round_id,
         ))
     for hit in ignored:
         mid = str(hit.get("memoryId") or "").strip()
@@ -231,7 +237,8 @@ def decisions_from_hits(
             taxonomy=taxonomy,
             namespace=_safe_namespace(hit),
             reason=str(hit.get("ignoredReason") or "excluded_by_consumer_policy"),
-            occurredAt=str(hit.get("occurredAt") or _utc_now_iso()),
+            occurredAt=_utc_now_iso(),
+            roundId=round_id,
         ))
     return rows
 
@@ -429,6 +436,7 @@ class MemoryClient:
                     "namespace": d.namespace,
                     "reason": d.reason,
                     "occurredAt": d.occurredAt or _utc_now_iso(),
+                    "roundId": d.roundId,
                 }
                 for d in decisions
             ],

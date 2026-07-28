@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 RUN_EVENT_TYPES = {
     "run.queued", "run.started", "run.progress",
     "agent.selected", "agent.started", "agent.progress", "agent.completed", "agent.failed",
-    "llm.started", "llm.retrying", "llm.completed", "llm.failed",
+    "llm.context.attached", "llm.started", "llm.retrying", "llm.completed", "llm.failed",
     "tool.started", "tool.progress", "tool.completed", "tool.failed",
     "mcp.catalog.exposed", "mcp.tool.proposed",
     "skill.catalog", "skill.catalog.exposed", "skill.selected", "skill.loaded",

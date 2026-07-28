@@ -51,7 +51,7 @@ public class RunMemoryUsageService {
                                 Double vectorScore, Double lexicalScore, Double recencyScore,
                                 Double finalScore, String decision, String ignoredReason,
                                 String memoryType, String taxonomy, String namespace,
-                                String reason, String occurredAt) {
+                                String reason, String occurredAt, String roundId) {
     }
 
     public int recordUsage(String runId, String consumerAgent, List<UsageDecision> decisions) {
@@ -91,7 +91,7 @@ public class RunMemoryUsageService {
                 mapper.insert(row);
                 written++;
                 publishDecisionEvent(run, row, taxonomy, namespace,
-                        decisionReason(d, decision), occurredAt);
+                        decisionReason(d, decision), occurredAt, d.roundId());
             } catch (Exception e) {
                 log.debug("run_memory_usage insert skipped run={} mem={}: {}",
                         runId, d.memoryId(), e.getMessage());
@@ -130,7 +130,9 @@ public class RunMemoryUsageService {
                     str(map.get("taxonomy")),
                     str(map.get("namespace")),
                     str(map.get("reason")),
-                    str(map.get("occurredAt"))
+                    str(map.get("occurredAt")),
+                    str(map.get("roundId") != null
+                            ? map.get("roundId") : map.get("parentRoundId"))
             ));
         }
         return recordUsage(runId, consumer, decisions);
@@ -148,7 +150,8 @@ public class RunMemoryUsageService {
 
     private void publishDecisionEvent(AgentRun run, RunMemoryUsageRow row,
                                       String taxonomy, String namespace,
-                                      String reason, String occurredAt) {
+                                      String reason, String occurredAt,
+                                      String roundId) {
         if (run == null) {
             return;
         }
@@ -162,6 +165,10 @@ public class RunMemoryUsageService {
         payload.put("runId", row.getRunId());
         payload.put("decision", row.getDecision());
         payload.put("reason", reason);
+        if (StringUtils.hasText(roundId)) {
+            payload.put("roundId", roundId.trim());
+            payload.put("parentRoundId", roundId.trim());
+        }
         if (row.getRankNo() != null) {
             payload.put("rank", row.getRankNo());
         }

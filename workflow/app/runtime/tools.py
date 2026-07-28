@@ -408,14 +408,18 @@ class ToolExecutor:
 
     async def execute(self, agent_id: str, tool: str, args: Dict[str, Any],
                       enable_rewrite: bool = False,
-                      tool_call_id: Optional[str] = None) -> ToolCallResult:
+                      tool_call_id: Optional[str] = None,
+                      trace_context: Optional[Dict[str, Any]] = None
+                      ) -> ToolCallResult:
         proposed_id = str(tool_call_id or f"tc-{uuid.uuid4().hex[:16]}")
+        trace = dict(trace_context or {})
         defn = self.definitions.get(tool)
         if defn is None:
             call = self._reject(agent_id, tool, args, "TOOL_NOT_ALLOWED",
                                 f"工具不在白名单中: {tool}",
                                 tool_call_id=proposed_id)
-            await self._emit_rejected(agent_id, tool, args, call)
+            await self._emit_rejected(
+                agent_id, tool, args, call, trace_context=trace)
             return call
         if self.budget.tool_calls >= self.max_tool_calls_run:
             raise BudgetExceeded("maxToolCallsPerRun", f"limit={self.max_tool_calls_run}")
@@ -432,7 +436,9 @@ class ToolExecutor:
         except ToolValidationError as exc:
             call = self._reject(agent_id, tool, args, "INPUT_SCHEMA", str(exc),
                                 tool_call_id=proposed_id)
-            await self._emit_rejected(agent_id, tool, args, call, defn=defn)
+            await self._emit_rejected(
+                agent_id, tool, args, call, defn=defn,
+                trace_context=trace)
             return call
         if defn.kind == "mcp" and defn.mcp_server == "deepwiki":
             try:
@@ -444,7 +450,8 @@ class ToolExecutor:
                     agent_id, tool, args, "SUBJECT_BINDING", str(exc),
                     tool_call_id=proposed_id)
                 await self._emit_rejected(
-                    agent_id, tool, args, call, defn=defn)
+                    agent_id, tool, args, call, defn=defn,
+                    trace_context=trace)
                 return call
 
         # Wire enable_rewrite AFTER schema validation (internal flag, not in tool schema).
@@ -461,6 +468,7 @@ class ToolExecutor:
         meta = self._tool_event_meta(defn)
         started_at = _utc_now()
         started_payload = {
+            **trace,
             "toolCallId": tool_call_id,
             "arguments": _preview_args(public_args),
             "idempotencyKey": signature,
@@ -491,6 +499,7 @@ class ToolExecutor:
                 self.call_log.append(call)
                 await self.emitter.emit("tool.completed", agent_id=agent_id,
                                         tool_name=tool, payload={
+                                            **trace,
                                             "toolCallId": tool_call_id,
                                             "durationMs": duration_ms,
                                             "cacheHit": True,
@@ -532,6 +541,7 @@ class ToolExecutor:
                 event_type = "tool.completed" if outcome == "SUCCEEDED" else "tool.failed"
                 await self.emitter.emit(event_type, agent_id=agent_id, tool_name=tool,
                                         payload={
+                                            **trace,
                                             "toolCallId": tool_call_id,
                                             "outcome": outcome,
                                             "lifecycleStage": (
@@ -551,6 +561,7 @@ class ToolExecutor:
             except asyncio.CancelledError:
                 await self.emitter.emit("tool.failed", agent_id=agent_id, tool_name=tool,
                                         payload={"toolCallId": tool_call_id,
+                                                 **trace,
                                                  "error": "cancelled",
                                                  "lifecycleStage": "ERROR",
                                                  "occurredAt": _utc_now(),
@@ -568,6 +579,7 @@ class ToolExecutor:
             if retries <= max_retries:
                 await self.emitter.emit("tool.progress", agent_id=agent_id, tool_name=tool,
                                         payload={"toolCallId": tool_call_id,
+                                                 **trace,
                                                  "progress": f"retry {retries}",
                                                  "error": (last_error or "")[:200],
                                                  **meta})
@@ -578,6 +590,7 @@ class ToolExecutor:
                               error=last_error, duration_ms=duration_ms, retries=retries)
         self.call_log.append(call)
         await self.emitter.emit("tool.failed", agent_id=agent_id, tool_name=tool, payload={
+            **trace,
             "toolCallId": tool_call_id, "error": (last_error or "")[:300],
             "lifecycleStage": "ERROR",
             "occurredAt": _utc_now(),
@@ -892,7 +905,9 @@ class ToolExecutor:
 
     async def _emit_rejected(self, agent_id: str, tool: str,
                              args: Dict[str, Any], call: ToolCallResult,
-                             *, defn: Optional[ToolDefinition] = None) -> None:
+                             *, defn: Optional[ToolDefinition] = None,
+                             trace_context: Optional[Dict[str, Any]] = None
+                             ) -> None:
         now = _utc_now()
         meta = self._tool_event_meta(defn) if defn is not None else {
             "kind": "unknown", "origin": "unknown", "source": "unknown",
@@ -900,6 +915,7 @@ class ToolExecutor:
         }
         await self.emitter.emit("tool.failed", agent_id=agent_id,
                                 tool_name=tool, payload={
+                                    **(trace_context or {}),
                                     "toolCallId": call.tool_call_id,
                                     "error": call.error,
                                     "outcome": "REJECTED",

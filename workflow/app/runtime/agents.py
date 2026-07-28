@@ -41,7 +41,10 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "ResumeParserAgent": AgentDefinition(
         "ResumeParserAgent", "简历解析", "简历结构化与事实提取",
         ("resume_parsing",),
-        skills=("route-conversation-turn",),
+        # Conversation routing is not a parser capability. Keeping it here
+        # produced a fake "Skill skipped" child on the deterministic no-LLM
+        # parser fast path.
+        skills=(),
         tools=("parse_resume",),
         max_iterations=1, max_tool_calls=2, timeout_seconds=150,
         output_type="resume_facts",

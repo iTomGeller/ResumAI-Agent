@@ -355,8 +355,9 @@ class SkillManager:
                 return
             selected_ids.append(skill_id)
 
-        # Every turn: conversation routing (Coordinator / first specialist).
-        if agent_id in ("CoordinatorAgent", "ResumeParserAgent") or (
+        # Conversation routing is a control/conversation capability, not a
+        # deterministic resume-parser capability.
+        if agent_id == "CoordinatorAgent" or (
                 agent_id == "ReportAgent"
                 and run_type in ("followup", "quick_answer")):
             add("route-conversation-turn")
@@ -558,10 +559,13 @@ class SkillManager:
     async def emit_loaded(self, emitter: Any, agent_id: str,
                           skill: SkillDefinition, *,
                           tool_call_id: str,
-                          reason: str = "llm_requested") -> None:
+                          reason: str = "llm_requested",
+                          round_id: Optional[str] = None) -> None:
         await emitter.emit("skill.loaded", agent_id=agent_id,
                            tool_name=skill.skill_id, payload={
                                **self._event_base(skill, agent_id, tool_call_id),
+                               "roundId": round_id,
+                               "parentRoundId": round_id,
                                "lifecycleStage": "LOADED",
                                "reason": reason,
                                "disclosureState": "INSTRUCTIONS",
@@ -571,11 +575,14 @@ class SkillManager:
     async def emit_applied(self, emitter: Any, agent_id: str,
                            skill: SkillDefinition, *,
                            tool_call_id: str,
-                           reason: str = "instructions_in_model_context") -> None:
+                           reason: str = "instructions_in_model_context",
+                           round_id: Optional[str] = None) -> None:
         """Emit only after loaded instructions were included in a model turn."""
         await emitter.emit("skill.applied", agent_id=agent_id,
                            tool_name=skill.skill_id, payload={
                                **self._event_base(skill, agent_id, tool_call_id),
+                               "roundId": round_id,
+                               "applicationRoundId": round_id,
                                "lifecycleStage": "APPLIED",
                                "triggerReason": reason,
                                "injected": True})

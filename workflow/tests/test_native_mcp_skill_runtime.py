@@ -396,6 +396,22 @@ def test_native_model_proposes_mcp_arguments_and_trace_chain():
     assert stages.index("CATALOG_EXPOSED") < stages.index("LLM_PROPOSED")
     assert stages.index("LLM_PROPOSED") < stages.index("EXECUTION_STARTED")
     assert stages.index("EXECUTION_STARTED") < stages.index("RESULT")
+    round_ids = {
+        event.get("payload", {}).get("roundId") for event in chain
+        if event.get("payload", {}).get("roundId")
+    }
+    assert len(round_ids) == 1
+    round_id = next(iter(round_ids))
+    contexts = [
+        event for event in emitter.events
+        if event["eventType"] == "llm.context.attached"
+        and event.get("payload", {}).get("roundId") == round_id
+    ]
+    assert len(contexts) == 1
+    assert any(
+        ref.get("mcpServer") == "demo"
+        for ref in contexts[0]["payload"]["toolCatalogRefs"])
+    assert contexts[0]["payload"]["contextRole"] == "MODEL_INPUT"
     evidence = executor.state.artifact("mcpEvidence")
     assert evidence and evidence[0]["status"] == "SUCCEEDED"
     assert evidence[0]["toolCallId"] == "provider-native-7"

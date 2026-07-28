@@ -157,6 +157,13 @@ public class RunTraceBridgeService {
                 detail = "tokens=" + prompt + "+" + completion
                         + " attempts=" + payload.getOrDefault("attempts", 1);
             }
+            case "llm.context.attached" -> {
+                title = "LLM 输入上下文已绑定";
+                detail = "round=" + payload.getOrDefault("roundId", "")
+                        + " memory=" + payload.getOrDefault("memoryCount", 0)
+                        + " skills=" + payload.getOrDefault("skillCount", 0)
+                        + " catalog=" + payload.getOrDefault("toolCatalogCount", 0);
+            }
             case "llm.retrying" -> {
                 title = "LLM 重试";
                 detail = String.valueOf(payload.getOrDefault("error", ""));
@@ -244,10 +251,11 @@ public class RunTraceBridgeService {
                 detail = preview(payload, 300);
             }
         }
+        String parentSpanId = causalParentSpan(type, payload);
         return new TraceEventResponse(
                 traceId,
                 "run-ev-" + event.getId(),
-                null,
+                parentSpanId,
                 agent,
                 mapEventKind(type),
                 title,
@@ -322,6 +330,16 @@ public class RunTraceBridgeService {
 
         Map<String, Map<String, Object>> nodes = new LinkedHashMap<>();
         Map<String, List<Map<String, Object>>> rounds = new LinkedHashMap<>();
+        Map<String, Map<String, Map<String, Object>>> roundsById = new LinkedHashMap<>();
+        Map<String, Map<Integer, Map<String, Object>>> roundsByCallIndex = new LinkedHashMap<>();
+        Map<String, String> currentIterationRound = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> proposalRoundByAgent = new LinkedHashMap<>();
+        Map<String, Integer> pendingProposalCountByAgent = new LinkedHashMap<>();
+        Map<String, List<String>> pendingProposalNamesByAgent = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> toolByCall = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> toolRoundByCall = new LinkedHashMap<>();
+        Map<String, List<Map<String, Object>>> deterministicSteps = new LinkedHashMap<>();
+        Map<String, Set<String>> contextKeysByRound = new LinkedHashMap<>();
         int nextPhase = groups.size();
         for (RunEvent event : events) {
             String agent = event.getAgentId();
@@ -340,6 +358,9 @@ public class RunTraceBridgeService {
                 node.put("durationMs", 0L);
                 nodes.put(agent, node);
                 rounds.put(agent, new ArrayList<>());
+                roundsById.put(agent, new LinkedHashMap<>());
+                roundsByCallIndex.put(agent, new LinkedHashMap<>());
+                deterministicSteps.put(agent, new ArrayList<>());
             }
             switch (event.getEventType()) {
                 case "agent.started" -> {
@@ -368,155 +389,215 @@ public class RunTraceBridgeService {
                     node.put("durationMs", longOf(payload.get("durationMs")));
                     node.put("output", payload.getOrDefault("error", ""));
                 }
+                case "agent.progress" -> {
+                    int iteration = intOf(payload.get("iteration"));
+                    if (iteration > 0) {
+                        String logicalRoundId = firstText(payload,
+                                "roundId", "parentRoundId", "parentSpanId");
+                        if (!StringUtils.hasText(logicalRoundId)) {
+                            logicalRoundId = agent + "-iteration-" + iteration;
+                        }
+                        currentIterationRound.put(agent, logicalRoundId);
+                    }
+                }
+                case "llm.context.attached" -> {
+                    String roundId = causalRoundId(payload, agent,
+                            currentIterationRound.get(agent));
+                    if (!StringUtils.hasText(roundId)) {
+                        break;
+                    }
+                    Map<String, Object> round = roundFor(
+                            agent, roundId, payload, event,
+                            rounds, roundsById, roundsByCallIndex);
+                    round.put("contextRole", payload.getOrDefault(
+                            "contextRole", "MODEL_INPUT"));
+                    round.put("contextAttachedAt", eventInstant(payload, event));
+                    copyIfPresent(round, payload,
+                            "memoryCount", "skillCount", "toolCatalogCount",
+                            "contextTokenEstimate", "promptHash",
+                            "observedToolCallIds");
+                    attachContextReferences(
+                            round, payload, event,
+                            contextKeysByRound.computeIfAbsent(
+                                    agent + "|" + roundId, ignored -> new java.util.LinkedHashSet<>()));
+                }
+                case "llm.started" -> {
+                    String roundId = causalRoundId(payload, agent,
+                            currentIterationRound.get(agent));
+                    if (!StringUtils.hasText(roundId)) {
+                        roundId = agent + "-llm-" + intOf(payload.get("callIndex"));
+                    }
+                    Map<String, Object> round = roundFor(
+                            agent, roundId, payload, event,
+                            rounds, roundsById, roundsByCallIndex);
+                    round.put("roundId", roundId);
+                    round.put("status", "RUNNING");
+                    round.put("purpose", payload.getOrDefault("purpose", ""));
+                    round.put("model", payload.getOrDefault("model", ""));
+                    round.put("startedAt", eventStart(payload, event));
+                    round.putIfAbsent("occurredAt", eventStart(payload, event));
+                }
                 case "llm.completed" -> {
                     int prompt = intOf(payload.get("promptTokens"));
                     int completion = intOf(payload.get("completionTokens"));
-                    Map<String, Object> round = new LinkedHashMap<>();
-                    round.put("roundNum", rounds.get(agent).size() + 1);
-                    round.put("type", "generation");
-                    round.put("title", "LLM 生成");
-                    round.put("category", "llm");
+                    String roundId = causalRoundId(payload, agent,
+                            currentIterationRound.get(agent));
+                    Map<String, Object> round = findRound(
+                            agent, roundId, intOf(payload.get("callIndex")),
+                            roundsById, roundsByCallIndex);
+                    if (round == null) {
+                        if (!StringUtils.hasText(roundId)) {
+                            roundId = agent + "-llm-" + intOf(payload.get("callIndex"));
+                        }
+                        round = roundFor(agent, roundId, payload, event,
+                                rounds, roundsById, roundsByCallIndex);
+                    }
                     round.put("tokens", prompt + completion);
                     round.put("durationMs", longOf(payload.get("durationMs")));
                     round.put("model", payload.getOrDefault("model", ""));
-                    putTemporalFields(round, payload, event);
-                    rounds.get(agent).add(round);
+                    round.put("status", "SUCCESS");
+                    round.put("endedAt", eventEnd(payload, event));
+                    round.putIfAbsent("occurredAt", round.getOrDefault(
+                            "startedAt", eventInstant(payload, event)));
+                    int toolCallCount = intOf(payload.get("toolCallCount"));
+                    if (toolCallCount > 0) {
+                        proposalRoundByAgent.put(agent, round);
+                        pendingProposalCountByAgent.put(agent, toolCallCount);
+                        pendingProposalNamesByAgent.put(
+                                agent, stringList(payload.get("toolNames")));
+                    }
                 }
                 case "llm.retrying", "llm.failed" -> {
-                    Map<String, Object> round = new LinkedHashMap<>();
-                    round.put("roundNum", rounds.get(agent).size() + 1);
-                    round.put("type", "generation");
-                    round.put("category", "llm");
+                    String roundId = causalRoundId(payload, agent,
+                            currentIterationRound.get(agent));
+                    Map<String, Object> round = findRound(
+                            agent, roundId, intOf(payload.get("callIndex")),
+                            roundsById, roundsByCallIndex);
+                    if (round == null) {
+                        if (!StringUtils.hasText(roundId)) {
+                            roundId = agent + "-llm-" + intOf(payload.get("callIndex"));
+                        }
+                        round = roundFor(agent, roundId, payload, event,
+                                rounds, roundsById, roundsByCallIndex);
+                    }
                     round.put("title", "llm.failed".equals(event.getEventType())
                             ? "LLM 失败" : "LLM 重试");
                     round.put("error", payload.getOrDefault("error", ""));
-                    putTemporalFields(round, payload, event);
-                    rounds.get(agent).add(round);
+                    round.put("status", "llm.failed".equals(event.getEventType())
+                            ? "FAILED" : "RUNNING");
+                    round.put("endedAt", eventEnd(payload, event));
                 }
-                case "tool.completed", "tool.failed" -> {
-                    Map<String, Object> round = new LinkedHashMap<>();
-                    round.put("roundNum", rounds.get(agent).size() + 1);
-                    round.put("type", "tool");
-                    round.put("title", "工具 " + event.getToolName());
-                    round.put("hasToolCalls", true);
-                    Map<String, Object> tool = new LinkedHashMap<>();
-                    String toolCallId = String.valueOf(payload.getOrDefault("toolCallId", ""));
-                    tool.put("toolCallId", toolCallId);
-                    tool.put("name", event.getToolName());
-                    String kind = stringOf(payload.get("kind"));
-                    if (!StringUtils.hasText(kind)) {
-                        kind = stringOf(payload.get("origin"));
+                case "tool.progress", "tool.started", "tool.completed", "tool.failed" -> {
+                    String toolCallId = firstText(payload,
+                            "toolCallId", "callId", "invocationId");
+                    if (!StringUtils.hasText(toolCallId)) {
+                        break;
                     }
-                    if (!StringUtils.hasText(kind)) {
-                        kind = inferKind(event.getToolName(), event.getEventType());
+                    String callKey = agent + "|" + toolCallId;
+                    String roundId = causalRoundId(payload, agent, null);
+                    Map<String, Object> parentRound = findRound(
+                            agent, roundId, intOf(payload.get("callIndex")),
+                            roundsById, roundsByCallIndex);
+                    String lifecycleStage = stringOf(payload.get("lifecycleStage"));
+                    if (parentRound == null && "LLM_PROPOSED".equals(lifecycleStage)) {
+                        Map<String, Object> candidate = proposalRoundByAgent.get(agent);
+                        List<String> expectedNames = pendingProposalNamesByAgent.getOrDefault(
+                                agent, List.of());
+                        String modelName = firstText(payload, "modelName", "toolName");
+                        int remaining = pendingProposalCountByAgent.getOrDefault(agent, 0);
+                        if (candidate != null && remaining > 0
+                                && (expectedNames.isEmpty() || expectedNames.contains(modelName))) {
+                            parentRound = candidate;
+                            pendingProposalCountByAgent.put(agent, remaining - 1);
+                        }
                     }
-                    tool.put("category", kind);
-                    tool.put("origin", payload.getOrDefault("origin", kind));
-                    if (payload.get("mcpServer") != null) {
-                        tool.put("mcpServer", payload.get("mcpServer"));
+                    if (parentRound == null) {
+                        parentRound = toolRoundByCall.get(callKey);
                     }
-                    if (payload.get("protocolVersion") != null) {
-                        tool.put("protocolVersion", payload.get("protocolVersion"));
+                    Map<String, Object> tool = toolByCall.computeIfAbsent(
+                            callKey, ignored -> newTool(event, payload, toolCallId));
+                    mergeToolEvent(tool, event, payload,
+                            argsByToolCall.get(toolCallId),
+                            proposalByToolCall.get(toolCallId));
+                    if (parentRound != null) {
+                        deterministicSteps.get(agent).remove(tool);
+                        attachTool(parentRound, tool);
+                        toolRoundByCall.put(callKey, parentRound);
+                        tool.put("parentRoundId", parentRound.get("roundId"));
+                    } else if (!"CATALOG_EXPOSED".equals(lifecycleStage)) {
+                        attachDeterministicStep(deterministicSteps.get(agent), tool);
                     }
-                    if (payload.get("skillId") != null) {
-                        tool.put("skillId", payload.get("skillId"));
-                    }
-                    if (payload.get("skillVersion") != null) {
-                        tool.put("skillVersion", payload.get("skillVersion"));
-                    }
-                    if (payload.get("sandboxExecutionId") != null) {
-                        tool.put("sandboxExecutionId", payload.get("sandboxExecutionId"));
-                    }
-                    tool.put("status", "tool.completed".equals(event.getEventType())
-                            ? "SUCCESS" : "FAILED");
-                    tool.put("durationMs", longOf(payload.get("durationMs")));
-                    Object arguments = payload.get("arguments");
-                    if (arguments == null) {
-                        arguments = argsByToolCall.get(toolCallId);
-                    }
-                    if (arguments != null) {
-                        tool.put("input", preview(arguments, 800));
-                    }
-                    Map<String, Object> proposal = proposalByToolCall.get(toolCallId);
-                    if (proposal != null) {
-                        tool.put("proposalSource", "LLM_NATIVE");
-                        tool.put("modelGeneratedArguments",
-                                preview(proposal.get("arguments"), 800));
-                        tool.put("proposalOccurredAt",
-                                temporalValue(proposal, "occurredAt", "startedAt",
-                                        "endedAt", event.getCreateTime()));
-                        tool.put("modelToolName",
-                                proposal.getOrDefault("modelName", event.getToolName()));
-                        tool.put("lifecycle", List.of(
-                                "CATALOG_EXPOSED", "LLM_PROPOSED",
-                                "EXECUTION_STARTED",
-                                "tool.completed".equals(event.getEventType())
-                                        ? "RESULT" : "FAILED"));
-                    }
-                    tool.put("result", preview(payload.getOrDefault(
-                            "resultPreview", payload.getOrDefault("error", "")), 800));
-                    tool.put("output", preview(payload.getOrDefault(
-                            "resultPreview", payload.getOrDefault("error", "")), 1600));
-                    putTemporalFields(tool, payload, event);
-                    putTemporalFields(round, payload, event);
-                    round.put("category", kind);
-                    round.put("toolCalls", List.of(tool));
-                    rounds.get(agent).add(round);
                 }
                 case "skill.catalog", "skill.catalog.exposed", "skill.selected" -> {
-                    // Catalog/selection are visible in the flat lifecycle trace.
-                    // The tree starts at LOADED to avoid one skill appearing
-                    // three times before it has influenced an Agent.
+                    // Metadata lifecycle remains available in the flat audit feed.
+                    // It is not executable work and therefore is never a tree sibling.
                 }
-                case "skill.loaded", "skill.applied", "skill.skipped", "skill.failed" -> {
-                    Map<String, Object> round = new LinkedHashMap<>();
-                    round.put("roundNum", rounds.get(agent).size() + 1);
-                    round.put("type", "skill");
-                    round.put("title", skillLifecycleTitle(
-                            event.getEventType(),
-                            String.valueOf(payload.getOrDefault("skillId", event.getToolName())),
-                            String.valueOf(payload.getOrDefault("skillVersion", "v1"))));
-                    round.put("hasToolCalls", true);
-                    round.put("category", "skill");
-                    Map<String, Object> tool = new LinkedHashMap<>();
-                    tool.put("name", "skill:" + payload.getOrDefault("skillId", event.getToolName()));
-                    tool.put("category", "skill");
-                    tool.put("origin", "skill_manager");
-                    tool.put("skillId", payload.getOrDefault("skillId", ""));
-                    tool.put("skillVersion", payload.getOrDefault("skillVersion", ""));
-                    tool.put("skillHash", payload.getOrDefault("skillHash", ""));
-                    tool.put("lifecycleStage", payload.getOrDefault("lifecycleStage", ""));
-                    tool.put("disclosureState", payload.getOrDefault("disclosureState", ""));
-                    tool.put("status", "skill.failed".equals(event.getEventType())
-                            ? "FAILED" : "SUCCESS");
-                    tool.put("result", "stage="
-                            + payload.getOrDefault("lifecycleStage", event.getEventType())
-                            + " reason=" + payload.getOrDefault(
-                                    "reason", payload.getOrDefault("triggerReason", "policy_match"))
-                            + " agent=" + payload.getOrDefault("agentId", agent));
-                    putTemporalFields(tool, payload, event);
-                    putTemporalFields(round, payload, event);
-                    round.put("toolCalls", List.of(tool));
-                    rounds.get(agent).add(round);
-                }
-                case "memory.read", "memory.selected", "memory.used", "memory.written",
-                     "memory.skipped", "memory.missed" -> {
-                    Map<String, Object> round = new LinkedHashMap<>();
-                    round.put("roundNum", rounds.get(agent).size() + 1);
-                    round.put("type", "memory");
-                    round.put("category", "memory");
-                    String taxonomy = memoryTaxonomy(payload);
-                    round.put("title", memoryRoundTitle(event.getEventType(), taxonomy));
-                    round.put("memoryId", payload.getOrDefault("memoryId", ""));
-                    round.put("memoryType", taxonomy);
-                    round.put("taxonomy", taxonomy);
-                    round.put("namespace", payload.getOrDefault("namespace", "unknown"));
-                    round.put("reason", payload.getOrDefault("reason", ""));
-                    if (payload.get("score") != null) {
-                        round.put("score", payload.get("score"));
+                case "skill.loaded", "skill.failed" -> {
+                    String toolCallId = firstText(payload, "toolCallId", "callId");
+                    if (!StringUtils.hasText(toolCallId)) {
+                        break;
                     }
-                    putTemporalFields(round, payload, event);
-                    rounds.get(agent).add(round);
+                    String callKey = agent + "|" + toolCallId;
+                    Map<String, Object> tool = toolByCall.computeIfAbsent(
+                            callKey, ignored -> newTool(event, payload, toolCallId));
+                    mergeSkillLifecycle(tool, event, payload);
+                    String proposalRoundId = firstText(payload,
+                            "proposalRoundId", "parentRoundId", "roundId", "parentSpanId");
+                    Map<String, Object> parentRound = findRound(
+                            agent, proposalRoundId, 0, roundsById, roundsByCallIndex);
+                    if (parentRound == null) {
+                        parentRound = toolRoundByCall.get(callKey);
+                    }
+                    if (parentRound != null) {
+                        deterministicSteps.get(agent).remove(tool);
+                        attachTool(parentRound, tool);
+                        toolRoundByCall.put(callKey, parentRound);
+                        tool.put("parentRoundId", parentRound.get("roundId"));
+                    }
+                }
+                case "skill.applied" -> {
+                    String applicationRoundId = firstText(payload,
+                            "applicationRoundId", "parentRoundId", "roundId", "parentSpanId");
+                    Map<String, Object> applicationRound = findRound(
+                            agent, applicationRoundId, intOf(payload.get("callIndex")),
+                            roundsById, roundsByCallIndex);
+                    if (applicationRound != null) {
+                        attachSkillContext(
+                                applicationRound, payload, event,
+                                contextKeysByRound.computeIfAbsent(
+                                        agent + "|" + applicationRound.get("roundId"),
+                                        ignored -> new java.util.LinkedHashSet<>()));
+                    }
+                    String toolCallId = firstText(payload, "toolCallId", "callId");
+                    if (StringUtils.hasText(toolCallId)) {
+                        Map<String, Object> tool = toolByCall.get(agent + "|" + toolCallId);
+                        if (tool != null) {
+                            addLifecycle(tool, "APPLIED_IN_ROUND");
+                            tool.put("applicationRoundId", applicationRoundId);
+                        }
+                    }
+                }
+                case "skill.skipped" -> {
+                    // A skipped skill never entered a model prompt. Audit only.
+                }
+                case "memory.used" -> {
+                    String roundId = causalRoundId(payload, agent,
+                            currentIterationRound.get(agent));
+                    Map<String, Object> round = findRound(
+                            agent, roundId, intOf(payload.get("callIndex")),
+                            roundsById, roundsByCallIndex);
+                    if (round != null) {
+                        attachMemoryContext(
+                                round, payload, event,
+                                contextKeysByRound.computeIfAbsent(
+                                        agent + "|" + round.get("roundId"),
+                                        ignored -> new java.util.LinkedHashSet<>()));
+                    }
+                }
+                case "memory.read", "memory.selected", "memory.written",
+                     "memory.skipped", "memory.missed" -> {
+                    // Retrieval/selection/write lifecycle is audit data. Only memory.used
+                    // (or llm.context.attached.memoryRefs) is model-input causality.
                 }
                 default -> {
                     // progress/queued events do not create rounds
@@ -529,8 +610,15 @@ public class RunTraceBridgeService {
         for (Map.Entry<String, Map<String, Object>> entry : nodes.entrySet()) {
             Map<String, Object> node = entry.getValue();
             List<Map<String, Object>> agentRounds = rounds.get(entry.getKey());
+            for (int i = 0; i < agentRounds.size(); i++) {
+                agentRounds.get(i).put("roundNum", i + 1);
+            }
             node.put("rounds", agentRounds);
             node.put("totalRounds", agentRounds.size());
+            List<Map<String, Object>> agentDeterministic = deterministicSteps.get(entry.getKey());
+            if (agentDeterministic != null && !agentDeterministic.isEmpty()) {
+                node.put("deterministicSteps", agentDeterministic);
+            }
             totalLlmCalls += intOf(node.get("llmCalls"));
             executionTree.add(node);
         }
@@ -570,6 +658,435 @@ public class RunTraceBridgeService {
         String otelTraceId = run.getTraceId() != null ? run.getTraceId() : traceId;
         tree.putAll(langfuseHealth.linkMeta(otelTraceId));
         return tree;
+    }
+
+    private static Map<String, Object> roundFor(
+            String agent, String roundId, Map<String, Object> payload, RunEvent event,
+            Map<String, List<Map<String, Object>>> rounds,
+            Map<String, Map<String, Map<String, Object>>> roundsById,
+            Map<String, Map<Integer, Map<String, Object>>> roundsByCallIndex) {
+        Map<String, Object> round = roundsById.get(agent).get(roundId);
+        if (round == null) {
+            round = new LinkedHashMap<>();
+            round.put("roundId", roundId);
+            round.put("type", "generation");
+            round.put("title", "LLM 生成");
+            round.put("category", "llm");
+            round.put("contextEvents", new ArrayList<Map<String, Object>>());
+            round.put("toolCalls", new ArrayList<Map<String, Object>>());
+            round.put("firstEventSeq", event.getSeq());
+            roundsById.get(agent).put(roundId, round);
+            rounds.get(agent).add(round);
+        }
+        int callIndex = intOf(payload.get("callIndex"));
+        if (callIndex > 0) {
+            round.put("callIndex", callIndex);
+            roundsByCallIndex.get(agent).put(callIndex, round);
+        }
+        String parentSpanId = firstText(payload, "parentSpanId");
+        if (StringUtils.hasText(parentSpanId)) {
+            round.put("parentSpanId", parentSpanId);
+        }
+        return round;
+    }
+
+    private static Map<String, Object> findRound(
+            String agent, String roundId, int callIndex,
+            Map<String, Map<String, Map<String, Object>>> roundsById,
+            Map<String, Map<Integer, Map<String, Object>>> roundsByCallIndex) {
+        if (StringUtils.hasText(roundId)) {
+            Map<String, Object> round = roundsById.getOrDefault(
+                    agent, Map.of()).get(roundId);
+            if (round != null) {
+                return round;
+            }
+        }
+        return callIndex > 0
+                ? roundsByCallIndex.getOrDefault(agent, Map.of()).get(callIndex)
+                : null;
+    }
+
+    private void attachContextReferences(Map<String, Object> round,
+                                         Map<String, Object> payload,
+                                         RunEvent event,
+                                         Set<String> seen) {
+        Object memoryRefs = payload.get("memoryRefs");
+        if (memoryRefs instanceof List<?> refs) {
+            for (Object ref : refs) {
+                Map<String, Object> memory = objectMap(ref);
+                if (!memory.isEmpty()) {
+                    attachMemoryContext(round, memory, event, seen);
+                }
+            }
+        }
+        Object skillRefs = payload.get("skillRefs");
+        if (skillRefs instanceof List<?> refs) {
+            for (Object ref : refs) {
+                Map<String, Object> skill = objectMap(ref);
+                if (skill.isEmpty() && ref != null) {
+                    skill.put("skillId", String.valueOf(ref));
+                }
+                if (!skill.isEmpty()) {
+                    attachSkillContext(round, skill, event, seen);
+                }
+            }
+        }
+        List<Map<String, Object>> catalogs = new ArrayList<>();
+        Object toolCatalogRefs = payload.get("toolCatalogRefs");
+        if (toolCatalogRefs instanceof List<?> refs) {
+            int index = 0;
+            for (Object ref : refs) {
+                Map<String, Object> catalog = objectMap(ref);
+                if (catalog.isEmpty()) {
+                    continue;
+                }
+                String name = firstText(catalog, "name", "toolName", "modelName");
+                String server = firstText(catalog, "mcpServer", "server");
+                String source = firstText(catalog, "source", "kind", "origin");
+                String category = "mcp".equalsIgnoreCase(source)
+                        || StringUtils.hasText(server) ? "mcp" : "tool_catalog";
+                Map<String, Object> context = new LinkedHashMap<>();
+                context.put("eventId", "run-ev-" + event.getId() + "-catalog-" + index++);
+                context.put("eventType", "tool.catalog.attached");
+                context.put("category", category);
+                context.put("title", ("mcp".equals(category)
+                        ? "MCP 工具描述 · " : "工具描述 · ") + name);
+                context.put("name", name);
+                context.put("mcpServer", server);
+                context.put("modelName", catalog.getOrDefault("modelName", name));
+                context.put("source", source);
+                context.put("status", "ATTACHED");
+                context.put("occurredAt", eventInstant(payload, event));
+                String key = "catalog|" + server + "|" + name;
+                if (seen.add(key)) {
+                    contextEvents(round).add(context);
+                    catalogs.add(catalog);
+                }
+            }
+        }
+        if (!catalogs.isEmpty()) {
+            round.put("toolCatalogRefs", catalogs);
+        }
+        // Results from the preceding tool round are inputs to this model turn,
+        // not independent siblings in the execution tree.  The runtime emits
+        // their call ids with the assembled prompt; retain that exact linkage
+        // so the UI can render “LLM observed tool result” without guessing by
+        // timestamps or display name.
+        List<String> observedToolCallIds = stringList(payload.get("observedToolCallIds"));
+        if (!observedToolCallIds.isEmpty()) {
+            round.put("observedToolCallIds", observedToolCallIds);
+        }
+    }
+
+    private static void attachMemoryContext(Map<String, Object> round,
+                                            Map<String, Object> payload,
+                                            RunEvent event,
+                                            Set<String> seen) {
+        String memoryId = firstText(payload, "memoryId", "id");
+        String taxonomy = memoryTaxonomy(payload);
+        String namespace = firstText(payload, "namespace", "source");
+        String key = "memory|" + memoryId + "|" + taxonomy + "|" + namespace;
+        if (!seen.add(key)) {
+            return;
+        }
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("eventId", "run-ev-" + event.getId() + "-memory-" + memoryId);
+        context.put("eventType", "memory.used");
+        context.put("category", "memory");
+        context.put("title", "记忆注入 · " + taxonomy);
+        context.put("memoryId", memoryId);
+        context.put("memoryType", taxonomy);
+        context.put("taxonomy", taxonomy);
+        context.put("namespace", StringUtils.hasText(namespace) ? namespace : "unknown");
+        context.put("source", payload.getOrDefault("source", ""));
+        context.put("reason", payload.getOrDefault("reason", "selected_for_agent_context"));
+        context.put("status", "ATTACHED");
+        if (payload.get("score") != null) {
+            context.put("score", payload.get("score"));
+        }
+        context.put("occurredAt", eventInstant(payload, event));
+        contextEvents(round).add(context);
+    }
+
+    private static void attachSkillContext(Map<String, Object> round,
+                                           Map<String, Object> payload,
+                                           RunEvent event,
+                                           Set<String> seen) {
+        String skillId = firstText(payload, "skillId", "id", "name");
+        String version = firstText(payload, "skillVersion", "version");
+        String key = "skill|" + skillId + "|" + version;
+        if (!seen.add(key)) {
+            return;
+        }
+        String stage = firstText(payload, "lifecycleStage", "stage");
+        if (!StringUtils.hasText(stage)) {
+            if (Boolean.TRUE.equals(payload.get("applied"))) {
+                stage = "APPLIED";
+            } else if (Boolean.TRUE.equals(payload.get("loaded"))) {
+                stage = "LOADED";
+            } else {
+                stage = "SELECTED_METADATA";
+            }
+        }
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("eventId", "run-ev-" + event.getId() + "-skill-" + skillId);
+        context.put("eventType", "skill.applied");
+        context.put("category", "skill");
+        context.put("title", "Skill 上下文 · " + skillId);
+        context.put("skillId", skillId);
+        context.put("skillVersion", version);
+        context.put("lifecycleStage", stage);
+        context.put("disclosureState", payload.getOrDefault(
+                "disclosureState", "APPLIED".equals(stage)
+                        ? "INSTRUCTIONS" : "METADATA"));
+        context.put("reason", payload.getOrDefault(
+                "reason", payload.getOrDefault("triggerReason", "model_input")));
+        context.put("status", "ATTACHED");
+        context.put("occurredAt", eventInstant(payload, event));
+        contextEvents(round).add(context);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> contextEvents(Map<String, Object> round) {
+        return (List<Map<String, Object>>) round.computeIfAbsent(
+                "contextEvents", ignored -> new ArrayList<Map<String, Object>>());
+    }
+
+    private Map<String, Object> newTool(RunEvent event,
+                                        Map<String, Object> payload,
+                                        String toolCallId) {
+        Map<String, Object> tool = new LinkedHashMap<>();
+        String toolName = StringUtils.hasText(event.getToolName())
+                ? event.getToolName() : firstText(payload, "toolName", "modelName");
+        String kind = firstText(payload, "kind", "origin", "source");
+        if (!StringUtils.hasText(kind)) {
+            kind = inferKind(toolName, event.getEventType());
+        }
+        if ("internal".equalsIgnoreCase(kind)
+                && ("load_skill".equals(toolName) || "read_skill_resource".equals(toolName))) {
+            kind = "skill";
+        }
+        tool.put("toolCallId", toolCallId);
+        tool.put("name", toolName);
+        tool.put("category", kind);
+        tool.put("origin", payload.getOrDefault("origin", kind));
+        tool.put("lifecycle", new ArrayList<String>());
+        tool.put("eventIds", new ArrayList<String>());
+        return tool;
+    }
+
+    private void mergeToolEvent(Map<String, Object> tool,
+                                RunEvent event,
+                                Map<String, Object> payload,
+                                Object startedArguments,
+                                Map<String, Object> indexedProposal) {
+        @SuppressWarnings("unchecked")
+        List<String> eventIds = (List<String>) tool.get("eventIds");
+        eventIds.add("run-ev-" + event.getId());
+        copyIfPresent(tool, payload,
+                "mcpServer", "protocolVersion", "skillId", "skillVersion",
+                "sandboxExecutionId", "executionBackend", "lifecycleStage");
+        String type = event.getEventType();
+        String stage = stringOf(payload.get("lifecycleStage"));
+        if (StringUtils.hasText(stage)) {
+            addLifecycle(tool, stage);
+        }
+        if ("tool.progress".equals(type) && "LLM_PROPOSED".equals(stage)) {
+            tool.put("proposalSource", "LLM_NATIVE");
+            tool.put("proposalOccurredAt", eventInstant(payload, event));
+            tool.put("modelToolName", payload.getOrDefault(
+                    "modelName", event.getToolName()));
+            if (payload.get("arguments") != null) {
+                tool.put("modelGeneratedArguments", preview(payload.get("arguments"), 800));
+                tool.put("input", preview(payload.get("arguments"), 800));
+            }
+        } else if ("tool.started".equals(type)) {
+            tool.put("status", "RUNNING");
+            tool.put("startedAt", eventStart(payload, event));
+            tool.putIfAbsent("occurredAt", eventStart(payload, event));
+            Object arguments = payload.get("arguments") != null
+                    ? payload.get("arguments") : startedArguments;
+            if (arguments != null) {
+                tool.put("input", preview(arguments, 800));
+            }
+        } else if ("tool.completed".equals(type) || "tool.failed".equals(type)) {
+            tool.put("status", "tool.completed".equals(type) ? "SUCCESS" : "FAILED");
+            tool.put("durationMs", longOf(payload.get("durationMs")));
+            tool.put("endedAt", eventEnd(payload, event));
+            tool.putIfAbsent("occurredAt", eventInstant(payload, event));
+            Object result = payload.getOrDefault(
+                    "resultPreview", payload.getOrDefault("error", ""));
+            tool.put("result", preview(result, 800));
+            tool.put("output", preview(result, 1600));
+            Object arguments = payload.get("arguments") != null
+                    ? payload.get("arguments") : startedArguments;
+            if (arguments != null) {
+                tool.put("input", preview(arguments, 800));
+            }
+        }
+        if (indexedProposal != null && tool.get("proposalSource") == null) {
+            tool.put("proposalSource", "LLM_NATIVE");
+            tool.put("modelGeneratedArguments",
+                    preview(indexedProposal.get("arguments"), 800));
+            tool.put("proposalOccurredAt", temporalValue(
+                    indexedProposal, "occurredAt", "startedAt", "endedAt",
+                    event.getCreateTime()));
+            tool.put("modelToolName", indexedProposal.getOrDefault(
+                    "modelName", event.getToolName()));
+        }
+    }
+
+    private static void mergeSkillLifecycle(Map<String, Object> tool,
+                                            RunEvent event,
+                                            Map<String, Object> payload) {
+        tool.put("category", "skill");
+        tool.put("origin", "skill_manager");
+        copyIfPresent(tool, payload,
+                "skillId", "skillVersion", "skillHash",
+                "lifecycleStage", "disclosureState", "resourcePath");
+        String stage = firstText(payload, "lifecycleStage");
+        addLifecycle(tool, StringUtils.hasText(stage) ? stage
+                : "skill.failed".equals(event.getEventType()) ? "ERROR" : "LOADED");
+        tool.put("status", "skill.failed".equals(event.getEventType())
+                ? "FAILED" : "SUCCESS");
+        tool.put("result", "stage=" + payload.getOrDefault(
+                "lifecycleStage", event.getEventType())
+                + " reason=" + payload.getOrDefault(
+                        "reason", payload.getOrDefault("triggerReason", "llm_requested")));
+        tool.putIfAbsent("occurredAt", eventInstant(payload, event));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void addLifecycle(Map<String, Object> tool, String stage) {
+        if (!StringUtils.hasText(stage)) {
+            return;
+        }
+        List<String> lifecycle = (List<String>) tool.computeIfAbsent(
+                "lifecycle", ignored -> new ArrayList<String>());
+        if (!lifecycle.contains(stage)) {
+            lifecycle.add(stage);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void attachTool(Map<String, Object> round,
+                                   Map<String, Object> tool) {
+        List<Map<String, Object>> tools = (List<Map<String, Object>>) round.computeIfAbsent(
+                "toolCalls", ignored -> new ArrayList<Map<String, Object>>());
+        if (!tools.contains(tool)) {
+            tools.add(tool);
+        }
+        round.put("hasToolCalls", true);
+    }
+
+    private static void attachDeterministicStep(List<Map<String, Object>> steps,
+                                                Map<String, Object> tool) {
+        if (!steps.contains(tool)) {
+            steps.add(tool);
+        }
+    }
+
+    private static String causalRoundId(Map<String, Object> payload,
+                                        String agent,
+                                        String fallback) {
+        String roundId = firstText(payload,
+                "roundId", "applicationRoundId", "proposalRoundId",
+                "parentRoundId", "parentSpanId", "llmRoundId");
+        if (StringUtils.hasText(roundId)) {
+            return roundId;
+        }
+        int iteration = intOf(payload.get("iteration"));
+        if (iteration > 0) {
+            return agent + "-iteration-" + iteration;
+        }
+        return fallback;
+    }
+
+    private static String causalParentSpan(String eventType,
+                                           Map<String, Object> payload) {
+        if ("skill.applied".equals(eventType)) {
+            return firstText(payload,
+                    "applicationRoundId", "parentRoundId", "parentSpanId", "roundId");
+        }
+        if ("skill.loaded".equals(eventType) || "skill.failed".equals(eventType)) {
+            return firstText(payload,
+                    "proposalRoundId", "parentRoundId", "parentSpanId", "roundId");
+        }
+        if (eventType.startsWith("tool.") || eventType.startsWith("memory.")
+                || "llm.context.attached".equals(eventType)) {
+            return firstText(payload,
+                    "roundId", "parentRoundId", "parentSpanId", "llmRoundId");
+        }
+        return firstText(payload, "parentSpanId", "parentRoundId");
+    }
+
+    private static String firstText(Map<String, Object> payload, String... keys) {
+        for (String key : keys) {
+            String value = stringOf(payload.get(key));
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private static void copyIfPresent(Map<String, Object> target,
+                                      Map<String, Object> source,
+                                      String... keys) {
+        for (String key : keys) {
+            if (source.get(key) != null) {
+                target.put(key, source.get(key));
+            }
+        }
+    }
+
+    private static List<String> stringList(Object value) {
+        List<String> out = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object item : list) {
+                if (item != null) {
+                    out.add(String.valueOf(item));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static Map<String, Object> objectMap(Object value) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (value instanceof Map<?, ?> raw) {
+            for (Map.Entry<?, ?> entry : raw.entrySet()) {
+                if (entry.getKey() != null) {
+                    out.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+        }
+        return out;
+    }
+
+    private static Object eventInstant(Map<String, Object> payload, RunEvent event) {
+        Object value = firstValue(payload, "occurredAt", "startedAt", "endedAt");
+        return value != null ? value : event.getCreateTime();
+    }
+
+    private static Object eventStart(Map<String, Object> payload, RunEvent event) {
+        Object value = firstValue(payload, "startedAt", "startAt", "occurredAt");
+        return value != null ? value : event.getCreateTime();
+    }
+
+    private static Object eventEnd(Map<String, Object> payload, RunEvent event) {
+        Object value = firstValue(payload, "endedAt", "endAt", "occurredAt");
+        return value != null ? value : event.getCreateTime();
+    }
+
+    private static Object firstValue(Map<String, Object> payload, String... keys) {
+        for (String key : keys) {
+            Object value = payload.get(key);
+            if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private List<Map<String, Object>> buildHistoricalAttempts(String traceId, String currentRunId) {

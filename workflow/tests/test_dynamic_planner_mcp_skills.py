@@ -55,6 +55,11 @@ def test_skills_load_from_backend_resources():
 
 def test_skill_selection_is_one_or_two_and_revision_aware():
     manager = SkillManager(resolve_skills_root())
+    parser = manager.select_for(
+        agent_id="ResumeParserAgent", run_type="full_evaluation",
+        job_focus=None, overrides={}, signals={}, user_message="评估简历")
+    assert parser == [], "deterministic parser must not expose conversation Skills"
+
     why = manager.select_for(
         agent_id="ReportAgent", run_type="followup",
         job_focus=None, overrides={},

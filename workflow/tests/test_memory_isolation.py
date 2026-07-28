@@ -154,14 +154,18 @@ def test_usage_decision_has_taxonomy_namespace_reason_and_real_time():
         "namespace": "conversation/abc123",
         "selectionReason": "query_intent:SEMANTIC",
         "score": 0.82,
+        "occurredAt": "2020-01-01T00:00:00Z",
     }]
-    rows = decisions_from_hits(used, [], "ResumeParserAgent")
+    rows = decisions_from_hits(
+        used, [], "ResumeParserAgent", round_id="run:parser:round:1")
     assert len(rows) == 1
     assert rows[0].taxonomy == "SEMANTIC"
     assert rows[0].memoryType == "SEMANTIC"
     assert rows[0].namespace == "conversation/abc123"
     assert rows[0].reason == "query_intent:SEMANTIC"
     assert rows[0].occurredAt and rows[0].occurredAt.endswith("Z")
+    assert rows[0].roundId == "run:parser:round:1"
+    assert rows[0].occurredAt != used[0]["occurredAt"]
 
 
 def test_working_memory_is_not_injected_into_report_agent():

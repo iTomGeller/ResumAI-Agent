@@ -10,6 +10,7 @@ import { computed, ref, watch } from 'vue';
 type ToolCategory = 'mcp' | 'skill' | 'memory' | 'builtin' | 'retrieval' | 'llm' | 'tool' | 'external';
 
 interface ToolCallView {
+  id?: string;
   toolCallId?: string;
   name?: string;
   status?: string;
@@ -22,6 +23,8 @@ interface ToolCallView {
   result?: string;
   output?: string;
   category?: string;
+  type?: string;
+  source?: string;
   origin?: string;
   executionBackend?: string;
   mcpServer?: string;
@@ -33,10 +36,43 @@ interface ToolCallView {
   proposalOccurredAt?: string;
   modelGeneratedArguments?: string;
   modelToolName?: string;
+  modelName?: string;
+  contextRole?: string;
+  description?: string;
+  inputSchema?: unknown;
+  schema?: unknown;
   lifecycle?: string[];
+  eventId?: string;
+  eventType?: string;
+  parentRoundId?: string;
+  callIndex?: number;
+  title?: string;
+  reason?: string;
+  content?: string;
+  taxonomy?: string;
+  memoryType?: string;
+  memoryId?: string;
+  namespace?: string;
+  score?: number;
+}
+
+interface ContextEventView extends ToolCallView {
+  category?: 'memory' | 'skill' | 'retrieval' | string;
 }
 
 interface RoundView {
+  id?: string;
+  roundId?: string;
+  callIndex?: number;
+  parentRoundId?: string;
+  roundRole?: string;
+  contextRole?: string;
+  contextAttachedAt?: string;
+  memoryCount?: number;
+  skillCount?: number;
+  toolCatalogCount?: number;
+  contextTokenEstimate?: number;
+  promptHash?: string;
   roundNum?: number;
   type?: string;
   category?: string;
@@ -58,6 +94,14 @@ interface RoundView {
   finalOutput?: string;
   inputMessages?: unknown[];
   outputMessage?: Record<string, unknown>;
+  contextEvents?: ContextEventView[];
+  toolCatalogRefs?: ContextEventView[];
+  memoryId?: string;
+  memoryType?: string;
+  taxonomy?: string;
+  namespace?: string;
+  reason?: string;
+  score?: number;
 }
 
 interface AgentView {
@@ -74,6 +118,7 @@ interface AgentView {
   confidence?: number;
   output?: string;
   rounds?: RoundView[];
+  deterministicSteps?: ToolCallView[];
   executionMode?: string;
 }
 
@@ -126,7 +171,7 @@ const props = defineProps<{
 interface SpanRow {
   id: string;
   depth: number;
-  kind: 'group' | 'agent' | 'round' | 'tool';
+  kind: 'group' | 'agent' | 'round' | 'deterministic' | 'context' | 'tool';
   label: string;
   sub?: string;
   status?: string;
@@ -139,6 +184,9 @@ interface SpanRow {
   agent?: AgentView;
   round?: RoundView;
   tool?: ToolCallView;
+  context?: ContextEventView;
+  parentId?: string;
+  causalRole?: 'input' | 'decision' | 'result' | 'deterministic';
 }
 
 const FILTERS: Array<{ id: ToolCategory | 'all'; label: string }> = [
@@ -164,7 +212,8 @@ const collapsed = ref<Set<string>>(new Set());
 const kindFilter = ref<ToolCategory | 'all'>('all');
 const historyOpen = ref(false);
 
-const agents = computed<AgentView[]>(() => props.tree?.executionTree || []);
+const agents = computed<AgentView[]>(() =>
+  (props.tree?.executionTree || []).map(normalizeAgentCausality));
 // Historical attempts stay out of the default candidate Trace tree.
 const historicalAttempts = computed(() => props.tree?.historicalAttempts || []);
 
@@ -218,14 +267,235 @@ function badgeLabel(badge?: ToolCategory): string {
   return badge.toUpperCase();
 }
 
-function roundBadge(round: RoundView): ToolCategory {
+function isGenerationRound(round: RoundView): boolean {
+  const type = (round.type || '').toLowerCase();
+  if (['generation', 'llm', 'llm_generation', 'llm_complete'].includes(type)) return true;
+  return (round.category || '').toLowerCase() === 'llm';
+}
+
+function roundKey(round: RoundView, fallbackIndex: number): string {
+  return round.roundId || round.id || round.parentRoundId
+    || (round.callIndex != null ? `call-${round.callIndex}` : `round-${round.roundNum ?? fallbackIndex + 1}`);
+}
+
+function eventTime(event: { proposalOccurredAt?: string; startedAt?: string; occurredAt?: string; endedAt?: string }): string | undefined {
+  return event.proposalOccurredAt || event.startedAt || event.occurredAt || event.endedAt;
+}
+
+function isContextLifecycle(round: RoundView): boolean {
+  const category = (round.category || round.type || '').toLowerCase();
+  if (category === 'memory') return true;
+  if (category === 'tool_catalog' || category === 'context'
+    || round.contextEvents?.length || round.toolCatalogRefs?.length) return true;
+  if (category !== 'skill') return false;
   const tool = round.toolCalls?.[0];
-  const isTool = ['tool', 'skill', 'memory'].includes(round.type || '') || round.hasToolCalls;
-  return normalizeCategory(
-    round.category || tool?.category || tool?.origin,
-    tool?.name,
-    !isTool,
+  const stage = String(tool?.lifecycleStage || '').toUpperCase();
+  const eventType = String(tool?.eventType || '').toLowerCase();
+  // Catalog/selection/skips are audit facts, not model input. Only content
+  // that was actually loaded/applied may be shown as an LLM attachment.
+  return ['RESOURCE_LOADED', 'LOADED', 'APPLIED'].includes(stage)
+    || ['skill.loaded', 'skill.applied'].includes(eventType)
+    || /已加载|已应用|渐进加载/.test(round.title || '');
+}
+
+function contextFromLegacyRound(round: RoundView, index: number): ContextEventView {
+  const tool = round.toolCalls?.[0] || {};
+  const category = normalizeCategory(
+    round.category || round.type || tool.category,
+    tool.name,
   );
+  return {
+    ...tool,
+    eventId: tool.eventId || round.id || `legacy-context-${index}`,
+    eventType: tool.eventType || (category === 'memory' ? 'memory.used' : 'skill.applied'),
+    category,
+    title: round.title || tool.title,
+    occurredAt: round.occurredAt || round.startedAt || round.timestamp || tool.occurredAt,
+    startedAt: round.startedAt || tool.startedAt,
+    endedAt: round.endedAt || tool.endedAt,
+    memoryId: round.memoryId || tool.memoryId,
+    memoryType: round.memoryType || round.taxonomy || tool.memoryType || tool.taxonomy,
+    taxonomy: round.taxonomy || round.memoryType || tool.taxonomy || tool.memoryType,
+    namespace: round.namespace || tool.namespace,
+    reason: round.reason || tool.reason,
+    score: round.score ?? tool.score,
+    content: tool.content || tool.result || tool.output,
+  };
+}
+
+function contextIdentity(event: ContextEventView): string {
+  const category = (event.category || event.type || event.origin || event.source || '').toLowerCase();
+  const contextId = event.memoryId || event.id;
+  if ((category === 'memory' || event.memoryId) && contextId) {
+    return `memory|${contextId}`;
+  }
+  if ((category === 'skill' || event.skillId) && (event.skillId || event.name)) {
+    return `skill|${event.skillId || event.name}`;
+  }
+  if (category === 'mcp' || category === 'tool_catalog'
+    || event.eventType === 'tool.catalog.attached') {
+    return `catalog|${event.mcpServer || event.origin || ''}|${event.modelToolName || event.name || event.eventId || ''}`;
+  }
+  return event.eventId || [event.eventType, event.category, event.name,
+    event.lifecycleStage, eventTime(event)].filter(Boolean).join('|');
+}
+
+function toolIdentity(tool: ToolCallView): string {
+  return tool.toolCallId || [tool.name, tool.category, tool.proposalOccurredAt,
+    tool.startedAt, tool.endedAt].filter(Boolean).join('|');
+}
+
+function dedupeContexts(events: ContextEventView[]): ContextEventView[] {
+  const merged = new Map<string, ContextEventView>();
+  events.forEach((event, index) => {
+    const key = contextIdentity(event) || `context-${index}`;
+    const previous = merged.get(key);
+    if (!previous) {
+      merged.set(key, event);
+      return;
+    }
+    merged.set(key, {
+      ...previous,
+      ...event,
+      lifecycle: [...new Set([...(previous.lifecycle || []), ...(event.lifecycle || [])])],
+    });
+  });
+  return [...merged.values()];
+}
+
+function dedupeTools(tools: ToolCallView[]): ToolCallView[] {
+  const byId = new Map<string, ToolCallView>();
+  tools.forEach((tool, index) => {
+    const key = toolIdentity(tool) || `tool-${index}`;
+    const previous = byId.get(key);
+    if (!previous) {
+      byId.set(key, tool);
+      return;
+    }
+    const merged: ToolCallView = { ...previous, ...tool };
+    (Object.keys(previous) as Array<keyof ToolCallView>).forEach((field) => {
+      const next = merged[field];
+      if (next == null || next === '') merged[field] = previous[field] as never;
+    });
+    merged.lifecycle = [...new Set([...(previous.lifecycle || []), ...(tool.lifecycle || [])])];
+    byId.set(key, merged);
+  });
+  return [...byId.values()];
+}
+
+/**
+ * Normalise both the causal API and traces created before roundId existed.
+ * The rendered unit is always an LLM turn: prompt attachments belong to its
+ * input, and native tool calls belong to the turn that proposed them.
+ */
+function normalizeAgentCausality(agent: AgentView): AgentView {
+  const rawRounds = agent.rounds || [];
+  const generationEntries = rawRounds
+    .map((round, index) => ({ round, index }))
+    .filter(({ round }) => isGenerationRound(round));
+
+  const normalizedRounds = generationEntries.map(({ round, index }) => ({
+    ...round,
+    roundId: roundKey(round, index),
+    contextEvents: dedupeContexts([
+      ...(round.contextEvents || []),
+      ...(round.toolCatalogRefs || []),
+    ]),
+    toolCalls: dedupeTools(round.toolCalls || []),
+  }));
+
+  const byRoundId = new Map<string, RoundView>();
+  normalizedRounds.forEach((round, index) => {
+    [round.roundId, round.id, round.parentRoundId, `round-${round.roundNum ?? index + 1}`]
+      .filter((key): key is string => !!key)
+      .forEach((key) => byRoundId.set(key, round));
+  });
+
+  const deterministicSteps = [...(agent.deterministicSteps || [])];
+  rawRounds.forEach((legacy, legacyIndex) => {
+    if (isGenerationRound(legacy)) return;
+    const explicitParent = legacy.parentRoundId
+      || legacy.toolCalls?.find((tool) => tool.parentRoundId)?.parentRoundId;
+    const explicitTarget = explicitParent ? byRoundId.get(explicitParent) : undefined;
+
+    if (isContextLifecycle(legacy)) {
+      const contexts = legacy.contextEvents?.length
+        ? legacy.contextEvents
+        : legacy.toolCatalogRefs?.length
+          ? legacy.toolCatalogRefs
+          : [contextFromLegacyRound(legacy, legacyIndex)];
+      const nextEntry = generationEntries.find(({ index }) => index > legacyIndex);
+      const target = explicitTarget || (nextEntry
+        ? normalizedRounds[generationEntries.indexOf(nextEntry)]
+        : undefined);
+      if (target) target.contextEvents = dedupeContexts([...(target.contextEvents || []), ...contexts]);
+      return;
+    }
+
+    const tools = legacy.toolCalls || [];
+    const legacyCategory = (legacy.category || legacy.type || '').toLowerCase();
+    if (legacyCategory === 'skill'
+      && !tools.some((tool) => ['load_skill', 'read_skill_resource'].includes(tool.name || ''))) {
+      // Legacy bridge exposed audit lifecycle events as pseudo tool rounds.
+      // They are not executions and must not reappear as orphan Skill rows.
+      return;
+    }
+    if (!tools.length) return;
+    const previousEntry = [...generationEntries].reverse().find(({ index }) => index < legacyIndex);
+    const target = explicitTarget || (previousEntry
+      ? normalizedRounds[generationEntries.indexOf(previousEntry)]
+      : undefined);
+    if (target) {
+      target.toolCalls = dedupeTools([...(target.toolCalls || []), ...tools]);
+      return;
+    }
+
+    // Older traces had no parent ids. Preserve only real deterministic
+    // pre-processing; never invent a model decision for orphan MCP/Skill rows.
+    tools.forEach((tool) => {
+      const category = normalizeCategory(tool.category || legacy.category, tool.name);
+      if (category === 'builtin' || category === 'retrieval') {
+        deterministicSteps.push({ ...tool, category });
+      }
+    });
+  });
+
+  return {
+    ...agent,
+    rounds: normalizedRounds,
+    deterministicSteps: dedupeTools(deterministicSteps),
+  };
+}
+
+function contextBadge(context: ContextEventView): ToolCategory {
+  const category = (context.category || context.type || '').toLowerCase();
+  if (category === 'tool_catalog') {
+    return (context.mcpServer || context.origin === 'mcp') ? 'mcp' : 'builtin';
+  }
+  return normalizeCategory(context.category || context.type || context.origin || context.source, context.name);
+}
+
+function contextLabel(context: ContextEventView): string {
+  const badge = contextBadge(context);
+  if (badge === 'memory') {
+    return `输入 · 记忆 ${context.memoryType || context.taxonomy || ''}`.trim();
+  }
+  if (badge === 'skill') {
+    return `输入 · Skill ${context.skillId || context.name || ''}`.trim();
+  }
+  if (context.eventType === 'tool.catalog.attached' || context.category === 'tool_catalog') {
+    return `输入 · 工具描述 ${context.modelToolName || context.modelName || context.name || ''}`.trim();
+  }
+  return `输入 · ${context.title || context.name || '上下文'}`;
+}
+
+function firstTime(events: Array<{ proposalOccurredAt?: string; startedAt?: string; occurredAt?: string; endedAt?: string }>): string | undefined {
+  return events.map(eventTime).filter((value): value is string => !!value).sort()[0];
+}
+
+function lastTime(events: Array<{ proposalOccurredAt?: string; startedAt?: string; occurredAt?: string; endedAt?: string }>): string | undefined {
+  return events.map((event) => event.endedAt || event.occurredAt || event.startedAt)
+    .filter((value): value is string => !!value).sort().at(-1);
 }
 
 const spans = computed<SpanRow[]>(() => {
@@ -256,6 +526,7 @@ const spans = computed<SpanRow[]>(() => {
       const agentId = `${groupId}-a-${ai}`;
       rows.push({
         id: agentId,
+        parentId: groupId,
         depth: 1,
         kind: 'agent',
         label: displayName(agent.name),
@@ -267,27 +538,105 @@ const spans = computed<SpanRow[]>(() => {
         agent,
       });
       if (collapsed.value.has(agentId)) return;
+      const deterministic = agent.deterministicSteps || [];
+      if (deterministic.length) {
+        const deterministicId = `${agentId}-deterministic`;
+        rows.push({
+          id: deterministicId,
+          parentId: agentId,
+          depth: 2,
+          kind: 'deterministic',
+          label: '确定性预处理',
+          sub: `${deterministic.length} 个真实工具步骤（非 LLM 决策）`,
+          status: deterministic.some((tool) => tool.status === 'FAILED') ? 'FAILED' : 'SUCCESS',
+          durationMs: deterministic.reduce((sum, tool) => sum + (tool.durationMs || 0), 0),
+          occurredAt: firstTime(deterministic),
+          endedAt: lastTime(deterministic),
+          badge: 'builtin',
+          agent,
+          causalRole: 'deterministic',
+        });
+        if (!collapsed.value.has(deterministicId)) {
+          deterministic.forEach((tool, ti) => {
+            const badge = normalizeCategory(tool.category || tool.origin, tool.name);
+            rows.push({
+              id: `${deterministicId}-t-${ti}`,
+              parentId: deterministicId,
+              depth: 3,
+              kind: 'tool',
+              label: `预处理 · ${tool.name || '工具'}`,
+              status: tool.status,
+              durationMs: tool.durationMs,
+              occurredAt: tool.startedAt || tool.occurredAt,
+              endedAt: tool.endedAt,
+              badge,
+              agent,
+              tool,
+              causalRole: 'deterministic',
+            });
+          });
+        }
+      }
       (agent.rounds || []).forEach((round, ri) => {
         const roundId = `${agentId}-r-${ri}`;
-        const isTool = ['tool', 'skill', 'memory'].includes(round.type || '')
-          || !!round.hasToolCalls;
-        const badge = roundBadge(round);
+        const contexts = round.contextEvents || [];
+        const tools = round.toolCalls || [];
         rows.push({
           id: roundId,
+          parentId: agentId,
           depth: 2,
-          kind: isTool ? 'tool' : 'round',
-          label: round.title || (isTool ? '工具调用' : `第 ${round.roundNum ?? ri + 1} 轮`),
+          kind: 'round',
+          label: round.title || `LLM 第 ${round.callIndex ?? round.roundNum ?? ri + 1} 轮`,
+          sub: `输入附件 ${contexts.length} · 模型工具调用 ${tools.length}`,
           status: round.error ? 'FAILED'
-            : round.toolCalls?.some((t) => t.status === 'FAILED') ? 'FAILED' : 'SUCCESS',
-          durationMs: round.durationMs ?? round.toolCalls?.[0]?.durationMs,
+            : tools.some((tool) => tool.status === 'FAILED') ? 'FAILED' : 'SUCCESS',
+          durationMs: round.durationMs,
           occurredAt: round.startedAt || round.occurredAt || round.timestamp
-            || round.toolCalls?.[0]?.startedAt || round.toolCalls?.[0]?.occurredAt,
-          endedAt: round.endedAt || round.toolCalls?.[0]?.endedAt,
+            || firstTime(contexts) || firstTime(tools),
+          endedAt: round.endedAt,
           tokens: round.tokens,
-          badge,
+          badge: 'llm',
           agent,
           round,
-          tool: round.toolCalls?.[0],
+          causalRole: 'decision',
+        });
+        if (collapsed.value.has(roundId)) return;
+        contexts.forEach((context, ci) => {
+          rows.push({
+            id: `${roundId}-c-${ci}`,
+            parentId: roundId,
+            depth: 3,
+            kind: 'context',
+            label: contextLabel(context),
+            sub: context.reason,
+            status: context.status || 'SUCCESS',
+            occurredAt: context.startedAt || context.occurredAt,
+            endedAt: context.endedAt,
+            badge: contextBadge(context),
+            agent,
+            round,
+            context,
+            causalRole: 'input',
+          });
+        });
+        tools.forEach((tool, ti) => {
+          const badge = normalizeCategory(tool.category || tool.origin, tool.name);
+          rows.push({
+            id: `${roundId}-t-${ti}`,
+            parentId: roundId,
+            depth: 3,
+            kind: 'tool',
+            label: `模型调用 · ${tool.name || '工具'}`,
+            status: tool.status,
+            durationMs: tool.durationMs,
+            occurredAt: tool.proposalOccurredAt || tool.startedAt || tool.occurredAt,
+            endedAt: tool.endedAt,
+            badge,
+            agent,
+            round,
+            tool,
+            causalRole: 'result',
+          });
         });
       });
     });
@@ -297,22 +646,23 @@ const spans = computed<SpanRow[]>(() => {
 
 const filteredSpans = computed(() => {
   if (kindFilter.value === 'all') return spans.value;
-  const matchingAgentIds = new Set<string>();
-  const matchingGroupIds = new Set<string>();
-  for (const row of spans.value) {
-    if ((row.kind === 'tool' || row.kind === 'round') && row.badge === kindFilter.value) {
-      const parts = row.id.split('-r-');
-      const agentId = parts[0];
-      matchingAgentIds.add(agentId);
-      const groupId = agentId.replace(/-a-\d+$/, '');
-      matchingGroupIds.add(groupId);
+  const byId = new Map(spans.value.map((row) => [row.id, row]));
+  const visible = new Set<string>();
+  const includeWithAncestors = (row: SpanRow) => {
+    let current: SpanRow | undefined = row;
+    while (current) {
+      visible.add(current.id);
+      current = current.parentId ? byId.get(current.parentId) : undefined;
     }
+  };
+  for (const row of spans.value) {
+    const matchesLlm = kindFilter.value === 'llm' && row.kind === 'round';
+    const matchesChild = kindFilter.value !== 'llm'
+      && (row.kind === 'context' || row.kind === 'tool')
+      && row.badge === kindFilter.value;
+    if (matchesLlm || matchesChild) includeWithAncestors(row);
   }
-  return spans.value.filter((row) => {
-    if (row.kind === 'group') return matchingGroupIds.has(row.id);
-    if (row.kind === 'agent') return matchingAgentIds.has(row.id);
-    return row.badge === kindFilter.value;
-  });
+  return spans.value.filter((row) => visible.has(row.id));
 });
 
 const selected = computed<SpanRow | null>(() =>
@@ -466,6 +816,7 @@ async function copyText(text?: string) {
       </div>
       <blockquote class="route-reason" v-if="route.whySelected?.length">{{ route.whySelected[0] }}</blockquote>
       <div class="route-memory" v-if="memoryTop.length">
+        <div class="route-memory-caption">Coordinator 规划阶段记忆摘要（非独立执行 span；实际注入见对应 LLM 轮次）</div>
         <div v-for="(hit, hi) in memoryTop" :key="hi" class="route-memory-item">
           <span class="memory-type">{{ hit.type }}</span>
           <span class="memory-content">{{ hit.content }}</span>
@@ -500,7 +851,10 @@ async function copyText(text?: string) {
           @keydown.enter="selectedId = row.id"
         >
           <button
-            v-if="row.kind === 'group' || (row.kind === 'agent' && (row.agent?.rounds?.length || 0) > 0)"
+            v-if="row.kind === 'group'
+              || (row.kind === 'agent' && (((row.agent?.rounds?.length || 0) + (row.agent?.deterministicSteps?.length || 0)) > 0))
+              || row.kind === 'deterministic'
+              || (row.kind === 'round' && (((row.round?.contextEvents?.length || 0) + (row.round?.toolCalls?.length || 0)) > 0))"
             class="span-caret"
             @click.stop="toggle(row.id)"
           >{{ collapsed.has(row.id) ? '▸' : '▾' }}</button>
@@ -519,11 +873,12 @@ async function copyText(text?: string) {
             class="span-kind badge-agent"
           >AGENT</span>
           <span
-            v-else-if="row.kind === 'tool' || row.kind === 'round'"
+            v-else-if="row.kind === 'tool' || row.kind === 'round' || row.kind === 'context' || row.kind === 'deterministic'"
             class="span-kind"
             :class="`badge-${row.badge || (row.kind === 'round' ? 'llm' : 'builtin')}`"
           >{{ badgeLabel(row.badge || (row.kind === 'round' ? 'llm' : 'builtin')) }}</span>
           <span class="span-label">{{ row.label }}</span>
+          <span class="span-causal-summary" v-if="row.sub && (row.kind === 'round' || row.kind === 'deterministic')">{{ row.sub }}</span>
           <span class="span-parallel" v-if="row.parallel">∥ 并行</span>
           <span class="span-tokens" v-if="row.tokens">{{ row.tokens }} tok</span>
           <time
@@ -567,10 +922,103 @@ async function copyText(text?: string) {
           </div>
         </template>
 
-        <template v-else-if="selected.round">
-          <p class="detail-sub" v-if="selected.agent">{{ displayName(selected.agent.name) }} · {{ selected.round.model || (selected.kind === 'tool' ? '确定性工具' : 'DeepSeek') }}</p>
+        <template v-else-if="selected.kind === 'deterministic' && selected.agent">
+          <p class="detail-sub">{{ displayName(selected.agent.name) }} · 不经过 LLM 决策的固定预处理链</p>
+          <div class="causal-banner deterministic-banner">
+            <strong>确定性输入处理</strong>
+            <span>只展示真实执行的 builtin / RAG；不会伪装成模型工具调用。</span>
+          </div>
+          <div class="attachment-list">
+            <div v-for="(tool, ti) in (selected.agent.deterministicSteps || [])" :key="tool.toolCallId || ti" class="attachment-card">
+              <div class="attachment-head">
+                <span class="span-kind" :class="`badge-${normalizeCategory(tool.category || tool.origin, tool.name)}`">{{ badgeLabel(normalizeCategory(tool.category || tool.origin, tool.name)) }}</span>
+                <strong>{{ tool.name || '工具' }}</strong>
+                <time v-if="tool.startedAt || tool.occurredAt">{{ fmtTime(tool.startedAt || tool.occurredAt) }}</time>
+                <span>{{ fmtMs(tool.durationMs) }}</span>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <template v-else-if="selected.kind === 'context' && selected.context && selected.round">
+          <p class="detail-sub">{{ displayName(selected.agent?.name) }} · LLM 第 {{ selected.round.callIndex ?? selected.round.roundNum ?? '-' }} 轮输入附件</p>
+          <div class="causal-banner">
+            <strong>MODEL_INPUT</strong>
+            <span>该内容随本轮 prompt 一起提交给模型，不是一次独立执行。</span>
+          </div>
+          <div class="detail-grid">
+            <div><em>类别</em><strong>{{ badgeLabel(contextBadge(selected.context)) }}</strong></div>
+            <div v-if="selected.context.contextRole"><em>Prompt 角色</em><strong>{{ selected.context.contextRole }}</strong></div>
+            <div v-if="selected.context.source || selected.context.origin"><em>来源</em><strong>{{ selected.context.source || selected.context.origin }}</strong></div>
+            <div v-if="selected.context.memoryType || selected.context.taxonomy"><em>记忆类型</em><strong>{{ selected.context.memoryType || selected.context.taxonomy }}</strong></div>
+            <div v-if="selected.context.skillId"><em>Skill</em><strong>{{ selected.context.skillId }}</strong></div>
+            <div v-if="selected.context.mcpServer"><em>MCP Server</em><strong>{{ selected.context.mcpServer }}</strong></div>
+            <div v-if="selected.context.score != null"><em>召回分数</em><strong>{{ Number(selected.context.score).toFixed(3) }}</strong></div>
+            <div v-if="selected.context.occurredAt || selected.context.startedAt"><em>附加时间</em><strong class="detail-time">{{ fmtTime(selected.context.startedAt || selected.context.occurredAt) }}</strong></div>
+          </div>
+          <div class="detail-block" v-if="selected.context.reason">
+            <div class="detail-block-head"><span>选入原因</span></div>
+            <pre>{{ selected.context.reason }}</pre>
+          </div>
+          <div class="detail-block" v-if="selected.context.content || selected.context.description || selected.context.input || selected.context.result || selected.context.output">
+            <div class="detail-block-head"><span>注入内容</span><button @click="copyText(selected.context.content || selected.context.description || selected.context.input || selected.context.result || selected.context.output)">复制</button></div>
+            <pre>{{ pretty(selected.context.content || selected.context.description || selected.context.input || selected.context.result || selected.context.output) }}</pre>
+          </div>
+          <div class="detail-block" v-if="selected.context.inputSchema || selected.context.schema">
+            <div class="detail-block-head"><span>注入模型的参数 Schema</span></div>
+            <pre>{{ JSON.stringify(selected.context.inputSchema || selected.context.schema, null, 2) }}</pre>
+          </div>
+        </template>
+
+        <template v-else-if="selected.kind === 'tool' && selected.tool">
+          <p class="detail-sub" v-if="selected.causalRole === 'result'">
+            {{ displayName(selected.agent?.name) }} · 由 LLM 第 {{ selected.round?.callIndex ?? selected.round?.roundNum ?? '-' }} 轮提出
+          </p>
+          <p class="detail-sub" v-else>{{ displayName(selected.agent?.name) }} · 确定性预处理</p>
+          <div class="causal-banner" :class="{ 'deterministic-banner': selected.causalRole === 'deterministic' }">
+            <strong>{{ selected.causalRole === 'result' ? 'LLM → TOOL → RESULT' : 'DETERMINISTIC TOOL' }}</strong>
+            <span>{{ selected.causalRole === 'result' ? '同一 toolCallId 合并模型提议、执行开始和真实返回。' : '该步骤没有伪造 LLM 决策。' }}</span>
+          </div>
+          <div class="detail-grid">
+            <div><em>来源</em><strong>{{ selected.tool.origin || selected.tool.category || '-' }}</strong></div>
+            <div v-if="selected.tool.mcpServer"><em>MCP</em><strong>{{ selected.tool.mcpServer }}</strong></div>
+            <div v-if="selected.tool.skillId"><em>Skill</em><strong>{{ selected.tool.skillId }}{{ selected.tool.skillVersion ? '@' + selected.tool.skillVersion : '' }}</strong></div>
+            <div v-if="selected.tool.proposalSource"><em>调用决策</em><strong>{{ selected.tool.proposalSource === 'LLM_NATIVE' ? 'LLM 原生 tool_call' : selected.tool.proposalSource }}</strong></div>
+            <div v-if="selected.tool.proposalOccurredAt"><em>模型提议时间</em><strong class="detail-time">{{ fmtTime(selected.tool.proposalOccurredAt) }}</strong></div>
+            <div v-if="selected.tool.startedAt || selected.tool.occurredAt"><em>执行开始</em><strong class="detail-time">{{ fmtTime(selected.tool.startedAt || selected.tool.occurredAt) }}</strong></div>
+            <div v-if="selected.tool.endedAt"><em>执行结束</em><strong class="detail-time">{{ fmtTime(selected.tool.endedAt) }}</strong></div>
+          </div>
+          <div class="detail-lifecycle" v-if="selected.tool.lifecycle?.length">
+            <span v-for="stage in selected.tool.lifecycle" :key="stage">{{ stage }}</span>
+          </div>
+          <div class="detail-block" v-if="selected.tool.modelGeneratedArguments || selected.tool.input">
+            <div class="detail-block-head"><span>{{ selected.tool.name }} · {{ selected.tool.proposalSource === 'LLM_NATIVE' ? '模型生成参数' : '入参' }}</span><button @click="copyText(selected.tool.modelGeneratedArguments || selected.tool.input)">复制</button></div>
+            <pre>{{ pretty(selected.tool.modelGeneratedArguments || selected.tool.input) }}</pre>
+          </div>
+          <div class="detail-block" v-if="selected.tool.output || selected.tool.result">
+            <div class="detail-block-head"><span>{{ selected.tool.name }} · 真实返回（{{ selected.tool.status }}，{{ fmtMs(selected.tool.durationMs) || '-' }}）</span><button @click="copyText(selected.tool.output || selected.tool.result)">复制</button></div>
+            <pre>{{ pretty(selected.tool.output || selected.tool.result) }}</pre>
+          </div>
+        </template>
+
+        <template v-else-if="selected.kind === 'round' && selected.round">
+          <p class="detail-sub" v-if="selected.agent">{{ displayName(selected.agent.name) }} · {{ selected.round.model || 'DeepSeek' }}</p>
+          <div class="causal-flow">
+            <span class="causal-node input-node">输入附件 {{ selected.round.contextEvents?.length || 0 }}</span>
+            <span class="causal-arrow">→</span>
+            <span class="causal-node llm-node">LLM 第 {{ selected.round.callIndex ?? selected.round.roundNum ?? '-' }} 轮</span>
+            <template v-if="selected.round.toolCalls?.length">
+              <span class="causal-arrow">→</span>
+              <span class="causal-node tool-node">模型工具调用 {{ selected.round.toolCalls.length }}</span>
+              <span class="causal-arrow">→</span>
+              <span class="causal-node result-node">真实返回</span>
+            </template>
+          </div>
           <div class="detail-grid">
             <div v-if="selected.round.tokens"><em>Tokens</em><strong>{{ selected.round.tokens }}</strong></div>
+            <div v-if="selected.round.contextRole"><em>Prompt 角色</em><strong>{{ selected.round.contextRole }}</strong></div>
+            <div v-if="selected.round.contextAttachedAt"><em>上下文附加时间</em><strong class="detail-time">{{ fmtTime(selected.round.contextAttachedAt) }}</strong></div>
+            <div v-if="selected.round.contextTokenEstimate"><em>上下文估算</em><strong>{{ selected.round.contextTokenEstimate }} tok</strong></div>
             <div v-if="selected.durationMs"><em>耗时</em><strong>{{ fmtMs(selected.durationMs) }}</strong></div>
             <div v-if="selected.occurredAt"><em>开始时间（北京时间）</em><strong class="detail-time" :title="selected.occurredAt">{{ fmtTime(selected.occurredAt) }}</strong></div>
             <div v-if="selected.endedAt"><em>结束时间（北京时间）</em><strong class="detail-time" :title="selected.endedAt">{{ fmtTime(selected.endedAt) }}</strong></div>
@@ -586,6 +1034,21 @@ async function copyText(text?: string) {
             <div class="detail-block-head"><span>错误</span></div>
             <pre>{{ selected.round.error }}</pre>
           </div>
+          <div class="detail-section" v-if="selected.round.contextEvents?.length">
+            <h5>本轮 prompt 输入附件</h5>
+            <div class="attachment-list">
+              <div v-for="(context, ci) in selected.round.contextEvents" :key="contextIdentity(context) || ci" class="attachment-card">
+                <div class="attachment-head">
+                  <span class="span-kind" :class="`badge-${contextBadge(context)}`">{{ badgeLabel(contextBadge(context)) }}</span>
+                  <strong>{{ contextLabel(context).replace(/^输入 · /, '') }}</strong>
+                  <time v-if="context.startedAt || context.occurredAt">{{ fmtTime(context.startedAt || context.occurredAt) }}</time>
+                </div>
+                <p v-if="context.reason">{{ context.reason }}</p>
+              </div>
+            </div>
+          </div>
+          <div class="detail-section" v-if="selected.round.toolCalls?.length">
+            <h5>本轮模型工具调用</h5>
           <template v-for="(tool, ti) in (selected.round.toolCalls || [])" :key="ti">
             <div class="detail-lifecycle" v-if="tool.lifecycle?.length">
               <span v-for="stage in tool.lifecycle" :key="stage">{{ stage }}</span>
@@ -613,6 +1076,7 @@ async function copyText(text?: string) {
               <pre>{{ pretty(tool.output || tool.result) }}</pre>
             </div>
           </template>
+          </div>
           <div class="detail-block" v-if="selected.round.input">
             <div class="detail-block-head"><span>输入上下文</span><button @click="copyText(selected.round.input)">复制</button></div>
             <pre>{{ selected.round.input }}</pre>
@@ -696,6 +1160,7 @@ async function copyText(text?: string) {
 .route-chip { padding: 2px 8px; border-radius: 999px; background: var(--color-bg); border: 1px solid var(--color-border-light); font-size: 12px; }
 .route-reason { margin: 8px 0 0; padding: 6px 10px; border-left: 3px solid var(--color-primary); background: var(--color-bg); color: var(--color-text-secondary); font-size: 12px; border-radius: 0 6px 6px 0; }
 .route-memory { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.route-memory-caption { font-size: 10px; color: var(--color-text-secondary); }
 .route-memory-item { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
 .memory-type { flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: #f0e7ff; color: #7c3aed; font-size: 10px; font-weight: 600; }
 .memory-content { color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -721,6 +1186,10 @@ async function copyText(text?: string) {
 .span-row.selected { background: var(--color-primary-light, #eef2ff); }
 .span-row.depth-1 { padding-left: 26px; }
 .span-row.depth-2 { padding-left: 46px; font-size: 12px; }
+.span-row.depth-3 {
+  padding-left: 68px; font-size: 11px; background: color-mix(in srgb, var(--color-bg) 65%, transparent);
+}
+.span-row.depth-3 .span-label { font-weight: 400; }
 .span-caret { border: none; background: none; cursor: pointer; padding: 0; width: 14px; color: var(--color-text-secondary); font-size: 11px; }
 .span-caret-placeholder { width: 14px; }
 .span-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -746,6 +1215,10 @@ async function copyText(text?: string) {
 .badge-agent { background: #e0e7ff; color: #4338ca; }
 .span-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .depth-0 .span-label { font-weight: 600; }
+.span-causal-summary {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--color-text-secondary); font-size: 9px; font-weight: 400;
+}
 .span-parallel { flex-shrink: 0; font-size: 10px; color: var(--color-primary); font-weight: 600; }
 .span-tokens { flex-shrink: 0; margin-left: auto; font-size: 11px; color: var(--color-text-secondary); }
 .span-time { flex-shrink: 0; margin-left: auto; font-size: 10px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
@@ -768,6 +1241,38 @@ async function copyText(text?: string) {
 .detail-grid em { font-style: normal; font-size: 10px; color: var(--color-text-secondary); }
 .detail-grid strong { font-size: 14px; }
 .detail-grid .detail-time { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.causal-banner {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px;
+  margin: 0 0 10px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid #bfdbfe; background: #eff6ff; color: #1e40af;
+}
+.causal-banner strong { font-size: 10px; letter-spacing: .03em; }
+.causal-banner span { font-size: 11px; color: #475569; }
+.deterministic-banner { border-color: #a7f3d0; background: #ecfdf5; color: #047857; }
+.causal-flow {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin: 0 0 12px;
+  padding: 8px; border-radius: 8px; background: var(--color-bg);
+}
+.causal-node { padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 600; }
+.input-node { background: #fef3c7; color: #92400e; }
+.llm-node { background: #dbeafe; color: #1d4ed8; }
+.tool-node { background: #f3e8ff; color: #7e22ce; }
+.result-node { background: #dcfce7; color: #15803d; }
+.causal-arrow { color: var(--color-text-secondary); font-size: 10px; }
+.detail-section { margin: 0 0 12px; }
+.detail-section h5 { margin: 0 0 7px; font-size: 11px; color: var(--color-text-secondary); }
+.attachment-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.attachment-card {
+  padding: 7px 9px; border: 1px solid var(--color-border-light);
+  border-radius: 8px; background: var(--color-bg);
+}
+.attachment-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.attachment-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.attachment-head time, .attachment-head > span:last-child {
+  margin-left: auto; flex-shrink: 0; color: var(--color-text-secondary); font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.attachment-card p { margin: 5px 0 0; font-size: 10px; color: var(--color-text-secondary); }
 .detail-call-time {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 8px;
   color: var(--color-text-secondary); font-size: 11px; font-variant-numeric: tabular-nums;

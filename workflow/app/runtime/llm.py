@@ -154,7 +154,8 @@ class ResilientLlmClient:
                    tool_choice: Optional[Dict[str, Any]] = None,
                    use_quality: bool = False,
                    _return_turn: bool = False,
-                   budget_scope: str = "") -> Any:
+                   budget_scope: str = "",
+                   trace_context: Optional[Dict[str, Any]] = None) -> Any:
         """LLM chat completion.
 
         The legacy string return remains the default. Native agent loops call
@@ -175,6 +176,10 @@ class ResilientLlmClient:
 
         scope = budget_scope or self._budget_scope(agent_id, purpose)
         model = self.quality_model if use_quality else self.model
+        trace_payload = {
+            str(key): value for key, value in (trace_context or {}).items()
+            if value is not None
+        }
 
         # --- CONTEXT AUDIT (temporary) ---
         _audit = {"agent": agent_id, "budgetScope": scope}
@@ -210,6 +215,7 @@ class ResilientLlmClient:
             except BudgetExceeded as exc:
                 await self.emitter.emit(
                     "llm.failed", agent_id=agent_id, payload={
+                        **trace_payload,
                         "error": str(exc),
                         "attempts": attempts - 1,
                         "budgetScope": scope,
@@ -222,6 +228,7 @@ class ResilientLlmClient:
             _audit["providerAttempt"] = attempts
             print(f"LLM_CONTEXT_AUDIT | {_audit}", flush=True)
             await self.emitter.emit("llm.started", agent_id=agent_id, payload={
+                **trace_payload,
                 "model": model,
                 "purpose": purpose,
                 "callIndex": call_index,
@@ -278,6 +285,7 @@ class ResilientLlmClient:
                       f"elapsed_ms={_call_elapsed} prompt_tokens={prompt_tokens} "
                       f"completion_tokens={completion_tokens} model={model}", flush=True)
                 await self.emitter.emit("llm.completed", agent_id=agent_id, payload={
+                    **trace_payload,
                     "model": model,
                     "callIndex": call_index,
                     "budgetScope": scope,
@@ -320,6 +328,7 @@ class ResilientLlmClient:
             elif isinstance(last_error, httpx.TransportError):
                 retry_reason = "CONNECT_TIMEOUT"
             await self.emitter.emit("llm.retrying", agent_id=agent_id, payload={
+                **trace_payload,
                 "attempt": attempts, "maxRetries": max_retries,
                 "callIndex": call_index, "budgetScope": scope,
                 "reason": retry_reason,
@@ -330,6 +339,7 @@ class ResilientLlmClient:
                 model = self.fallback_model
 
         await self.emitter.emit("llm.failed", agent_id=agent_id, payload={
+            **trace_payload,
             "error": str(last_error)[:300], "attempts": attempts,
             "budgetScope": scope,
             "budget": self.budget.llm_audit(self.max_llm_calls)})
@@ -343,14 +353,15 @@ class ResilientLlmClient:
                         tools: Optional[List[Dict[str, Any]]] = None,
                         tool_choice: Optional[Any] = None,
                         use_quality: bool = False,
-                        budget_scope: str = "") -> LlmTurn:
+                        budget_scope: str = "",
+                        trace_context: Optional[Dict[str, Any]] = None) -> LlmTurn:
         """Return one provider-native assistant turn including all tool calls."""
         turn = await self.chat(
             messages, agent_id=agent_id, purpose=purpose,
             max_tokens=max_tokens, temperature=temperature,
             json_mode=False, tools=tools, tool_choice=tool_choice,
             use_quality=use_quality, _return_turn=True,
-            budget_scope=budget_scope)
+            budget_scope=budget_scope, trace_context=trace_context)
         if not isinstance(turn, LlmTurn):
             raise LlmError("MALFORMED_RESPONSE",
                            "native tool turn was not preserved", False)
