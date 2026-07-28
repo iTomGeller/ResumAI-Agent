@@ -209,11 +209,15 @@ class Coordinator:
             if "evidence_ledger" not in optional:
                 optional.append("evidence_ledger")
         # Force required when gates demand producers.
-        if run_type in FULL_EVAL_TYPES and signals.get("has_projects"):
+        if (run_type in FULL_EVAL_TYPES
+                and signals.get("has_projects")
+                and not signals.get("is_sparse_resume")):
             if "project_findings" not in required:
                 required.append("project_findings")
             optional = [a for a in optional if a != "project_findings"]
-        if self.policy.evidenceVerification.enabled and "evidence_ledger" in defaults:
+        if (self.policy.evidenceVerification.enabled
+                and "evidence_ledger" in defaults
+                and not signals.get("is_sparse_resume")):
             if "evidence_ledger" not in required:
                 required.append("evidence_ledger")
             optional = [a for a in optional if a != "evidence_ledger"]

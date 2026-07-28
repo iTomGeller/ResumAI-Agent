@@ -174,6 +174,27 @@ def test_sparse_resume_uses_fast_core_pipeline():
     assert sum(item["llmQuota"] for item in planned["budgetPlan"].values()) <= 5
 
 
+def test_sparse_resume_with_project_hint_still_drops_deep_agents():
+    """A short uploaded fragment may mention a project, but must stay fast."""
+    coordinator = _coordinator({"evidenceVerification": {"enabled": True}})
+    planned = coordinator.plan_from_artifacts(
+        run_type="full_evaluation",
+        needs_parse=True,
+        resume_text=("候选人，目标 Java 后端工程师，拥有两年服务端开发经验。"
+                     "技能 Java Spring Boot Redis MySQL，熟悉 Linux、Git 和 REST API。"
+                     "项目：订单服务重构，完成接口设计、缓存一致性处理和自动化测试。"
+                     "成果：优化慢查询与缓存策略，提升接口稳定性并编写技术文档。"),
+        job_description="Java Spring",
+    )
+    assert planned["plan"] == [
+        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent", "ReportAgent"
+    ]
+    assert "ProjectAgent" not in planned["plan"]
+    assert "EvidenceAgent" not in planned["plan"]
+    assert "project_findings" in planned["optionalArtifacts"]
+    assert "evidence_ledger" in planned["optionalArtifacts"]
+
+
 def test_evidence_disabled_skips_evidence_agent():
     coordinator = _coordinator({
         "evidenceVerification": {"enabled": False},
