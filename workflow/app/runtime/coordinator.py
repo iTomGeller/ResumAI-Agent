@@ -689,8 +689,11 @@ class Coordinator:
                 decision_cap = max(1, min(
                     definition.max_iterations,
                     self.policy.maxIterationsPerAgent))
+                max_native_action_turns = (
+                    3 if agent == "ProjectAgent"
+                    and sig.get("has_external_urls") else 2)
                 action_cap = min(
-                    2, definition.max_tool_calls,
+                    max_native_action_turns, definition.max_tool_calls,
                     self.policy.toolBudget.maxToolCallsPerAgent)
             except KeyError:
                 decision_cap, action_cap = 1, 1
@@ -708,7 +711,8 @@ class Coordinator:
         # Without this floor production traces stopped after Skill loading and
         # incorrectly reported the URL as "not checked" despite a live catalog.
         action_floors = {
-            "ProjectAgent": 3 if sig.get("has_external_urls") else 2,
+            # local evidence -> Skill -> MCP -> final is four LLM turns.
+            "ProjectAgent": 4 if sig.get("has_external_urls") else 2,
             "EvidenceAgent": 2,
         }
         for tool_agent, floor in action_floors.items():
@@ -766,7 +770,7 @@ class Coordinator:
                 # calls. Keep that branch usable without raising the run-wide
                 # hard tool cap enforced by RunBudget/ToolExecutor.
                 tool_quota = min(
-                    4, self.policy.toolBudget.maxToolCallsPerAgent)
+                    5, self.policy.toolBudget.maxToolCallsPerAgent)
             budget[agent] = {
                 "llmQuota": llm_quota,
                 "actionTurnQuota": action_quota,

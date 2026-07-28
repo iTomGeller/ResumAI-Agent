@@ -416,8 +416,8 @@ def test_native_model_proposes_mcp_arguments_and_trace_chain():
 class _SkillThenNativeMcpLlm:
     """Reproduces the production external-URL sequence.
 
-    The first turn loads the single selected Skill, the second chooses an MCP
-    function from its live description/schema, and the third emits the result.
+    Production may first gather local evidence, then load the selected Skill,
+    choose MCP from its live schema, and only then emit the result.
     """
 
     def __init__(self):
@@ -432,6 +432,19 @@ class _SkillThenNativeMcpLlm:
         available = list(tools or [])
         if self.turn == 1:
             arguments = {
+                "resumeText": "Example project https://example.test/repo",
+                "claims": [{"text": "public project"}],
+            }
+            return LlmTurn(
+                content="",
+                tool_calls=[LlmToolCall(
+                    tool_call_id="local-evidence-before-skill",
+                    name="locate_evidence",
+                    arguments=arguments,
+                    raw_arguments=json.dumps(arguments))],
+                finish_reason="tool_calls")
+        if self.turn == 2:
+            arguments = {
                 "skill_id": "retrieve-public-candidate-evidence"}
             return LlmTurn(
                 content="",
@@ -441,7 +454,7 @@ class _SkillThenNativeMcpLlm:
                     arguments=arguments,
                     raw_arguments=json.dumps(arguments))],
                 finish_reason="tool_calls")
-        if self.turn == 2:
+        if self.turn == 3:
             remote = next(
                 item["function"] for item in available
                 if item["function"].get("description")
@@ -492,9 +505,9 @@ def test_external_url_budget_allows_progressive_skill_then_native_mcp():
     client = _LiveMcpClient()
     _attach_demo_mcp(executor.tools, client)
     executor.budget_plan["ProjectAgent"] = {
-        "llmQuota": 3,
-        "actionTurnQuota": 2,
-        "toolQuota": 2,
+        "llmQuota": 4,
+        "actionTurnQuota": 3,
+        "toolQuota": 3,
     }
     executor.state.apply_artifacts({
         "resumeFacts": {"projects": [{"name": "Example"}]},
@@ -504,13 +517,13 @@ def test_external_url_budget_allows_progressive_skill_then_native_mcp():
         default_agent_registry.get("ProjectAgent")))
 
     assert output.summary == "external evidence checked"
-    assert llm.turn == 3
-    assert llm.tool_choices[:2] == ["auto", "auto"]
+    assert llm.turn == 4
+    assert llm.tool_choices[:3] == ["auto", "auto", "auto"]
     assert client.calls == [(
         "remote_search", {"query": "candidate-declared repository"})]
     counters = executor.agent_counters["ProjectAgent"]
-    assert counters["actionTurns"] == 2
-    assert counters["toolCalls"] == 2
+    assert counters["actionTurns"] == 3
+    assert counters["toolCalls"] == 3
     mcp_chain = [
         event["payload"]["lifecycleStage"]
         for event in emitter.events
@@ -1194,7 +1207,7 @@ def test_coordinator_order_helper_and_revision_reuse_contract():
             "has_jd": True,
         })
     assert live_budget["ReportAgent"]["llmQuota"] >= 3
-    assert live_budget["ProjectAgent"]["actionTurnQuota"] >= 2
+    assert live_budget["ProjectAgent"]["actionTurnQuota"] >= 3
     assert live_budget["EvidenceAgent"]["actionTurnQuota"] >= 1
 
     previous = {

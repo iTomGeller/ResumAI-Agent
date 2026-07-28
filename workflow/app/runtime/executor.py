@@ -1418,12 +1418,18 @@ class RunExecutor:
         # are different budget axes.  If they share one counter, a normal
         # progressive flow such as load_skill -> read_resource -> final answer
         # can never finish for agents whose decision budget is one or two.
-        # Reserve at most two action follow-up turns; every call still counts
-        # against the run-wide LLM/token/cost limits enforced by the client.
+        # Reserve at most two action follow-up turns normally. An external-URL
+        # Project may need three (local evidence -> Skill -> MCP) before its
+        # final decision; every call still counts against the run-wide hard
+        # LLM/token/cost limits enforced by the client.
         max_decision_iterations = min(
             definition.max_iterations, self.policy.maxIterationsPerAgent)
+        action_turn_ceiling = (
+            3 if agent_id == "ProjectAgent"
+            and signals.get("has_external_urls") else 2)
         available_tool_turns = min(
-            2, max(0, agent_tool_limit - agent_tool_calls))
+            action_turn_ceiling,
+            max(0, agent_tool_limit - agent_tool_calls))
         fallback_turn_limit = max_decision_iterations + available_tool_turns
         agent_llm_quota = self._agent_quota(
             agent_id, "llmQuota", fallback_turn_limit)
