@@ -609,6 +609,17 @@ public class RunTraceBridgeService {
         int totalLlmCalls = 0;
         for (Map.Entry<String, Map<String, Object>> entry : nodes.entrySet()) {
             Map<String, Object> node = entry.getValue();
+            // memory.used events carry consumerAgent=SpecialistAgent for
+            // attribution, but SpecialistAgent is not an executable node.
+            // Do not surface that synthetic attribution as a permanently
+            // RUNNING agent in a completed trace.
+            if ("SpecialistAgent".equals(entry.getKey())
+                    && !node.containsKey("startedAt")
+                    && !node.containsKey("endedAt")
+                    && rounds.get(entry.getKey()).isEmpty()
+                    && deterministicSteps.get(entry.getKey()).isEmpty()) {
+                continue;
+            }
             List<Map<String, Object>> agentRounds = rounds.get(entry.getKey());
             for (int i = 0; i < agentRounds.size(); i++) {
                 agentRounds.get(i).put("roundNum", i + 1);
