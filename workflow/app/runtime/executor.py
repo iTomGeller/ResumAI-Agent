@@ -2013,10 +2013,10 @@ class RunExecutor:
                 "tool_choice": tool_choice,
                 "use_quality": use_quality,
             }
-            parameters = inspect.signature(chat_turn).parameters.values()
-            if ("trace_context" in inspect.signature(chat_turn).parameters
-                    or any(p.kind == inspect.Parameter.VAR_KEYWORD
-                           for p in parameters)):
+            # Compatibility adapters often accept **kwargs only to forward
+            # them to an older strict signature. Pass trace metadata solely
+            # when the adapter explicitly declares support for it.
+            if "trace_context" in inspect.signature(chat_turn).parameters:
                 kwargs["trace_context"] = trace_context
             return await chat_turn(messages, **kwargs)
         chat = self.llm.chat
@@ -2028,10 +2028,7 @@ class RunExecutor:
             "tool_choice": tool_choice,
             "use_quality": use_quality,
         }
-        parameters = inspect.signature(chat).parameters.values()
-        if ("trace_context" in inspect.signature(chat).parameters
-                or any(p.kind == inspect.Parameter.VAR_KEYWORD
-                       for p in parameters)):
+        if "trace_context" in inspect.signature(chat).parameters:
             kwargs["trace_context"] = trace_context
         raw = await chat(messages, **kwargs)
         return LlmTurn(content=str(raw or ""), tool_calls=[],
