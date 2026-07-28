@@ -348,14 +348,12 @@ function toolIdentity(tool: ToolCallView): string {
 function dedupeContexts(events: ContextEventView[]): ContextEventView[] {
   const merged = new Map<string, ContextEventView>();
   events.forEach((event, index) => {
-    const category = (event.category || event.type || event.origin || event.source || '').toLowerCase();
     // Keep anonymous legacy placeholders in the raw audit feed, but never
     // render them as if they were prompt material or an executable sibling.
     const meaningful = Boolean(
-      event.memoryId || event.skillId || event.name || event.modelName
-      || event.modelToolName || event.mcpServer || event.description
-      || category === 'memory' || category === 'skill'
-      || category === 'mcp' || category === 'tool_catalog');
+      event.memoryId || event.memoryType || event.taxonomy
+      || event.skillId || event.name || event.title
+      || event.modelName || event.modelToolName);
     if (!meaningful) return;
     const key = contextIdentity(event) || `context-${index}`;
     const previous = merged.get(key);
