@@ -221,8 +221,7 @@ class Coordinator:
             if "evidence_ledger" not in required:
                 required.append("evidence_ledger")
             optional = [a for a in optional if a != "evidence_ledger"]
-        if (signals.get("is_sparse_resume") and run_type in FULL_EVAL_TYPES
-                and not self.policy.requiredArtifacts):
+        if signals.get("is_sparse_resume") and run_type in FULL_EVAL_TYPES:
             # A tiny resume is not evidence for independent project, timeline,
             # or public-web agents. Keep the useful core (parse → match →
             # report) and record the skipped dimensions in the plan metadata.
