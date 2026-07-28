@@ -217,6 +217,15 @@ class Coordinator:
             if "evidence_ledger" not in required:
                 required.append("evidence_ledger")
             optional = [a for a in optional if a != "evidence_ledger"]
+        if (signals.get("is_sparse_resume") and run_type in FULL_EVAL_TYPES
+                and not self.policy.requiredArtifacts):
+            # A tiny resume is not evidence for independent project, timeline,
+            # or public-web agents. Keep the useful core (parse → match →
+            # report) and record the skipped dimensions in the plan metadata.
+            core = {"resume_facts", "jd_requirements", "technical_findings", "final_report"}
+            dropped = [artifact for artifact in required if artifact not in core]
+            required = [artifact for artifact in required if artifact in core]
+            optional.extend(dropped)
         # De-dupe while preserving order.
         required = list(dict.fromkeys(required))
         optional = [a for a in dict.fromkeys(optional) if a not in required]
@@ -299,6 +308,14 @@ class Coordinator:
             or bool(artifacts.get("jdMatches")) \
             or bool(artifacts.get("jdRequirements") or shared.get("jdRequirements"))
         has_external_urls = bool(_URL_HINT.search(text))
+        # A short resume cannot support separate project/risk/public-evidence
+        # investigations. Treat it as a fast, evidence-limited assessment;
+        # callers can still request those deep modes explicitly.
+        # Keep explicit contract tests and tiny user prompts out of this gate;
+        # the fast path targets a real uploaded resume fragment, not an empty
+        # placeholder.  120–800 chars is the practical “too thin to fan out”
+        # range for production uploads.
+        is_sparse_resume = 120 <= len(text.strip()) < 800
         present = self._present_artifacts(artifacts, shared)
         is_rich_resume = len(text) > 2000 and has_projects and has_timeline
         has_github = bool(re.search(r"github\.com/\w+", text, re.I))
@@ -322,6 +339,7 @@ class Coordinator:
             "has_jd_or_match": has_jd or bool(text.strip()),
             "has_jd_requirements": "jd_requirements" in present or has_jd,
             "has_external_urls": has_external_urls,
+            "is_sparse_resume": is_sparse_resume,
             "has_github": has_github,
             "has_publications": has_publications,
             "is_rich_resume": is_rich_resume,
@@ -347,6 +365,7 @@ class Coordinator:
         if needs_parse or signals["needs_parse"]:
             signals = {**signals, "needs_parse": True}
         goal, optional_goal = self.resolve_goal_artifacts(run_type, signals=signals)
+        self._last_signals = signals
         present = self._present_artifacts(artifacts or {}, shared or {})
         initially_present = set(present)
         selected: List[str] = []
@@ -488,11 +507,6 @@ class Coordinator:
             run_type=run_type, needs_parse=needs_parse,
             resume_text=resume_text, job_description=job_description,
             artifacts=artifacts, shared=shared)
-        if self.is_simple(run_type) or self.llm is None:
-            return base
-
-        from app.runtime import cache
-
         signals = self.inspect_signals(
             resume_text=resume_text, job_description=job_description,
             artifacts=artifacts, shared=shared)
@@ -501,6 +515,15 @@ class Coordinator:
             n for n in (memory_notes if isinstance(memory_notes, list) else [])
             if isinstance(n, dict) and (n.get("source") == "execution_profile"
                                         or "execution_profile" in str(n.get("structured", {}).get("factKey", "")))]
+
+        # Sparse resumes are deliberately deterministic at the planning layer:
+        # one specialist plus the terminal report is enough. Spending a
+        # coordinator LLM call to rediscover that fact only adds latency.
+        if (self.is_simple(run_type) or self.llm is None
+                or (run_type in FULL_EVAL_TYPES and signals.get("is_sparse_resume"))):
+            return base
+
+        from app.runtime import cache
 
         # Full evaluations: NEVER cache plans — each candidate deserves a
         # fresh, signal-driven plan. Only cache simple/lightweight run types.
@@ -628,9 +651,13 @@ class Coordinator:
         if not ordered:
             return {}
         sig = signals or {}
-        others = [a for a in ordered if a != terminal]
+        # ResumeParserAgent is deterministic in production and must not reserve
+        # provider calls that belong to the actual reasoning agents.
+        others = [a for a in ordered if a not in {terminal, "ResumeParserAgent"}]
         hist_ratios = self._extract_budget_ratios(execution_history, others)
         hard_cap = max(0, int(self.policy.maxLlmCalls))
+        if sig.get("is_sparse_resume"):
+            hard_cap = min(hard_cap, 5)
         runtime_budget = getattr(self.llm, "budget", None)
         if runtime_budget is not None and hasattr(
                 runtime_budget, "available_agent_llm_calls"):
@@ -686,6 +713,10 @@ class Coordinator:
         for agent in ordered:
             try:
                 definition = self.registry.get(agent)
+                if agent == "ResumeParserAgent":
+                    action_caps[agent] = 0
+                    total_caps[agent] = 0
+                    continue
                 decision_cap = max(1, min(
                     definition.max_iterations,
                     self.policy.maxIterationsPerAgent))
@@ -977,9 +1008,12 @@ class Coordinator:
         project_depth_run = run_type == "project_analysis"
         if (run_type in FULL_EVAL_TYPES or project_depth_run) \
                 and signals.get("has_projects") \
+                and not signals.get("is_sparse_resume") \
                 and "project_findings" in goal:
             forced.add("ProjectAgent")
-        if signals.get("evidence_enabled") and "evidence_ledger" in goal:
+        if (signals.get("evidence_enabled")
+                and not signals.get("is_sparse_resume")
+                and "evidence_ledger" in goal):
             forced.add("EvidenceAgent")
         return forced
 

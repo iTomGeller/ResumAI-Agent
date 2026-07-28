@@ -157,6 +157,23 @@ def test_evidence_enabled_forces_evidence_agent():
     assert "evidence_ledger" in planned["goalArtifacts"]
 
 
+def test_sparse_resume_uses_fast_core_pipeline():
+    coordinator = _coordinator({"evidenceVerification": {"enabled": True}})
+    planned = coordinator.plan_from_artifacts(
+        run_type="full_evaluation",
+        needs_parse=True,
+        resume_text="a" * 150 + " github.com/user 2022-2024",
+        job_description="Java Spring",
+    )
+
+    assert planned["plan"] == [
+        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent", "ReportAgent"
+    ]
+    assert "ProjectAgent" not in planned["plan"]
+    assert "EvidenceAgent" not in planned["plan"]
+    assert sum(item["llmQuota"] for item in planned["budgetPlan"].values()) <= 5
+
+
 def test_evidence_disabled_skips_evidence_agent():
     coordinator = _coordinator({
         "evidenceVerification": {"enabled": False},

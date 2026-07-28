@@ -656,7 +656,10 @@ const spans = computed<SpanRow[]>(() => {
 });
 
 const filteredSpans = computed(() => {
-  if (kindFilter.value === 'all') return spans.value;
+  // Keep the default audit readable: prompt attachments remain available in
+  // the selected LLM detail and via MEMORY/SKILL/MCP filters, but should not
+  // occupy one tree row per token of model context.
+  if (kindFilter.value === 'all') return spans.value.filter((row) => row.kind !== 'context');
   const byId = new Map(spans.value.map((row) => [row.id, row]));
   const visible = new Set<string>();
   const includeWithAncestors = (row: SpanRow) => {

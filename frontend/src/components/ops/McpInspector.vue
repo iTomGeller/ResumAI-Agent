@@ -50,6 +50,15 @@ function isoTimestamp(value?: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
+function durationLabel(row: any): string {
+  const explicit = Number(row.durationMs);
+  if (Number.isFinite(explicit) && explicit >= 0) return `${Math.round(explicit)}ms`;
+  if (row.startedAt && row.endedAt) {
+    const elapsed = Date.parse(row.endedAt) - Date.parse(row.startedAt);
+    if (Number.isFinite(elapsed) && elapsed >= 0) return `${elapsed}ms`;
+  }
+  return '未采集';
+}
 </script>
 
 <template>
@@ -98,7 +107,7 @@ function isoTimestamp(value?: string): string {
       <table class="ops-table">
         <thead>
           <tr>
-            <th>Time（北京时间）</th><th>Tool</th><th>Server</th><th>Stage / Outcome</th><th>Retry/Cache</th>
+            <th>Time（北京时间）</th><th>Tool</th><th>Server</th><th>Stage / Outcome</th><th>耗时</th><th>Retry/Cache</th>
             <th>Args</th><th>Result/Error</th><th>Run</th>
           </tr>
         </thead>
@@ -115,13 +124,14 @@ function isoTimestamp(value?: string): string {
               <span v-if="row.lifecycleStage" class="ops-chip neutral">{{ row.lifecycleStage }}</span>
               <span class="ops-chip" :class="statusClass(mcpOutcome(row))">{{ mcpOutcome(row) }}</span>
             </td>
+            <td class="mono text-xs">{{ durationLabel(row) }}</td>
             <td class="text-xs">retry={{ row.retryCount ?? '-' }} · cache={{ row.cacheHit == null ? '-' : row.cacheHit }}</td>
             <td class="mono text-xs">{{ typeof row.arguments === 'string' ? row.arguments : JSON.stringify(row.arguments || {}).slice(0, 80) }}</td>
             <td class="text-muted text-xs">{{ row.error || (typeof row.resultPreview === 'string' ? row.resultPreview : JSON.stringify(row.resultPreview || {}).slice(0, 80)) || '-' }}</td>
             <td class="mono text-xs ops-link" @click="row.runId && emit('open-run', row.runId)">{{ row.runId }}</td>
           </tr>
           <tr v-if="!allCalls.length">
-            <td colspan="8" class="text-muted">暂无真实 MCP 调用</td>
+            <td colspan="9" class="text-muted">暂无真实 MCP 调用</td>
           </tr>
         </tbody>
       </table>

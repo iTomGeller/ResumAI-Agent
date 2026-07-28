@@ -87,20 +87,8 @@
   },
   "optionalMcpServers": {},
   "agentToolRouting": {
-    "JDAnalysisAgent": [
-      "context7.resolve-library-id",
-      "context7.query-docs",
-      "microsoft-learn.microsoft_docs_search",
-      "microsoft-learn.microsoft_docs_fetch",
-      "exa.web_search_exa"
-    ],
-    "TechAgent": [
-      "context7.resolve-library-id",
-      "context7.query-docs",
-      "microsoft-learn.microsoft_docs_search",
-      "microsoft-learn.microsoft_code_sample_search",
-      "exa.web_search_exa"
-    ],
+    "JDAnalysisAgent": [],
+    "TechAgent": [],
     "ProjectAgent": [
       "exa.web_search_exa",
       "exa.web_fetch_exa",
@@ -117,10 +105,7 @@
       "deepwiki.ask_question",
       "fetch.fetch"
     ],
-    "RiskAgent": [
-      "exa.web_search_exa",
-      "fetch.fetch"
-    ],
+    "RiskAgent": [],
     "ReportAgent": [],
     "InterviewQuestionAgent": [
       "context7.resolve-library-id",

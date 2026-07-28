@@ -43,6 +43,7 @@ import com.resumai.agent.service.AgentMemoryService;
 import com.resumai.agent.service.RunMemoryUsageService;
 import com.resumai.agent.service.run.AgentRuntimeClient;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -760,10 +761,15 @@ public class OpsDebugService {
             q.eq("run_id", runId.trim());
         }
         List<RunEvent> events = runEventMapper.selectList(q);
-        List<McpInvocationView> out = new ArrayList<>();
+        Map<String, McpInvocationView> merged = new LinkedHashMap<>();
         for (RunEvent event : events) {
             Object payload = parseJson(event.getPayload());
             if (!isMcpPayload(payload)) {
+                continue;
+            }
+            if (payload instanceof Map<?, ?> raw
+                    && "CATALOG_EXPOSED".equalsIgnoreCase(str(raw.get("lifecycleStage")))) {
+                // Catalog exposure is model input, not an invocation.
                 continue;
             }
             McpInvocationView view = toMcpInvocation(event, payload);
@@ -775,16 +781,100 @@ public class OpsDebugService {
                     || !server.equalsIgnoreCase(view.server()))) {
                 continue;
             }
+            String key = String.valueOf(view.runId()) + "|"
+                    + (StringUtils.hasText(view.toolCallId())
+                    ? view.toolCallId()
+                    : String.valueOf(view.server()) + "|" + view.tool() + "|" + view.seq());
+            merged.merge(key, view, OpsDebugService::mergeMcpInvocation);
+        }
+        List<McpInvocationView> out = new ArrayList<>();
+        for (McpInvocationView view : merged.values()) {
             if (StringUtils.hasText(outcome) && (view.outcome() == null
                     || !outcome.equalsIgnoreCase(view.outcome()))) {
                 continue;
             }
             out.add(view);
-            if (out.size() >= cap) {
-                break;
-            }
+            if (out.size() >= cap) break;
         }
         return out;
+    }
+
+    private static McpInvocationView mergeMcpInvocation(McpInvocationView first,
+                                                         McpInvocationView second) {
+        String startedAt = earliestTimestamp(first.startedAt(), second.startedAt());
+        String endedAt = latestTimestamp(first.endedAt(), second.endedAt());
+        Long durationMs = first.durationMs() != null ? first.durationMs() : second.durationMs();
+        if (durationMs == null && startedAt != null && endedAt != null) {
+            durationMs = elapsedMs(startedAt, endedAt);
+        }
+        String outcome = mergeMcpOutcome(first.outcome(), second.outcome());
+        String stage = terminalMcpOutcome(outcome)
+                ? ("FAILED".equals(outcome) ? "FAILED" : "COMPLETED")
+                : firstNonBlank(first.lifecycleStage(), second.lifecycleStage());
+        return new McpInvocationView(
+                firstNonBlank(first.runId(), second.runId()),
+                firstNonBlank(first.traceId(), second.traceId()),
+                minSeq(first.seq(), second.seq()),
+                firstNonBlank(first.toolCallId(), second.toolCallId()),
+                firstNonBlank(first.server(), second.server()),
+                firstNonBlank(first.tool(), second.tool()),
+                firstNonBlank(first.agent(), second.agent()),
+                stage,
+                outcome,
+                durationMs,
+                maxInt(first.retryCount(), second.retryCount()),
+                first.cacheHit() != null ? first.cacheHit() : second.cacheHit(),
+                first.arguments() != null ? first.arguments() : second.arguments(),
+                first.resultPreview() != null ? first.resultPreview() : second.resultPreview(),
+                firstNonBlank(first.error(), second.error()),
+                earliestTimestamp(first.occurredAt(), second.occurredAt()),
+                startedAt,
+                endedAt,
+                first.createTime() != null ? first.createTime() : second.createTime());
+    }
+
+    private static String mergeMcpOutcome(String first, String second) {
+        if ("FAILED".equalsIgnoreCase(first) || "REJECTED".equalsIgnoreCase(first)) {
+            return first.toUpperCase(Locale.ROOT);
+        }
+        if ("FAILED".equalsIgnoreCase(second) || "REJECTED".equalsIgnoreCase(second)) {
+            return second.toUpperCase(Locale.ROOT);
+        }
+        if (terminalMcpOutcome(first)) return first.toUpperCase(Locale.ROOT);
+        if (terminalMcpOutcome(second)) return second.toUpperCase(Locale.ROOT);
+        return firstNonBlank(first, second, "RUNNING").toUpperCase(Locale.ROOT);
+    }
+
+    private static boolean terminalMcpOutcome(String outcome) {
+        return "SUCCESS".equalsIgnoreCase(outcome)
+                || "FAILED".equalsIgnoreCase(outcome)
+                || "REJECTED".equalsIgnoreCase(outcome);
+    }
+
+    private static String earliestTimestamp(String first, String second) {
+        if (!StringUtils.hasText(first)) return second;
+        if (!StringUtils.hasText(second)) return first;
+        return first.compareTo(second) <= 0 ? first : second;
+    }
+
+    private static String latestTimestamp(String first, String second) {
+        if (!StringUtils.hasText(first)) return second;
+        if (!StringUtils.hasText(second)) return first;
+        return first.compareTo(second) >= 0 ? first : second;
+    }
+
+    private static Long elapsedMs(String startedAt, String endedAt) {
+        try {
+            return Math.max(0L, Duration.between(Instant.parse(startedAt), Instant.parse(endedAt)).toMillis());
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static Integer maxInt(Integer first, Integer second) {
+        if (first == null) return second;
+        if (second == null) return first;
+        return Math.max(first, second);
     }
 
     private McpInvocationView toMcpInvocation(RunEvent event, Object payload) {
@@ -792,15 +882,19 @@ public class OpsDebugService {
         String type = event.getEventType() == null ? "" : event.getEventType();
         String outcome;
         Object payloadOutcome = p.get("outcome");
-        if (payloadOutcome instanceof String po && !po.isBlank()) {
-            outcome = po;
-        } else if (type.endsWith("failed")) {
+        if (type.endsWith("failed")) {
             outcome = "FAILED";
         } else if (type.endsWith("completed")) {
             Object rp = p.get("resultPreview");
             String rpStr = rp instanceof String s ? s : (rp != null ? rp.toString() : "");
-            outcome = rpStr.contains("\"success\":false") || rpStr.contains("\"success\": false")
+            String payloadStatus = payloadOutcome instanceof String po ? po : "";
+            outcome = "FAILED".equalsIgnoreCase(payloadStatus)
+                    || "REJECTED".equalsIgnoreCase(payloadStatus)
+                    || rpStr.contains("\"success\":false")
+                    || rpStr.contains("\"success\": false")
                     ? "FAILED" : "SUCCESS";
+        } else if (payloadOutcome instanceof String po && !po.isBlank()) {
+            outcome = po;
         } else {
             outcome = "RUNNING";
         }
@@ -1784,6 +1878,11 @@ public class OpsDebugService {
 
     private static String firstNonBlank(String first, String second) {
         return StringUtils.hasText(first) ? first : second;
+    }
+
+    private static String firstNonBlank(String first, String second, String fallback) {
+        String value = firstNonBlank(first, second);
+        return StringUtils.hasText(value) ? value : fallback;
     }
 
     private static String eventTime(RunEvent event) {
