@@ -23,6 +23,12 @@ const disabledServers = computed(() => {
   const raw = props.panel?.servers || props.panel?.inventory?.servers || [];
   return raw.filter((s: any) => s.status !== 'AVAILABLE' && s.status !== 'RATE_LIMITED');
 });
+const allServers = computed(() => props.panel?.servers || props.panel?.inventory?.servers || []);
+const availableToolCount = computed(() => {
+  const explicit = Number(props.panel?.toolCount ?? props.panel?.inventory?.toolCount);
+  if (Number.isFinite(explicit)) return explicit;
+  return allServers.value.reduce((sum: number, server: any) => sum + (server.tools || []).length, 0);
+});
 function mcpOutcome(row: any): string {
   const explicit = row.outcome || row.status;
   if (explicit === 'FAILED' || explicit === 'REJECTED') return explicit;
@@ -71,6 +77,11 @@ function durationLabel(row: any): string {
         · reachable={{ (panel?.runtimeReachable ?? panel?.inventory?.runtimeReachable) ? 'yes' : 'no' }}
       </p>
       <p v-if="panel?.runtimeError" class="text-muted text-sm">{{ panel.runtimeError }}</p>
+    </div>
+    <div class="ops-metrics">
+      <div><span>MCP Servers</span><strong>{{ allServers.length }}</strong></div>
+      <div><span>Available tools</span><strong>{{ availableToolCount }}</strong></div>
+      <div><span>Recent real calls</span><strong>{{ allCalls.length }}</strong></div>
     </div>
     <div class="ops-grid">
       <div v-for="server in activeServers" :key="server.name" class="card card-active">
@@ -146,6 +157,10 @@ function durationLabel(row: any): string {
 
 <style scoped>
 .ops-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.ops-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.ops-metrics > div { border: 1px solid var(--color-border); border-radius: 10px; padding: 10px 12px; background: var(--color-surface); }
+.ops-metrics span { display: block; font-size: 12px; color: var(--color-text-secondary); }
+.ops-metrics strong { display: block; margin-top: 2px; font-size: 20px; }
 .ops-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ops-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .ops-chip {

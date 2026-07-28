@@ -899,6 +899,8 @@ public class OpsDebugService {
             outcome = "RUNNING";
         }
         String fallbackTime = eventTime(event);
+        String toolName = firstNonBlank(event.getToolName(),
+                firstTextDeep(p, "toolName", "tool", "name"));
         String occurredAt = firstNonBlank(
                 firstTextDeep(p, "occurredAt", "timestamp"),
                 fallbackTime);
@@ -915,7 +917,7 @@ public class OpsDebugService {
                 event.getRunId(), event.getTraceId(), event.getSeq(),
                 str(p.get("toolCallId")),
                 str(p.get("mcpServer")),
-                event.getToolName(),
+                toolName,
                 event.getAgentId(),
                 str(p.get("lifecycleStage")),
                 outcome,
