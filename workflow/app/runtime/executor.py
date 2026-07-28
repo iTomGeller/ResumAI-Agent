@@ -1545,8 +1545,12 @@ class RunExecutor:
             turn = await self._chat_native_turn(
                 turn_messages, agent_id=agent_id,
                 purpose=definition.output_type,
-                max_tokens=4096 if not (
-                    definition.agent_id in TERMINAL_AGENTS and not is_report) else 3600,
+                # Full reports routinely exceed 4k tokens because every score,
+                # risk and interview probe is evidence-bound. A 4096 ceiling
+                # truncated provider-native emit_decision arguments twice in
+                # production, leaving no JSON object for schema repair.
+                max_tokens=(8192 if is_report else 3600 if (
+                    definition.agent_id in TERMINAL_AGENTS) else 4096),
                 tools=turn_tools,
                 tool_choice=tool_choice,
                 use_quality=is_report)

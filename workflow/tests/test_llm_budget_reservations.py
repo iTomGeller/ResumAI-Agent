@@ -227,4 +227,5 @@ def test_external_url_budget_keeps_skill_mcp_and_final_turns_inside_cap():
         budget.available_agent_llm_calls(policy.maxLlmCalls))
     assert plan["ProjectAgent"]["llmQuota"] >= 3
     assert plan["ProjectAgent"]["actionTurnQuota"] >= 2
+    assert plan["ProjectAgent"]["toolQuota"] == 4
     assert plan["EvidenceAgent"]["actionTurnQuota"] >= 1

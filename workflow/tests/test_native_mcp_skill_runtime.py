@@ -711,6 +711,7 @@ class _ReportFinalizationLlm:
         self.turn = 0
         self.tool_choices = []
         self.tool_names = []
+        self.max_tokens = []
 
     async def chat_turn(self, messages, *, agent_id, purpose="",
                         max_tokens=2048, tools=None, tool_choice=None,
@@ -719,6 +720,7 @@ class _ReportFinalizationLlm:
         names = [item["function"]["name"] for item in (tools or [])]
         self.tool_choices.append(tool_choice)
         self.tool_names.append(names)
+        self.max_tokens.append(max_tokens)
         if tool_choice == "auto":
             arguments = {"skill_id": "calibrate-and-explain-decision"}
             return LlmTurn(
@@ -796,6 +798,7 @@ def test_report_agent_hides_evaluation_retrieval_and_forces_final_output():
     assert llm.tool_names[1] == ["emit_decision"]
     assert llm.tool_choices[1] == {
         "type": "function", "function": {"name": "emit_decision"}}
+    assert llm.max_tokens == [8192, 8192]
 
 
 class _ReportRepairLlm:
