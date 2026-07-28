@@ -348,6 +348,15 @@ function toolIdentity(tool: ToolCallView): string {
 function dedupeContexts(events: ContextEventView[]): ContextEventView[] {
   const merged = new Map<string, ContextEventView>();
   events.forEach((event, index) => {
+    const category = (event.category || event.type || event.origin || event.source || '').toLowerCase();
+    // Keep anonymous legacy placeholders in the raw audit feed, but never
+    // render them as if they were prompt material or an executable sibling.
+    const meaningful = Boolean(
+      event.memoryId || event.skillId || event.name || event.modelName
+      || event.modelToolName || event.mcpServer || event.description
+      || category === 'memory' || category === 'skill'
+      || category === 'mcp' || category === 'tool_catalog');
+    if (!meaningful) return;
     const key = contextIdentity(event) || `context-${index}`;
     const previous = merged.get(key);
     if (!previous) {
@@ -478,15 +487,16 @@ function contextBadge(context: ContextEventView): ToolCategory {
 function contextLabel(context: ContextEventView): string {
   const badge = contextBadge(context);
   if (badge === 'memory') {
-    return `输入 · 记忆 ${context.memoryType || context.taxonomy || ''}`.trim();
+    const memoryId = context.memoryId ? ` · ${String(context.memoryId).slice(0, 16)}` : '';
+    return `MODEL_INPUT · 记忆 ${context.memoryType || context.taxonomy || ''}${memoryId}`.trim();
   }
   if (badge === 'skill') {
-    return `输入 · Skill ${context.skillId || context.name || ''}`.trim();
+    return `MODEL_INPUT · Skill ${context.skillId || context.name || ''}`.trim();
   }
   if (context.eventType === 'tool.catalog.attached' || context.category === 'tool_catalog') {
-    return `输入 · 工具描述 ${context.modelToolName || context.modelName || context.name || ''}`.trim();
+    return `MODEL_INPUT · 工具描述 ${context.modelToolName || context.modelName || context.name || ''}`.trim();
   }
-  return `输入 · ${context.title || context.name || '上下文'}`;
+  return `MODEL_INPUT · ${context.title || context.name || '上下文'}`;
 }
 
 function firstTime(events: Array<{ proposalOccurredAt?: string; startedAt?: string; occurredAt?: string; endedAt?: string }>): string | undefined {
@@ -846,6 +856,10 @@ async function copyText(text?: string) {
           class="span-row"
           :class="[statusClass(row.status), { selected: row.id === selectedId, [`depth-${row.depth}`]: true }]"
           role="treeitem"
+          :aria-level="row.depth + 1"
+          :aria-expanded="(row.kind === 'group' || row.kind === 'agent' || row.kind === 'deterministic' || row.kind === 'round') ? (!collapsed.has(row.id)) : undefined"
+          :data-parent-id="row.parentId || undefined"
+          :data-causal-role="row.causalRole || undefined"
           tabindex="0"
           @click="selectedId = row.id"
           @keydown.enter="selectedId = row.id"
@@ -877,7 +891,7 @@ async function copyText(text?: string) {
             class="span-kind"
             :class="`badge-${row.badge || (row.kind === 'round' ? 'llm' : 'builtin')}`"
           >{{ badgeLabel(row.badge || (row.kind === 'round' ? 'llm' : 'builtin')) }}</span>
-          <span class="span-label">{{ row.label }}</span>
+          <span class="span-label">{{ row.kind === 'round' ? `MODEL_INPUT → ${row.label}` : row.kind === 'tool' && row.causalRole === 'result' ? `LLM → TOOL → RESULT · ${row.label.replace(/^模型调用 · /, '')}` : row.label }}</span>
           <span class="span-causal-summary" v-if="row.sub && (row.kind === 'round' || row.kind === 'deterministic')">{{ row.sub }}</span>
           <span class="span-parallel" v-if="row.parallel">∥ 并行</span>
           <span class="span-tokens" v-if="row.tokens">{{ row.tokens }} tok</span>
@@ -1188,8 +1202,11 @@ async function copyText(text?: string) {
 .span-row.depth-2 { padding-left: 46px; font-size: 12px; }
 .span-row.depth-3 {
   padding-left: 68px; font-size: 11px; background: color-mix(in srgb, var(--color-bg) 65%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--color-primary) 28%, transparent);
 }
 .span-row.depth-3 .span-label { font-weight: 400; }
+.span-row[data-causal-role="input"] .span-label { color: var(--color-text-secondary); }
+.span-row[data-causal-role="result"] .span-label { color: var(--color-text); }
 .span-caret { border: none; background: none; cursor: pointer; padding: 0; width: 14px; color: var(--color-text-secondary); font-size: 11px; }
 .span-caret-placeholder { width: 14px; }
 .span-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
