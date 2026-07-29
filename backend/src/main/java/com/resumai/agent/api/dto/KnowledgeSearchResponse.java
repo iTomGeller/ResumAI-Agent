@@ -19,6 +19,13 @@ public record KnowledgeSearchResponse(
         List<String> fallbackChain,
         String queryId,
         String retrievedAt,
-        Long latencyMs
+        Long latencyMs,
+        Long retrievalMs,
+        Long fusionMs,
+        Long rerankMs,
+        Integer candidateCount,
+        String rerankProvider,
+        Double rerankBeforeTopScore,
+        Double rerankAfterTopScore
 ) {
 }

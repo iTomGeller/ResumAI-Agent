@@ -45,8 +45,7 @@ async def java_jd_search(resume_text: str, top_k: int = 3) -> str:
 
 async def java_knowledge_search(query: str, top_k: int = 5,
                                 rerank: bool = False) -> str:
-    """KB search. EXP-4: rerank defaults OFF; only agentic second-round
-    low-confidence retrieval should pass rerank=True."""
+    """KB hybrid search with an optional in-request second-stage reranker."""
     url = f"{settings.java_backend_url}/api/rag/knowledge-base/search"
     payload = {"query": query, "topK": top_k, "rerank": bool(rerank)}
     async with httpx.AsyncClient(timeout=60.0 if rerank else 30.0) as client:

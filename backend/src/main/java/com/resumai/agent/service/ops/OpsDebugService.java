@@ -1139,7 +1139,7 @@ public class OpsDebugService {
                 .sorted()
                 .toList();
         List<Double> topScores = items.stream()
-                .map(RagRetrievalView::topScore)
+                .map(OpsDebugService::normalizedRankingProxy)
                 .filter(OpsDebugService::isFinite)
                 .toList();
         List<Double> returned = items.stream()
@@ -1202,7 +1202,7 @@ public class OpsDebugService {
 
         Map<String, Object> semantics = new LinkedHashMap<>();
         semantics.put("rankingScores",
-                "retriever/reranker relevance scores are online ranking proxies, not precision or recall");
+                "final/reranker scores are ranking proxies; legacy raw RRF values are normalized by the two-channel theoretical maximum for summary display, never interpreted as precision or recall");
         semantics.put("topKFillRate",
                 "returnedK/requestedK is a capacity proxy; it does not prove relevance");
         semantics.put("precisionRecall",
@@ -1255,6 +1255,19 @@ public class OpsDebugService {
         }
         return new RagStageAggregateView(
                 name, values.size(), average(values), percentile(values, 0.90), average(shares));
+    }
+
+    private static Double normalizedRankingProxy(RagRetrievalView item) {
+        Double score = item != null ? item.topScore() : null;
+        if (!isFinite(score)) return null;
+        String fusion = item.fusionStrategy() == null
+                ? "" : item.fusionStrategy().toLowerCase(Locale.ROOT);
+        if (!Boolean.TRUE.equals(item.rerankApplied())
+                && fusion.contains("rrf") && score <= 0.05) {
+            // k=60, two recall channels: max raw RRF = 2/(60+1).
+            return Math.min(1.0, score / (2.0 / 61.0));
+        }
+        return score;
     }
 
     private static double sumKnownStages(RagStageTimingView stages) {

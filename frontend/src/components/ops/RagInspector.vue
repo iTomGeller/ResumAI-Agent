@@ -266,6 +266,15 @@ function scoreClass(value?: number | null): string {
   return 'bad';
 }
 
+function displayRankingScore(event: RagEvent, value?: number | null): number | null {
+  if (value === null || value === undefined) return null;
+  const fusion = String(event.fusionStrategy || '').toLowerCase();
+  if (event.rerankApplied !== true && fusion.includes('rrf') && value <= 0.05) {
+    return Math.min(1, value / (2 / 61));
+  }
+  return value;
+}
+
 function stageEntries(stages: RagStageTiming) {
   return [
     ['Query rewrite', stages.queryRewriteMs],
@@ -305,7 +314,7 @@ onMounted(loadRagEvents);
 
     <div class="proxy-notice">
       <strong>怎么看：</strong>
-      相关度表示检索结果的排序分数，Top-K 表示请求的结果是否返回完整；它们不是人工正确率。
+      归一排序分用于观察同一检索策略的排序强度；原始 RRF 分另行保留供审计。Top-K 表示结果是否返回完整，两者都不是人工正确率。
     </div>
 
     <div v-if="summary" class="rag-kpi-grid">
@@ -333,7 +342,7 @@ onMounted(loadRagEvents);
         <span class="metric-note">端到端 retrieval pipeline</span>
       </div>
       <div class="metric-card">
-        <span class="metric-label">相关度 / 结果完整率</span>
+        <span class="metric-label">归一排序分 / 结果完整率</span>
         <strong class="metric-value compact-value">
           {{ formatNumber(summary.averageTopScoreProxy, 3) }} /
           {{ formatPercent(summary.topKFillRateProxy) }}
@@ -417,7 +426,7 @@ onMounted(loadRagEvents);
             <th>Outcome</th>
             <th>Strategy / Index</th>
             <th>K / Docs</th>
-            <th>Score proxy</th>
+            <th>归一排序分</th>
             <th>Latency</th>
           </tr>
         </thead>
@@ -451,10 +460,10 @@ onMounted(loadRagEvents);
                 <span class="cell-subtitle">{{ event.uniqueDocuments ?? '—' }} unique docs</span>
               </td>
               <td>
-                <span class="score-chip" :class="scoreClass(event.topScore)">
-                  top {{ formatNumber(event.topScore, 3) }}
+                <span class="score-chip" :class="scoreClass(displayRankingScore(event, event.topScore))">
+                  top {{ formatNumber(displayRankingScore(event, event.topScore), 3) }}
                 </span>
-                <span class="cell-subtitle">mean {{ formatNumber(event.meanScore, 3) }}</span>
+                <span class="cell-subtitle">mean {{ formatNumber(displayRankingScore(event, event.meanScore), 3) }}</span>
               </td>
               <td>
                 <strong>{{ formatMs(event.stages?.totalMs ?? event.durationMs) }}</strong>
@@ -494,12 +503,12 @@ onMounted(loadRagEvents);
                       <div><span>candidate / unique docs</span><strong>{{ event.candidateCount ?? '未采集' }} / {{ event.uniqueDocuments ?? '未采集' }}</strong></div>
                       <div><span>lexical / vector hits</span><strong>{{ event.lexicalHits ?? '未采集' }} / {{ event.vectorHits ?? '未采集' }}</strong></div>
                       <div><span>filtered / dropped / dedup</span><strong>{{ event.filteredCount ?? '未采集' }} / {{ event.droppedCount ?? '未采集' }} / {{ event.deduplicatedCount ?? '未采集' }}</strong></div>
-                      <div><span>top / mean / min</span><strong>{{ formatNumber(event.topScore, 4) }} / {{ formatNumber(event.meanScore, 4) }} / {{ formatNumber(event.minScore, 4) }}</strong></div>
+                      <div><span>top / mean / min（归一展示）</span><strong>{{ formatNumber(displayRankingScore(event, event.topScore), 4) }} / {{ formatNumber(displayRankingScore(event, event.meanScore), 4) }} / {{ formatNumber(displayRankingScore(event, event.minScore), 4) }}</strong></div>
                       <div><span>spread / score samples</span><strong>{{ formatNumber(event.scoreSpread, 4) }} / {{ event.scoreSampleSize ?? '未采集' }}</strong></div>
                       <div><span>rerank before / after / lift</span><strong>{{ formatNumber(event.rerankBeforeTopScore, 4) }} / {{ formatNumber(event.rerankAfterTopScore, 4) }} / {{ formatNumber(event.rerankLift, 4) }}</strong></div>
                       <div><span>cache / zero hit</span><strong>{{ event.cacheHit ?? '未采集' }} / {{ event.zeroHit ?? '未采集' }}</strong></div>
                     </div>
-                    <p class="proxy-copy">Score 为 retriever/reranker relevance proxy；不同 strategy 的分值未校准时不可横向等同。</p>
+                    <p class="proxy-copy">表格优先展示 final/rerank 归一排序分；展开 chunk 可看 scoreType。原始 RRF 是倒数秩融合值，不是百分比；不同 strategy 仍不可直接横比。</p>
                   </div>
 
                   <div v-if="event.fallback || event.degraded || event.error" class="detail-section issue-section">

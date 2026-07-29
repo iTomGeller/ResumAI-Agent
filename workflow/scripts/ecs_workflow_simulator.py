@@ -152,6 +152,13 @@ EXTERNAL_RESUME = """王强｜Java 后端工程师
 项目：https://github.com/spring-projects/spring-petclinic
 项目成果：负责 Agent 编排、向量检索和服务稳定性优化。"""
 
+DOMESTIC_EXTERNAL_RESUME = """陈晨｜Java / AI Agent 平台工程师
+2021-至今 企业软件平台，负责 Spring Boot 微服务与 RAG 知识助手。
+技术：Java、Spring Boot、Redis、MySQL、Docker、RAG、LLM、Trace。
+国内公开仓库：https://gitee.com/mindspore/mindspore
+技术文章主页：https://blog.csdn.net/
+项目成果：完成混合召回、二次排序和逐调用可观测性改造。"""
+
 STRONG_RESUME = """李明｜高级 AI Agent / Java 平台工程师｜7 年经验
 2019-2022 某金融科技公司，高级 Java 工程师：负责交易平台服务治理与性能优化。
 2022-至今 某智能软件公司，Agent 平台负责人：带领 5 人团队建设企业知识助手。
@@ -165,6 +172,7 @@ SCENARIOS = {
     "short": SHORT_RESUME,
     "strong": STRONG_RESUME,
     "external": EXTERNAL_RESUME,
+    "domestic_external": DOMESTIC_EXTERNAL_RESUME,
 }
 
 

@@ -705,7 +705,11 @@ class ToolExecutor:
 
         if len(queries) == 1:
             _t1 = _time.perf_counter()
-            result = await one(queries[0], use_rerank=False)
+            # Full evaluations use the backend's measured, millisecond-scale
+            # second-stage reranker in the same request.  Previously rerank
+            # only ran for Copilot rewrites and repeated the whole retrieval.
+            result = await one(
+                queries[0], use_rerank=(defn.name == "knowledge_search"))
             _embed_ms = (_time.perf_counter() - _t1) * 1000
             result = self._normalize_result(result)
             if isinstance(result, dict):
@@ -713,13 +717,29 @@ class ToolExecutor:
                 result["queryRewriteMode"] = (
                     "deterministic_passthrough" if rewrite
                     else "not_requested")
+                backend_total = result.get("latencyMs")
                 result["_latency"] = {
                     "rewrite_ms": round(_rewrite_ms, 1),
-                    "retrieval_ms": round(_embed_ms, 1),
-                    "rerank_ms": 0,
-                    "total_ms": round(_rewrite_ms + _embed_ms, 1),
+                    "retrieval_ms": result.get("retrievalMs")
+                    if result.get("retrievalMs") is not None
+                    else round(_embed_ms, 1),
+                    "fusion_ms": result.get("fusionMs"),
+                    "rerank_ms": result.get("rerankMs"),
+                    "total_ms": round(
+                        _rewrite_ms + (
+                            float(backend_total)
+                            if isinstance(backend_total, (int, float))
+                            else _embed_ms), 1),
                 }
+                rerank_strategy = str(
+                    result.get("rerankStrategy") or "").strip()
+                if (not isinstance(result.get("rerankApplied"), bool)
+                        and rerank_strategy):
+                    result["rerankApplied"] = True
+                    result.setdefault(
+                        "rerankProvider", "overlap_density_v1")
                 if (rewrite and defn.name == "knowledge_search"
+                        and not result.get("rerankApplied")
                         and self._retrieval_low_confidence(result)):
                     _t2 = _time.perf_counter()
                     reranked = await one(queries[0], use_rerank=True)
@@ -846,8 +866,8 @@ class ToolExecutor:
             if not isinstance(item, dict):
                 continue
             for key in (
-                    "rerankScore", "vectorScore", "bm25Score",
-                    "retrievalScore", "similarity", "rrfScore",
+                    "finalScore", "rerankScore", "retrievalScore",
+                    "vectorScore", "bm25Score", "similarity", "rrfScore",
                     "matchScore", "score"):
                 value = item.get(key)
                 if isinstance(value, (int, float)) and not isinstance(value, bool):

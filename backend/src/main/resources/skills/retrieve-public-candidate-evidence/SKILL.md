@@ -24,6 +24,13 @@ allowed-tools: exa.web_search_exa exa.web_fetch_exa deepwiki.read_wiki_structure
 
 生产 MCP 清单只允许免 OAuth、免 API Key 的服务；公开 GitHub 页通过 Exa、DeepWiki 或白名单 fetch 核验。
 
+### 中国大陆 ECS 路由
+
+- GitHub 连通性按**运行时探测结果**处理，不能因机房地域直接假定可用或不可用。
+- GitHub 直连失败时，优先换到托管在境外的 Exa 抓取；候选人明确声明了仓库时可用 DeepWiki 定位结构。仍失败则记 `not_checked`，不得反推为“仓库不存在”或履历风险。
+- Gitee / GitCode / CSDN / 掘金 / 知乎 / 博客园等候选人显式声明的国内链接，优先用白名单 fetch 直连；来源 URL 必须原样保留。
+- 不得把同名 Gitee 镜像自动当成 GitHub 原仓库；只有简历显式声明或页面提供可验证的 canonical / mirror 关系时才允许绑定。
+
 ## URL 绑定与白名单
 
 - 候选事实只允许绑定**候选人声明**的 URL / 标识。

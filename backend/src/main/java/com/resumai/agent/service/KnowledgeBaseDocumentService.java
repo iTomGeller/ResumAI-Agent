@@ -244,12 +244,15 @@ public class KnowledgeBaseDocumentService {
         String queryId = "kbq-" + UUID.randomUUID();
         String retrievedAt = LocalDateTime.now().toString();
         int limit = Math.max(topK, 1);
+        long retrievalStarted = System.currentTimeMillis();
         List<Map<String, Object>> lexical = lexicalSearch(query, Math.max(limit * 4, 20));
         List<Map<String, Object>> vector = vectorSearch(query, Math.max(limit * 4, 20));
+        long retrievalMs = System.currentTimeMillis() - retrievalStarted;
 
         String strategy;
         String fallbackStage;
         List<Map<String, Object>> fused;
+        long fusionStarted = System.currentTimeMillis();
         if (!lexical.isEmpty() && !vector.isEmpty()) {
             fused = fuseRrf(lexical, vector, Math.max(limit * 2, 10));
             strategy = "hybrid_bm25_embedding";
@@ -271,16 +274,22 @@ public class KnowledgeBaseDocumentService {
             strategy = "none";
             fallbackStage = "none";
         }
+        long fusionMs = System.currentTimeMillis() - fusionStarted;
 
         boolean rerankApplied = false;
+        long rerankMs = 0L;
+        Double beforeTopScore = topFinalScore(fused);
         if (rerank && fused.size() > 1) {
-            List<Map<String, Object>> reranked = llmRerank(query, fused);
-            if (reranked != null && !reranked.isEmpty()) {
+            long rerankStarted = System.currentTimeMillis();
+            List<Map<String, Object>> reranked = featureRerank(query, fused);
+            rerankMs = System.currentTimeMillis() - rerankStarted;
+            if (!reranked.isEmpty()) {
                 fused = reranked;
                 rerankApplied = true;
-                strategy = strategy + "+llm_rerank";
+                strategy = strategy + "+feature_rerank";
             }
         }
+        Double afterTopScore = topFinalScore(fused);
 
         final String resolvedStrategy = strategy;
         final String resolvedStage = fallbackStage;
@@ -300,15 +309,15 @@ public class KnowledgeBaseDocumentService {
             copy.put("fallbackStage", resolvedStage);
             copy.put("fallbackUsed", "lexical".equals(resolvedStage) || "none".equals(resolvedStage));
             copy.put("enabled", true);
-            if (appliedRerank && copy.get("rerankScore") == null) {
-                // listwise order only — expose inverse-rank as soft rerank score when LLM did not emit one
-                copy.put("rerankScore", 1.0 / rank);
-            }
-            Object finalScore = copy.get("rrfScore") != null ? copy.get("rrfScore")
-                    : (copy.get("vectorScore") != null ? copy.get("vectorScore") : copy.get("bm25Score"));
+            Object finalScore = appliedRerank && copy.get("rerankScore") != null
+                    ? copy.get("rerankScore")
+                    : (copy.get("retrievalScore") != null ? copy.get("retrievalScore")
+                    : (copy.get("vectorScore") != null ? copy.get("vectorScore") : copy.get("bm25Score")));
             if (finalScore != null) {
                 copy.put("finalScore", finalScore);
                 copy.putIfAbsent("retrievalScore", finalScore);
+                copy.put("score", finalScore);
+                copy.put("topScore", finalScore);
             }
             hits.add(copy);
         }
@@ -316,7 +325,10 @@ public class KnowledgeBaseDocumentService {
         long latencyMs = System.currentTimeMillis() - started;
         return new SearchResult(hits, resolvedStrategy, lexical.size(), vector.size(),
                 !lexical.isEmpty() && !vector.isEmpty() ? "rrf_k60" : "none",
-                rerankApplied, resolvedStage, FALLBACK_CHAIN, queryId, retrievedAt, latencyMs);
+                rerankApplied, resolvedStage, FALLBACK_CHAIN, queryId, retrievedAt, latencyMs,
+                retrievalMs, fusionMs, rerankMs, fused.size(),
+                rerankApplied ? "feature_rerank_v1" : null,
+                beforeTopScore, afterTopScore);
     }
 
     /**
@@ -675,20 +687,72 @@ public class KnowledgeBaseDocumentService {
                 .map(e -> {
                     Map<String, Object> row = new LinkedHashMap<>(byId.get(e.getKey()));
                     Double rrf = e.getValue();
+                    double normalizedRrf = Math.min(1.0,
+                            rrf / (2.0 / (RRF_K + 1.0)));
                     Double bm25 = bm25ById.get(e.getKey());
                     Double vec = vectorById.get(e.getKey());
-                    row.put("score", rrf);
+                    row.put("score", normalizedRrf);
                     row.put("rrfScore", rrf);
-                    row.put("retrievalScore", rrf);
+                    row.put("normalizedRrfScore", normalizedRrf);
+                    row.put("retrievalScore", normalizedRrf);
                     row.put("bm25Score", bm25);
                     row.put("vectorScore", vec);
                     row.put("bm25Rank", bm25RankById.get(e.getKey()));
                     row.put("vectorRank", vectorRankById.get(e.getKey()));
                     row.put("channel", "rrf");
-                    row.put("topScore", rrf);
+                    row.put("topScore", normalizedRrf);
                     return row;
                 })
                 .toList();
+    }
+
+    /**
+     * Millisecond-scale second-stage reranker.  RRF remains the auditable
+     * fusion signal; this stage combines its normalized rank signal with
+     * query coverage and the original dense/lexical scores.  It deliberately
+     * avoids a hidden chat-model call in the latency-critical evaluation path.
+     */
+    private List<Map<String, Object>> featureRerank(
+            String query, List<Map<String, Object>> candidates) {
+        List<String> terms = expandTerms(tokenize(query));
+        List<Map<String, Object>> scored = new ArrayList<>();
+        for (Map<String, Object> candidate : candidates) {
+            Map<String, Object> row = new LinkedHashMap<>(candidate);
+            String searchable = stringValue(row.get("title"), "") + " "
+                    + stringValue(row.get("sectionPath"), "") + " "
+                    + stringValue(row.get("content"), "") + " "
+                    + stringValue(row.get("metadata"), "");
+            double coverage = scoreText(searchable, terms);
+            double retrieval = clamp01(doubleValue(row.get("retrievalScore")));
+            double dense = clamp01(doubleValue(row.get("vectorScore")));
+            double lexical = clamp01(doubleValue(row.get("bm25Score")));
+            double score = clamp01(
+                    0.45 * retrieval + 0.30 * coverage
+                            + 0.15 * dense + 0.10 * lexical);
+            row.put("rerankScore", score);
+            row.put("rerankProvider", "feature_rerank_v1");
+            row.put("rerankReason", String.format(
+                    "normalizedRrf=%.3f queryCoverage=%.3f dense=%.3f lexical=%.3f",
+                    retrieval, coverage, dense, lexical));
+            row.put("finalScore", score);
+            scored.add(row);
+        }
+        scored.sort((a, b) -> Double.compare(
+                doubleValue(b.get("rerankScore")),
+                doubleValue(a.get("rerankScore"))));
+        return scored;
+    }
+
+    private Double topFinalScore(List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) return null;
+        Object value = rows.get(0).get("finalScore");
+        if (!(value instanceof Number)) value = rows.get(0).get("retrievalScore");
+        if (!(value instanceof Number)) value = rows.get(0).get("score");
+        return value instanceof Number number ? number.doubleValue() : null;
+    }
+
+    private double clamp01(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
     }
 
     private Map<String, Object> preserveChannelScores(Map<String, Object> row, String channel) {
@@ -1238,13 +1302,18 @@ public class KnowledgeBaseDocumentService {
                                int lexicalHits, int vectorHits, String fusion,
                                boolean rerankApplied, String fallbackStage,
                                List<String> fallbackChain,
-                               String queryId, String retrievedAt, Long latencyMs) {
+                               String queryId, String retrievedAt, Long latencyMs,
+                               Long retrievalMs, Long fusionMs, Long rerankMs,
+                               Integer candidateCount, String rerankProvider,
+                               Double rerankBeforeTopScore,
+                               Double rerankAfterTopScore) {
         public SearchResult(List<Map<String, Object>> chunks, String strategy,
                             int lexicalHits, int vectorHits, String fusion,
                             boolean rerankApplied, String fallbackStage,
                             List<String> fallbackChain) {
             this(chunks, strategy, lexicalHits, vectorHits, fusion, rerankApplied,
-                    fallbackStage, fallbackChain, null, null, null);
+                    fallbackStage, fallbackChain, null, null, null,
+                    null, null, null, null, null, null, null);
         }
     }
 }

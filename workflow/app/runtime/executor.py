@@ -2962,8 +2962,9 @@ class RunExecutor:
             if isinstance(chunk, dict):
                 raw_score = next((
                     chunk.get(key) for key in (
-                        "score", "relevanceScore", "similarity",
-                        "vectorScore", "bm25Score", "rrfScore")
+                        "finalScore", "rerankScore", "retrievalScore",
+                        "relevanceScore", "similarity", "vectorScore",
+                        "bm25Score", "rrfScore", "score")
                     if isinstance(chunk.get(key), (int, float))), None)
                 score = float(raw_score) if raw_score is not None else None
                 if score is not None:
@@ -2978,7 +2979,10 @@ class RunExecutor:
                     "title": chunk.get("title"),
                     "source": chunk.get("source") or chunk.get("sourceType"),
                     "uri": chunk.get("uri") or chunk.get("url"),
-                    "score": round(score, 4) if score is not None else None,
+                    "finalScore": round(score, 4) if score is not None else None,
+                    "retrievalScore": chunk.get("retrievalScore"),
+                    "rerankScore": chunk.get("rerankScore"),
+                    "rrfScore": chunk.get("rrfScore"),
                     "content": str(content)[:800] if content else None,
                     "provenance": chunk.get("provenance") or {
                         "indexName": chunk.get("index")
@@ -3162,7 +3166,9 @@ class RunExecutor:
         """Extract verifiable candidate URLs from resume (GitHub, LinkedIn, blog, portfolio)."""
         import re as _re
         url_pattern = _re.compile(
-            r'https?://(?:github\.com|linkedin\.com|gitee\.com|'
+            r'https?://(?:github\.com|linkedin\.com|gitee\.com|gitcode\.com|'
+            r'(?:blog\.)?csdn\.net|juejin\.cn|(?:zhuanlan\.)?zhihu\.com|'
+            r'(?:www\.)?cnblogs\.com|segmentfault\.com|'
             r'blog\.\w+|[\w-]+\.github\.io|portfolio|[\w-]+\.vercel\.app)'
             r'[^\s\)\]<>\"\']*', _re.IGNORECASE)
         urls = url_pattern.findall(resume_text or "")
@@ -3898,17 +3904,28 @@ class RunExecutor:
         elif definition.agent_id == "RiskAgent" and resume \
                 and "timelineCheck" not in artifacts:
             steps.append(("check_timeline", {"resumeText": resume}))
-        elif definition.agent_id == "TechAgent" and resume \
-                and "jdCoverage" not in artifacts:
+        elif definition.agent_id == "TechAgent" and resume:
             effective_jd = ""
             artifact_jd = artifacts.get("effectiveJd")
             if isinstance(artifact_jd, str) and artifact_jd.strip():
                 effective_jd = artifact_jd.strip()
             elif (request.jobDescription or "").strip():
                 effective_jd = request.jobDescription.strip()
-            if effective_jd:
+            if effective_jd and "jdCoverage" not in artifacts:
                 steps.append(("calculate_jd_coverage",
                               {"resumeText": resume, "jdText": effective_jd}))
+            # One broad evidence recall prevents a native model turn from
+            # issuing several near-duplicate semantic searches and exhausting
+            # the per-agent tool budget.  A successful prestep is removed from
+            # the later model catalog; Skill/MCP choices remain model-made.
+            tech_query = self._build_tech_search_query(
+                resume, effective_jd, artifacts)
+            if tech_query:
+                steps.append(("resume_semantic_search", {
+                    "query": tech_query,
+                    "resumeText": resume,
+                    "topK": 5,
+                }))
         elif definition.agent_id == "EvidenceAgent" and resume:
             claims = self.state.claims_for_verification()
             if claims:
@@ -3951,6 +3968,20 @@ class RunExecutor:
             return "技术能力评估标准 评分规范"
         # ReportAgent: retrieve overall evaluation policy
         return "简历评估 评分标准 录用建议 风险判断"
+
+    def _build_tech_search_query(self, resume: str, jd: str,
+                                 artifacts: Dict[str, Any]) -> str:
+        """Build one evidence-oriented Tech query without naming MCP/Skills."""
+        import re as _re
+        source = f"{jd} {resume[:1200]}"
+        techs = _re.findall(
+            r"\b(Java|Python|Go|Spring(?:\s*Boot)?|Redis|Kafka|MySQL|"
+            r"Docker|Kubernetes|K8s|RAG|LLM|Agent|JVM|"
+            r"微服务|分布式|后端|前端|可观测性)\b",
+            source, _re.IGNORECASE)
+        unique = list(dict.fromkeys(value.strip() for value in techs))[:8]
+        focus = " ".join(unique) if unique else "核心技术栈"
+        return f"{focus} 项目实践 性能优化 故障排查 量化成果"
 
     def _apply_verification(self, result: Any) -> None:
         if not isinstance(result, dict):

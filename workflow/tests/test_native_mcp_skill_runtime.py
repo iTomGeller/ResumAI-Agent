@@ -1706,7 +1706,7 @@ def test_runtime_transport_failure_transitions_to_down_for_ttl_reprobe():
         now=100.0 + DEGRADED_REPROBE_TTL_S + 1.0) is True
 
 
-def test_rerank_telemetry_uses_actual_before_after_scores_only():
+def test_knowledge_search_uses_single_in_request_rerank_with_real_timings():
     from app.runtime import gateway
 
     tools = ToolExecutor(
@@ -1717,13 +1717,23 @@ def test_rerank_telemetry_uses_actual_before_after_scores_only():
     async def one_query(query):
         return [query]
 
+    calls = []
+
     async def fake_search(*, query, top_k=5, rerank=False, **kwargs):
-        score = 0.7 if rerank else 0.2
+        calls.append(rerank)
         return {
             "chunks": [
-                {"chunkId": "a", "score": score, "content": "A"},
-                {"chunkId": "b", "score": score - 0.05, "content": "B"},
+                {"chunkId": "a", "finalScore": 0.7, "content": "A"},
+                {"chunkId": "b", "finalScore": 0.65, "content": "B"},
             ],
+            "rerankApplied": True,
+            "rerankProvider": "feature_rerank_v1",
+            "rerankBeforeTopScore": 0.55,
+            "rerankAfterTopScore": 0.7,
+            "retrievalMs": 12,
+            "fusionMs": 1,
+            "rerankMs": 2,
+            "latencyMs": 15,
         }
 
     tools._rewrite_queries = one_query
@@ -1736,10 +1746,35 @@ def test_rerank_telemetry_uses_actual_before_after_scores_only():
             True))
     finally:
         gateway.java_knowledge_search = original
-    assert result["agenticRerank"] is True
-    assert result["rerankBeforeTopScore"] == 0.2
+    assert calls == [True]
+    assert result["rerankApplied"] is True
+    assert result["rerankProvider"] == "feature_rerank_v1"
+    assert result["rerankBeforeTopScore"] == 0.55
     assert result["rerankAfterTopScore"] == 0.7
-    assert result["rerankLift"] == 0.5
+    assert result["_latency"]["retrieval_ms"] == 12
+    assert result["_latency"]["fusion_ms"] == 1
+    assert result["_latency"]["rerank_ms"] == 2
+
+
+def test_tech_presteps_use_one_semantic_recall_and_leave_no_duplicate_catalog():
+    request = AgentRunRequest(
+        runId="r-tech-pre", conversationId="c-tech-pre",
+        runType="full_evaluation",
+        resumeText=("Java Spring Boot Redis RAG 项目：性能优化与故障排查"),
+        jobDescription="Java Spring Boot Docker RAG Agent")
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=_NativeMcpLlm())
+    steps = executor._pre_steps(default_agent_registry.get("TechAgent"))
+    names = [name for name, _arguments in steps]
+    assert names.count("resume_semantic_search") == 1
+    assert names.count("knowledge_search") == 1
+    assert names.count("calculate_jd_coverage") == 1
+    semantic_args = next(
+        arguments for name, arguments in steps
+        if name == "resume_semantic_search")
+    assert "性能优化" in semantic_args["query"]
+    assert "resumeText" in semantic_args
 
 
 def test_cancelled_degraded_reprobe_preserves_old_health_catalog_and_clients(

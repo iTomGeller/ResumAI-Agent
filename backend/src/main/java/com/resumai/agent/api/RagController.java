@@ -238,7 +238,14 @@ public class RagController {
                 result.fallbackChain(),
                 result.queryId(),
                 result.retrievedAt(),
-                result.latencyMs());
+                result.latencyMs(),
+                result.retrievalMs(),
+                result.fusionMs(),
+                result.rerankMs(),
+                result.candidateCount(),
+                result.rerankProvider(),
+                result.rerankBeforeTopScore(),
+                result.rerankAfterTopScore());
     }
 
     @PostMapping("/knowledge-base/reindex")
