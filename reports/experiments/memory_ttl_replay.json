@@ -1,11 +1,12 @@
 {
   "experiment": "memory_ttl_temporal_replay",
   "version": 2,
-  "generatedAt": "2026-07-29T08:52:20Z",
+  "generatedAt": "2026-07-29T09:24:07Z",
   "source": "mysql-container:resumai-mysql",
   "cohort": {
     "compatibility": "CURRENT_VERSION",
-    "sinceUtc": "2026-07-29 08:03:16"
+    "sinceUtc": "2026-07-29 08:03:16",
+    "producerCompatibility": "CURRENT_VERSION"
   },
   "mutation": "NONE",
   "guardrail": "Never change production TTL from an inconclusive replay",
@@ -16,16 +17,16 @@
     "minimumHistoryCoverageRatio": 0.8
   },
   "diagnostics": {
-    "inputRows": 0,
+    "inputRows": 30,
     "missingType": 0,
     "legacyTypeRemapped": 0,
     "legacyTypeCounts": {},
     "missingAge": 0,
     "negativeAge": 0,
     "unsupportedDecision": 0,
-    "validRows": 0
+    "validRows": 30
   },
-  "overallDecision": "INSUFFICIENT_CURRENT_VERSION_DATA",
+  "overallDecision": "KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA",
   "typeResults": [
     {
       "type": "WORKING",
@@ -162,14 +163,14 @@
     {
       "type": "EPISODIC",
       "currentDefaultDays": 90,
-      "sampleCount": 0,
-      "usedSamples": 0,
+      "sampleCount": 30,
+      "usedSamples": 30,
       "ignoredSamples": 0,
-      "maxObservedAgeDays": 0.0,
-      "distinctObservedAgeDays": 0,
+      "maxObservedAgeDays": 0.003,
+      "distinctObservedAgeDays": 1,
       "requiredCoverageDays": 72.0,
       "ageHistogram": {
-        "0-1d": 0,
+        "0-1d": 30,
         "1-7d": 0,
         "7-30d": 0,
         "30-90d": 0,
@@ -179,9 +180,8 @@
       },
       "conclusive": false,
       "insufficientReasons": [
-        "USED 样本 0 < 30",
         "最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 72.0d",
-        "仅覆盖 0 个不同记忆年龄日",
+        "仅覆盖 1 个不同记忆年龄日",
         "候选 TTL 在当前样本上没有产生可区分结果"
       ],
       "decision": "KEEP_DEFAULT_INSUFFICIENT_DATA",
@@ -190,38 +190,38 @@
         {
           "ttlDays": 30,
           "isCurrentDefault": false,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         },
         {
           "ttlDays": 60,
           "isCurrentDefault": false,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         },
         {
           "ttlDays": 90,
           "isCurrentDefault": true,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         },
         {
           "ttlDays": 180,
           "isCurrentDefault": false,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         }
       ]
     },

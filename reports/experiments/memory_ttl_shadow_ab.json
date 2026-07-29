@@ -1,0 +1,54 @@
+{
+  "experiment": "EXP-13-current-workflow-episodic-shadow-ab",
+  "workflowCutoverUtc": "2026-07-29T08:03:16Z",
+  "cohort": "CURRENT_VERSION_CONSUMER_AND_PRODUCER",
+  "conditions": {
+    "retained": "latest ACTIVE current-version cross_candidate_anchor remains visible",
+    "expired": "the same current-version anchor is temporarily past expires_at"
+  },
+  "validPairs": [
+    {
+      "caseId": "gold-java-backend-normal",
+      "retainedRunId": "run-3376b860-8e42-474d-99f6-f3a304a7a462",
+      "expiredRunId": "run-0d8168e6-7db3-4db6-a7b8-2f58b7e8fe7d",
+      "retainedCurrentMemoryHits": 5,
+      "expiredCurrentMemoryHits": 0,
+      "rewardDeltaRetainedMinusExpired": 0.0129,
+      "evidenceSupportDelta": 0.11,
+      "latencyDeltaSeconds": 1.02,
+      "mustFindDelta": 0.0,
+      "violationDelta": 0.0
+    },
+    {
+      "caseId": "gold-ai-agent-resume",
+      "retainedRunId": "run-b836c6aa-0b4b-4303-bc8c-53da0be98bb7",
+      "expiredRunId": "run-70179470-3ed4-45a3-a347-d5efb7c0e567",
+      "retainedCurrentMemoryHits": 5,
+      "expiredCurrentMemoryHits": 0,
+      "rewardDeltaRetainedMinusExpired": 0.0251,
+      "evidenceSupportDelta": 0.148,
+      "latencyDeltaSeconds": -11.14,
+      "mustFindDelta": 0.0,
+      "violationDelta": 0.0
+    }
+  ],
+  "aggregate": {
+    "successfulRuns": 4,
+    "meanRewardDeltaRetainedMinusExpired": 0.019,
+    "meanEvidenceSupportDelta": 0.129,
+    "meanLatencyDeltaSeconds": -5.06,
+    "mustFindRegressions": 0,
+    "violationRegressions": 0
+  },
+  "invalidatedPilot": {
+    "caseId": "gold-java-backend-normal",
+    "reason": "cross_candidate_anchor lifecycle changed the prior ACTIVE row to CONFLICTED, so the labelled retained condition had zero current-version hits"
+  },
+  "safety": {
+    "scope": "only benchmark cross_candidate_anchor rows created after the workflow cutover",
+    "restored": true,
+    "activeUnexpectedlyExpiredAfterExperiment": 0
+  },
+  "decision": "KEEP_EPISODIC_INCUMBENT_NOT_HORIZON_OPTIMAL",
+  "limitation": "The clean anchors were minutes old. This establishes positive marginal utility of retaining Episodic memory, but cannot distinguish a 30, 60 or 90 day horizon."
+}

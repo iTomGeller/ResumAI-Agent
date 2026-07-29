@@ -82,6 +82,18 @@ class MemoryTtlReplayTest(unittest.TestCase):
         self.assertEqual("INSUFFICIENT_CURRENT_VERSION_DATA",
                          report["overallDecision"])
 
+    def test_current_cohort_records_producer_compatibility(self):
+        report = build_report({
+            "_cohort": {
+                "compatibility": "CURRENT_VERSION",
+                "sinceUtc": "2026-07-29 08:03:16",
+                "producerCompatibility": "CURRENT_VERSION",
+            },
+            "usage": [],
+        })
+        self.assertEqual("CURRENT_VERSION",
+                         report["cohort"]["producerCompatibility"])
+
     def test_cutover_is_normalized_to_utc(self):
         self.assertEqual("2026-07-29 08:03:16",
                          parse_utc_cutover("2026-07-29T16:03:16+08:00"))

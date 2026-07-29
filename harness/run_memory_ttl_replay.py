@@ -63,10 +63,24 @@ def parse_utc_cutover(value: str | None) -> str | None:
     return parsed.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def fetch_mysql_payload(container: str, since_utc: str | None = None) -> dict[str, Any]:
+def fetch_mysql_payload(
+    container: str,
+    since_utc: str | None = None,
+    current_producers_only: bool = False,
+) -> dict[str, Any]:
     """Read the complete ECS usage history without the Ops API page limit."""
     cutover = parse_utc_cutover(since_utc)
-    where_clause = f"WHERE u.create_time >= '{cutover}'" if cutover else ""
+    filters = []
+    if cutover:
+        filters.append(f"u.create_time >= '{cutover}'")
+    if current_producers_only:
+        if not cutover:
+            raise ValueError("--current-producers-only requires --since-utc")
+        # run_memory_usage is stored as UTC LocalDateTime; memory_entry uses
+        # JVM-local Asia/Shanghai time. Compare the same deployment instant.
+        filters.append(
+            f"m.create_time >= DATE_ADD('{cutover}', INTERVAL 8 HOUR)")
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
     sql = f"""
 SELECT JSON_OBJECT(
   'type', m.type,
@@ -94,6 +108,8 @@ ORDER BY u.id;
         "_cohort": {
             "compatibility": "CURRENT_VERSION" if cutover else "MIXED_LEGACY",
             "sinceUtc": cutover,
+            "producerCompatibility": (
+                "CURRENT_VERSION" if current_producers_only else "MIXED_OR_UNKNOWN"),
         },
         "usage": rows,
         "defaults": {"ttl": {"typeDefaultDays": DEFAULT_TTL_DAYS}},
@@ -328,6 +344,8 @@ def markdown_summary(report: dict[str, Any]) -> str:
         f"- cohort：{report['cohort']['compatibility']}"
         + (f"（UTC {report['cohort']['sinceUtc']} 之后）"
            if report['cohort'].get('sinceUtc') else ""),
+        f"- Memory 生产版本："
+        f"{report['cohort'].get('producerCompatibility', 'MIXED_OR_UNKNOWN')}",
         f"- 历史类型归一：{report['diagnostics']['legacyTypeRemapped']} 条",
         "- 安全边界：样本不足时只保留默认值，不自动修改生产 TTL。",
         "",
@@ -356,6 +374,9 @@ def main() -> int:
     parser.add_argument(
         "--since-utc",
         help="Only include usage at/after this workflow-version cutover (ISO-8601 UTC)")
+    parser.add_argument(
+        "--current-producers-only", action="store_true",
+        help="Also require the consumed memory to have been created after the cutover")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--min-used", type=int, default=30)
     parser.add_argument("--retention-floor", type=float, default=0.99)
@@ -365,7 +386,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.mysql_container:
-        payload = fetch_mysql_payload(args.mysql_container, args.since_utc)
+        payload = fetch_mysql_payload(
+            args.mysql_container, args.since_utc, args.current_producers_only)
     elif args.input:
         payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
     else:
