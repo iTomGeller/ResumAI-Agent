@@ -731,7 +731,7 @@ class Coordinator:
                 tool_quota = per_agent_tools
                 if agent == "ProjectAgent" and sig.get("has_external_urls"):
                     tool_quota = min(
-                        5, self.policy.toolBudget.maxToolCallsPerAgent)
+                        6, self.policy.toolBudget.maxToolCallsPerAgent)
                 budget[agent] = {
                     "llmQuota": quotas[agent],
                     "actionTurnQuota": min(
@@ -874,11 +874,11 @@ class Coordinator:
             tool_quota = per_agent_tools
             if agent == "ProjectAgent" and sig.get("has_external_urls"):
                 # Real external-evidence turns commonly need one Skill load,
-                # one local evidence locator and one or two model-selected MCP
-                # calls. Keep that branch usable without raising the run-wide
-                # hard tool cap enforced by RunBudget/ToolExecutor.
+                # two local evidence presteps and up to three model-selected
+                # MCP calls (search plus two candidate-declared URLs). Keep
+                # that branch usable without raising the run-wide hard cap.
                 tool_quota = min(
-                    5, self.policy.toolBudget.maxToolCallsPerAgent)
+                    6, self.policy.toolBudget.maxToolCallsPerAgent)
             budget[agent] = {
                 "llmQuota": llm_quota,
                 "actionTurnQuota": action_quota,

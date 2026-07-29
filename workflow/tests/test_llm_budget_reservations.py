@@ -195,7 +195,7 @@ def test_external_url_budget_keeps_skill_mcp_and_final_turns_inside_cap():
         "maxIterationsPerAgent": 2,
         "toolBudget": {
             "maxToolCallsPerRun": 20,
-            "maxToolCallsPerAgent": 5,
+            "maxToolCallsPerAgent": 6,
         },
     })
     budget = RunBudget()
@@ -227,5 +227,5 @@ def test_external_url_budget_keeps_skill_mcp_and_final_turns_inside_cap():
         budget.available_agent_llm_calls(policy.maxLlmCalls))
     assert plan["ProjectAgent"]["llmQuota"] >= 4
     assert plan["ProjectAgent"]["actionTurnQuota"] >= 3
-    assert plan["ProjectAgent"]["toolQuota"] == 5
+    assert plan["ProjectAgent"]["toolQuota"] == 6
     assert plan["EvidenceAgent"]["actionTurnQuota"] >= 1

@@ -52,7 +52,7 @@ class PauseRequest(BaseModel):
 
 class ToolBudget(BaseModel):
     maxToolCallsPerRun: int = 20
-    maxToolCallsPerAgent: int = 5
+    maxToolCallsPerAgent: int = 6
 
 
 class ContextBudget(BaseModel):
