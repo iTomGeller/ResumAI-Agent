@@ -1281,10 +1281,19 @@ class RunExecutor:
             job_description=request.jobDescription or "",
             artifacts=self.state.data.get("artifacts") or {},
             shared=self.state.data)
+        sparse_fast_path = bool(
+            signals.get("is_sparse_resume")
+            and request.runType in ("full_evaluation", "jd_evaluation",
+                                    "backend_eval", "agent_eval"))
         skills = default_skill_manager.select_for(
             agent_id=agent_id, run_type=request.runType,
             job_focus=self.policy.jobFocus, overrides=self.policy.skillOverrides,
             signals=signals, user_message=request.userMessage or "")
+        if sparse_fast_path:
+            # A thin resume has no evidence surface for Skills/MCP exploration.
+            # Keep one direct model decision per selected specialist/terminal;
+            # this avoids a skill-loading action turn plus a slow repair turn.
+            skills = []
         # Build the requested surface now, but do not expose Skill/MCP metadata
         # until we know this agent will actually execute an LLM turn. This
         # prevents deterministic fast paths from producing phantom standalone
@@ -1296,6 +1305,8 @@ class RunExecutor:
                 tool for tool in requested_tools
                 if tool not in {"knowledge_search", "resume_semantic_search"}
             ]
+        if sparse_fast_path:
+            requested_tools = []
         if skills:
             requested_tools.extend(["load_skill", "read_skill_resource"])
 
@@ -1430,9 +1441,13 @@ class RunExecutor:
         # LLM/token/cost limits enforced by the client.
         max_decision_iterations = min(
             definition.max_iterations, self.policy.maxIterationsPerAgent)
+        if sparse_fast_path:
+            max_decision_iterations = 1
         action_turn_ceiling = (
             3 if agent_id == "ProjectAgent"
             and signals.get("has_external_urls") else 2)
+        if sparse_fast_path:
+            action_turn_ceiling = 0
         available_tool_turns = min(
             action_turn_ceiling,
             max(0, agent_tool_limit - agent_tool_calls))
