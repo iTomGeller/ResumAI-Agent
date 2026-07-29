@@ -139,7 +139,8 @@ ARTIFACT_INVALIDATION_GRAPH: Dict[str, Tuple[str, ...]] = {
 
 _PROJECT_HINT = re.compile(
     r"(项目经历|项目经验|project\s*experience|side\s*project|"
-    r"个人项目|开源项目|项目名称|项目\s*[:：]|github\.com/)", re.I)
+    r"个人项目|开源项目|项目名称|项目(?:[一二三四五六七八九十0-9]+)?\s*[:：]|"
+    r"github\.com/)", re.I)
 _TIMELINE_HINT = re.compile(
     r"(工作经历|实习经历|education|工作经验|"
     r"\d{4}\s*[./年-]\s*\d{1,2}|\d{4}\s*[-–—]\s*\d{4})", re.I)
