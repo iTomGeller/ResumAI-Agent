@@ -16,8 +16,14 @@ from app.runtime.coordinator import Coordinator, TASK_PIPELINES
 from app.runtime.agents import default_agent_registry
 from app.runtime.events import NullEmitter
 from app.runtime.executor import RunExecutor
+from app.runtime.llm import LlmToolCall, LlmTurn
 from app.runtime.memory import NullMemoryClient
-from app.runtime.models import AgentRunRequest, BudgetExceeded, PolicyBundle
+from app.runtime.models import (
+    AgentOutput,
+    AgentRunRequest,
+    BudgetExceeded,
+    PolicyBundle,
+)
 from app.runtime.builtin_tools import BuiltinToolRegistry
 
 RESUME = """张三
@@ -452,6 +458,126 @@ def test_parallel_specialists_grouped_and_merged():
     for agent in ("TechAgent", "ProjectAgent", "RiskAgent", "ReportAgent"):
         assert agent in agents_used
     assert result["metrics"]["agentTimingsMs"], "per-agent profiling recorded"
+
+
+def test_parallel_runner_overlaps_independent_agent_tasks():
+    async def scenario():
+        request = make_request(run_type="full_evaluation")
+        executor, _ = make_executor(request)
+        definitions = [
+            executor.registry.get(agent_id)
+            for agent_id in ("TechAgent", "ProjectAgent", "RiskAgent")
+        ]
+        starts = {}
+
+        async def delayed_run(definition):
+            starts[definition.agent_id] = asyncio.get_running_loop().time()
+            await asyncio.sleep(0.20)
+            return AgentOutput(
+                agentId=definition.agent_id,
+                type=definition.output_type,
+                claims=[], evidence=[], confidence=0.8,
+                source="test", dependencies=[], summary="done")
+
+        executor._run_agent = delayed_run  # type: ignore[method-assign]
+        started = asyncio.get_running_loop().time()
+        assert await executor._run_parallel(definitions)
+        elapsed = asyncio.get_running_loop().time() - started
+        assert max(starts.values()) - min(starts.values()) < 0.02
+        assert elapsed < 0.50, f"parallel group took {elapsed:.3f}s"
+
+    run(scenario())
+
+
+def test_parallel_report_sections_merge_and_overlap():
+    ref = {
+        "sourceType": "RESUME", "sourceId": "resume",
+        "quote": "负责订单服务和缓存一致性优化",
+    }
+
+    class SectionLlm:
+        supports_parallel_report_sections = True
+
+        def __init__(self):
+            self.started = {}
+            self.quality = {}
+
+        async def chat_turn(self, messages, *, agent_id, purpose="",
+                            max_tokens=2048, tools=None, tool_choice=None,
+                            use_quality=False, trace_context=None):
+            self.started[purpose] = asyncio.get_running_loop().time()
+            self.quality[purpose] = use_quality
+            await asyncio.sleep(0.08)
+            if purpose == "report_score":
+                payload = {
+                    "summary": "候选人基础栈匹配，但项目深度需要面试核验。",
+                    "recommendation": "NEED_MANUAL_REVIEW",
+                    "dataQuality": "PARTIAL",
+                    "dimensions": [
+                        {"name": name, "score": score, "status": "ASSESSED",
+                         "rationale": "有简历证据", "evidenceRefs": [ref]}
+                        for name, score in (
+                            ("技术能力", 72), ("项目深度", 66),
+                            ("JD匹配", 70), ("履历可信度", 62))],
+                    "strengths": ["Java 后端经验", "具备缓存优化经验"],
+                }
+            elif purpose == "report_risk":
+                payload = {
+                    "risks": [
+                        {"id": f"r{i}", "category": "CANDIDATE",
+                         "severity": "HIGH" if i == 1 else "MEDIUM",
+                         "claim": f"风险 {i}", "impact": "影响岗位判断",
+                         "verificationPlan": "面试中核验",
+                         "evidenceRefs": [ref]}
+                        for i in range(1, 5)],
+                    "missingEvidence": [f"缺失证据 {i}" for i in range(1, 9)],
+                }
+            else:
+                payload = {
+                    "interviewQuestions": [
+                        {"id": f"q{i}", "priority": "HIGH",
+                         "question": f"请说明项目问题 {i}",
+                         "objective": "核验项目深度", "triggeredBy": "项目风险",
+                         "goodSignals": ["给出数据和取舍"],
+                         "redFlags": ["只能复述简历"],
+                         "evidenceRefs": [ref]}
+                        for i in range(1, 9)],
+                }
+            raw = json.dumps(payload, ensure_ascii=False)
+            return LlmTurn(
+                content="",
+                tool_calls=[LlmToolCall(
+                    tool_call_id=f"call-{purpose}",
+                    name="emit_report_section", arguments=payload,
+                    raw_arguments=raw)],
+                finish_reason="tool_calls")
+
+    async def scenario():
+        request = make_request(run_type="full_evaluation")
+        llm = SectionLlm()
+        executor, _ = make_executor(request, llm=llm)
+        started = asyncio.get_running_loop().time()
+        output, calls = await executor._run_parallel_report_sections(
+            [{"role": "system", "content": "生成结构化评估"},
+             {"role": "user", "content": "评估这份简历"}],
+            round_id="r:ReportAgent:round:1",
+            memory_refs=[], skill_refs=[], observed_tool_call_ids=[],
+            is_sparse_resume=False)
+        elapsed = asyncio.get_running_loop().time() - started
+        assert calls == 3 and output is not None
+        report = output["report"]
+        assert len(report["risks"]) == 4
+        assert len(report["interviewQuestions"]) == 8
+        assert isinstance(report.get("overallScore"), int)
+        assert max(llm.started.values()) - min(llm.started.values()) < 0.02
+        assert elapsed < 0.18
+        assert llm.quality == {
+            "report_score": True,
+            "report_risk": False,
+            "report_question": False,
+        }
+
+    run(scenario())
 
 
 def test_pause_snapshot_and_resume_skips_completed_agents():

@@ -299,6 +299,71 @@ EMIT_REPORT_TOOL = {
     },
 }
 
+
+def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
+    """Focused report sections used by the latency-safe parallel synthesizer.
+
+    Scoring stays on the quality model. Risk discovery and interview design are
+    narrower extraction/generation tasks and use the fast model. The regular
+    report validator remains the only authority after deterministic merging.
+    """
+    score_properties = {
+        "summary": {"type": "string"},
+        "recommendation": {
+            "type": "string",
+            "enum": ["HIRE", "INTERVIEW_RECOMMEND",
+                     "NEED_MANUAL_REVIEW", "NOT_RECOMMEND"],
+        },
+        "dataQuality": {
+            "type": "string",
+            "enum": ["SUFFICIENT", "PARTIAL", "INSUFFICIENT"],
+        },
+        "dimensions": {"type": "array", "items": _REPORT_DIM},
+        "strengths": {"type": "array", "items": {"type": "string"}},
+    }
+    risk_properties = {
+        "risks": {"type": "array", "items": _CANDIDATE_RISK_SCHEMA},
+        "missingEvidence": {
+            "type": "array", "items": {"type": "string"}},
+    }
+    question_properties = {
+        "interviewQuestions": {
+            "type": "array", "items": _INTERVIEW_PROBE_SCHEMA},
+    }
+    return {
+        "score": {
+            "useQuality": True,
+            "maxTokens": 2400,
+            "properties": score_properties,
+            "required": list(score_properties),
+            "instruction": (
+                "只生成评分总览小节：技术能力、项目深度、JD匹配、履历可信度"
+                "四个维度必须齐全且逐项引用证据；给出150-250字summary、"
+                "recommendation、dataQuality和至少2条strengths。"
+                "不要生成风险和面试题。"),
+        },
+        "risk": {
+            "useQuality": False,
+            "maxTokens": 3000,
+            "properties": risk_properties,
+            "required": list(risk_properties),
+            "instruction": (
+                "只生成候选人风险小节：输出5-8条不重复的具体风险，覆盖"
+                "履历可信度、项目真实性、JD缺口；每条给影响、核验方式和"
+                "证据引用；另列8-12条missingEvidence。不要生成评分和面试题。"),
+        },
+        "question": {
+            "useQuality": False,
+            "maxTokens": 3800,
+            "properties": question_properties,
+            "required": list(question_properties),
+            "instruction": (
+                "只生成结构化面试追问：必须8-10题，覆盖每个HIGH风险、"
+                "TOP3 JD缺口和最重要项目；每题含目的、触发依据、好信号、"
+                "红旗、追问和证据引用。不要生成评分和风险。"),
+        },
+    }
+
 # Dimension weights for deterministic overallScore (name normalized lowercase).
 _DIMENSION_WEIGHTS = {
     "技术能力": 0.35,
@@ -832,35 +897,55 @@ class RunExecutor:
             return False
 
     async def _run_parallel(self, definitions: List[AgentDefinition]) -> bool:
-        """Specialists run sequentially to avoid resource contention on
-        constrained infrastructure. Outputs are merged after each agent."""
-        any_success = False
-        for definition in definitions:
-            await self.emitter.emit("agent.started", agent_id=definition.agent_id,
-                                    payload={"description": definition.description,
-                                             "parallelGroup": [d.agent_id for d in definitions],
-                                             "position": len(self.executed) + 1,
-                                             "planned": len(self.plan)})
+        """Run independent specialists concurrently, then merge in plan order.
+
+        The Coordinator only puts dependency-free agents in the same group.
+        Keeping the merge ordered makes state/conflict resolution deterministic
+        while avoiding the previous false parallelism where the trace advertised
+        a group but every provider call waited for the preceding specialist.
+        """
+        async def invoke(
+                definition: AgentDefinition,
+        ) -> Tuple[AgentDefinition, float, Optional[AgentOutput], Optional[Exception]]:
             agent_start = time.monotonic()
             try:
                 output = await asyncio.wait_for(
-                    self._run_agent(definition), timeout=definition.timeout_seconds)
-                if isinstance(output, AgentOutput):
-                    conflicts = self.state.apply_output(output)
-                    self._after_agent_success(definition, output, conflicts,
-                                              agent_start, fire_started=False)
-                    any_success = True
+                    self._run_agent(definition),
+                    timeout=definition.timeout_seconds)
+                return definition, agent_start, output, None
             except asyncio.CancelledError:
                 raise
-            except BudgetExceeded as exc:
+            except Exception as exc:  # noqa: BLE001 - merged below in plan order
+                return definition, agent_start, None, exc
+
+        base_position = len(self.executed)
+        for offset, definition in enumerate(definitions):
+            await self.emitter.emit("agent.started", agent_id=definition.agent_id,
+                                    payload={"description": definition.description,
+                                             "parallelGroup": [d.agent_id for d in definitions],
+                                             "position": base_position + offset + 1,
+                                             "planned": len(self.plan)})
+
+        results = await asyncio.gather(
+            *(invoke(definition) for definition in definitions))
+
+        any_success = False
+        for definition, agent_start, output, exc in results:
+            if exc is None and isinstance(output, AgentOutput):
+                conflicts = self.state.apply_output(output)
+                self._after_agent_success(definition, output, conflicts,
+                                          agent_start, fire_started=False)
+                any_success = True
+                continue
+            if isinstance(exc, BudgetExceeded):
                 if (definition.agent_id not in TERMINAL_AGENTS
                         and exc.kind in {
                             "llmReservation", "llmScopeLimit"}):
                     await self._after_agent_failure(
                         definition, exc, agent_start)
                     continue
-                raise
-            except Exception as exc:  # noqa: BLE001
+                raise exc
+            if isinstance(exc, Exception):
                 await self._after_agent_failure(definition, exc, agent_start)
         return any_success
 
@@ -1643,6 +1728,23 @@ class RunExecutor:
                 "parentAgentId": agent_id,
                 "contextRole": "MODEL_INPUT",
             }
+            if (is_report and single_pass_evaluation
+                    and self._parallel_report_sections_enabled()):
+                section_output, section_calls = (
+                    await self._run_parallel_report_sections(
+                        messages,
+                        round_id=round_id,
+                        memory_refs=memory_refs,
+                        skill_refs=skill_refs,
+                        observed_tool_call_ids=observed_tool_call_ids,
+                        is_sparse_resume=bool(
+                            signals.get("is_sparse_resume"))))
+                agent_llm_calls += section_calls
+                if section_output is not None:
+                    decision_iterations += 1
+                    output = self._build_output(
+                        definition, section_output, tool_results_block)
+                    break
             await self.emitter.emit(
                 "llm.context.attached", agent_id=agent_id, payload={
                     **trace_context,
@@ -1669,8 +1771,12 @@ class RunExecutor:
                 # risk and interview probe is evidence-bound. A 4096 ceiling
                 # truncated provider-native emit_decision arguments twice in
                 # production, leaving no JSON object for schema repair.
-                max_tokens=(8192 if is_report else 3600 if (
-                    definition.agent_id in TERMINAL_AGENTS) else 4096),
+                max_tokens=(
+                    8192 if is_report
+                    else 6144 if definition.agent_id == "EvidenceAgent"
+                    and single_pass_evaluation
+                    else 3600 if definition.agent_id in TERMINAL_AGENTS
+                    else 4096),
                 tools=turn_tools,
                 tool_choice=tool_choice,
                 use_quality=is_report,
@@ -2059,6 +2165,270 @@ class RunExecutor:
         raw = await chat(messages, **kwargs)
         return LlmTurn(content=str(raw or ""), tool_calls=[],
                        finish_reason="legacy_adapter")
+
+    def _parallel_report_sections_enabled(self) -> bool:
+        configured = _os.getenv(
+            "REPORT_PARALLEL_SECTIONS", "1").strip().lower()
+        return (
+            configured not in {"0", "false", "no", "off"}
+            and bool(getattr(
+                self.llm, "supports_parallel_report_sections", False))
+        )
+
+    async def _run_parallel_report_sections(
+            self, messages: List[Dict[str, Any]], *, round_id: str,
+            memory_refs: List[Dict[str, Any]],
+            skill_refs: List[Dict[str, Any]],
+            observed_tool_call_ids: List[str],
+            is_sparse_resume: bool,
+    ) -> Tuple[Optional[Dict[str, Any]], int]:
+        """Generate score, risk and interview sections concurrently.
+
+        A failed/weak merge returns ``None`` so the existing monolithic Pro
+        path remains the automatic fallback. No partial section is published.
+        """
+        specs = _parallel_report_section_specs()
+
+        async def generate(
+                section: str, spec: Dict[str, Any], attempt: int = 1,
+        ) -> Tuple[str, Dict[str, Any]]:
+            section_round = (
+                f"{round_id}:section:{section}:attempt:{attempt}")
+            tool = {
+                "type": "function",
+                "function": {
+                    "name": "emit_report_section",
+                    "description": f"提交 ReportAgent {section} 结构化小节",
+                    "parameters": {
+                        "type": "object",
+                        "properties": spec["properties"],
+                        "required": spec["required"],
+                    },
+                },
+            }
+            section_messages = list(messages) + [{
+                "role": "user",
+                "content": (
+                    "[并行报告小节任务]\n"
+                    f"{spec['instruction']}\n"
+                    + ("这是质量闸门后的定向重试，必须严格满足数量、"
+                       "证据引用和结构要求。\n" if attempt > 1 else "")
+                    + "必须调用 emit_report_section，一次提交完整结果。"),
+            }]
+            trace_context = {
+                "roundId": section_round,
+                "parentRoundId": round_id,
+                "parentAgentId": "ReportAgent",
+                "contextRole": "MODEL_INPUT",
+                "reportSection": section,
+            }
+            await self.emitter.emit(
+                "llm.context.attached", agent_id="ReportAgent", payload={
+                    **trace_context,
+                    "memoryRefs": memory_refs,
+                    "skillRefs": skill_refs,
+                    "observedToolCallIds": observed_tool_call_ids,
+                    "memoryCount": len(memory_refs),
+                    "skillCount": len(skill_refs),
+                    "memoryAttachedCount": len(memory_refs),
+                    "skillMetadataCount": len(skill_refs),
+                    "skillInstructionCount": sum(
+                        1 for ref in skill_refs
+                        if ref.get("instructionsAttached")),
+                    "toolCatalogRefs": [{
+                        "toolName": "emit_report_section",
+                        "modelName": "emit_report_section",
+                        "source": "runtime_terminal",
+                        "mcpServer": None,
+                        "description": tool["function"]["description"],
+                        "inputSchema": tool["function"]["parameters"],
+                    }],
+                    "toolCatalogCount": 1,
+                    "messageCount": len(section_messages),
+                    "toolChoice": {
+                        "type": "function",
+                        "function": {"name": "emit_report_section"},
+                    },
+                    "occurredAt": _utc_now(),
+                })
+            turn = await self._chat_native_turn(
+                section_messages,
+                agent_id="ReportAgent",
+                purpose=f"report_{section}",
+                max_tokens=int(spec["maxTokens"]),
+                tools=[tool],
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": "emit_report_section"},
+                },
+                use_quality=bool(spec["useQuality"]),
+                trace_context=trace_context)
+            call = next(
+                (candidate for candidate in turn.tool_calls
+                 if candidate.name == "emit_report_section"), None)
+            if call is not None:
+                if call.arguments_error:
+                    raise LlmError(
+                        "MALFORMED_OUTPUT", call.arguments_error, False)
+                payload = dict(call.arguments)
+            else:
+                payload = extract_json_object(turn.content)
+            if not isinstance(payload, dict) or not payload:
+                raise LlmError(
+                    "MALFORMED_OUTPUT",
+                    f"ReportAgent {section} section is empty", False)
+
+            # Compatibility adapters may still return the legacy full
+            # AgentDecision shape. Extract only this section's fields.
+            nested_output = payload.get("output")
+            if isinstance(nested_output, dict):
+                nested_report = nested_output.get("report")
+                if isinstance(nested_report, dict):
+                    payload = dict(nested_report)
+                    if nested_output.get("summary"):
+                        payload.setdefault(
+                            "summary", nested_output["summary"])
+            if section == "question" and not payload.get(
+                    "interviewQuestions"):
+                payload["interviewQuestions"] = list(
+                    payload.get("interviewProbes") or [])
+            missing = [
+                field for field in spec["required"]
+                if field not in payload
+            ]
+            if missing:
+                raise LlmError(
+                    "MALFORMED_OUTPUT",
+                    f"ReportAgent {section} missing: {', '.join(missing)}",
+                    False)
+            return section, payload
+
+        minimums = (
+            {"dimensions": 2, "strengths": 1, "risks": 2,
+             "questions": 4, "refs": 4}
+            if is_sparse_resume else
+            {"dimensions": 4, "strengths": 2, "risks": 4,
+             "questions": 8, "refs": 8}
+        )
+        sections: Dict[str, Dict[str, Any]] = {}
+        call_count = 0
+
+        async def run_sections(
+                names: List[str], attempt: int,
+        ) -> Dict[str, str]:
+            nonlocal call_count
+            if not names:
+                return {}
+            call_count += len(names)
+            generated = await asyncio.gather(
+                *(generate(name, specs[name], attempt) for name in names),
+                return_exceptions=True)
+            errors: Dict[str, str] = {}
+            for name, result in zip(names, generated):
+                if isinstance(result, BaseException):
+                    errors[name] = str(result)[:240]
+                    continue
+                section, payload = result
+                sections[section] = payload
+            return errors
+
+        def assess() -> Tuple[
+                Optional[Dict[str, Any]], Dict[str, int],
+                Dict[str, Dict[str, int]], set]:
+            merged = {
+                **sections.get("score", {}),
+                **sections.get("risk", {}),
+                **sections.get("question", {}),
+            }
+            merged["interviewProbes"] = list(
+                merged.get("interviewQuestions") or [])
+            validated = self._validate_structured_report(merged)
+            if not validated:
+                return None, {}, {}, set(specs)
+            groups = {
+                "score": list(validated.get("dimensions") or []),
+                "risk": list(validated.get("risks") or []),
+                "question": list(
+                    validated.get("interviewQuestions") or []),
+            }
+            refs_by_section = {
+                name: sum(
+                    len(item.get("evidenceRefs") or [])
+                    for item in items if isinstance(item, dict))
+                for name, items in groups.items()
+            }
+            refs = sum(refs_by_section.values())
+            observed = {
+                "dimensions": len(groups["score"]),
+                "strengths": len(validated.get("strengths") or []),
+                "risks": len(groups["risk"]),
+                "questions": len(groups["question"]),
+                "refs": refs,
+            }
+            weak = {
+                key: {"actual": observed[key], "minimum": minimum}
+                for key, minimum in minimums.items()
+                if observed[key] < minimum
+            }
+            retry = set()
+            if "dimensions" in weak or "strengths" in weak:
+                retry.add("score")
+            if "risks" in weak:
+                retry.add("risk")
+            if "questions" in weak:
+                retry.add("question")
+            if "refs" in weak:
+                per_section_floor = 1 if is_sparse_resume else 2
+                retry.update(
+                    name for name, count in refs_by_section.items()
+                    if count < per_section_floor)
+                if not retry:
+                    retry.update(specs)
+            return validated, observed, weak, retry
+
+        errors = await run_sections(list(specs), attempt=1)
+        validated, observed, weak, retry_sections = assess()
+        retry_sections.update(errors)
+        if retry_sections:
+            await self.emitter.emit(
+                "run.progress", agent_id="ReportAgent", payload={
+                    "stage": "parallel_report_retry",
+                    "reason": (
+                        "section_generation_failed" if errors
+                        else "section_quality_floor_failed"),
+                    "retrySections": sorted(retry_sections),
+                    "errors": errors,
+                    "qualityFloor": weak,
+                    "occurredAt": _utc_now(),
+                })
+            retry_errors = await run_sections(
+                sorted(retry_sections), attempt=2)
+            validated, observed, weak, _ = assess()
+            errors = retry_errors
+        if errors or weak or not validated:
+            await self.emitter.emit(
+                "run.progress", agent_id="ReportAgent", payload={
+                    "stage": "parallel_report_fallback",
+                    "reason": (
+                        "section_generation_failed" if errors
+                        else "section_quality_floor_failed"),
+                    "errors": errors,
+                    "qualityFloor": weak,
+                    "occurredAt": _utc_now(),
+                })
+            return None, call_count
+        await self.emitter.emit(
+            "run.progress", agent_id="ReportAgent", payload={
+                "stage": "parallel_report_merged",
+                "reportSections": list(specs),
+                "quality": observed,
+                "occurredAt": _utc_now(),
+            })
+        return {
+            "summary": str(validated.get("summary") or ""),
+            "confidence": 0.85,
+            "report": validated,
+        }, call_count
 
     async def _reject_native_proposal(self, agent_id: str, tool: str,
                                       proposed: LlmToolCall, reason: str, *,

@@ -246,7 +246,13 @@ async def simulate(*, live: bool = False,
         raise SystemExit(f"simulation failed: {result.get('status')}")
     if not {"TechAgent", "ProjectAgent", "EvidenceAgent", "ReportAgent"} <= agents:
         raise SystemExit(f"multi-agent plan regressed: {summary['plan']}")
-    min_calls, max_calls = ((7, 9) if external else (4, 6))
+    # The deterministic fake completes ProjectAgent without proposing extra
+    # MCP action turns; live external research is expected to use them.
+    min_calls, max_calls = (
+        (9, 14) if live and external
+        else (6, 12) if live
+        else (5, 7)
+    )
     if not (min_calls <= summary["llmCalls"] <= max_calls):
         raise SystemExit(f"unexpected LLM call count: {summary['llmCalls']}")
     if summary["skillEvents"]["skill.loaded"] < 2 \

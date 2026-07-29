@@ -676,9 +676,10 @@ class Coordinator:
         hist_ratios = self._extract_budget_ratios(execution_history, others)
         hard_cap = max(0, int(self.policy.maxLlmCalls))
         if sig.get("single_pass_evaluation"):
-            # One decision per specialist + terminal; Project may use two
-            # additional turns for real external code/repository research.
-            hard_cap = min(hard_cap, 7)
+            # One decision per specialist; Report uses three concurrent,
+            # focused sections. Project may use two additional turns for real
+            # external code/repository research.
+            hard_cap = min(hard_cap, 9)
         runtime_budget = getattr(self.llm, "budget", None)
         if runtime_budget is not None and hasattr(
                 runtime_budget, "available_agent_llm_calls"):
@@ -688,8 +689,13 @@ class Coordinator:
         if sig.get("single_pass_evaluation"):
             quotas = {agent: 0 for agent in ordered}
             remaining = hard_cap
+            if terminal in quotas:
+                terminal_turns = min(
+                    3 if terminal == "ReportAgent" else 1, remaining)
+                quotas[terminal] = terminal_turns
+                remaining -= terminal_turns
             priority = [
-                terminal, "TechAgent", "ProjectAgent", "RiskAgent",
+                "TechAgent", "ProjectAgent", "RiskAgent",
                 "EvidenceAgent",
             ]
             for agent in priority:

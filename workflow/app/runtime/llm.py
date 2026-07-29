@@ -105,6 +105,10 @@ class ResilientLlmClient:
     the literal word "json" via the output schema), not just by prompting.
     """
 
+    # Runtime capability flag: test/legacy adapters stay on the monolithic
+    # report path unless they explicitly implement concurrent native turns.
+    supports_parallel_report_sections = True
+
     _shared_client: Optional[httpx.AsyncClient] = None
 
     def __init__(self, emitter: RuntimeEmitter, budget: RunBudget,
