@@ -167,6 +167,15 @@ else
 fi
 log "sandbox worker image tag: resumai-sandbox-worker:${GIT_SHA}"
 
+# Memory producer/consumer cohort telemetry must identify the code that is
+# actually running.  Never carry a previous deploy's build version forward.
+if grep -q '^WORKFLOW_BUILD_VERSION=' .env; then
+  sed -i "s/^WORKFLOW_BUILD_VERSION=.*/WORKFLOW_BUILD_VERSION=${GIT_SHA}/" .env
+else
+  echo "WORKFLOW_BUILD_VERSION=${GIT_SHA}" >> .env
+fi
+log "workflow build version: ${GIT_SHA}"
+
 mkdir -p "$BACKUP_DIR"
 cp -a .env "$BACKUP_DIR/env.backup"
 cp -a docker-compose.prod.yml "$BACKUP_DIR/"
