@@ -11,7 +11,13 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
     && pip install --no-cache-dir pytest==8.3.5 pytest-timeout==2.3.1 \
     # Outside the hash-locked set: redis (semantic cache) and the public-web
     # MCP fetch server (real MCP protocol, allowlisted hosts only).
-    && pip install --no-cache-dir "redis>=5.0" mcp-server-fetch \
+    # mcp-server-fetch 2026.7.10 still imports the 1.x SDK's `McpError`.
+    # An unconstrained install selected mcp 2.0 and made the stdio server exit
+    # during startup, so keep this compatibility pair explicit and smoke-test
+    # the import in the image build.
+    && pip install --no-cache-dir "redis>=5.0" \
+         "mcp>=1.1.3,<2" "mcp-server-fetch==2026.7.10" \
+    && python -c "import mcp_server_fetch" \
     && pip install --no-cache-dir \
          "opentelemetry-api>=1.27.0" \
          "opentelemetry-sdk>=1.27.0" \
