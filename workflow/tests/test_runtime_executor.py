@@ -580,6 +580,75 @@ def test_parallel_report_sections_merge_and_overlap():
     run(scenario())
 
 
+def test_parallel_report_retries_only_the_failed_section():
+    ref = {
+        "sourceType": "RESUME", "sourceId": "resume",
+        "quote": "candidate evidence",
+    }
+
+    class OneMalformedSectionLlm:
+        supports_parallel_report_sections = True
+
+        def __init__(self):
+            self.calls = []
+
+        async def chat_turn(self, messages, *, agent_id, purpose="",
+                            max_tokens=2048, tools=None, tool_choice=None,
+                            use_quality=False, trace_context=None):
+            self.calls.append(purpose)
+            if purpose == "report_score":
+                payload = {
+                    "summary": "summary", "recommendation": "NEED_MANUAL_REVIEW",
+                    "dataQuality": "PARTIAL",
+                    "dimensions": [
+                        {"name": name, "score": 60, "status": "ASSESSED",
+                         "rationale": "evidence", "evidenceRefs": [ref]}
+                        for name in ("技术能力", "项目深度", "JD匹配", "履历可信度")],
+                    "strengths": ["one", "two"],
+                }
+            elif purpose == "report_risk":
+                payload = {
+                    "risks": [
+                        {"claim": f"risk {i}", "evidenceRefs": [ref]}
+                        for i in range(4)],
+                    "missingEvidence": [],
+                }
+            elif self.calls.count("report_question") == 1:
+                return LlmTurn(
+                    content="", tool_calls=[LlmToolCall(
+                        tool_call_id="bad-question", name="emit_report_section",
+                        arguments={}, raw_arguments="{bad",
+                        arguments_error="malformed json")],
+                    finish_reason="tool_calls")
+            else:
+                payload = {
+                    "interviewQuestions": [
+                        {"question": f"question {i}", "evidenceRefs": [ref]}
+                        for i in range(8)]}
+            raw = json.dumps(payload, ensure_ascii=False)
+            return LlmTurn(
+                content="", tool_calls=[LlmToolCall(
+                    tool_call_id=f"call-{purpose}",
+                    name="emit_report_section", arguments=payload,
+                    raw_arguments=raw)], finish_reason="tool_calls")
+
+    async def scenario():
+        request = make_request(run_type="full_evaluation")
+        llm = OneMalformedSectionLlm()
+        executor, _ = make_executor(request, llm=llm)
+        output, calls = await executor._run_parallel_report_sections(
+            [{"role": "system", "content": "json report"}],
+            round_id="r:ReportAgent:round:1", memory_refs=[],
+            skill_refs=[], observed_tool_call_ids=[], is_sparse_resume=False)
+        assert output is not None
+        assert calls == 4
+        assert llm.calls.count("report_score") == 1
+        assert llm.calls.count("report_risk") == 1
+        assert llm.calls.count("report_question") == 2
+
+    run(scenario())
+
+
 def test_pause_snapshot_and_resume_skips_completed_agents():
     async def scenario():
         request = make_request(run_type="full_evaluation")

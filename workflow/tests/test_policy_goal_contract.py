@@ -170,11 +170,12 @@ def test_sparse_resume_keeps_parallel_evidence_pipeline():
         "ResumeParserAgent", "JDAnalysisAgent", "TechAgent", "ProjectAgent",
         "RiskAgent", "EvidenceAgent", "ReportAgent",
     ]
-    assert sum(item["llmQuota"] for item in planned["budgetPlan"].values()) <= 9
-    assert planned["budgetPlan"]["TechAgent"]["llmQuota"] == 1
-    assert planned["budgetPlan"]["RiskAgent"]["llmQuota"] == 1
+    assert sum(item["llmQuota"] for item in planned["budgetPlan"].values()) <= 12
+    assert planned["budgetPlan"]["TechAgent"]["llmQuota"] == 2
+    assert planned["budgetPlan"]["RiskAgent"]["llmQuota"] == 2
     assert planned["budgetPlan"]["ReportAgent"]["llmQuota"] == 3
     assert planned["budgetPlan"]["ProjectAgent"]["actionTurnQuota"] == 2
+    assert planned["budgetPlan"]["TechAgent"]["actionTurnQuota"] == 1
 
 
 def test_sparse_resume_with_project_hint_keeps_project_and_evidence():

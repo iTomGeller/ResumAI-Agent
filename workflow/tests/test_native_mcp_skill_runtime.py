@@ -391,7 +391,8 @@ def test_native_model_proposes_mcp_arguments_and_trace_chain():
     assert client.calls == [(
         "remote_search",
         {"query": "model-generated precise project query"})]
-    assert execute_flags == [False], (
+    assert len(execute_flags) == 3 and all(
+        flag is False for flag in execute_flags), (
         "native model-authored MCP parameters must execute verbatim")
 
     chain = [
@@ -435,11 +436,72 @@ def test_native_model_proposes_mcp_arguments_and_trace_chain():
         "provider-native-7", "provider-native-repeat"]
 
 
+class _OptionalCatalogLlm:
+    def __init__(self):
+        self.tool_choice = None
+        self.tool_names = []
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.tool_choice = tool_choice
+        self.tool_names = [
+            item["function"]["name"] for item in (tools or [])]
+        decision = {
+            "thought": "the resume already contains enough evidence",
+            "output": {
+                "summary": "finished without unnecessary external lookup",
+                "claims": [],
+                "evidence": [],
+                "confidence": 0.7,
+            },
+            "done": True,
+        }
+        return LlmTurn(
+            content="",
+            tool_calls=[LlmToolCall(
+                tool_call_id="optional-final",
+                name="emit_decision",
+                arguments=decision,
+                raw_arguments=json.dumps(decision))],
+            finish_reason="tool_calls")
+
+
+def test_no_url_project_receives_live_mcp_and_skill_catalog_but_may_finish():
+    request = AgentRunRequest(
+        runId="r-optional-catalog", conversationId="c-optional-catalog",
+        traceId="t-optional-catalog", runType="full_evaluation",
+        resumeText="项目经历\n支付平台\nJava Spring Redis",
+        jobDescription="Java backend")
+    llm = _OptionalCatalogLlm()
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    client = _LiveMcpClient()
+    _attach_demo_mcp(executor.tools, client)
+    executor.state.apply_artifacts({
+        "resumeFacts": {"projects": [{"name": "支付平台"}]},
+    })
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("ProjectAgent")))
+
+    assert output.summary == "finished without unnecessary external lookup"
+    assert llm.tool_choice == "auto"
+    assert "load_skill" in llm.tool_names
+    assert "emit_decision" in llm.tool_names
+    assert any(
+        name not in {"load_skill", "read_skill_resource", "emit_decision",
+                     "locate_evidence", "resume_semantic_search"}
+        for name in llm.tool_names), "a live MCP schema must reach the model"
+    assert client.calls == [], "catalog exposure must not force execution"
+
+
 class _SkillThenNativeMcpLlm:
     """Reproduces the production external-URL sequence.
 
-    Production may first gather local evidence, then load the selected Skill,
-    choose MCP from its live schema, and only then emit the result.
+    Deterministic preflight gathers local evidence. The model may then load the
+    selected Skill, choose MCP from its live schema, and emit the result.
     """
 
     def __init__(self):
@@ -454,19 +516,6 @@ class _SkillThenNativeMcpLlm:
         available = list(tools or [])
         if self.turn == 1:
             arguments = {
-                "resumeText": "Example project https://example.test/repo",
-                "claims": [{"text": "public project"}],
-            }
-            return LlmTurn(
-                content="",
-                tool_calls=[LlmToolCall(
-                    tool_call_id="local-evidence-before-skill",
-                    name="locate_evidence",
-                    arguments=arguments,
-                    raw_arguments=json.dumps(arguments))],
-                finish_reason="tool_calls")
-        if self.turn == 2:
-            arguments = {
                 "skill_id": "retrieve-public-candidate-evidence"}
             return LlmTurn(
                 content="",
@@ -476,7 +525,7 @@ class _SkillThenNativeMcpLlm:
                     arguments=arguments,
                     raw_arguments=json.dumps(arguments))],
                 finish_reason="tool_calls")
-        if self.turn == 3:
+        if self.turn == 2:
             remote = next(
                 item["function"] for item in available
                 if item["function"].get("description")
@@ -527,9 +576,9 @@ def test_external_url_budget_allows_progressive_skill_then_native_mcp():
     client = _LiveMcpClient()
     _attach_demo_mcp(executor.tools, client)
     executor.budget_plan["ProjectAgent"] = {
-        "llmQuota": 4,
-        "actionTurnQuota": 3,
-        "toolQuota": 3,
+        "llmQuota": 3,
+        "actionTurnQuota": 2,
+        "toolQuota": 4,
     }
     executor.state.apply_artifacts({
         "resumeFacts": {"projects": [{"name": "Example"}]},
@@ -539,13 +588,13 @@ def test_external_url_budget_allows_progressive_skill_then_native_mcp():
         default_agent_registry.get("ProjectAgent")))
 
     assert output.summary == "external evidence checked"
-    assert llm.turn == 4
-    assert llm.tool_choices[:3] == ["auto", "auto", "auto"]
+    assert llm.turn == 3
+    assert llm.tool_choices[:2] == ["auto", "auto"]
     assert client.calls == [(
         "remote_search", {"query": "candidate-declared repository"})]
     counters = executor.agent_counters["ProjectAgent"]
-    assert counters["actionTurns"] == 3
-    assert counters["toolCalls"] == 3
+    assert counters["actionTurns"] == 2
+    assert counters["toolCalls"] == 4
     mcp_chain = [
         event["payload"]["lifecycleStage"]
         for event in emitter.events
@@ -620,7 +669,7 @@ def test_action_turn_and_total_llm_quota_are_hard_limits():
     executor.budget_plan["ProjectAgent"] = {
         "llmQuota": 3,
         "actionTurnQuota": 1,
-        "toolQuota": 2,
+        "toolQuota": 4,
     }
     executor.state.apply_artifacts({
         "resumeFacts": {"projects": [{"name": "Example"}]},
@@ -715,7 +764,7 @@ def test_malformed_native_final_borrows_one_traced_repair_turn():
     executor.budget_plan["ProjectAgent"] = {
         "llmQuota": 2,
         "actionTurnQuota": 1,
-        "toolQuota": 2,
+        "toolQuota": 4,
     }
     executor.state.apply_artifacts({
         "resumeFacts": {"projects": [{"name": "Example"}]},
@@ -829,10 +878,15 @@ def test_report_agent_hides_evaluation_retrieval_and_forces_final_output():
     assert "knowledge_search" not in llm.tool_names[0]
     assert "resume_semantic_search" not in llm.tool_names[0]
     assert "validate_report_schema" not in llm.tool_names[0]
-    assert llm.tool_names == [["emit_decision"]]
-    assert llm.tool_choices[0] == {
-        "type": "function", "function": {"name": "emit_decision"}}
-    assert llm.max_tokens == [8192]
+    assert llm.tool_names == [
+        ["load_skill", "read_skill_resource", "emit_decision"],
+        ["emit_decision"],
+    ]
+    assert llm.tool_choices == [
+        "auto",
+        {"type": "function", "function": {"name": "emit_decision"}},
+    ]
+    assert llm.max_tokens == [8192, 8192]
 
 
 class _ReportRepairLlm:
@@ -1077,7 +1131,7 @@ def test_project_presteps_never_force_mcp_call():
         not (executor.tools.definitions.get(name)
              and executor.tools.definitions[name].kind == "mcp")
         for name, _arguments in steps)
-    assert steps == []
+    assert "locate_evidence" in {name for name, _arguments in steps}
 
 
 class _ProgressiveSkillLlm:

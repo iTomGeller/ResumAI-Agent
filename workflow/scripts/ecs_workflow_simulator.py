@@ -1,4 +1,4 @@
-"""ECS-local production workflow simulator (no image rebuild, no live LLM).
+"""ECS-local production workflow simulator (no image rebuild required).
 
 Run on the ECS host with the existing workflow image and mount current source:
 
@@ -13,10 +13,10 @@ Run on the ECS host with the existing workflow image and mount current source:
     resumai-ai-resume-workflow:latest scripts/ecs_workflow_simulator.py
 
 The simulator executes the real Coordinator, ContextManager, SkillManager,
-tool pre-steps and RunExecutor. Only the provider response is deterministic.
-It records the exact model-input message sizes and tool schemas that the
-production executor would send, so Python routing changes can be checked on
-ECS before rebuilding/restarting Docker services.
+tool pre-steps and RunExecutor. By default the provider response is
+deterministic; ``--live`` uses the ECS production LLM and MCP configuration.
+It records the exact model-input messages and tool schemas so routing changes
+can be checked on ECS before rebuilding/restarting production services.
 """
 from __future__ import annotations
 
@@ -152,15 +152,33 @@ EXTERNAL_RESUME = """王强｜Java 后端工程师
 项目：https://github.com/spring-projects/spring-petclinic
 项目成果：负责 Agent 编排、向量检索和服务稳定性优化。"""
 
+STRONG_RESUME = """李明｜高级 AI Agent / Java 平台工程师｜7 年经验
+2019-2022 某金融科技公司，高级 Java 工程师：负责交易平台服务治理与性能优化。
+2022-至今 某智能软件公司，Agent 平台负责人：带领 5 人团队建设企业知识助手。
+技术：Java 21、Spring Boot 3、MySQL、Redis、Kafka、Docker、Kubernetes、Python、RAG、LLM。
+项目一：设计多 Agent 编排与状态恢复机制，将复杂任务成功率从 71% 提升到 89%；
+通过并行工具调用和上下文压缩把 P95 延迟从 48 秒降低到 19 秒。
+项目二：建设混合检索、重排和引用追踪链路，离线 NDCG@10 提升 13%，并落地逐调用 Trace、预算和熔断监控。
+职责边界：负责架构设计、关键模块编码、评测集设计和线上事故复盘；业务收益数字由内部看板统计，未附公开链接。"""
+
+SCENARIOS = {
+    "short": SHORT_RESUME,
+    "strong": STRONG_RESUME,
+    "external": EXTERNAL_RESUME,
+}
+
 
 async def simulate(*, live: bool = False,
                    context_log: Optional[Path] = None,
-                   external: bool = False) -> dict[str, Any]:
+                   scenario: str = "short") -> dict[str, Any]:
+    if scenario not in SCENARIOS:
+        raise ValueError(f"unknown scenario: {scenario}")
     request = AgentRunRequest(
-        runId="ecs-sim-run", conversationId="ecs-sim-conversation",
-        userId="ecs-sim", traceId="ecs-sim-trace",
+        runId=f"ecs-sim-{scenario}-run",
+        conversationId=f"ecs-sim-{scenario}-conversation",
+        userId="ecs-sim", traceId=f"ecs-sim-{scenario}-trace",
         runType="full_evaluation", userMessage="评估这份简历",
-        resumeText=(EXTERNAL_RESUME if external else SHORT_RESUME),
+        resumeText=SCENARIOS[scenario],
         jobDescription=JD,
         policyId="balanced",
         policyConfig={"evidenceVerification": {"enabled": True}},
@@ -192,6 +210,13 @@ async def simulate(*, live: bool = False,
          if event.get("eventType") == "agent.selected"), {})
     event_counts = Counter(
         str(event.get("eventType") or "") for event in emitter.events)
+    mcp_calls = [
+        call for call in executor.tools.call_log
+        if (
+            executor.tools.definitions.get(call.tool) is not None
+            and executor.tools.definitions[call.tool].kind == "mcp"
+        )
+    ]
     summary = {
         "status": result.get("status"),
         "elapsedMs": elapsed_ms,
@@ -210,8 +235,18 @@ async def simulate(*, live: bool = False,
             if event.get("eventType") == "tool.progress"
             and (event.get("payload") or {}).get("lifecycleStage")
             == "CATALOG_EXPOSED"),
+        "mcpExecutions": {
+            outcome: sum(1 for call in mcp_calls if call.status == outcome)
+            for outcome in ("SUCCEEDED", "FAILED", "REJECTED")
+        },
+        "mcpCalls": [{
+            "tool": call.tool,
+            "status": call.status,
+            "durationMs": call.duration_ms,
+            "error": call.error,
+        } for call in mcp_calls],
         "liveProvider": live,
-        "externalScenario": external,
+        "scenario": scenario,
         "contextLog": str(context_log or (
             ROOT / ".sim-artifacts" / "llm-contexts.jsonl")) if live else None,
         "reportQuality": {
@@ -240,6 +275,12 @@ async def simulate(*, live: bool = False,
             "metrics": result.get("metrics"),
         }, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
         summary["resultLog"] = str(result_path)
+        event_path = result_path.with_name(
+            result_path.stem.replace(".result", "") + ".events.json")
+        event_path.write_text(json.dumps(
+            emitter.events, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8")
+        summary["eventLog"] = str(event_path)
 
     agents = set(summary["plan"])
     if result.get("status") != "SUCCEEDED":
@@ -249,21 +290,28 @@ async def simulate(*, live: bool = False,
     # The deterministic fake completes ProjectAgent without proposing extra
     # MCP action turns; live external research is expected to use them.
     min_calls, max_calls = (
-        (9, 14) if live and external
-        else (6, 12) if live
+        (6, 15) if live and scenario == "external"
+        else (6, 14) if live
         else (5, 7)
     )
     if not (min_calls <= summary["llmCalls"] <= max_calls):
         raise SystemExit(f"unexpected LLM call count: {summary['llmCalls']}")
-    if summary["skillEvents"]["skill.loaded"] < 2 \
-            or summary["skillEvents"]["skill.applied"] < 2:
-        raise SystemExit(f"Skill injection regressed: {summary['skillEvents']}")
+    skill_events = summary["skillEvents"]
+    if skill_events["skill.catalog"] < 1 \
+            or skill_events["skill.selected"] < 1:
+        raise SystemExit(f"Skill metadata exposure regressed: {skill_events}")
+    if skill_events["skill.applied"] > skill_events["skill.loaded"]:
+        raise SystemExit(f"Skill lifecycle is inconsistent: {skill_events}")
     report_context = next(
         (row for row in llm.contexts if row["agent"] == "ReportAgent"), None)
     if not report_context or not report_context["qualityModel"]:
         raise SystemExit("ReportAgent is not using the quality model")
-    if external and summary["mcpCatalogExposures"] < 1:
+    if scenario == "external" and summary["mcpCatalogExposures"] < 1:
         raise SystemExit("external scenario did not expose live MCP tools")
+    if live and scenario == "external" \
+            and summary["mcpExecutions"]["SUCCEEDED"] < 1:
+        raise SystemExit(
+            "external scenario did not autonomously complete MCP research")
     return summary
 
 
@@ -306,7 +354,10 @@ if __name__ == "__main__":
         help="JSONL path for the exact per-round messages and tool schemas")
     parser.add_argument(
         "--external", action="store_true",
-        help="use a valid public GitHub repository to exercise MCP research")
+        help="compatibility alias for --scenario external")
+    parser.add_argument(
+        "--scenario", choices=sorted(SCENARIOS), default="short",
+        help="differentiated resume fixture")
     parser.add_argument(
         "--mcp-smoke", action="store_true",
         help="probe and call DeepWiki once without invoking an LLM")
@@ -316,5 +367,5 @@ if __name__ == "__main__":
     else:
         payload = asyncio.run(simulate(
             live=args.live, context_log=args.context_log,
-            external=args.external))
+            scenario=("external" if args.external else args.scenario)))
     print(json.dumps(payload, ensure_ascii=False, indent=2))

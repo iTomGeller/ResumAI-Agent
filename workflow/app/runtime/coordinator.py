@@ -677,9 +677,9 @@ class Coordinator:
         hard_cap = max(0, int(self.policy.maxLlmCalls))
         if sig.get("single_pass_evaluation"):
             # One decision per specialist; Report uses three concurrent,
-            # focused sections. Project may use two additional turns for real
-            # external code/repository research.
-            hard_cap = min(hard_cap, 9)
+            # focused sections. Specialists may use one optional progressive
+            # Skill/tool turn; Project may use two for external research.
+            hard_cap = min(hard_cap, 12)
         runtime_budget = getattr(self.llm, "budget", None)
         if runtime_budget is not None and hasattr(
                 runtime_budget, "available_agent_llm_calls"):
@@ -709,10 +709,18 @@ class Coordinator:
             # runtime constrains this to public technical/background context;
             # it never treats public search as proof of private employment.
             if sig.get("has_projects") and "ProjectAgent" in quotas:
-                # action + final, with one bounded retry when the provider
-                # ignores a forced MCP tool choice.
+                # Optional action(s) + final. Tool choice remains provider
+                # `auto`; this is capacity, never a forced MCP invocation.
                 while remaining > 0 and quotas["ProjectAgent"] < 3:
                     quotas["ProjectAgent"] += 1
+                    remaining -= 1
+            # Give the other reasoning specialists room to activate one Skill
+            # from metadata. They keep the turn when no activation is useful.
+            for agent in ("TechAgent", "RiskAgent", "EvidenceAgent"):
+                if remaining <= 0:
+                    break
+                if agent in quotas and quotas[agent] == 1:
+                    quotas[agent] += 1
                     remaining -= 1
             per_agent_tools = min(
                 max(1, self.policy.toolBudget.maxToolCallsPerRun
@@ -726,12 +734,10 @@ class Coordinator:
                         5, self.policy.toolBudget.maxToolCallsPerAgent)
                 budget[agent] = {
                     "llmQuota": quotas[agent],
-                    "actionTurnQuota": (
-                        min(
-                            2 if sig.get("has_external_urls") else 1,
-                            max(0, quotas[agent] - 1))
-                        if agent == "ProjectAgent"
-                        and sig.get("has_projects") else 0),
+                    "actionTurnQuota": min(
+                        (2 if agent == "ProjectAgent"
+                         and sig.get("has_external_urls") else 1),
+                        max(0, quotas[agent] - 1)),
                     "toolQuota": tool_quota,
                 }
             return budget
@@ -983,7 +989,9 @@ class Coordinator:
         elif sig.get("is_fresh_grad"):
             signal_lines.append("应届生/实习生，精简路径：跳过深度验证，重点考察潜力和学习能力")
         if sig.get("has_github"):
-            signal_lines.append("有 GitHub 链接，EvidenceAgent 必须使用 MCP fetch 验证代码贡献")
+            signal_lines.append(
+                "有公开代码仓库链接，应把外部核验列为高价值选项；"
+                "由执行 Agent 根据实时工具目录与证据缺口自主决定是否调用")
         if sig.get("has_publications"):
             signal_lines.append("有论文/出版物，TechAgent 应深入评估学术能力和研究方向")
         if sig.get("is_senior"):
@@ -999,7 +1007,8 @@ class Coordinator:
         if not sig.get("has_timeline"):
             signal_lines.append("无清晰时间线，RiskAgent 时间线核查优先级降低")
         if sig.get("has_external_urls"):
-            signal_lines.append("有外部链接，EvidenceAgent 应使用 MCP 验证可公开验证的声明")
+            signal_lines.append(
+                "有外部链接，可优先安排公开证据核验；具体工具由执行 Agent 自主选择")
         if sig.get("resume_language") == "en":
             signal_lines.append("英文简历，评估标准切换为国际化口径")
 
@@ -1018,7 +1027,7 @@ class Coordinator:
             "你是动态规划 Coordinator。根据候选人特征做出差异化决策：\n"
             "1. 丰富简历（>2000字+项目+多年经验）：完整流水线+深度验证\n"
             "2. 薄简历（<800字/应届/缺少项目）：精简路径，跳过ProjectAgent\n"
-            "3. 有GitHub/外部URL：EvidenceAgent必含+MCP工具优先\n"
+            "3. 有GitHub/外部URL：保留公开证据核验能力，具体工具由执行 Agent 自主选择\n"
             "4. 有论文/出版物：TechAgent需深入学术评估\n"
             "5. 资深候选人（10年+/总监级）：RiskAgent重点关注管理&架构证据\n"
             "6. 跨领域转型：增加JDAnalysisAgent权重,评估能力迁移\n\n"

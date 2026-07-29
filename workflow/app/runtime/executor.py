@@ -154,8 +154,12 @@ EMIT_DECISION_TOOL = {
                     "type": "object",
                     "properties": {
                         "summary": {"type": "string"},
-                        "claims": {"type": "array", "items": {"type": "object"}},
-                        "evidence": {"type": "array", "items": {"type": "object"}},
+                        "claims": {
+                            "type": "array", "maxItems": 12,
+                            "items": {"type": "object"}},
+                        "evidence": {
+                            "type": "array", "maxItems": 12,
+                            "items": {"type": "object"}},
                         "confidence": {"type": "number"},
                         "requestedNextAction": {"type": "string"},
                     },
@@ -333,7 +337,7 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
     return {
         "score": {
             "useQuality": True,
-            "maxTokens": 2400,
+            "maxTokens": 2100,
             "properties": score_properties,
             "required": list(score_properties),
             "instruction": (
@@ -344,23 +348,24 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
         },
         "risk": {
             "useQuality": False,
-            "maxTokens": 3000,
+            "maxTokens": 2200,
             "properties": risk_properties,
             "required": list(risk_properties),
             "instruction": (
-                "只生成候选人风险小节：输出5-8条不重复的具体风险，覆盖"
+                "只生成候选人风险小节：输出4-6条不重复的具体风险，覆盖"
                 "履历可信度、项目真实性、JD缺口；每条给影响、核验方式和"
-                "证据引用；另列8-12条missingEvidence。不要生成评分和面试题。"),
+                "证据引用；另列4-8条missingEvidence。不要生成评分和面试题。"),
         },
         "question": {
             "useQuality": False,
-            "maxTokens": 3800,
+            "maxTokens": 2800,
             "properties": question_properties,
             "required": list(question_properties),
             "instruction": (
-                "只生成结构化面试追问：必须8-10题，覆盖每个HIGH风险、"
+                "只生成结构化面试追问：必须8题，覆盖每个HIGH风险、"
                 "TOP3 JD缺口和最重要项目；每题含目的、触发依据、好信号、"
-                "红旗、追问和证据引用。不要生成评分和风险。"),
+                "红旗、1个追问和证据引用；好信号/红旗各1-2条，避免重复。"
+                "不要生成评分和风险。"),
         },
     }
 
@@ -1383,11 +1388,12 @@ class RunExecutor:
                 tool for tool in requested_tools
                 if tool not in {"knowledge_search", "resume_semantic_search"}
             ]
-        if skills and not single_pass_evaluation:
+        if skills:
             requested_tools.extend(["load_skill", "read_skill_resource"])
 
         tool_results_block = ""
         pre_llm_tool_call_ids: List[str] = []
+        pre_llm_succeeded_tools: set[str] = set()
         agent_tool_calls = 0
         agent_llm_calls = 0
         agent_tool_limit = min(
@@ -1428,6 +1434,7 @@ class RunExecutor:
                 self._tool_failed_this_group = True
             tool_results_block += self._format_tool_result(call)
             if call.status == "SUCCEEDED":
+                pre_llm_succeeded_tools.add(tool)
                 await self._record_tool_success(
                     agent_id, tool, args, call.result,
                     tool_call_id=call.tool_call_id)
@@ -1465,34 +1472,28 @@ class RunExecutor:
         # From this point onward the model really receives the progressive
         # Skill metadata and live MCP tools/list schemas.
         self.skill_selections[agent_id] = skills
-        auto_loaded_skills: Dict[str, Any] = {}
-        auto_loaded_skill_call_ids: Dict[str, str] = {}
         try:
             await default_skill_manager.emit_catalog(
                 self.emitter, agent_id, skills)
             await default_skill_manager.emit_selection(
                 self.emitter, agent_id, skills,
                 trigger_reason="agent_capability_and_input_signals")
-            if single_pass_evaluation:
-                first_round_id = f"{self.request.runId}:{agent_id}:round:1"
-                for selected_skill in skills:
-                    loaded = default_skill_manager.load(
-                        selected_skill.skill_id, selected_skill.version)
-                    auto_call_id = f"autoload-{uuid.uuid4().hex[:16]}"
-                    auto_loaded_skills[loaded.skill_id] = loaded
-                    auto_loaded_skill_call_ids[loaded.skill_id] = auto_call_id
-                    await default_skill_manager.emit_loaded(
-                        self.emitter, agent_id, loaded,
-                        tool_call_id=auto_call_id,
-                        reason="single_pass_preload",
-                        round_id=first_round_id)
         except Exception as exc:  # noqa: BLE001
             logger.debug("skill catalog/selection emit skipped: %s", exc)
 
         catalog: List[Dict[str, Any]] = []
         catalog_exposure_ids: Dict[str, str] = {}
         try:
-            catalog = self.tools.catalog_for_agent(agent_id, requested_tools)
+            model_requested_tools = [
+                tool for tool in requested_tools
+                if not (single_pass_evaluation
+                        and tool in pre_llm_succeeded_tools)
+            ]
+            # Successful deterministic pre-steps are already attached as
+            # observations. Re-exposing the same tools made the model repeat
+            # them and consume the action turn needed for Skill/MCP selection.
+            catalog = self.tools.catalog_for_agent(
+                agent_id, model_requested_tools)
             for entry in catalog:
                 if entry.get("kind") == "mcp" or entry.get("mcpServer"):
                     exposure_id = f"catalog-{uuid.uuid4().hex[:16]}"
@@ -1533,18 +1534,24 @@ class RunExecutor:
         max_decision_iterations = min(
             definition.max_iterations, self.policy.maxIterationsPerAgent)
         if single_pass_evaluation:
-            # Normal path is one decision. Report keeps one repair allowance;
-            # it is borrowed only when the first native final fails schema.
-            max_decision_iterations = 2 if agent_id == "ReportAgent" else 1
+            # Normal path is still one decision. Keep a second decision slot
+            # solely as a malformed-native-final repair allowance; it consumes
+            # no call unless the provider's structured arguments fail schema.
+            max_decision_iterations = 2
         action_turn_ceiling = (
             3 if agent_id == "ProjectAgent"
             and signals.get("has_external_urls") else 2)
         if single_pass_evaluation:
-            action_turn_ceiling = (
+            research_turn_ceiling = (
                 2 if agent_id == "ProjectAgent"
                 and signals.get("has_external_urls")
                 else 1 if agent_id == "ProjectAgent"
                 and signals.get("has_projects") else 0)
+            # Skill metadata is present in the model context, but the body is
+            # disclosed only if the model calls load_skill. Reserving a turn
+            # makes that choice real without requiring any Skill invocation.
+            action_turn_ceiling = max(
+                research_turn_ceiling, 1 if skills else 0)
         available_tool_turns = min(
             action_turn_ceiling,
             max(0, agent_tool_limit - agent_tool_calls))
@@ -1572,9 +1579,8 @@ class RunExecutor:
         decision_iterations = 0
         action_turns = 0
         borrowed_repair_turns = 0
-        loaded_skills: Dict[str, Any] = dict(auto_loaded_skills)
-        loaded_skill_call_ids: Dict[str, str] = dict(
-            auto_loaded_skill_call_ids)
+        loaded_skills: Dict[str, Any] = {}
+        loaded_skill_call_ids: Dict[str, str] = {}
         applied_skill_ids: set = set()
         native_history: List[Dict[str, Any]] = []
         # Memory selection is immutable for this agent execution. Keeping the
@@ -1692,14 +1698,25 @@ class RunExecutor:
                     if model_name:
                         applicable_mcp_names.add(model_name)
                 if applicable_mcp_names:
+                    all_mcp_model_names = {
+                        str(entry.get("modelName") or "")
+                        for entry in catalog
+                        if entry.get("kind") == "mcp"
+                        or entry.get("mcpServer")
+                    }
+                    # Send applicable MCP schemas alongside Skill activation,
+                    # builtin and terminal schemas. This `tools` array is part
+                    # of the model input. `auto` lets the model select one,
+                    # another action, or finish without an MCP call.
                     turn_tools = [
                         tool for tool in model_tools
-                        if str(tool.get("function", {}).get("name") or "")
-                        in applicable_mcp_names
+                        if (
+                            str(tool.get("function", {}).get("name") or "")
+                            not in all_mcp_model_names
+                            or str(tool.get("function", {}).get("name") or "")
+                            in applicable_mcp_names
+                        )
                     ]
-                    # Native protocol constraint: choose one of the currently
-                    # available tools. No tool name or Skill is put in prompt.
-                    tool_choice = "required"
 
             # Persist memory usage once, at the first prompt that consumes it.
             # Every later round still declares it as an input attachment below,
@@ -2024,7 +2041,8 @@ class RunExecutor:
                             "tool_call_id": proposed.tool_call_id,
                             "name": proposed.name,
                             "content": json.dumps(
-                                result_payload, ensure_ascii=False)[:12000],
+                                result_payload, ensure_ascii=False)[
+                                    :(6000 if source == "mcp" else 8000)],
                         })
                     native_history.extend(tool_messages)
                     guard = self.guard.check_observation(observations)
@@ -2445,8 +2463,15 @@ class RunExecutor:
             return validated, observed, weak, retry
 
         errors = await run_sections(list(specs), attempt=1)
-        validated, observed, weak, retry_sections = assess()
-        retry_sections.update(errors)
+        if errors:
+            # A missing section makes whole-report validation fail, but the
+            # other concurrently generated sections may already be valid.
+            # Retry only malformed/failed sections; retrying all three caused
+            # a 3-call storm without improving the successful outputs.
+            validated, observed, weak = None, {}, {}
+            retry_sections = set(errors)
+        else:
+            validated, observed, weak, retry_sections = assess()
         if retry_sections:
             await self.emitter.emit(
                 "run.progress", agent_id="ReportAgent", payload={
@@ -3834,6 +3859,42 @@ class RunExecutor:
         elif definition.agent_id == "JDAnalysisAgent" and resume:
             if "jdMatches" not in artifacts:
                 steps.append(("jd_match_search", {"resumeText": resume}))
+        elif definition.agent_id == "ProjectAgent" and resume:
+            # Gather cheap internal project evidence before the model turn.
+            # Otherwise the model predictably spends its first action turn on
+            # these two builtins and cannot progress from Skill activation to
+            # optional public MCP research within the bounded latency budget.
+            query = self._build_project_search_query(resume, artifacts)
+            project_claims: List[str] = []
+            facts = artifacts.get("resumeFacts") or {}
+            if isinstance(facts, dict):
+                for project in list(facts.get("projects") or [])[:6]:
+                    if isinstance(project, dict):
+                        for key in ("name", "title", "summary", "role"):
+                            value = str(project.get(key) or "").strip()
+                            if value and value not in project_claims:
+                                project_claims.append(value[:240])
+                    elif str(project).strip():
+                        project_claims.append(str(project).strip()[:240])
+            if not project_claims:
+                project_claims = [
+                    line.strip()[:240]
+                    for line in resume.splitlines()
+                    if any(marker in line for marker in (
+                        "项目", "负责", "成果", "贡献"))
+                    and line.strip()
+                ][:8]
+            if project_claims:
+                steps.append(("locate_evidence", {
+                    "resumeText": resume,
+                    "claims": project_claims,
+                }))
+            if query:
+                steps.append(("resume_semantic_search", {
+                    "query": query,
+                    "resumeText": resume,
+                    "topK": 5,
+                }))
         elif definition.agent_id == "RiskAgent" and resume \
                 and "timelineCheck" not in artifacts:
             steps.append(("check_timeline", {"resumeText": resume}))
