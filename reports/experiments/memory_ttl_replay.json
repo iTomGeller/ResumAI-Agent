@@ -1,12 +1,14 @@
 {
   "experiment": "memory_ttl_temporal_replay",
   "version": 2,
-  "generatedAt": "2026-07-29T09:38:07Z",
+  "generatedAt": "2026-07-29T11:24:36Z",
   "source": "mysql-container:resumai-mysql",
   "cohort": {
     "compatibility": "CURRENT_VERSION",
-    "sinceUtc": "2026-07-29 08:03:16",
-    "producerCompatibility": "CURRENT_VERSION"
+    "sinceUtc": null,
+    "producerCompatibility": "CURRENT_VERSION",
+    "consumerVersion": "861ca1e",
+    "producerVersion": "861ca1e"
   },
   "mutation": "NONE",
   "guardrail": "Never change production TTL from an inconclusive replay",
@@ -17,14 +19,14 @@
     "minimumHistoryCoverageRatio": 0.8
   },
   "diagnostics": {
-    "inputRows": 50,
+    "inputRows": 10,
     "missingType": 0,
     "legacyTypeRemapped": 0,
     "legacyTypeCounts": {},
     "missingAge": 0,
     "negativeAge": 0,
     "unsupportedDecision": 0,
-    "validRows": 50
+    "validRows": 10
   },
   "overallDecision": "KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA",
   "typeResults": [
@@ -163,14 +165,14 @@
     {
       "type": "EPISODIC",
       "currentDefaultDays": 90,
-      "sampleCount": 50,
-      "usedSamples": 50,
+      "sampleCount": 10,
+      "usedSamples": 10,
       "ignoredSamples": 0,
-      "maxObservedAgeDays": 0.007,
+      "maxObservedAgeDays": 0.001,
       "distinctObservedAgeDays": 1,
       "requiredCoverageDays": 72.0,
       "ageHistogram": {
-        "0-1d": 50,
+        "0-1d": 10,
         "1-7d": 0,
         "7-30d": 0,
         "30-90d": 0,
@@ -180,6 +182,7 @@
       },
       "conclusive": false,
       "insufficientReasons": [
+        "USED 样本 10 < 30",
         "最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 72.0d",
         "仅覆盖 1 个不同记忆年龄日",
         "候选 TTL 在当前样本上没有产生可区分结果"

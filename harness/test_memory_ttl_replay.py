@@ -103,6 +103,21 @@ class MemoryTtlReplayTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             version_key("current' OR 1=1 --")
 
+    def test_exact_version_cohort_is_current_without_time_cutover(self):
+        report = build_report({
+            "_cohort": {
+                "compatibility": "CURRENT_VERSION",
+                "sinceUtc": None,
+                "consumerVersion": "861ca1e",
+                "producerVersion": "861ca1e",
+                "producerCompatibility": "CURRENT_VERSION",
+            },
+            "usage": [],
+        })
+        self.assertEqual("CURRENT_VERSION", report["cohort"]["compatibility"])
+        self.assertEqual("INSUFFICIENT_CURRENT_VERSION_DATA",
+                         report["overallDecision"])
+
 
 if __name__ == "__main__":
     unittest.main()

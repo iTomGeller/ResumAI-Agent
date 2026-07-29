@@ -124,7 +124,8 @@ ORDER BY u.id;
     return {
         "_experimentSource": f"mysql-container:{container}",
         "_cohort": {
-            "compatibility": "CURRENT_VERSION" if cutover else "MIXED_LEGACY",
+            "compatibility": (
+                "CURRENT_VERSION" if cutover or consumer else "MIXED_LEGACY"),
             "sinceUtc": cutover,
             "producerCompatibility": (
                 "CURRENT_VERSION" if current_producers_only or producer
@@ -367,6 +368,10 @@ def markdown_summary(report: dict[str, Any]) -> str:
            if report['cohort'].get('sinceUtc') else ""),
         f"- Memory 生产版本："
         f"{report['cohort'].get('producerCompatibility', 'MIXED_OR_UNKNOWN')}",
+        f"- consumer version："
+        f"{report['cohort'].get('consumerVersion') or '未记录'}",
+        f"- producer version："
+        f"{report['cohort'].get('producerVersion') or '未记录'}",
         f"- 历史类型归一：{report['diagnostics']['legacyTypeRemapped']} 条",
         "- 安全边界：样本不足时只保留默认值，不自动修改生产 TTL。",
         "",

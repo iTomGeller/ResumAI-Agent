@@ -1,11 +1,13 @@
 # EXP-13 Memory TTL 时间回放
 
-- 生成时间：2026-07-29T09:38:07Z
+- 生成时间：2026-07-29T11:24:36Z
 - 总体决策：**KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA**
-- 有效 usage：50 / 50
+- 有效 usage：10 / 10
 - 数据源：mysql-container:resumai-mysql
-- cohort：CURRENT_VERSION（UTC 2026-07-29 08:03:16 之后）
+- cohort：CURRENT_VERSION
 - Memory 生产版本：CURRENT_VERSION
+- consumer version：861ca1e
+- producer version：861ca1e
 - 历史类型归一：0 条
 - 安全边界：样本不足时只保留默认值，不自动修改生产 TTL。
 
@@ -15,7 +17,7 @@
 |  |  |  |  | 原因 | USED 样本 0 < 30；最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 1.6d；仅覆盖 0 个不同记忆年龄日；候选 TTL 在当前样本上没有产生可区分结果 |
 | SEMANTIC | 90d | 0 | 0.0d | 否 | 保持默认 |
 |  |  |  |  | 原因 | USED 样本 0 < 30；最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 72.0d；仅覆盖 0 个不同记忆年龄日；候选 TTL 在当前样本上没有产生可区分结果 |
-| EPISODIC | 90d | 50 | 0.007d | 否 | 保持默认 |
-|  |  |  |  | 原因 | 最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 72.0d；仅覆盖 1 个不同记忆年龄日；候选 TTL 在当前样本上没有产生可区分结果 |
+| EPISODIC | 90d | 10 | 0.001d | 否 | 保持默认 |
+|  |  |  |  | 原因 | USED 样本 10 < 30；最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 72.0d；仅覆盖 1 个不同记忆年龄日；候选 TTL 在当前样本上没有产生可区分结果 |
 | PROCEDURAL | 365d | 0 | 0.0d | 否 | 保持默认 |
 |  |  |  |  | 原因 | USED 样本 0 < 30；最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 292.0d；仅覆盖 0 个不同记忆年龄日；候选 TTL 在当前样本上没有产生可区分结果 |
