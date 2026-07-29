@@ -280,6 +280,8 @@ public class KnowledgeBaseDocumentService {
         long rerankMs = 0L;
         Double beforeTopScore = topFinalScore(fused);
         if (rerank && fused.size() > 1) {
+            String preRerankTopId = stringValue(
+                    fused.get(0).get("chunkId"), "");
             long rerankStarted = System.currentTimeMillis();
             List<Map<String, Object>> reranked = featureRerank(query, fused);
             rerankMs = System.currentTimeMillis() - rerankStarted;
@@ -287,6 +289,15 @@ public class KnowledgeBaseDocumentService {
                 fused = reranked;
                 rerankApplied = true;
                 strategy = strategy + "+feature_rerank";
+                beforeTopScore = reranked.stream()
+                        .filter(row -> preRerankTopId.equals(
+                                stringValue(row.get("chunkId"), "")))
+                        .map(row -> row.get("rerankScore"))
+                        .filter(Number.class::isInstance)
+                        .map(Number.class::cast)
+                        .map(Number::doubleValue)
+                        .findFirst()
+                        .orElse(null);
             }
         }
         Double afterTopScore = topFinalScore(fused);
