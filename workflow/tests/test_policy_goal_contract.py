@@ -157,7 +157,7 @@ def test_evidence_enabled_forces_evidence_agent():
     assert "evidence_ledger" in planned["goalArtifacts"]
 
 
-def test_sparse_resume_uses_fast_core_pipeline():
+def test_sparse_resume_keeps_parallel_evidence_pipeline():
     coordinator = _coordinator({"evidenceVerification": {"enabled": True}})
     planned = coordinator.plan_from_artifacts(
         run_type="full_evaluation",
@@ -167,15 +167,18 @@ def test_sparse_resume_uses_fast_core_pipeline():
     )
 
     assert planned["plan"] == [
-        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent", "ReportAgent"
+        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent", "ProjectAgent",
+        "RiskAgent", "EvidenceAgent", "ReportAgent",
     ]
-    assert "ProjectAgent" not in planned["plan"]
-    assert "EvidenceAgent" not in planned["plan"]
-    assert sum(item["llmQuota"] for item in planned["budgetPlan"].values()) <= 5
+    assert sum(item["llmQuota"] for item in planned["budgetPlan"].values()) <= 7
+    assert planned["budgetPlan"]["TechAgent"]["llmQuota"] == 1
+    assert planned["budgetPlan"]["RiskAgent"]["llmQuota"] == 1
+    assert planned["budgetPlan"]["ReportAgent"]["llmQuota"] == 1
+    assert planned["budgetPlan"]["ProjectAgent"]["actionTurnQuota"] == 2
 
 
-def test_sparse_resume_with_project_hint_still_drops_deep_agents():
-    """A short uploaded fragment may mention a project, but must stay fast."""
+def test_sparse_resume_with_project_hint_keeps_project_and_evidence():
+    """Short resumes stay multi-agent; unsupported dimensions alone are skipped."""
     coordinator = _coordinator({"evidenceVerification": {"enabled": True}})
     planned = coordinator.plan_from_artifacts(
         run_type="full_evaluation",
@@ -187,12 +190,12 @@ def test_sparse_resume_with_project_hint_still_drops_deep_agents():
         job_description="Java Spring",
     )
     assert planned["plan"] == [
-        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent", "ReportAgent"
+        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent", "ProjectAgent",
+        "EvidenceAgent", "ReportAgent",
     ]
-    assert "ProjectAgent" not in planned["plan"]
-    assert "EvidenceAgent" not in planned["plan"]
-    assert "project_findings" in planned["optionalArtifacts"]
-    assert "evidence_ledger" in planned["optionalArtifacts"]
+    assert "RiskAgent" not in planned["plan"]
+    assert "project_findings" in planned["goalArtifacts"]
+    assert "evidence_ledger" in planned["goalArtifacts"]
 
 
 def test_evidence_disabled_skips_evidence_agent():

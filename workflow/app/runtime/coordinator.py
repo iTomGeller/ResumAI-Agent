@@ -223,10 +223,20 @@ class Coordinator:
                 required.append("evidence_ledger")
             optional = [a for a in optional if a != "evidence_ledger"]
         if signals.get("is_sparse_resume") and run_type in FULL_EVAL_TYPES:
-            # A tiny resume is not evidence for independent project, timeline,
-            # or public-web agents. Keep the useful core (parse → match →
-            # report) and record the skipped dimensions in the plan metadata.
-            core = {"resume_facts", "jd_requirements", "technical_findings", "final_report"}
+            # Keep the multi-agent review surface even for a short resume, but
+            # only activate dimensions supported by input signals. Latency is
+            # controlled by parallel single-pass execution, not by deleting
+            # Skills/agents from the evaluation.
+            core = {
+                "resume_facts", "jd_requirements", "technical_findings",
+                "final_report",
+            }
+            if signals.get("has_projects"):
+                core.add("project_findings")
+            if signals.get("has_timeline"):
+                core.add("risks")
+            if self.policy.evidenceVerification.enabled:
+                core.add("evidence_ledger")
             dropped = [artifact for artifact in required if artifact not in core]
             required = [artifact for artifact in required if artifact in core]
             optional.extend(dropped)
@@ -369,6 +379,7 @@ class Coordinator:
         signals = self.inspect_signals(
             resume_text=resume_text, job_description=job_description,
             artifacts=artifacts, shared=shared)
+        signals["single_pass_evaluation"] = run_type in FULL_EVAL_TYPES
         if needs_parse or signals["needs_parse"]:
             signals = {**signals, "needs_parse": True}
         goal, optional_goal = self.resolve_goal_artifacts(run_type, signals=signals)
@@ -517,17 +528,18 @@ class Coordinator:
         signals = self.inspect_signals(
             resume_text=resume_text, job_description=job_description,
             artifacts=artifacts, shared=shared)
+        signals["single_pass_evaluation"] = run_type in FULL_EVAL_TYPES
         self._last_signals = signals
         self._execution_history = [
             n for n in (memory_notes if isinstance(memory_notes, list) else [])
             if isinstance(n, dict) and (n.get("source") == "execution_profile"
                                         or "execution_profile" in str(n.get("structured", {}).get("factKey", "")))]
 
-        # Sparse resumes are deliberately deterministic at the planning layer:
-        # one specialist plus the terminal report is enough. Spending a
-        # coordinator LLM call to rediscover that fact only adds latency.
+        # Evaluation routing is deterministic and signal-driven. Spending a
+        # coordinator provider call to restate the artifact plan adds latency
+        # without improving the evidence contract.
         if (self.is_simple(run_type) or self.llm is None
-                or (run_type in FULL_EVAL_TYPES and signals.get("is_sparse_resume"))):
+                or run_type in FULL_EVAL_TYPES):
             return base
 
         from app.runtime import cache
@@ -663,14 +675,52 @@ class Coordinator:
         others = [a for a in ordered if a not in {terminal, "ResumeParserAgent"}]
         hist_ratios = self._extract_budget_ratios(execution_history, others)
         hard_cap = max(0, int(self.policy.maxLlmCalls))
-        if sig.get("is_sparse_resume"):
-            hard_cap = min(hard_cap, 5)
+        if sig.get("single_pass_evaluation"):
+            # One decision per specialist + terminal; Project may use two
+            # additional turns for real external code/repository research.
+            hard_cap = min(hard_cap, 7)
         runtime_budget = getattr(self.llm, "budget", None)
         if runtime_budget is not None and hasattr(
                 runtime_budget, "available_agent_llm_calls"):
             hard_cap = min(
                 hard_cap,
                 runtime_budget.available_agent_llm_calls(hard_cap))
+        if sig.get("single_pass_evaluation"):
+            quotas = {agent: 0 for agent in ordered}
+            remaining = hard_cap
+            priority = [
+                terminal, "TechAgent", "ProjectAgent", "RiskAgent",
+                "EvidenceAgent",
+            ]
+            for agent in priority:
+                if remaining <= 0:
+                    break
+                if agent in quotas and quotas[agent] == 0:
+                    quotas[agent] = 1
+                    remaining -= 1
+            if sig.get("has_external_urls") and "ProjectAgent" in quotas:
+                while remaining > 0 and quotas["ProjectAgent"] < 3:
+                    quotas["ProjectAgent"] += 1
+                    remaining -= 1
+            per_agent_tools = min(
+                max(1, self.policy.toolBudget.maxToolCallsPerRun
+                    // max(1, len(ordered))),
+                self.policy.toolBudget.maxToolCallsPerAgent)
+            budget: Dict[str, Dict[str, int]] = {}
+            for agent in ordered:
+                tool_quota = per_agent_tools
+                if agent == "ProjectAgent" and sig.get("has_external_urls"):
+                    tool_quota = min(
+                        5, self.policy.toolBudget.maxToolCallsPerAgent)
+                budget[agent] = {
+                    "llmQuota": quotas[agent],
+                    "actionTurnQuota": (
+                        min(2, max(0, quotas[agent] - 1))
+                        if agent == "ProjectAgent"
+                        and sig.get("has_external_urls") else 0),
+                    "toolQuota": tool_quota,
+                }
+            return budget
         quotas = {agent: 0 for agent in ordered}
         remaining = hard_cap
 

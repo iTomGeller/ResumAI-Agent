@@ -120,8 +120,6 @@ interface RagSummary {
 
 const events = ref<RagEvent[]>([]);
 const summary = ref<RagSummary | null>(null);
-const warnings = ref<string[]>([]);
-const metricSemantics = ref<Record<string, string>>({});
 const loading = ref(false);
 const error = ref('');
 const search = ref('');
@@ -211,8 +209,6 @@ async function loadRagEvents() {
     const data = await response.json();
     events.value = (data.items || data.events || []).map(normalizeEvent);
     summary.value = data.summary || null;
-    warnings.value = Array.isArray(data.warnings) ? data.warnings : [];
-    metricSemantics.value = data.metricSemantics || {};
     page.value = 0;
   } catch (reason: any) {
     error.value = reason?.message || 'RAG 数据加载失败';
@@ -299,8 +295,8 @@ onMounted(loadRagEvents);
   <div class="ops-panel-inner">
     <div class="card ops-note rag-intro">
       <div>
-        <strong>Multi-stage RAG Observability</strong>
-        <p>每次真实 retrieval 调用以 tool event 为主账，并合并阶段、召回和 provenance telemetry。</p>
+        <strong>多阶段 RAG 监控</strong>
+        <p>查看每次真实检索的结果数量、耗时、排序分数和来源。</p>
       </div>
       <button class="refresh-button" type="button" :disabled="loading" @click="loadRagEvents">
         {{ loading ? '刷新中…' : '刷新' }}
@@ -308,19 +304,18 @@ onMounted(loadRagEvents);
     </div>
 
     <div class="proxy-notice">
-      <strong>指标语义：</strong>
-      在线 relevance score 与 Top-K 填充率都是代理指标，不等于 precision / recall。
-      只有事件附带标注集或真实 judge 时，详情才展示真值质量指标。
+      <strong>怎么看：</strong>
+      相关度表示检索结果的排序分数，Top-K 表示请求的结果是否返回完整；它们不是人工正确率。
     </div>
 
     <div v-if="summary" class="rag-kpi-grid">
       <div class="metric-card">
-        <span class="metric-label">Retrieval volume</span>
+        <span class="metric-label">检索调用</span>
         <strong class="metric-value">{{ summary.volume }}</strong>
         <span class="metric-note">完整 telemetry {{ summary.completeTelemetryCount }}/{{ summary.volume }}</span>
       </div>
       <div class="metric-card">
-        <span class="metric-label">Success / zero / error</span>
+        <span class="metric-label">成功 / 零结果 / 失败</span>
         <strong class="metric-value compact-value">
           {{ summary.successCount }} / {{ summary.zeroHitCount }} / {{ summary.errorCount }}
         </strong>
@@ -331,14 +326,14 @@ onMounted(loadRagEvents);
         </span>
       </div>
       <div class="metric-card">
-        <span class="metric-label">Latency P50 / P90</span>
+        <span class="metric-label">耗时 P50 / P90</span>
         <strong class="metric-value compact-value">
           {{ formatMs(summary.p50LatencyMs) }} / {{ formatMs(summary.p90LatencyMs) }}
         </strong>
         <span class="metric-note">端到端 retrieval pipeline</span>
       </div>
       <div class="metric-card">
-        <span class="metric-label">Relevance / Top-K（proxy）</span>
+        <span class="metric-label">相关度 / 结果完整率</span>
         <strong class="metric-value compact-value">
           {{ formatNumber(summary.averageTopScoreProxy, 3) }} /
           {{ formatPercent(summary.topKFillRateProxy) }}
@@ -346,16 +341,20 @@ onMounted(loadRagEvents);
         <span class="metric-note">平均 top score / K 填充率</span>
       </div>
       <div class="metric-card">
-        <span class="metric-label">Rerank lift</span>
+        <span class="metric-label">二次排序效果</span>
         <strong class="metric-value compact-value">
           {{ summary.rerankLiftSamples
             ? formatNumber(summary.averageRerankLift, 4)
-            : '无前后对照样本' }}
+            : '未启用二次排序' }}
         </strong>
-        <span class="metric-note">仅统计真实 before / after，n={{ summary.rerankLiftSamples }}</span>
+        <span class="metric-note">
+          {{ summary.rerankLiftSamples
+            ? `已对比 ${summary.rerankLiftSamples} 次排序前后结果`
+            : '本批调用没有执行重排步骤' }}
+        </span>
       </div>
       <div class="metric-card">
-        <span class="metric-label">Stage bottleneck</span>
+        <span class="metric-label">最慢阶段</span>
         <strong class="metric-value compact-value">
           {{ summary.bottleneckStage || '未采集' }}
         </strong>
@@ -366,7 +365,7 @@ onMounted(loadRagEvents);
     <div v-if="summary?.stageBreakdown?.length" class="card stage-card">
       <div class="section-heading">
         <strong>阶段瓶颈</strong>
-        <span>平均耗时、P90 与样本数；缺失阶段不补零。</span>
+        <span>显示各阶段的平均耗时、P90 和调用次数。</span>
       </div>
       <div class="stage-list">
         <div v-for="stage in summary.stageBreakdown" :key="stage.stage" class="stage-row">
@@ -382,10 +381,6 @@ onMounted(loadRagEvents);
           </span>
         </div>
       </div>
-    </div>
-
-    <div v-if="warnings.length" class="warning-list">
-      <p v-for="warning in warnings" :key="warning">{{ warning }}</p>
     </div>
 
     <div class="rag-toolbar">
@@ -571,15 +566,6 @@ onMounted(loadRagEvents);
       </div>
     </div>
 
-    <details v-if="Object.keys(metricSemantics).length" class="semantics-details">
-      <summary>API metric semantics</summary>
-      <dl>
-        <template v-for="(value, key) in metricSemantics" :key="key">
-          <dt>{{ key }}</dt>
-          <dd>{{ value }}</dd>
-        </template>
-      </dl>
-    </details>
   </div>
 </template>
 

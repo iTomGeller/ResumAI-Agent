@@ -151,6 +151,12 @@ def _attach_deepwiki_mcp(tools: ToolExecutor,
             },
             "required": ["repoName", "question"],
         },
+        # Some remote servers describe their native JSON-RPC result rather
+        # than the normalized runtime envelope returned to ToolExecutor.
+        output_schema={
+            "type": "object", "required": ["result"],
+            "properties": {"result": {"type": "object"}},
+        },
         protocol_version="2025-06-18")
     registry._http_clients["deepwiki"] = client
     tools.attach_mcp(registry)
@@ -507,7 +513,7 @@ class _SkillThenNativeMcpLlm:
 def test_external_url_budget_allows_progressive_skill_then_native_mcp():
     request = AgentRunRequest(
         runId="r-skill-mcp", conversationId="c-skill-mcp",
-        traceId="t-skill-mcp", runType="full_evaluation",
+        traceId="t-skill-mcp", runType="project_analysis",
         userMessage="核验简历中声明的公开仓库",
         resumeText=(
             "项目经历\n公开项目 Example\n"

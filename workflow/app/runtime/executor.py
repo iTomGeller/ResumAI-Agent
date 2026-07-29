@@ -1281,19 +1281,12 @@ class RunExecutor:
             job_description=request.jobDescription or "",
             artifacts=self.state.data.get("artifacts") or {},
             shared=self.state.data)
-        sparse_fast_path = bool(
-            signals.get("is_sparse_resume")
-            and request.runType in ("full_evaluation", "jd_evaluation",
-                                    "backend_eval", "agent_eval"))
+        single_pass_evaluation = request.runType in (
+            "full_evaluation", "jd_evaluation", "backend_eval", "agent_eval")
         skills = default_skill_manager.select_for(
             agent_id=agent_id, run_type=request.runType,
             job_focus=self.policy.jobFocus, overrides=self.policy.skillOverrides,
             signals=signals, user_message=request.userMessage or "")
-        if sparse_fast_path:
-            # A thin resume has no evidence surface for Skills/MCP exploration.
-            # Keep one direct model decision per selected specialist/terminal;
-            # this avoids a skill-loading action turn plus a slow repair turn.
-            skills = []
         # Build the requested surface now, but do not expose Skill/MCP metadata
         # until we know this agent will actually execute an LLM turn. This
         # prevents deterministic fast paths from producing phantom standalone
@@ -1305,9 +1298,7 @@ class RunExecutor:
                 tool for tool in requested_tools
                 if tool not in {"knowledge_search", "resume_semantic_search"}
             ]
-        if sparse_fast_path:
-            requested_tools = []
-        if skills:
+        if skills and not single_pass_evaluation:
             requested_tools.extend(["load_skill", "read_skill_resource"])
 
         tool_results_block = ""
@@ -1389,12 +1380,27 @@ class RunExecutor:
         # From this point onward the model really receives the progressive
         # Skill metadata and live MCP tools/list schemas.
         self.skill_selections[agent_id] = skills
+        auto_loaded_skills: Dict[str, Any] = {}
+        auto_loaded_skill_call_ids: Dict[str, str] = {}
         try:
             await default_skill_manager.emit_catalog(
                 self.emitter, agent_id, skills)
             await default_skill_manager.emit_selection(
                 self.emitter, agent_id, skills,
                 trigger_reason="agent_capability_and_input_signals")
+            if single_pass_evaluation:
+                first_round_id = f"{self.request.runId}:{agent_id}:round:1"
+                for selected_skill in skills:
+                    loaded = default_skill_manager.load(
+                        selected_skill.skill_id, selected_skill.version)
+                    auto_call_id = f"autoload-{uuid.uuid4().hex[:16]}"
+                    auto_loaded_skills[loaded.skill_id] = loaded
+                    auto_loaded_skill_call_ids[loaded.skill_id] = auto_call_id
+                    await default_skill_manager.emit_loaded(
+                        self.emitter, agent_id, loaded,
+                        tool_call_id=auto_call_id,
+                        reason="single_pass_preload",
+                        round_id=first_round_id)
         except Exception as exc:  # noqa: BLE001
             logger.debug("skill catalog/selection emit skipped: %s", exc)
 
@@ -1441,13 +1447,15 @@ class RunExecutor:
         # LLM/token/cost limits enforced by the client.
         max_decision_iterations = min(
             definition.max_iterations, self.policy.maxIterationsPerAgent)
-        if sparse_fast_path:
+        if single_pass_evaluation:
             max_decision_iterations = 1
         action_turn_ceiling = (
             3 if agent_id == "ProjectAgent"
             and signals.get("has_external_urls") else 2)
-        if sparse_fast_path:
-            action_turn_ceiling = 0
+        if single_pass_evaluation:
+            action_turn_ceiling = (
+                2 if agent_id == "ProjectAgent"
+                and signals.get("has_external_urls") else 0)
         available_tool_turns = min(
             action_turn_ceiling,
             max(0, agent_tool_limit - agent_tool_calls))
@@ -1468,8 +1476,9 @@ class RunExecutor:
         decision_iterations = 0
         action_turns = 0
         borrowed_repair_turns = 0
-        loaded_skills: Dict[str, Any] = {}
-        loaded_skill_call_ids: Dict[str, str] = {}
+        loaded_skills: Dict[str, Any] = dict(auto_loaded_skills)
+        loaded_skill_call_ids: Dict[str, str] = dict(
+            auto_loaded_skill_call_ids)
         applied_skill_ids: set = set()
         native_history: List[Dict[str, Any]] = []
         # Memory selection is immutable for this agent execution. Keeping the
@@ -1658,13 +1667,11 @@ class RunExecutor:
                 # risk and interview probe is evidence-bound. A 4096 ceiling
                 # truncated provider-native emit_decision arguments twice in
                 # production, leaving no JSON object for schema repair.
-                max_tokens=(4096 if is_report and sparse_fast_path
-                            else 8192 if is_report else 3600 if (
-                                definition.agent_id in TERMINAL_AGENTS)
-                            else 4096),
+                max_tokens=(8192 if is_report else 3600 if (
+                    definition.agent_id in TERMINAL_AGENTS) else 4096),
                 tools=turn_tools,
                 tool_choice=tool_choice,
-                use_quality=is_report and not sparse_fast_path,
+                use_quality=is_report,
                 trace_context=trace_context)
             agent_llm_calls += 1
             raw = turn.content

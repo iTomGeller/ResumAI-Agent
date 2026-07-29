@@ -783,9 +783,23 @@ class McpRegistry:
                 # in the separate mcp_server field and trace payload.
                 description=info.description,
                 input_schema=info.input_schema or {"type": "object"},
-                output_schema=info.output_schema or {
+                # MCP tools/list describes the server-native result, while the
+                # runtime deliberately normalizes every CallToolResult into a
+                # stable envelope (success/text/structuredContent/parsed).
+                # Validating that envelope against the remote native schema
+                # incorrectly rejected successful DeepWiki calls that require
+                # a server-side `result` field.
+                output_schema={
                     "type": "object",
-                    "properties": {"success": {"type": "boolean"}}},
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "text": {"type": "string"},
+                        "isError": {"type": "boolean"},
+                        "structuredContent": {"type": "object"},
+                        "parsed": {},
+                    },
+                    "required": ["success"],
+                },
                 timeout_seconds=40.0, max_retries=0,
                 network_policy="gateway", kind="mcp",
                 side_effect_level="read_only",
