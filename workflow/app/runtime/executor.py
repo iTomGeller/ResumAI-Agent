@@ -1650,7 +1650,6 @@ class RunExecutor:
             turn_tools = [final_tool] if force_final else model_tools
             turn_messages = list(messages)
             tool_choice: Any = "auto"
-            forced_research_model_name = ""
             if force_final:
                 terminal_name = str(final_tool["function"]["name"])
                 tool_choice = {
@@ -1670,46 +1669,37 @@ class RunExecutor:
                     and signals.get("has_projects")
                     and not signals.get("has_external_urls")
                     and action_turns == 0):
-                # No candidate URL does not mean "no external research". Give
-                # the model one real MCP turn to retrieve public technical or
-                # project-background context. The model still authors the
-                # search arguments; public results must not be promoted to
-                # proof of the candidate's private employment or contribution.
-                mcp_model_names = [
-                    str(entry.get("modelName") or "")
-                    for entry in catalog
-                    if (entry.get("kind") == "mcp" or entry.get("mcpServer"))
-                    and entry.get("modelName")
-                ]
-                preferred_mcp = next(
-                    (name for preferred in (
-                        "exa_web_search_exa",
-                        "microsoft_learn_microsoft_docs_search",
-                        "context7_query_docs",
-                    ) for name in mcp_model_names
-                     if name == preferred),
-                    mcp_model_names[0] if mcp_model_names else "")
-                if preferred_mcp:
-                    forced_research_model_name = preferred_mcp
+                # Policy grants one public-research turn; it never selects a
+                # concrete server/tool. Build the choice set from the live MCP
+                # catalog and whether required arguments can be grounded in
+                # current input. The model chooses the tool and authors args.
+                applicable_mcp_names: set[str] = set()
+                for entry in catalog:
+                    if not (entry.get("kind") == "mcp"
+                            or entry.get("mcpServer")):
+                        continue
+                    schema = entry.get("inputSchema")
+                    required = (
+                        schema.get("required") if isinstance(schema, dict)
+                        else []) or []
+                    requires_external_identifier = any(
+                        any(marker in str(field).lower()
+                            for marker in ("url", "uri", "repo", "repository"))
+                        for field in required)
+                    if requires_external_identifier:
+                        continue
+                    model_name = str(entry.get("modelName") or "")
+                    if model_name:
+                        applicable_mcp_names.add(model_name)
+                if applicable_mcp_names:
                     turn_tools = [
                         tool for tool in model_tools
                         if str(tool.get("function", {}).get("name") or "")
-                        == preferred_mcp
+                        in applicable_mcp_names
                     ]
-                    tool_choice = {
-                        "type": "function",
-                        "function": {"name": preferred_mcp},
-                    }
-                    turn_messages.append({
-                        "role": "user",
-                        "content": (
-                            "在提交项目评价前，先完成一次公开资料研究。"
-                            f"本轮只能调用 {preferred_mcp}，禁止调用任何其他工具。"
-                            "请生成与候选人项目技术栈、项目背景或关键工程主张"
-                            "直接相关的检索参数。没有候选人公开链接时，仅把结果"
-                            "用作技术背景和面试追问依据，不得据此证明其任职或"
-                            "个人贡献。"),
-                    })
+                    # Native protocol constraint: choose one of the currently
+                    # available tools. No tool name or Skill is put in prompt.
+                    tool_choice = "required"
 
             # Persist memory usage once, at the first prompt that consumes it.
             # Every later round still declares it as an input attachment below,
