@@ -4377,7 +4377,7 @@ class RunExecutor:
                         source_id=(
                             f"candidate_profile:{self.request.conversationId}"),
                         confidence=float(parsed.get("confidence") or 0.85),
-                        ttl_days=180)
+                        ttl_days=90)
                     semantic_written = True
 
             # 0c) WORKING: evidence & verification context.

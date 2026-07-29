@@ -45,7 +45,7 @@ class OpsMemoryTtlTest {
 
     @Test
     void publishesCanonicalTypeDefaults() {
-        assertEquals(2L, MemoryService.ttlPolicyDays().get("WORKING"));
+        assertEquals(1L, MemoryService.ttlPolicyDays().get("WORKING"));
         assertEquals(90L, MemoryService.ttlPolicyDays().get("SEMANTIC"));
         assertEquals(90L, MemoryService.ttlPolicyDays().get("EPISODIC"));
         assertEquals(365L, MemoryService.ttlPolicyDays().get("PROCEDURAL"));

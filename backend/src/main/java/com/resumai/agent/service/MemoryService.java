@@ -88,7 +88,7 @@ public class MemoryService {
             Pattern.CASE_INSENSITIVE);
 
     private static final Map<String, Duration> TTL_BY_TYPE = Map.of(
-            "WORKING", Duration.ofDays(2),
+            "WORKING", Duration.ofDays(1),
             "SEMANTIC", Duration.ofDays(90),
             "EPISODIC", Duration.ofDays(90),
             "PROCEDURAL", Duration.ofDays(365));
@@ -188,6 +188,7 @@ public class MemoryService {
         MemoryEntryRow existing = memoryMapper.selectOne(new QueryWrapper<MemoryEntryRow>()
                 .eq("content_hash", hash).eq("status", "ACTIVE").last("limit 1"));
         if (existing != null) {
+            LocalDateTime now = LocalDateTime.now();
             double existingConfidence = existing.getConfidence() != null
                     ? existing.getConfidence().doubleValue() : 0.5;
             double bumped = Math.min(1.0,
@@ -195,7 +196,16 @@ public class MemoryService {
                             + (request.confidence() != null ? request.confidence() : 0.5) * 0.3 + 0.05);
             existing.setConfidence(decimal(bumped));
             existing.setVersion(existing.getVersion() + 1);
-            existing.setUpdateTime(LocalDateTime.now());
+            String producerVersion = structuredText(
+                    request.structuredContent(), "_producerVersion", 64);
+            if (StringUtils.hasText(producerVersion)) {
+                existing.setProducerVersion(producerVersion);
+            }
+            Duration ttl = request.ttlDays() != null && request.ttlDays() > 0
+                    ? Duration.ofDays(request.ttlDays())
+                    : TTL_BY_TYPE.getOrDefault(type, Duration.ofDays(30));
+            existing.setExpiresAt(now.plus(ttl));
+            existing.setUpdateTime(now);
             memoryMapper.updateById(existing);
             return existing;
         }
@@ -242,7 +252,7 @@ public class MemoryService {
         if (request.ttlDays() != null && request.ttlDays() > 0) {
             row.setExpiresAt(now.plusDays(request.ttlDays()));
         } else if ("RUN".equals(scope)) {
-            row.setExpiresAt(now.plusDays(2));
+            row.setExpiresAt(now.plus(TTL_BY_TYPE.get("WORKING")));
         } else {
             Duration defaultTtl = TTL_BY_TYPE.getOrDefault(type, Duration.ofDays(30));
             row.setExpiresAt(now.plus(defaultTtl));
@@ -310,7 +320,7 @@ public class MemoryService {
                 "WORKING", "RUN", request.userId(), request.conversationId(),
                 request.runId(), request.content(), structured,
                 request.source(), request.sourceId(), request.confidence(),
-                request.sensitivityLevel(), 2));
+                request.sensitivityLevel(), 1));
     }
 
     /**

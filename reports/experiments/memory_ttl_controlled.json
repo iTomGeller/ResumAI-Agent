@@ -1,0 +1,847 @@
+{
+  "experiment": "EXP-14-current-workflow-memory-ttl-controlled",
+  "generatedAt": "2026-07-29T11:39:08Z",
+  "workflowProducerVersion": "861ca1e",
+  "cohort": "EXACT_CURRENT_PRODUCER_PAYLOADS_AND_CURRENT_WORKFLOW_CONSUMER",
+  "mutation": "NONE",
+  "method": {
+    "fullWorkflow": true,
+    "realProvider": true,
+    "differentiatedCases": [
+      "gold-java-backend-normal",
+      "gold-ai-agent-resume"
+    ],
+    "conditionsPerCase": [
+      "expired",
+      "semantic",
+      "episodic",
+      "procedural"
+    ],
+    "timeShift": "payload is held constant; only availability at boundary ages changes",
+    "lifecycleGuard": "CONFLICTED/ARCHIVED/expired rows are non-retrievable independent of TTL",
+    "selectionObjective": "shortest candidate meeting the declared consumer horizon, after measuring retained-vs-expired report impact"
+  },
+  "fixtureSources": {
+    "gold-java-backend-normal": {
+      "SEMANTIC": {
+        "memoryId": "mem-eff8c381-f8c1-4c14-bf4d-10ca39801805",
+        "source": "candidate_fact",
+        "producerVersion": "861ca1e",
+        "sourceStatus": "ACTIVE"
+      },
+      "EPISODIC": {
+        "memoryId": "mem-90c957a9-bf38-4d4a-8ac9-2ecfc03ee785",
+        "source": "cross_candidate_anchor",
+        "producerVersion": "861ca1e",
+        "sourceStatus": "CONFLICTED"
+      },
+      "PROCEDURAL": {
+        "memoryId": "mem-e51aed9e-b030-49de-beab-71aea763acc1",
+        "source": "runtime_strategy",
+        "producerVersion": "861ca1e",
+        "sourceStatus": "ARCHIVED"
+      }
+    },
+    "gold-ai-agent-resume": {
+      "SEMANTIC": {
+        "memoryId": "mem-726bba9a-06d2-47a9-a27f-1f3ddf2f5c34",
+        "source": "candidate_fact",
+        "producerVersion": "861ca1e",
+        "sourceStatus": "ACTIVE"
+      },
+      "EPISODIC": {
+        "memoryId": "mem-61ee3b11-cc4f-47b9-a295-25918e2878c4",
+        "source": "cross_candidate_anchor",
+        "producerVersion": "861ca1e",
+        "sourceStatus": "ACTIVE"
+      },
+      "PROCEDURAL": {
+        "memoryId": "mem-e51aed9e-b030-49de-beab-71aea763acc1",
+        "source": "runtime_strategy",
+        "producerVersion": "861ca1e",
+        "sourceStatus": "ARCHIVED"
+      }
+    }
+  },
+  "effects": {
+    "SEMANTIC": {
+      "meanRewardDelta": -0.0029,
+      "meanViolationDelta": 0.0,
+      "cases": [
+        {
+          "caseId": "gold-java-backend-normal",
+          "rewardDelta": 0.0104,
+          "evidenceSupportDelta": 0.017,
+          "mustFindDelta": 0.0,
+          "violationDelta": 0.0,
+          "latencyDeltaSeconds": -9.61,
+          "tokenDelta": -7516
+        },
+        {
+          "caseId": "gold-ai-agent-resume",
+          "rewardDelta": -0.0163,
+          "evidenceSupportDelta": -0.089,
+          "mustFindDelta": 0.0,
+          "violationDelta": 0.0,
+          "latencyDeltaSeconds": -2.33,
+          "tokenDelta": -2716
+        }
+      ]
+    },
+    "EPISODIC": {
+      "meanRewardDelta": 0.0202,
+      "meanViolationDelta": 0.0,
+      "cases": [
+        {
+          "caseId": "gold-java-backend-normal",
+          "rewardDelta": 0.0188,
+          "evidenceSupportDelta": 0.021,
+          "mustFindDelta": 0.0,
+          "violationDelta": 0.0,
+          "latencyDeltaSeconds": -24.4,
+          "tokenDelta": -9234
+        },
+        {
+          "caseId": "gold-ai-agent-resume",
+          "rewardDelta": 0.0217,
+          "evidenceSupportDelta": 0.124,
+          "mustFindDelta": 0.0,
+          "violationDelta": 0.0,
+          "latencyDeltaSeconds": 3.33,
+          "tokenDelta": 5063
+        }
+      ]
+    },
+    "PROCEDURAL": {
+      "meanRewardDelta": 0.0042,
+      "meanViolationDelta": 0.0,
+      "cases": [
+        {
+          "caseId": "gold-java-backend-normal",
+          "rewardDelta": 0.0133,
+          "evidenceSupportDelta": 0.029,
+          "mustFindDelta": 0.0,
+          "violationDelta": 0.0,
+          "latencyDeltaSeconds": -11.08,
+          "tokenDelta": -6726
+        },
+        {
+          "caseId": "gold-ai-agent-resume",
+          "rewardDelta": -0.0048,
+          "evidenceSupportDelta": -0.027,
+          "mustFindDelta": 0.0,
+          "violationDelta": 0.0,
+          "latencyDeltaSeconds": -3.08,
+          "tokenDelta": 2936
+        }
+      ]
+    }
+  },
+  "ttlDecisions": [
+    {
+      "type": "WORKING",
+      "candidateGrid": [
+        1,
+        2,
+        3,
+        7
+      ],
+      "pauseTtlSeconds": 7200,
+      "requiredCoverageDays": 0.083333,
+      "selectedTtlDays": 1,
+      "selectionRule": "smallest integer-day TTL above the control-plane PAUSED lifetime; WORKING is RUN-scoped, restored from execution_snapshot, and archived at terminal",
+      "llmAbRequired": false
+    },
+    {
+      "type": "SEMANTIC",
+      "candidateGrid": [
+        30,
+        60,
+        90,
+        180
+      ],
+      "boundaryProbeAgesDays": [
+        1,
+        7,
+        30,
+        60,
+        89
+      ],
+      "measuredRetainedMinusExpiredReward": -0.0029,
+      "measuredRetainedMinusExpiredViolation": 0.0,
+      "selectionRule": "shortest candidate covering every boundary probe; quality delta is measured by the current full workflow, TTL only gates availability",
+      "selectedTtlDays": 90,
+      "candidates": [
+        {
+          "ttlDays": 30,
+          "probeRetention": 0.6,
+          "projectedRewardDelta": -0.0018,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": false
+        },
+        {
+          "ttlDays": 60,
+          "probeRetention": 0.8,
+          "projectedRewardDelta": -0.0024,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": false
+        },
+        {
+          "ttlDays": 90,
+          "probeRetention": 1.0,
+          "projectedRewardDelta": -0.0029,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": true
+        },
+        {
+          "ttlDays": 180,
+          "probeRetention": 1.0,
+          "projectedRewardDelta": -0.0029,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": true
+        }
+      ]
+    },
+    {
+      "type": "EPISODIC",
+      "candidateGrid": [
+        30,
+        60,
+        90,
+        180
+      ],
+      "boundaryProbeAgesDays": [
+        1,
+        7,
+        30,
+        60,
+        89
+      ],
+      "measuredRetainedMinusExpiredReward": 0.0202,
+      "measuredRetainedMinusExpiredViolation": 0.0,
+      "selectionRule": "shortest candidate covering every boundary probe; quality delta is measured by the current full workflow, TTL only gates availability",
+      "selectedTtlDays": 90,
+      "candidates": [
+        {
+          "ttlDays": 30,
+          "probeRetention": 0.6,
+          "projectedRewardDelta": 0.0121,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": false
+        },
+        {
+          "ttlDays": 60,
+          "probeRetention": 0.8,
+          "projectedRewardDelta": 0.0162,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": false
+        },
+        {
+          "ttlDays": 90,
+          "probeRetention": 1.0,
+          "projectedRewardDelta": 0.0202,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": true
+        },
+        {
+          "ttlDays": 180,
+          "probeRetention": 1.0,
+          "projectedRewardDelta": 0.0202,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": true
+        }
+      ]
+    },
+    {
+      "type": "PROCEDURAL",
+      "candidateGrid": [
+        90,
+        180,
+        365,
+        730
+      ],
+      "boundaryProbeAgesDays": [
+        1,
+        7,
+        30,
+        90,
+        180,
+        364
+      ],
+      "measuredRetainedMinusExpiredReward": 0.0042,
+      "measuredRetainedMinusExpiredViolation": 0.0,
+      "selectionRule": "shortest candidate covering every boundary probe; quality delta is measured by the current full workflow, TTL only gates availability",
+      "selectedTtlDays": 365,
+      "candidates": [
+        {
+          "ttlDays": 90,
+          "probeRetention": 0.6667,
+          "projectedRewardDelta": 0.0028,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": false
+        },
+        {
+          "ttlDays": 180,
+          "probeRetention": 0.8333,
+          "projectedRewardDelta": 0.0035,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": false
+        },
+        {
+          "ttlDays": 365,
+          "probeRetention": 1.0,
+          "projectedRewardDelta": 0.0042,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": true
+        },
+        {
+          "ttlDays": 730,
+          "probeRetention": 1.0,
+          "projectedRewardDelta": 0.0042,
+          "projectedViolationDelta": 0.0,
+          "coversHorizon": true
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "caseId": "gold-java-backend-normal",
+      "condition": "expired",
+      "runId": "ttl-gold-java-backend-normal-expired-51540f6e",
+      "wallSeconds": 74.988,
+      "injectedMemory": null,
+      "retrievedMemoryTypes": {},
+      "memoryUsageBatches": 0,
+      "plan": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "parallelGroups": [
+        [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent"
+        ],
+        [
+          "EvidenceAgent"
+        ],
+        [
+          "ReportAgent"
+        ]
+      ],
+      "skillEvents": {
+        "skill.catalog": 5,
+        "skill.selected": 5,
+        "skill.loaded": 4,
+        "skill.applied": 4
+      },
+      "contextLog": "/repo/reports/experiments/ttl-contexts/gold-java-backend-normal-expired.jsonl",
+      "metrics": {
+        "status": "SUCCEEDED",
+        "reward": 0.5769,
+        "mustFind": 1.0,
+        "violation": 0.0,
+        "recommendationAccuracy": 0.8,
+        "evidenceSupport": 0.564,
+        "evidenceLocated": 1.0,
+        "unsupportedClaimRate": 0.4364,
+        "latencySeconds": 74.99,
+        "promptTokens": 57181,
+        "completionTokens": 13942,
+        "costCny": 0.225898,
+        "llmCalls": 15,
+        "toolCalls": 10,
+        "agentsUsed": [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent",
+          "EvidenceAgent",
+          "ReportAgent"
+        ],
+        "overallScore": 42,
+        "recommendation": "NOT_RECOMMEND",
+        "answerChars": 4349
+      }
+    },
+    {
+      "caseId": "gold-java-backend-normal",
+      "condition": "semantic",
+      "runId": "ttl-gold-java-backend-normal-semantic-b36a0c79",
+      "wallSeconds": 65.38,
+      "injectedMemory": {
+        "type": "SEMANTIC",
+        "source": "candidate_fact",
+        "sourceMemoryId": "mem-eff8c381-f8c1-4c14-bf4d-10ca39801805",
+        "producerVersion": "861ca1e"
+      },
+      "retrievedMemoryTypes": {
+        "SEMANTIC": 1
+      },
+      "memoryUsageBatches": 5,
+      "plan": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "parallelGroups": [
+        [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent"
+        ],
+        [
+          "EvidenceAgent"
+        ],
+        [
+          "ReportAgent"
+        ]
+      ],
+      "skillEvents": {
+        "skill.catalog": 5,
+        "skill.selected": 5,
+        "skill.loaded": 4,
+        "skill.applied": 4
+      },
+      "contextLog": "/repo/reports/experiments/ttl-contexts/gold-java-backend-normal-semantic.jsonl",
+      "metrics": {
+        "status": "SUCCEEDED",
+        "reward": 0.5873,
+        "mustFind": 1.0,
+        "violation": 0.0,
+        "recommendationAccuracy": 0.8,
+        "evidenceSupport": 0.581,
+        "evidenceLocated": 1.0,
+        "unsupportedClaimRate": 0.4186,
+        "latencySeconds": 65.38,
+        "promptTokens": 51658,
+        "completionTokens": 11949,
+        "costCny": 0.198908,
+        "llmCalls": 12,
+        "toolCalls": 10,
+        "agentsUsed": [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent",
+          "EvidenceAgent",
+          "ReportAgent"
+        ],
+        "overallScore": 41,
+        "recommendation": "NOT_RECOMMEND",
+        "answerChars": 4939
+      }
+    },
+    {
+      "caseId": "gold-java-backend-normal",
+      "condition": "episodic",
+      "runId": "ttl-gold-java-backend-normal-episodic-1c6e8fe7",
+      "wallSeconds": 50.587,
+      "injectedMemory": {
+        "type": "EPISODIC",
+        "source": "cross_candidate_anchor",
+        "sourceMemoryId": "mem-90c957a9-bf38-4d4a-8ac9-2ecfc03ee785",
+        "producerVersion": "861ca1e"
+      },
+      "retrievedMemoryTypes": {
+        "EPISODIC": 1
+      },
+      "memoryUsageBatches": 5,
+      "plan": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "parallelGroups": [
+        [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent"
+        ],
+        [
+          "EvidenceAgent"
+        ],
+        [
+          "ReportAgent"
+        ]
+      ],
+      "skillEvents": {
+        "skill.catalog": 5,
+        "skill.selected": 5,
+        "skill.loaded": 4,
+        "skill.applied": 4
+      },
+      "contextLog": "/repo/reports/experiments/ttl-contexts/gold-java-backend-normal-episodic.jsonl",
+      "metrics": {
+        "status": "SUCCEEDED",
+        "reward": 0.5957,
+        "mustFind": 1.0,
+        "violation": 0.0,
+        "recommendationAccuracy": 0.8,
+        "evidenceSupport": 0.585,
+        "evidenceLocated": 1.0,
+        "unsupportedClaimRate": 0.4146,
+        "latencySeconds": 50.59,
+        "promptTokens": 51089,
+        "completionTokens": 10800,
+        "costCny": 0.188578,
+        "llmCalls": 13,
+        "toolCalls": 10,
+        "agentsUsed": [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent",
+          "EvidenceAgent",
+          "ReportAgent"
+        ],
+        "overallScore": 44,
+        "recommendation": "NOT_RECOMMEND",
+        "answerChars": 4772
+      }
+    },
+    {
+      "caseId": "gold-java-backend-normal",
+      "condition": "procedural",
+      "runId": "ttl-gold-java-backend-normal-procedural-cbc10517",
+      "wallSeconds": 63.914,
+      "injectedMemory": {
+        "type": "PROCEDURAL",
+        "source": "runtime_strategy",
+        "sourceMemoryId": "mem-e51aed9e-b030-49de-beab-71aea763acc1",
+        "producerVersion": "861ca1e"
+      },
+      "retrievedMemoryTypes": {
+        "PROCEDURAL": 1
+      },
+      "memoryUsageBatches": 5,
+      "plan": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "parallelGroups": [
+        [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent"
+        ],
+        [
+          "EvidenceAgent"
+        ],
+        [
+          "ReportAgent"
+        ]
+      ],
+      "skillEvents": {
+        "skill.catalog": 5,
+        "skill.selected": 5,
+        "skill.loaded": 4,
+        "skill.applied": 4
+      },
+      "contextLog": "/repo/reports/experiments/ttl-contexts/gold-java-backend-normal-procedural.jsonl",
+      "metrics": {
+        "status": "SUCCEEDED",
+        "reward": 0.5902,
+        "mustFind": 1.0,
+        "violation": 0.0,
+        "recommendationAccuracy": 0.8,
+        "evidenceSupport": 0.593,
+        "evidenceLocated": 1.0,
+        "unsupportedClaimRate": 0.4074,
+        "latencySeconds": 63.91,
+        "promptTokens": 52603,
+        "completionTokens": 11794,
+        "costCny": 0.199558,
+        "llmCalls": 13,
+        "toolCalls": 10,
+        "agentsUsed": [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent",
+          "EvidenceAgent",
+          "ReportAgent"
+        ],
+        "overallScore": 49,
+        "recommendation": "NEED_MANUAL_REVIEW",
+        "answerChars": 4849
+      }
+    },
+    {
+      "caseId": "gold-ai-agent-resume",
+      "condition": "expired",
+      "runId": "ttl-gold-ai-agent-resume-expired-be40e6aa",
+      "wallSeconds": 52.533,
+      "injectedMemory": null,
+      "retrievedMemoryTypes": {},
+      "memoryUsageBatches": 0,
+      "plan": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "parallelGroups": [
+        [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent"
+        ],
+        [
+          "EvidenceAgent"
+        ],
+        [
+          "ReportAgent"
+        ]
+      ],
+      "skillEvents": {
+        "skill.catalog": 5,
+        "skill.selected": 5,
+        "skill.loaded": 4,
+        "skill.applied": 4
+      },
+      "contextLog": "/repo/reports/experiments/ttl-contexts/gold-ai-agent-resume-expired.jsonl",
+      "metrics": {
+        "status": "SUCCEEDED",
+        "reward": 0.6169,
+        "mustFind": 1.0,
+        "violation": 0.0,
+        "recommendationAccuracy": 0.8,
+        "evidenceSupport": 0.694,
+        "evidenceLocated": 1.0,
+        "unsupportedClaimRate": 0.3056,
+        "latencySeconds": 52.53,
+        "promptTokens": 49147,
+        "completionTokens": 10912,
+        "costCny": 0.18559,
+        "llmCalls": 12,
+        "toolCalls": 11,
+        "agentsUsed": [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent",
+          "EvidenceAgent",
+          "ReportAgent"
+        ],
+        "overallScore": 45,
+        "recommendation": "NEED_MANUAL_REVIEW",
+        "answerChars": 5497
+      }
+    },
+    {
+      "caseId": "gold-ai-agent-resume",
+      "condition": "semantic",
+      "runId": "ttl-gold-ai-agent-resume-semantic-d4bb2f0a",
+      "wallSeconds": 50.205,
+      "injectedMemory": {
+        "type": "SEMANTIC",
+        "source": "candidate_fact",
+        "sourceMemoryId": "mem-726bba9a-06d2-47a9-a27f-1f3ddf2f5c34",
+        "producerVersion": "861ca1e"
+      },
+      "retrievedMemoryTypes": {
+        "SEMANTIC": 1
+      },
+      "memoryUsageBatches": 5,
+      "plan": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "parallelGroups": [
+        [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent"
+        ],
+        [
+          "EvidenceAgent"
+        ],
+        [
+          "ReportAgent"
+        ]
+      ],
+      "skillEvents": {
+        "skill.catalog": 5,
+        "skill.selected": 5,
+        "skill.loaded": 4,
+        "skill.applied": 4
+      },
+      "contextLog": "/repo/reports/experiments/ttl-contexts/gold-ai-agent-resume-semantic.jsonl",
+      "metrics": {
+        "status": "SUCCEEDED",
+        "reward": 0.6006,
+        "mustFind": 1.0,
+        "violation": 0.0,
+        "recommendationAccuracy": 0.8,
+        "evidenceSupport": 0.605,
+        "evidenceLocated": 1.0,
+        "unsupportedClaimRate": 0.3953,
+        "latencySeconds": 50.2,
+        "promptTokens": 46281,
+        "completionTokens": 11062,
+        "costCny": 0.181058,
+        "llmCalls": 12,
+        "toolCalls": 10,
+        "agentsUsed": [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent",
+          "EvidenceAgent",
+          "ReportAgent"
+        ],
+        "overallScore": 40,
+        "recommendation": "NEED_MANUAL_REVIEW",
+        "answerChars": 5750
+      }
+    },
+    {
+      "caseId": "gold-ai-agent-resume",
+      "condition": "episodic",
+      "runId": "ttl-gold-ai-agent-resume-episodic-d9f10176",
+      "wallSeconds": 55.864,
+      "injectedMemory": {
+        "type": "EPISODIC",
+        "source": "cross_candidate_anchor",
+        "sourceMemoryId": "mem-61ee3b11-cc4f-47b9-a295-25918e2878c4",
+        "producerVersion": "861ca1e"
+      },
+      "retrievedMemoryTypes": {
+        "EPISODIC": 1
+      },
+      "memoryUsageBatches": 5,
+      "plan": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "parallelGroups": [
+        [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent"
+        ],
+        [
+          "EvidenceAgent"
+        ],
+        [
+          "ReportAgent"
+        ]
+      ],
+      "skillEvents": {
+        "skill.catalog": 5,
+        "skill.selected": 5,
+        "skill.loaded": 4,
+        "skill.applied": 4
+      },
+      "contextLog": "/repo/reports/experiments/ttl-contexts/gold-ai-agent-resume-episodic.jsonl",
+      "metrics": {
+        "status": "SUCCEEDED",
+        "reward": 0.6386,
+        "mustFind": 1.0,
+        "violation": 0.0,
+        "recommendationAccuracy": 0.8,
+        "evidenceSupport": 0.818,
+        "evidenceLocated": 1.0,
+        "unsupportedClaimRate": 0.1818,
+        "latencySeconds": 55.86,
+        "promptTokens": 53260,
+        "completionTokens": 11862,
+        "costCny": 0.201416,
+        "llmCalls": 13,
+        "toolCalls": 11,
+        "agentsUsed": [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent",
+          "EvidenceAgent",
+          "ReportAgent"
+        ],
+        "overallScore": 37,
+        "recommendation": "NOT_RECOMMEND",
+        "answerChars": 5225
+      }
+    },
+    {
+      "caseId": "gold-ai-agent-resume",
+      "condition": "procedural",
+      "runId": "ttl-gold-ai-agent-resume-procedural-da54a09a",
+      "wallSeconds": 49.457,
+      "injectedMemory": {
+        "type": "PROCEDURAL",
+        "source": "runtime_strategy",
+        "sourceMemoryId": "mem-e51aed9e-b030-49de-beab-71aea763acc1",
+        "producerVersion": "861ca1e"
+      },
+      "retrievedMemoryTypes": {
+        "PROCEDURAL": 1
+      },
+      "memoryUsageBatches": 5,
+      "plan": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "parallelGroups": [
+        [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent"
+        ],
+        [
+          "EvidenceAgent"
+        ],
+        [
+          "ReportAgent"
+        ]
+      ],
+      "skillEvents": {
+        "skill.catalog": 5,
+        "skill.selected": 5,
+        "skill.loaded": 4,
+        "skill.applied": 4
+      },
+      "contextLog": "/repo/reports/experiments/ttl-contexts/gold-ai-agent-resume-procedural.jsonl",
+      "metrics": {
+        "status": "SUCCEEDED",
+        "reward": 0.6121,
+        "mustFind": 1.0,
+        "violation": 0.0,
+        "recommendationAccuracy": 0.8,
+        "evidenceSupport": 0.667,
+        "evidenceLocated": 1.0,
+        "unsupportedClaimRate": 0.3333,
+        "latencySeconds": 49.45,
+        "promptTokens": 51784,
+        "completionTokens": 11211,
+        "costCny": 0.193256,
+        "llmCalls": 12,
+        "toolCalls": 11,
+        "agentsUsed": [
+          "TechAgent",
+          "ProjectAgent",
+          "RiskAgent",
+          "EvidenceAgent",
+          "ReportAgent"
+        ],
+        "overallScore": 46,
+        "recommendation": "INTERVIEW_RECOMMEND",
+        "answerChars": 5413
+      }
+    }
+  ]
+}

@@ -26,7 +26,7 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_TTL_DAYS = {
-    "WORKING": 2,
+    "WORKING": 1,
     "SEMANTIC": 90,
     "EPISODIC": 90,
     "PROCEDURAL": 365,

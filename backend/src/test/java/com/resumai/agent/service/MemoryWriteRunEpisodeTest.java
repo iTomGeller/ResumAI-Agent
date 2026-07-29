@@ -15,11 +15,38 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.dao.MemoryEntryMapper;
 import com.resumai.agent.domain.entity.MemoryEntryRow;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class MemoryWriteRunEpisodeTest {
+
+    @Test
+    void identicalCurrentBuildWriteRefreshesProducerAndTtl() {
+        MemoryEntryMapper mapper = mock(MemoryEntryMapper.class);
+        MemoryVectorService vector = mock(MemoryVectorService.class);
+        MemoryService svc = new MemoryService(mapper, new ObjectMapper(), vector);
+        MemoryEntryRow existing = new MemoryEntryRow();
+        existing.setMemoryId("mem-existing");
+        existing.setConfidence(BigDecimal.valueOf(0.8));
+        existing.setVersion(2);
+        existing.setProducerVersion("old-build");
+        existing.setExpiresAt(LocalDateTime.now().plusDays(2));
+        when(mapper.selectOne(any())).thenReturn(existing);
+
+        LocalDateTime before = LocalDateTime.now();
+        MemoryEntryRow refreshed = svc.write(new MemoryService.WriteRequest(
+                "SEMANTIC", "CONVERSATION", "u1", "c1", "r1",
+                "候选人事实: Java", Map.of("_producerVersion", "build-2"),
+                "candidate_fact", "candidate_profile:c1",
+                0.9, "NORMAL", 90));
+
+        assertEquals("build-2", refreshed.getProducerVersion());
+        assertEquals(3, refreshed.getVersion());
+        assertTrue(refreshed.getExpiresAt().isAfter(before.plusDays(89)));
+        assertTrue(refreshed.getExpiresAt().isBefore(before.plusDays(91)));
+    }
 
     @Test
     void hasBusinessArtifactsDetectsResumeFacts() throws Exception {

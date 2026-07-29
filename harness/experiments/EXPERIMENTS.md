@@ -19,6 +19,7 @@
 | EXP-9 | 进化 reward 权重敏感性 | `harness/run_reward_sensitivity.py` | DONE（2026-07-21） | 对 24 个真实 SUCCEEDED run 注入 6 档多样化反馈（强同意→强不同意）后 FEEDBACK reward 行达 28 条；±10pp×20 组重加权 champion（agent_job）**零翻转 → robust**，当前 reward 权重配置保留 |
 | EXP-10 | 并行 vs 串行 specialist | `harness/run_parallel_ab.py` | DONE（2026-07-21） | 串行 reward 略高但延迟/成本显著更差（49.2s vs 30.95s）；**拒绝 serial 默认**，上线「并行 + 冲突时串行仲裁」 |
 | EXP-13 | Memory TTL 时间回放 | `harness/run_memory_ttl_replay.py --base http://127.0.0.1` | ACTIVE（2026-07-29 首轮） | 188/200 条真实 usage 年龄有效、0 负年龄；Episodic 16 条/最长 0.047d，Procedural 172 条/最长 0.781d，时间跨度不足，结论为 **保持当前 TTL**，禁止自动调参 |
+| EXP-14 | 当前 Workflow TTL 控制实验 | `workflow/scripts/ecs_memory_ttl_experiment.py` | DONE（2026-07-29） | 精确使用 producer `861ca1e` 的当前记忆 payload，Java/AI Agent 两份差异化简历 × 4 条件共 8 个真实完整 workflow，全部成功、must-find=100%、违规=0；按边界保留 + 最短非劣值选择 **Working 1 / Semantic 90 / Episodic 90 / Procedural 365 天** |
 
 ## EXP-1 Embedding 模型选型
 
@@ -136,3 +137,11 @@
 - **2026-07-29 版本切点复核**：全库 764 条 usage 最晚为北京时间 15:03，而当前 workflow 容器于 16:03 启动；当前 Memory 查询、分类并发及多类型融合实现上线后的干净 usage 为 **0 条**。因此 764 条只能作为旧版本基线，不能支持当前版本 TTL 最优性；脚本增加 `--since-utc` 强制版本 cohort，混合历史标记 `BASELINE_ONLY_MIXED_VERSION`，当前版本无数据标记 `INSUFFICIENT_CURRENT_VERSION_DATA`。生产配置 **Working 2 / Semantic 90 / Episodic 90 / Procedural 365 天仅作为 incumbent 默认值保留，不声称为实验最优**。产物：`reports/experiments/memory_ttl_replay.{json,md}`。
 - **2026-07-29 当前版本干净 cohort + shadow A/B**：增加生产版本二次切点，只保留“当前 workflow 消费 + 当前 workflow 生成”的 usage。真实 E2E 后得到 50 条干净 Episodic USED；Working/Semantic/Procedural 仍为 0。对 Java 后端与 AI Agent 两类 gold 简历跑 4 个有效完整 workflow shadow run，保留当前 Episodic 相比临时过期，平均 Reward **+0.019**、证据支持率 **+0.129**、耗时 **-5.06s**，must-find/违规率无回退。决策：保留 Episodic 90 天 incumbent，但分钟级年龄不足以判断 90 天优于 30/60 天。可重复脚本：`harness/run_memory_ttl_shadow_ab.py`；产物：`reports/experiments/memory_ttl_shadow_ab.{json,md}`。
 - **2026-07-29 V20 版本闭环**：`memory_entry.producer_version` 与 `run_memory_usage.consumer_version` 已上线，Ops usage 详情同时展示 producer/consumer。部署后 3 个真实 run 共 60 条 usage 全部写入 `consumer_version=861ca1e`；其中后续 run 共 10 次真实消费 `producer_version=861ca1e` 的 Episodic。主回放已改用精确双版本过滤，旧 PREFERENCE/Procedural 的 producer 为 null，不再进入当前版本 TTL cohort。
+
+## EXP-14 当前 Workflow TTL 控制实验
+
+- **数据边界**：只使用当前 workflow build `861ca1e` 生成的 payload；Procedural 取本次 run 的 `runtime_strategy` staging payload，避免把 producer=null 的旧去重行当成当前生产样本。实验使用 `NullMemoryClient` 隔离注入，不写 MySQL、不改生产 `expires_at`。
+- **执行矩阵**：`gold-java-backend-normal` 与 `gold-ai-agent-resume` 两份差异化简历，各跑 expired / Semantic / Episodic / Procedural 四种条件，共 8 个真实 `RunExecutor` 完整流程；真实 DeepSeek、Coordinator、动态 Agent、Skill 与 MCP catalog，逐轮完整 context 落 `reports/experiments/ttl-contexts/`。
+- **结果**：8/8 `SUCCEEDED`，两例 must-find 均 100%，must-not-claim 违规均 0。相对同简历 expired 基线，Semantic 平均 Reward -0.0029（非劣容差内、平均少 5.97s），Episodic +0.0202，Procedural +0.0042；三类均未增加违规。
+- **TTL 选择目标**：Working 受控制面 PAUSED 最长 7200s 约束，1 天是当前整数天 API 的最小覆盖值；其余类型把 payload 固定、只移动消费年龄，在 90 天招聘会话/候选对比边界与 365 天跨招聘季策略边界上做可见/过期反事实。若两个候选同样覆盖边界，则按最小暴露与存储选择较短值。
+- **上线决策**：**Working 1 天、Semantic 90 天、Episodic 90 天、Procedural 365 天**。同步删除 Semantic 写入的 180 天隐式覆盖；相同内容被当前版本重新验证时刷新 producer version 与 TTL（这是 write refresh，不是 read renewal）。结论只在当前候选网格、当前 workflow 与上述消费边界内称为最优，不伪装成已经自然等待 365 天的生产纵向实验。产物：`reports/experiments/memory_ttl_controlled.{json,md}`。
