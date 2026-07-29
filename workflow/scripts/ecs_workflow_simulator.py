@@ -228,6 +228,18 @@ async def simulate(*, live: bool = False,
             "answerChars": len(str(result.get("answer") or "")),
         },
     }
+    if live:
+        result_path = (context_log or (
+            ROOT / ".sim-artifacts" / "llm-contexts.jsonl")).with_suffix(
+                ".result.json")
+        result_path.write_text(json.dumps({
+            "elapsedMs": elapsed_ms,
+            "status": result.get("status"),
+            "answer": result.get("answer"),
+            "structuredReport": result.get("structuredReport"),
+            "metrics": result.get("metrics"),
+        }, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        summary["resultLog"] = str(result_path)
 
     agents = set(summary["plan"])
     if result.get("status") != "SUCCEEDED":

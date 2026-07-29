@@ -1448,7 +1448,9 @@ class RunExecutor:
         max_decision_iterations = min(
             definition.max_iterations, self.policy.maxIterationsPerAgent)
         if single_pass_evaluation:
-            max_decision_iterations = 1
+            # Normal path is one decision. Report keeps one repair allowance;
+            # it is borrowed only when the first native final fails schema.
+            max_decision_iterations = 2 if agent_id == "ReportAgent" else 1
         action_turn_ceiling = (
             3 if agent_id == "ProjectAgent"
             and signals.get("has_external_urls") else 2)

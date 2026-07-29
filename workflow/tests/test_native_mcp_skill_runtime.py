@@ -701,7 +701,7 @@ def test_malformed_native_final_borrows_one_traced_repair_turn():
     """Regression for run-7d52f4c9…: don't strand a repair at llmQuota."""
     request = AgentRunRequest(
         runId="r-native-repair", conversationId="c-native-repair",
-        traceId="t-native-repair", runType="full_evaluation",
+        traceId="t-native-repair", runType="project_analysis",
         resumeText="项目经历\nExample\nPython",
         jobDescription="Python backend")
     emitter = NullEmitter(
@@ -829,11 +829,10 @@ def test_report_agent_hides_evaluation_retrieval_and_forces_final_output():
     assert "knowledge_search" not in llm.tool_names[0]
     assert "resume_semantic_search" not in llm.tool_names[0]
     assert "validate_report_schema" not in llm.tool_names[0]
-    assert "load_skill" in llm.tool_names[0]
-    assert llm.tool_names[1] == ["emit_decision"]
-    assert llm.tool_choices[1] == {
+    assert llm.tool_names == [["emit_decision"]]
+    assert llm.tool_choices[0] == {
         "type": "function", "function": {"name": "emit_decision"}}
-    assert llm.max_tokens == [8192, 8192]
+    assert llm.max_tokens == [8192]
 
 
 class _ReportRepairLlm:
@@ -1162,7 +1161,7 @@ def test_progressive_skill_action_turns_are_reserved(monkeypatch, tmp_path):
 
     request = AgentRunRequest(
         runId="r-skill-turns", conversationId="c-skill-turns",
-        traceId="t-skill-turns", runType="full_evaluation",
+        traceId="t-skill-turns", runType="project_analysis",
         resumeText="项目经历\n支付平台，负责缓存与消息队列",
         jobDescription="Java backend")
     llm = _ProgressiveSkillLlm()
