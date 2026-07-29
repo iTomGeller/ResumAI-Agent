@@ -1,6 +1,7 @@
 import unittest
 
-from harness.run_memory_ttl_replay import build_report, evaluate_type, normalize_usage
+from harness.run_memory_ttl_replay import (
+    build_report, evaluate_type, normalize_usage, parse_utc_cutover)
 
 
 class MemoryTtlReplayTest(unittest.TestCase):
@@ -59,6 +60,31 @@ class MemoryTtlReplayTest(unittest.TestCase):
         self.assertIsNone(procedural["proposedTtlDays"])
         self.assertEqual("KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA",
                          report["overallDecision"])
+
+    def test_mixed_legacy_history_is_baseline_only(self):
+        report = build_report({
+            "_cohort": {"compatibility": "MIXED_LEGACY", "sinceUtc": None},
+            "usage": [{
+                "type": "EPISODIC", "decision": "USED",
+                "ageAtUseSeconds": 60, "finalScore": 0.8,
+            }],
+        })
+        self.assertEqual("BASELINE_ONLY_MIXED_VERSION", report["overallDecision"])
+
+    def test_empty_current_version_cohort_is_not_called_an_optimum(self):
+        report = build_report({
+            "_cohort": {
+                "compatibility": "CURRENT_VERSION",
+                "sinceUtc": "2026-07-29 08:03:16",
+            },
+            "usage": [],
+        })
+        self.assertEqual("INSUFFICIENT_CURRENT_VERSION_DATA",
+                         report["overallDecision"])
+
+    def test_cutover_is_normalized_to_utc(self):
+        self.assertEqual("2026-07-29 08:03:16",
+                         parse_utc_cutover("2026-07-29T16:03:16+08:00"))
 
 
 if __name__ == "__main__":

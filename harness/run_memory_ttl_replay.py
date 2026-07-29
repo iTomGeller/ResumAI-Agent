@@ -12,6 +12,7 @@ Runs on ECS: python3 harness/run_memory_ttl_replay.py --base http://127.0.0.1
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import math
 import subprocess
@@ -53,9 +54,20 @@ LEGACY_TYPE_REMAP = {
 }
 
 
-def fetch_mysql_payload(container: str) -> dict[str, Any]:
+def parse_utc_cutover(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def fetch_mysql_payload(container: str, since_utc: str | None = None) -> dict[str, Any]:
     """Read the complete ECS usage history without the Ops API page limit."""
-    sql = """
+    cutover = parse_utc_cutover(since_utc)
+    where_clause = f"WHERE u.create_time >= '{cutover}'" if cutover else ""
+    sql = f"""
 SELECT JSON_OBJECT(
   'type', m.type,
   'decision', u.decision,
@@ -67,6 +79,7 @@ SELECT JSON_OBJECT(
 )
 FROM run_memory_usage u
 JOIN memory_entry m ON m.memory_id = u.memory_id
+{where_clause}
 ORDER BY u.id;
 """
     command = [
@@ -78,6 +91,10 @@ ORDER BY u.id;
     rows = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
     return {
         "_experimentSource": f"mysql-container:{container}",
+        "_cohort": {
+            "compatibility": "CURRENT_VERSION" if cutover else "MIXED_LEGACY",
+            "sinceUtc": cutover,
+        },
         "usage": rows,
         "defaults": {"ttl": {"typeDefaultDays": DEFAULT_TTL_DAYS}},
     }
@@ -268,11 +285,23 @@ def build_report(
         row for row in results
         if row["conclusive"] and row["proposedTtlDays"] is not None
     ]
+    cohort = payload.get("_cohort") or {"compatibility": "UNVERSIONED", "sinceUtc": None}
+    compatibility = str(cohort.get("compatibility") or "UNVERSIONED")
+    if compatibility == "MIXED_LEGACY":
+        overall_decision = "BASELINE_ONLY_MIXED_VERSION"
+    elif diagnostics["validRows"] == 0:
+        overall_decision = "INSUFFICIENT_CURRENT_VERSION_DATA"
+    else:
+        overall_decision = (
+            "REVIEW_PROPOSALS" if proposals
+            else "KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA"
+        )
     return {
         "experiment": "memory_ttl_temporal_replay",
         "version": 2,
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source": payload.get("_experimentSource", "ops-memory-api"),
+        "cohort": cohort,
         "mutation": "NONE",
         "guardrail": "Never change production TTL from an inconclusive replay",
         "thresholds": {
@@ -282,10 +311,7 @@ def build_report(
             "minimumHistoryCoverageRatio": coverage_ratio,
         },
         "diagnostics": diagnostics,
-        "overallDecision": (
-            "REVIEW_PROPOSALS" if proposals
-            else "KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA"
-        ),
+        "overallDecision": overall_decision,
         "typeResults": results,
     }
 
@@ -299,6 +325,9 @@ def markdown_summary(report: dict[str, Any]) -> str:
         f"- 有效 usage：{report['diagnostics']['validRows']} / "
         f"{report['diagnostics']['inputRows']}",
         f"- 数据源：{report['source']}",
+        f"- cohort：{report['cohort']['compatibility']}"
+        + (f"（UTC {report['cohort']['sinceUtc']} 之后）"
+           if report['cohort'].get('sinceUtc') else ""),
         f"- 历史类型归一：{report['diagnostics']['legacyTypeRemapped']} 条",
         "- 安全边界：样本不足时只保留默认值，不自动修改生产 TTL。",
         "",
@@ -324,6 +353,9 @@ def main() -> int:
     parser.add_argument(
         "--mysql-container",
         help="Read complete history from a local ECS MySQL container (for example resumai-mysql)")
+    parser.add_argument(
+        "--since-utc",
+        help="Only include usage at/after this workflow-version cutover (ISO-8601 UTC)")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--min-used", type=int, default=30)
     parser.add_argument("--retention-floor", type=float, default=0.99)
@@ -333,7 +365,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.mysql_container:
-        payload = fetch_mysql_payload(args.mysql_container)
+        payload = fetch_mysql_payload(args.mysql_container, args.since_utc)
     elif args.input:
         payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
     else:
