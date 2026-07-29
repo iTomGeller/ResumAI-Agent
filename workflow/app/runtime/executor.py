@@ -1658,11 +1658,13 @@ class RunExecutor:
                 # risk and interview probe is evidence-bound. A 4096 ceiling
                 # truncated provider-native emit_decision arguments twice in
                 # production, leaving no JSON object for schema repair.
-                max_tokens=(8192 if is_report else 3600 if (
-                    definition.agent_id in TERMINAL_AGENTS) else 4096),
+                max_tokens=(4096 if is_report and sparse_fast_path
+                            else 8192 if is_report else 3600 if (
+                                definition.agent_id in TERMINAL_AGENTS)
+                            else 4096),
                 tools=turn_tools,
                 tool_choice=tool_choice,
-                use_quality=is_report,
+                use_quality=is_report and not sparse_fast_path,
                 trace_context=trace_context)
             agent_llm_calls += 1
             raw = turn.content
