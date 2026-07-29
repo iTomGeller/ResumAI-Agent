@@ -254,9 +254,28 @@ public final class OpsDebugDtos {
     ) {
     }
 
+    public record McpEndpointStats(
+            String server,
+            String endpoint,
+            long calls,
+            long success,
+            long failed,
+            long rejected,
+            long running,
+            Double successRate,
+            Long averageMs,
+            Long p50Ms,
+            Long p90Ms,
+            Long maxMs,
+            String lastRunId,
+            String lastCalledAt
+    ) {
+    }
+
     public record McpOpsResponse(
             McpInventory inventory,
             McpInvocationPage invocations,
+            List<McpEndpointStats> endpointStats,
             List<String> statusEnum,
             String note
     ) {

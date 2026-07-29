@@ -114,12 +114,22 @@ class OpsControllerContractTest {
         when(runtime.getOpsRuntime(false)).thenReturn(Optional.of(Map.of(
                 "skills", Map.of(
                         "source", "python_skill_manager",
-                        "count", 1,
-                        "activeCount", 1,
+                        "count", 2,
+                        "activeCount", 2,
                         "deprecatedCount", 0,
                         "advertisedTools", List.of(
                                 "load_skill", "read_skill_resource"),
-                        "skills", List.of()))));
+                        "skills", List.of(
+                                Map.of("skillId", "calibrate-and-explain-decision",
+                                        "name", "calibrate-and-explain-decision",
+                                        "version", "v2", "hash", "hash-v2",
+                                        "status", "ACTIVE", "deprecated", false,
+                                        "adminOnly", false),
+                                Map.of("skillId", "plan-evaluation-revision",
+                                        "name", "plan-evaluation-revision",
+                                        "version", "v1", "hash", "hash-plan",
+                                        "status", "ACTIVE", "deprecated", false,
+                                        "adminOnly", false))))));
         LocalDateTime newest = LocalDateTime.of(2026, 7, 28, 9, 5);
         String payload = """
                 {"skillId":"calibrate-and-explain-decision",
@@ -151,6 +161,57 @@ class OpsControllerContractTest {
         assertEquals("run-new", aggregate.lastRunId());
         assertEquals(newest, aggregate.lastAt());
         assertEquals(5, response.selectedApplied().size());
+        assertEquals(2, response.usageBySkill().size());
+        SkillAggUsage unused = response.usageBySkill().get(1);
+        assertEquals("plan-evaluation-revision", unused.skillId());
+        assertEquals(0, unused.catalog());
+        assertEquals(0, unused.selected());
+        assertEquals(0, unused.loaded());
+        assertEquals(0, unused.applied());
+        assertEquals("hash-plan", unused.lastHash());
+    }
+
+    @Test
+    void mcpEndpointStatsIncludeEveryLiveToolAndRealInvocationLatency() {
+        RunEventMapper events = mock(RunEventMapper.class);
+        AgentRuntimeClient runtime = mock(AgentRuntimeClient.class);
+        when(runtime.getOpsRuntime(false)).thenReturn(Optional.of(Map.of(
+                "mcp", Map.of(
+                        "source", "python_mcp_registry",
+                        "probed", true,
+                        "servers", Map.of("exa", Map.of(
+                                "status", "AVAILABLE",
+                                "tools", List.of("exa.web_search_exa", "exa.web_fetch_exa"))),
+                        "toolCount", 2))));
+        LocalDateTime started = LocalDateTime.of(2026, 7, 29, 20, 0);
+        when(events.selectList(any())).thenReturn(List.of(
+                event("tool.completed", "exa.web_search_exa", "run-1",
+                        started.plusNanos(120_000_000),
+                        """
+                        {"source":"mcp","mcpServer":"exa","toolCallId":"call-1",
+                         "lifecycleStage":"RESULT","outcome":"SUCCESS","durationMs":120,
+                         "occurredAt":"2026-07-29T12:00:00.120Z","resultPreview":{"success":true}}
+                        """),
+                event("tool.started", "exa.web_search_exa", "run-1", started,
+                        """
+                        {"source":"mcp","mcpServer":"exa","toolCallId":"call-1",
+                         "lifecycleStage":"EXECUTION_STARTED","occurredAt":"2026-07-29T12:00:00Z"}
+                        """)));
+
+        var response = service(events, runtime).mcp(false, null, null, null, 40);
+
+        assertEquals(2, response.endpointStats().size());
+        var search = response.endpointStats().stream()
+                .filter(row -> "exa.web_search_exa".equals(row.endpoint()))
+                .findFirst().orElseThrow();
+        assertEquals(1, search.calls());
+        assertEquals(1, search.success());
+        assertEquals(100.0, search.successRate());
+        assertEquals(120L, search.averageMs());
+        var fetch = response.endpointStats().stream()
+                .filter(row -> "exa.web_fetch_exa".equals(row.endpoint()))
+                .findFirst().orElseThrow();
+        assertEquals(0, fetch.calls());
     }
 
     @Test

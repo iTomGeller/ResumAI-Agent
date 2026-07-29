@@ -9,6 +9,20 @@ const EVENT_PREVIEW = 8;
 const allEvents = computed(() => props.panel?.events || props.panel?.selectedApplied || []);
 const visibleEvents = computed(() =>
   showAllEvents.value ? allEvents.value : allEvents.value.slice(0, EVENT_PREVIEW));
+const usageRows = computed(() => {
+  const usage = props.panel?.usageBySkill || [];
+  const byId = new Map(usage.map((row: any) => [row.skillId, row]));
+  const rows = (props.panel?.skills || []).map((skill: any) => {
+    const skillId = skill.skillId || skill.name;
+    return byId.get(skillId) || {
+      skillId,
+      catalog: 0, selected: 0, loaded: 0, applied: 0, skipped: 0, failed: 0,
+      lastHash: skill.hash, lastVersion: skill.version,
+    };
+  });
+  const catalogIds = new Set(rows.map((row: any) => row.skillId));
+  return [...rows, ...usage.filter((row: any) => !catalogIds.has(row.skillId))];
+});
 function eventLabel(eventType?: string): string {
   return (eventType || 'unknown').replace(/^skill\./, '');
 }
@@ -77,7 +91,7 @@ function isoTimestamp(value?: string): string {
             <tr><th>Skill</th><th>Catalog</th><th>Selected</th><th>Loaded</th><th>Applied</th><th>Skipped</th><th>Failed</th><th>Last Time</th><th>Last Run</th></tr>
           </thead>
           <tbody>
-            <tr v-for="row in (panel?.usageBySkill || [])" :key="row.skillId">
+            <tr v-for="row in usageRows" :key="row.skillId">
               <td>{{ row.skillId }}</td>
               <td>{{ row.catalog ?? 0 }}</td>
               <td>{{ row.selected ?? 0 }}</td>
@@ -88,7 +102,7 @@ function isoTimestamp(value?: string): string {
               <td class="mono text-xs time-cell"><time :datetime="eventTime(row)" :title="isoTimestamp(eventTime(row))">{{ formatTimestamp(eventTime(row)) }}</time></td>
               <td class="mono text-xs">{{ row.lastRunId || '-' }}</td>
             </tr>
-            <tr v-if="!(panel?.usageBySkill || []).length">
+            <tr v-if="!usageRows.length">
               <td colspan="9" class="text-muted">尚无 skill catalog / selected / loaded / applied 事件</td>
             </tr>
           </tbody>

@@ -10,6 +10,7 @@ import com.resumai.agent.api.dto.ops.OpsDebugDtos.ErrorDiagnosticView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.EventOutcome;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpInventory;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpInventoryServer;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpEndpointStats;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpInvocationPage;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpInvocationView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpOpsResponse;
@@ -268,11 +269,13 @@ public class OpsDebugService {
         List<McpInvocationView> calls = recentMcpCalls(
                 recentLimit, runId, server, outcome, allowedServers,
                 filterToCurrentInventory);
+        List<McpEndpointStats> endpointStats = mcpEndpointStats(inventory);
         return new McpOpsResponse(
                 inventory,
                 new McpInvocationPage(calls.size(), calls),
+                endpointStats,
                 List.of("AVAILABLE", "RATE_LIMITED", "AUTH_REQUIRED", "DOWN", "UNREACHABLE"),
-                "状态来自 Python MCP Registry 真实 probe；调用证据来自 run_event。");
+                "状态来自 Python MCP Registry 真实 probe；Endpoint 累计统计与调用明细来自 run_event。");
     }
 
     public SkillOpsResponse skills(boolean includeDeprecated, int recentLimit) {
@@ -312,11 +315,34 @@ public class OpsDebugService {
         @SuppressWarnings("unchecked")
         List<SkillUsageView> events = (List<SkillUsageView>) usage.get("events");
         @SuppressWarnings("unchecked")
-        List<SkillAggUsage> bySkill = (List<SkillAggUsage>) usage.get("bySkill");
+        List<SkillAggUsage> bySkill = mergeManifestSkillUsage(
+                manifest, (List<SkillAggUsage>) usage.get("bySkill"));
         return new SkillOpsResponse(
                 source, reachable, root, count, activeCount, deprecatedCount, advertised,
                 manifest, events, bySkill, runtimeError,
                 "默认展示 Python runtime ACTIVE skills；选择/应用来自 run_event。");
+    }
+
+    static List<SkillAggUsage> mergeManifestSkillUsage(
+            List<SkillManifestItem> manifest, List<SkillAggUsage> eventUsage) {
+        Map<String, SkillAggUsage> observed = new LinkedHashMap<>();
+        for (SkillAggUsage usage : eventUsage == null ? List.<SkillAggUsage>of() : eventUsage) {
+            if (usage != null && StringUtils.hasText(usage.skillId())) {
+                observed.put(usage.skillId(), usage);
+            }
+        }
+        List<SkillAggUsage> result = new ArrayList<>();
+        for (SkillManifestItem skill : manifest == null ? List.<SkillManifestItem>of() : manifest) {
+            if (skill == null || !StringUtils.hasText(skill.skillId())) {
+                continue;
+            }
+            SkillAggUsage actual = observed.remove(skill.skillId());
+            result.add(actual != null ? actual
+                    : new SkillAggUsage(skill.skillId(), 0, 0, 0, 0, 0, 0,
+                    null, null, skill.hash(), skill.version()));
+        }
+        result.addAll(observed.values());
+        return result;
     }
 
     /**
@@ -834,6 +860,100 @@ public class OpsDebugService {
             if (out.size() >= cap) break;
         }
         return out;
+    }
+
+    private List<McpEndpointStats> mcpEndpointStats(McpInventory inventory) {
+        Map<String, String> serverByTool = new LinkedHashMap<>();
+        for (McpInventoryServer server : inventory.servers()) {
+            for (String tool : server.tools() == null ? List.<String>of() : server.tools()) {
+                if (StringUtils.hasText(tool)) {
+                    serverByTool.put(tool, server.name());
+                }
+            }
+        }
+        if (serverByTool.isEmpty()) {
+            return List.of();
+        }
+
+        List<RunEvent> events = runEventMapper.selectList(new QueryWrapper<RunEvent>()
+                .in("event_type", MCP_EVENT_TYPES)
+                .in("tool_name", serverByTool.keySet())
+                .orderByDesc("create_time")
+                .orderByDesc("seq"));
+        Map<String, McpInvocationView> merged = new LinkedHashMap<>();
+        for (RunEvent event : events) {
+            Object payload = parseJson(event.getPayload());
+            if (!isMcpPayload(payload)) {
+                continue;
+            }
+            if (payload instanceof Map<?, ?> raw
+                    && "CATALOG_EXPOSED".equalsIgnoreCase(str(raw.get("lifecycleStage")))) {
+                continue;
+            }
+            McpInvocationView view = toMcpInvocation(event, payload);
+            if (!serverByTool.containsKey(view.tool())) {
+                continue;
+            }
+            String key = String.valueOf(view.runId()) + "|"
+                    + (StringUtils.hasText(view.toolCallId())
+                    ? view.toolCallId()
+                    : view.tool() + "|" + view.seq());
+            merged.merge(key, view, OpsDebugService::mergeMcpInvocation);
+        }
+
+        Map<String, List<McpInvocationView>> callsByTool = new LinkedHashMap<>();
+        serverByTool.keySet().forEach(tool -> callsByTool.put(tool, new ArrayList<>()));
+        for (McpInvocationView call : merged.values()) {
+            callsByTool.computeIfAbsent(call.tool(), ignored -> new ArrayList<>()).add(call);
+        }
+
+        List<McpEndpointStats> result = new ArrayList<>();
+        for (Map.Entry<String, String> endpoint : serverByTool.entrySet()) {
+            String tool = endpoint.getKey();
+            List<McpInvocationView> calls = callsByTool.getOrDefault(tool, List.of());
+            long success = calls.stream().filter(call -> "SUCCESS".equalsIgnoreCase(call.outcome())).count();
+            long rejected = calls.stream().filter(call -> "REJECTED".equalsIgnoreCase(call.outcome())).count();
+            long failed = calls.stream().filter(call -> "FAILED".equalsIgnoreCase(call.outcome())).count();
+            long running = calls.stream().filter(call -> !terminalMcpOutcome(call.outcome())).count();
+            long terminal = success + failed + rejected;
+            Double successRate = terminal > 0
+                    ? Math.round(1000D * success / terminal) / 10D : null;
+            List<Long> durations = calls.stream()
+                    .map(McpInvocationView::durationMs)
+                    .filter(value -> value != null && value >= 0)
+                    .sorted()
+                    .toList();
+            Long average = durations.isEmpty() ? null
+                    : Math.round(durations.stream().mapToLong(Long::longValue).average().orElse(0));
+            McpInvocationView latest = calls.stream()
+                    .max(Comparator.comparing(OpsDebugService::mcpCallTimestamp,
+                            Comparator.nullsFirst(Comparator.naturalOrder())))
+                    .orElse(null);
+            result.add(new McpEndpointStats(
+                    endpoint.getValue(), tool, calls.size(), success, failed, rejected, running,
+                    successRate, average, percentileLong(durations, 0.50),
+                    percentileLong(durations, 0.90),
+                    durations.isEmpty() ? null : durations.get(durations.size() - 1),
+                    latest != null ? latest.runId() : null,
+                    latest != null ? mcpCallTimestamp(latest) : null));
+        }
+        result.sort(Comparator.comparing(McpEndpointStats::server)
+                .thenComparing(McpEndpointStats::endpoint));
+        return result;
+    }
+
+    private static String mcpCallTimestamp(McpInvocationView call) {
+        if (call == null) return null;
+        return firstNonBlank(
+                firstNonBlank(call.endedAt(), call.occurredAt(), call.startedAt()),
+                localTimestamp(call.createTime()));
+    }
+
+    private static Long percentileLong(List<Long> sorted, double percentile) {
+        if (sorted == null || sorted.isEmpty()) return null;
+        int index = Math.max(0, Math.min(sorted.size() - 1,
+                (int) Math.ceil(percentile * sorted.size()) - 1));
+        return sorted.get(index);
     }
 
     private static McpInvocationView mergeMcpInvocation(McpInvocationView first,

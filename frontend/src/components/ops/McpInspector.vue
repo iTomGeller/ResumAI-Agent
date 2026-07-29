@@ -10,6 +10,9 @@ const emit = defineEmits<{ (e: 'open-run', runId: string): void }>();
 const PAGE_SIZE = 10;
 const mcpPage = ref(0);
 const allCalls = computed(() => props.panel?.recentCalls || props.panel?.invocations?.items || []);
+const endpointStats = computed(() => props.panel?.endpointStats || []);
+const cumulativeCalls = computed(() => endpointStats.value.reduce(
+  (sum: number, row: any) => sum + Number(row.calls || 0), 0));
 const totalPages = computed(() => Math.max(1, Math.ceil(allCalls.value.length / PAGE_SIZE)));
 const pagedCalls = computed(() => {
   const start = mcpPage.value * PAGE_SIZE;
@@ -65,6 +68,15 @@ function durationLabel(row: any): string {
   }
   return '未采集';
 }
+function compactLatency(value?: number | null): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return '-';
+  return numeric >= 1000 ? `${(numeric / 1000).toFixed(2)}s` : `${Math.round(numeric)}ms`;
+}
+function successRateLabel(value?: number | null): string {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : '-';
+}
 </script>
 
 <template>
@@ -81,6 +93,7 @@ function durationLabel(row: any): string {
     <div class="ops-metrics">
       <div><span>MCP Servers</span><strong>{{ allServers.length }}</strong></div>
       <div><span>Available tools</span><strong>{{ availableToolCount }}</strong></div>
+      <div><span>累计真实调用</span><strong>{{ cumulativeCalls }}</strong></div>
       <div><span>Recent real calls</span><strong>{{ allCalls.length }}</strong></div>
     </div>
     <div class="ops-grid">
@@ -113,6 +126,43 @@ function durationLabel(row: any): string {
         </div>
       </div>
     </details>
+    <div class="card table-wrap" style="margin-top:12px">
+      <h3>MCP Endpoint 总体调用统计</h3>
+      <p class="text-muted text-sm endpoint-note">按当前 Registry 的 Server / Tool 汇总历史真实调用；从未调用的 endpoint 也显示为 0。</p>
+      <table class="ops-table endpoint-table">
+        <thead>
+          <tr>
+            <th>Server</th><th>Endpoint / Tool</th><th>调用</th><th>成功</th><th>失败</th>
+            <th>拒绝</th><th>运行中</th><th>成功率</th><th>Avg</th><th>P50</th><th>P90</th><th>Max</th><th>最近调用</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in endpointStats" :key="`${row.server}:${row.endpoint}`">
+            <td><strong>{{ row.server }}</strong></td>
+            <td class="mono">{{ row.endpoint }}</td>
+            <td>{{ row.calls ?? 0 }}</td>
+            <td class="stat-success">{{ row.success ?? 0 }}</td>
+            <td class="stat-failed">{{ row.failed ?? 0 }}</td>
+            <td>{{ row.rejected ?? 0 }}</td>
+            <td>{{ row.running ?? 0 }}</td>
+            <td>{{ successRateLabel(row.successRate) }}</td>
+            <td>{{ compactLatency(row.averageMs) }}</td>
+            <td>{{ compactLatency(row.p50Ms) }}</td>
+            <td>{{ compactLatency(row.p90Ms) }}</td>
+            <td>{{ compactLatency(row.maxMs) }}</td>
+            <td class="mono text-xs time-cell">
+              <time v-if="row.lastCalledAt" :datetime="row.lastCalledAt" :title="isoTimestamp(row.lastCalledAt)">
+                {{ formatTimestamp(row.lastCalledAt) }}
+              </time>
+              <span v-else>-</span>
+            </td>
+          </tr>
+          <tr v-if="!endpointStats.length">
+            <td colspan="13" class="text-muted">暂无 Endpoint 统计</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <div class="card table-wrap" style="margin-top:12px">
       <h3>MCP Invocations</h3>
       <table class="ops-table">
@@ -179,6 +229,10 @@ function durationLabel(row: any): string {
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 .time-cell { min-width: 168px; font-variant-numeric: tabular-nums; }
 .time-cell span { display: block; margin-top: 2px; color: var(--color-text-secondary); }
+.endpoint-note { margin: -4px 0 10px; }
+.endpoint-table { min-width: 1220px; }
+.stat-success { color: var(--color-success); font-weight: 600; }
+.stat-failed { color: var(--color-danger); font-weight: 600; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 0; font-size: 13px; }
 .pagination button { border: 1px solid var(--color-border); border-radius: 6px; padding: 4px 10px; cursor: pointer; background: var(--color-surface); }
 .pagination button:disabled { opacity: 0.4; cursor: not-allowed; }

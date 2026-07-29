@@ -285,6 +285,7 @@ public class OpsController {
         body.put("inventory", resp.inventory());
         body.put("invocations", resp.invocations());
         body.put("recentCalls", resp.invocations().items());
+        body.put("endpointStats", resp.endpointStats());
         body.put("note", resp.note());
         return body;
     }
