@@ -14,6 +14,7 @@ import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpInvocationPage;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpInvocationView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpOpsResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryOpsResponse;
+import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryTtlView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryUsageView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.ObservabilityView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.PlanDebugView;
@@ -40,6 +41,7 @@ import com.resumai.agent.domain.entity.MemoryEntryRow;
 import com.resumai.agent.domain.entity.RunEvent;
 import com.resumai.agent.domain.entity.RunMemoryUsageRow;
 import com.resumai.agent.service.AgentMemoryService;
+import com.resumai.agent.service.MemoryService;
 import com.resumai.agent.service.RunMemoryUsageService;
 import com.resumai.agent.service.run.AgentRuntimeClient;
 import java.time.Duration;
@@ -450,9 +452,17 @@ public class OpsDebugService {
         }
         List<MemoryUsageView> usage = memoryUsageViews(
                 StringUtils.hasText(runId) ? runId : null, decision, cap);
+        Map<String, Object> defaults = new LinkedHashMap<>();
+        defaults.put("hideBenchmark", !includeBenchmark);
+        defaults.put("hideControlFailure", !includeControlFailure);
+        defaults.put("ttl", Map.of(
+                "mode", "ABSOLUTE",
+                "renewOnUse", false,
+                "expiringSoonDays", 7,
+                "typeDefaultDays", MemoryService.ttlPolicyDays()));
         return new MemoryOpsResponse(
                 entries.size(), skipped, byType, byScope, bySource, entries, usage,
-                Map.of("hideBenchmark", !includeBenchmark, "hideControlFailure", !includeControlFailure),
+                defaults,
                 agentMemoryService.overview());
     }
 
@@ -676,6 +686,7 @@ public class OpsDebugService {
             }
         }
         List<MemoryUsageView> out = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now();
         for (RunMemoryUsageRow row : rows) {
             MemoryEntryRow entry = byId.get(row.getMemoryId());
             out.add(new MemoryUsageView(
@@ -691,7 +702,8 @@ public class OpsDebugService {
                     entry != null ? entry.getType() : null,
                     entry != null ? entry.getOwnerScope() : null,
                     entry != null ? entry.getSource() : null,
-                    entry != null ? truncate(entry.getContent(), 200) : null));
+                    entry != null ? truncate(entry.getContent(), 200) : null,
+                    entry != null ? memoryTtlView(entry, now) : null));
         }
         return out;
     }
@@ -1084,10 +1096,49 @@ public class OpsDebugService {
         item.put("updateTime", row.getUpdateTime());
         item.put("createTime", row.getCreateTime());
         item.put("occurredAt", localTimestamp(row.getCreateTime()));
+        item.put("ttl", memoryTtlView(row, LocalDateTime.now()));
         return item;
     }
 
-    private String localTimestamp(LocalDateTime value) {
+    static MemoryTtlView memoryTtlView(MemoryEntryRow row, LocalDateTime now) {
+        LocalDateTime expiresAt = row.getExpiresAt();
+        long defaultDays = MemoryService.defaultTtlDays(row.getType());
+        if (expiresAt == null) {
+            return new MemoryTtlView(
+                    "ABSOLUTE", "NO_EXPIRY", null, null, null, null,
+                    defaultDays, false, false);
+        }
+
+        Long effectiveSeconds = row.getCreateTime() != null
+                ? Math.max(0L, Duration.between(row.getCreateTime(), expiresAt).getSeconds())
+                : null;
+        long remainingSeconds = Duration.between(now, expiresAt).getSeconds();
+        Double remainingPercent = null;
+        if (effectiveSeconds != null && effectiveSeconds > 0) {
+            double raw = 100.0 * remainingSeconds / effectiveSeconds;
+            remainingPercent = Math.round(Math.max(0.0, Math.min(100.0, raw)) * 10.0) / 10.0;
+        }
+        long defaultSeconds = Duration.ofDays(defaultDays).getSeconds();
+        boolean overrideDetected = effectiveSeconds != null
+                && Math.abs(effectiveSeconds - defaultSeconds) >= 60;
+        String storedStatus = String.valueOf(row.getStatus()).toUpperCase(Locale.ROOT);
+        String state;
+        if ("EXPIRED".equals(storedStatus) || remainingSeconds <= 0) {
+            state = "EXPIRED";
+        } else if (!"ACTIVE".equals(storedStatus)) {
+            state = storedStatus;
+        } else if (remainingSeconds <= Duration.ofDays(7).getSeconds()) {
+            state = "EXPIRING_SOON";
+        } else {
+            state = "ACTIVE";
+        }
+        return new MemoryTtlView(
+                "ABSOLUTE", state, localTimestamp(expiresAt), effectiveSeconds,
+                remainingSeconds, remainingPercent, defaultDays,
+                overrideDetected, false);
+    }
+
+    private static String localTimestamp(LocalDateTime value) {
         return value != null
                 ? value.atZone(ZoneId.systemDefault()).toInstant().toString()
                 : null;

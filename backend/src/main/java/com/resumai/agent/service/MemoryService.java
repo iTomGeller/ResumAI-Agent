@@ -93,6 +93,18 @@ public class MemoryService {
             "EPISODIC", Duration.ofDays(90),
             "PROCEDURAL", Duration.ofDays(365));
 
+    /** Effective type defaults exposed to Ops; writes may still override ttlDays. */
+    public static Map<String, Long> ttlPolicyDays() {
+        Map<String, Long> days = new LinkedHashMap<>();
+        TTL_BY_TYPE.forEach((type, ttl) -> days.put(type, ttl.toDays()));
+        return Map.copyOf(days);
+    }
+
+    public static long defaultTtlDays(String rawType) {
+        String type = canonicalTaxonomy(rawType);
+        return TTL_BY_TYPE.getOrDefault(type, Duration.ofDays(30)).toDays();
+    }
+
     /** Matches exp5_benchmark / exp_benchmark / exp12_benchmark style sources. */
     private static final Pattern BENCHMARK_SOURCE_PATTERN = Pattern.compile(
             "^exp\\d*_benchmark$", Pattern.CASE_INSENSITIVE);

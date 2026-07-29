@@ -39,6 +39,17 @@ const usageTypeCounts = computed(() => {
   }
   return counts;
 });
+const ttlSummary = computed(() => {
+  const counts: Record<string, number> = {
+    ACTIVE: 0, EXPIRING_SOON: 0, EXPIRED: 0, ARCHIVED: 0, NO_EXPIRY: 0,
+  };
+  for (const row of allEntries.value) {
+    const state = String(row?.ttl?.state || 'NO_EXPIRY').toUpperCase();
+    counts[state] = (counts[state] || 0) + 1;
+  }
+  return counts;
+});
+const ttlDefaults = computed(() => props.panel?.defaults?.ttl?.typeDefaultDays || {});
 const totalPages = computed(() => Math.max(1, Math.ceil(filteredEntries.value.length / PAGE_SIZE)));
 const pagedEntries = computed(() => {
   const start = entryPage.value * PAGE_SIZE;
@@ -65,6 +76,33 @@ function formatTimestamp(value?: string): string {
   }).format(date).replaceAll('/', '-');
   return `${rendered}.${String(date.getMilliseconds()).padStart(3, '0')}`;
 }
+function formatDuration(seconds?: number | null): string {
+  if (seconds == null) return '永久';
+  if (seconds <= 0) return '已到期';
+  const days = Math.floor(seconds / 86400);
+  if (days >= 1) return `${days}天`;
+  const hours = Math.floor(seconds / 3600);
+  if (hours >= 1) return `${hours}小时`;
+  return `${Math.max(1, Math.floor(seconds / 60))}分钟`;
+}
+function effectiveTtl(ttl: any): string {
+  if (!ttl || ttl.effectiveTtlSeconds == null) return '-';
+  const days = ttl.effectiveTtlSeconds / 86400;
+  return `${Number.isInteger(days) ? days : days.toFixed(1)}天`;
+}
+function ttlStateText(state?: string): string {
+  const labels: Record<string, string> = {
+    ACTIVE: '有效', EXPIRING_SOON: '即将到期', EXPIRED: '已到期',
+    ARCHIVED: '已归档', DELETED: '已删除', NO_EXPIRY: '无到期时间',
+  };
+  return labels[String(state || '').toUpperCase()] || state || '-';
+}
+function ttlChipClass(state?: string): string {
+  const value = String(state || '').toUpperCase();
+  if (value === 'ACTIVE') return 'ok';
+  if (value === 'EXPIRING_SOON') return 'warn';
+  return value === 'EXPIRED' || value === 'DELETED' ? 'danger' : '';
+}
 </script>
 
 <template>
@@ -86,6 +124,15 @@ function formatTimestamp(value?: string): string {
       <div><span>Episodic used</span><strong>{{ usageTypeCounts.EPISODIC }}</strong></div>
       <div><span>Procedural used</span><strong>{{ usageTypeCounts.PROCEDURAL }}</strong></div>
       <div><span>Working used</span><strong>{{ usageTypeCounts.WORKING }}</strong></div>
+      <div><span>TTL 有效</span><strong>{{ ttlSummary.ACTIVE }}</strong></div>
+      <div><span>7天内到期</span><strong>{{ ttlSummary.EXPIRING_SOON }}</strong></div>
+      <div><span>已到期</span><strong>{{ ttlSummary.EXPIRED }}</strong></div>
+    </div>
+    <div class="ttl-policy card">
+      <strong>TTL 策略：</strong>绝对过期，召回不会续期；
+      默认 Working {{ ttlDefaults.WORKING ?? '-' }}天、Semantic {{ ttlDefaults.SEMANTIC ?? '-' }}天、
+      Episodic {{ ttlDefaults.EPISODIC ?? '-' }}天、Procedural {{ ttlDefaults.PROCEDURAL ?? '-' }}天。
+      单条记录若写入了不同 TTL，会标记“写入覆盖”。
     </div>
     <div class="card table-wrap">
       <h3>Memory Usage（USED / IGNORED）</h3>
@@ -102,6 +149,10 @@ function formatTimestamp(value?: string): string {
             <td>
               <div class="mono text-xs">{{ row.memoryId }}</div>
               <div class="text-muted text-xs">{{ canonicalType(row) }} · {{ row.ownerScope }} · {{ row.source }}</div>
+              <div v-if="row.ttl" class="ttl-line text-xs">
+                <span class="ops-chip" :class="ttlChipClass(row.ttl.state)">{{ ttlStateText(row.ttl.state) }}</span>
+                剩余 {{ formatDuration(row.ttl.remainingTtlSeconds) }} · 到期 {{ formatTimestamp(row.ttl.expiresAt) }}
+              </div>
               <div class="text-sm">{{ row.contentPreview || '-' }}</div>
             </td>
             <td><span class="ops-chip" :class="row.decision === 'USED' ? 'ok' : 'warn'">{{ row.decision }}</span></td>
@@ -132,8 +183,16 @@ function formatTimestamp(value?: string): string {
         <li v-for="item in pagedEntries" :key="item.memoryId">
           <div class="ops-row-head">
             <span class="ops-chip" :class="canonicalType(item) === 'EPISODIC' ? '' : 'ok'">{{ canonicalType(item) }}</span>
+            <span v-if="item.ttl" class="ops-chip" :class="ttlChipClass(item.ttl.state)">{{ ttlStateText(item.ttl.state) }}</span>
             <span class="text-muted text-xs">scope:{{ item.ownerScope }} · src:{{ item.source }} · {{ item.runId || '-' }}</span>
             <time class="mono text-xs entry-time" :datetime="rowTime(item)" :title="rowTime(item)">{{ formatTimestamp(rowTime(item)) }}</time>
+          </div>
+          <div v-if="item.ttl" class="ttl-detail text-xs">
+            TTL {{ effectiveTtl(item.ttl) }} · 剩余 {{ formatDuration(item.ttl.remainingTtlSeconds) }}
+            （{{ item.ttl.remainingPercent ?? 0 }}%）· 到期 {{ formatTimestamp(item.ttl.expiresAt) }}
+            · 类型默认 {{ item.ttl.typeDefaultDays }}天
+            <span v-if="item.ttl.overrideDetected" class="ttl-override">· 写入覆盖</span>
+            · 不随召回续期
           </div>
           <p>{{ item.content }}</p>
         </li>
@@ -159,6 +218,10 @@ function formatTimestamp(value?: string): string {
   border: 1px solid var(--color-border); border-radius: 10px; padding: 10px 12px; background: var(--color-surface);
 }
 .ops-metrics span { display: block; font-size: 12px; color: var(--color-text-secondary); }
+.ttl-policy { margin-bottom: 12px; padding: 10px 12px; color: var(--color-text-secondary); font-size: 13px; }
+.ttl-line { display: flex; align-items: center; gap: 5px; margin: 4px 0; color: var(--color-text-secondary); }
+.ttl-detail { margin-top: 6px; color: var(--color-text-secondary); }
+.ttl-override { color: var(--color-warning); font-weight: 600; }
 .ops-list { list-style: none; display: grid; gap: 10px; margin: 0; padding: 0; }
 .ops-list li { border: 1px solid var(--color-border-light); border-radius: 8px; padding: 10px; background: var(--color-bg); }
 .ops-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -168,6 +231,7 @@ function formatTimestamp(value?: string): string {
 }
 .ops-chip.ok { background: var(--color-success-light); color: var(--color-success); border-color: transparent; }
 .ops-chip.warn { background: var(--color-warning-light); color: var(--color-warning); border-color: transparent; }
+.ops-chip.danger { background: var(--color-danger-light, #fee2e2); color: var(--color-danger, #dc2626); border-color: transparent; }
 .ops-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .ops-table th, .ops-table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--color-border-light); vertical-align: top; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }

@@ -160,6 +160,19 @@ public final class OpsDebugDtos {
     ) {
     }
 
+    public record MemoryTtlView(
+            String mode,
+            String state,
+            String expiresAt,
+            Long effectiveTtlSeconds,
+            Long remainingTtlSeconds,
+            Double remainingPercent,
+            Long typeDefaultDays,
+            boolean overrideDetected,
+            boolean renewOnUse
+    ) {
+    }
+
     public record MemoryUsageView(
             Long id,
             String runId,
@@ -177,7 +190,8 @@ public final class OpsDebugDtos {
             String type,
             String ownerScope,
             String source,
-            String contentPreview
+            String contentPreview,
+            MemoryTtlView ttl
     ) {
     }
 
