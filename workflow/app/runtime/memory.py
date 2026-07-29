@@ -420,6 +420,7 @@ class MemoryClient:
             return 0
         body = {
             "consumerAgent": consumer_agent,
+            "consumerVersion": settings.workflow_build_version,
             "decisions": [
                 {
                     "memoryId": d.memoryId,
@@ -464,6 +465,9 @@ class MemoryClient:
         # Candidate/user semantic facts never write into a global namespace.
         if type_ == "SEMANTIC" and owner_scope.upper() == "GLOBAL":
             owner_scope = "USER"
+        structured_payload = dict(structured or {})
+        structured_payload.setdefault(
+            "_producerVersion", settings.workflow_build_version)
         body = {
             "type": type_,
             "ownerScope": owner_scope,
@@ -471,7 +475,7 @@ class MemoryClient:
             "conversationId": self.conversation_id,
             "runId": self.run_id,
             "content": content,
-            "structuredContent": structured or {},
+            "structuredContent": structured_payload,
             "source": source,
             "sourceId": source_id,
             "confidence": confidence,

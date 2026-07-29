@@ -234,6 +234,8 @@ public class MemoryService {
         row.setConfidence(decimal(request.confidence() != null ? request.confidence() : 0.5));
         row.setStatus("ACTIVE");
         row.setVersion(1);
+        row.setProducerVersion(structuredText(
+                request.structuredContent(), "_producerVersion", 64));
         row.setSensitivityLevel(StringUtils.hasText(request.sensitivityLevel())
                 ? request.sensitivityLevel() : "NORMAL");
         LocalDateTime now = LocalDateTime.now();
@@ -1325,6 +1327,18 @@ public class MemoryService {
     private BigDecimal decimal(double value) {
         return BigDecimal.valueOf(Math.max(0, Math.min(1, value)))
                 .setScale(3, RoundingMode.HALF_UP);
+    }
+
+    private static String structuredText(Map<String, Object> structured,
+                                         String key, int maxLength) {
+        if (structured == null || structured.get(key) == null) {
+            return null;
+        }
+        String value = String.valueOf(structured.get(key)).trim();
+        if (value.isEmpty()) {
+            return null;
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 
     private String writeJson(Object value) {

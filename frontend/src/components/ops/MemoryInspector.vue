@@ -149,6 +149,9 @@ function ttlChipClass(state?: string): string {
             <td>
               <div class="mono text-xs">{{ row.memoryId }}</div>
               <div class="text-muted text-xs">{{ canonicalType(row) }} · {{ row.ownerScope }} · {{ row.source }}</div>
+              <div v-if="row.producerVersion || row.consumerVersion" class="text-muted text-xs mono">
+                producer={{ row.producerVersion || 'legacy' }} · consumer={{ row.consumerVersion || 'legacy' }}
+              </div>
               <div v-if="row.ttl" class="ttl-line text-xs">
                 <span class="ops-chip" :class="ttlChipClass(row.ttl.state)">{{ ttlStateText(row.ttl.state) }}</span>
                 剩余 {{ formatDuration(row.ttl.remainingTtlSeconds) }} · 到期 {{ formatTimestamp(row.ttl.expiresAt) }}

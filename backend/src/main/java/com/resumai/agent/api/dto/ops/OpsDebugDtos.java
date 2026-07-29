@@ -178,6 +178,8 @@ public final class OpsDebugDtos {
             String runId,
             String memoryId,
             String consumerAgent,
+            String consumerVersion,
+            String producerVersion,
             Integer rankNo,
             Double vectorScore,
             Double lexicalScore,

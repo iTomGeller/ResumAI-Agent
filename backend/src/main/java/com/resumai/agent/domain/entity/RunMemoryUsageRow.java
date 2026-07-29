@@ -24,6 +24,9 @@ public class RunMemoryUsageRow {
     @TableField("consumer_agent")
     private String consumerAgent;
 
+    @TableField("consumer_version")
+    private String consumerVersion;
+
     @TableField("rank_no")
     private Integer rankNo;
 

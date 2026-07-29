@@ -54,6 +54,9 @@ public class MemoryEntryRow {
     @TableField("version")
     private Integer version;
 
+    @TableField("producer_version")
+    private String producerVersion;
+
     @TableField("embedding")
     private String embedding;
 

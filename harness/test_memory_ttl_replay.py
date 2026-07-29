@@ -1,7 +1,7 @@
 import unittest
 
 from harness.run_memory_ttl_replay import (
-    build_report, evaluate_type, normalize_usage, parse_utc_cutover)
+    build_report, evaluate_type, normalize_usage, parse_utc_cutover, version_key)
 
 
 class MemoryTtlReplayTest(unittest.TestCase):
@@ -97,6 +97,11 @@ class MemoryTtlReplayTest(unittest.TestCase):
     def test_cutover_is_normalized_to_utc(self):
         self.assertEqual("2026-07-29 08:03:16",
                          parse_utc_cutover("2026-07-29T16:03:16+08:00"))
+
+    def test_workflow_version_filter_rejects_sql_fragments(self):
+        self.assertEqual("1930d08", version_key("1930d08"))
+        with self.assertRaises(ValueError):
+            version_key("current' OR 1=1 --")
 
 
 if __name__ == "__main__":

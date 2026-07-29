@@ -697,6 +697,7 @@ public class OpsDebugService {
             Long ageAtUseSeconds = memoryAgeAtUseSeconds(entry, row.getCreateTime());
             out.add(new MemoryUsageView(
                     row.getId(), row.getRunId(), row.getMemoryId(), row.getConsumerAgent(),
+                    row.getConsumerVersion(), entry != null ? entry.getProducerVersion() : null,
                     row.getRankNo(),
                     row.getVectorScore() != null ? row.getVectorScore().doubleValue() : null,
                     row.getLexicalScore() != null ? row.getLexicalScore().doubleValue() : null,
@@ -1117,6 +1118,7 @@ public class OpsDebugService {
         item.put("confidence", row.getConfidence());
         item.put("status", row.getStatus());
         item.put("version", row.getVersion());
+        item.put("producerVersion", row.getProducerVersion());
         item.put("updateTime", row.getUpdateTime());
         item.put("createTime", row.getCreateTime());
         item.put("occurredAt", localTimestamp(row.getCreateTime()));

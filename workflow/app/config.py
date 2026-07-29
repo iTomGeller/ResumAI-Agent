@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     java_backend_url: str = "http://ai-resume-backend:8080"
     workflow_internal_token: str = "change-me"
+    workflow_build_version: str = "dev"
 
     skills_path: str = "/app/skills"
     mcp_config_path: str = ""  # empty → resolve via mcp_registry fallbacks

@@ -54,7 +54,8 @@ public class RunMemoryUsageService {
                                 String reason, String occurredAt, String roundId) {
     }
 
-    public int recordUsage(String runId, String consumerAgent, List<UsageDecision> decisions) {
+    public int recordUsage(String runId, String consumerAgent, String consumerVersion,
+                           List<UsageDecision> decisions) {
         if (!StringUtils.hasText(runId) || decisions == null || decisions.isEmpty()) {
             return 0;
         }
@@ -78,6 +79,8 @@ public class RunMemoryUsageService {
             row.setConsumerAgent(StringUtils.hasText(d.consumerAgent())
                     ? d.consumerAgent().trim()
                     : (StringUtils.hasText(consumerAgent) ? consumerAgent.trim() : "UNKNOWN"));
+            row.setConsumerVersion(StringUtils.hasText(consumerVersion)
+                    ? truncate(consumerVersion.trim(), 64) : null);
             row.setRankNo(d.rankNo());
             row.setVectorScore(decimal(d.vectorScore()));
             row.setLexicalScore(decimal(d.lexicalScore()));
@@ -107,6 +110,8 @@ public class RunMemoryUsageService {
         }
         String consumer = body.get("consumerAgent") != null
                 ? String.valueOf(body.get("consumerAgent")) : null;
+        String consumerVersion = body.get("consumerVersion") != null
+                ? String.valueOf(body.get("consumerVersion")) : null;
         Object raw = body.get("decisions");
         if (!(raw instanceof List<?> list)) {
             return 0;
@@ -135,7 +140,7 @@ public class RunMemoryUsageService {
                             ? map.get("roundId") : map.get("parentRoundId"))
             ));
         }
-        return recordUsage(runId, consumer, decisions);
+        return recordUsage(runId, consumer, consumerVersion, decisions);
     }
 
     private String resolveTaxonomy(UsageDecision decision, MemoryEntryRow memory) {
@@ -162,6 +167,7 @@ public class RunMemoryUsageService {
         payload.put("taxonomy", taxonomy);
         payload.put("namespace", namespace);
         payload.put("agent", row.getConsumerAgent());
+        payload.put("consumerVersion", row.getConsumerVersion());
         payload.put("runId", row.getRunId());
         payload.put("decision", row.getDecision());
         payload.put("reason", reason);

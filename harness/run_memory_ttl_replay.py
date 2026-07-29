@@ -15,6 +15,7 @@ import argparse
 import datetime as dt
 import json
 import math
+import re
 import subprocess
 import time
 import urllib.parse
@@ -63,13 +64,26 @@ def parse_utc_cutover(value: str | None) -> str | None:
     return parsed.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def version_key(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", normalized):
+        raise ValueError("workflow version must match [A-Za-z0-9._-]{1,64}")
+    return normalized
+
+
 def fetch_mysql_payload(
     container: str,
     since_utc: str | None = None,
     current_producers_only: bool = False,
+    consumer_version: str | None = None,
+    producer_version: str | None = None,
 ) -> dict[str, Any]:
     """Read the complete ECS usage history without the Ops API page limit."""
     cutover = parse_utc_cutover(since_utc)
+    consumer = version_key(consumer_version)
+    producer = version_key(producer_version)
     filters = []
     if cutover:
         filters.append(f"u.create_time >= '{cutover}'")
@@ -80,6 +94,10 @@ def fetch_mysql_payload(
         # JVM-local Asia/Shanghai time. Compare the same deployment instant.
         filters.append(
             f"m.create_time >= DATE_ADD('{cutover}', INTERVAL 8 HOUR)")
+    if consumer:
+        filters.append(f"u.consumer_version = '{consumer}'")
+    if producer:
+        filters.append(f"m.producer_version = '{producer}'")
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
     sql = f"""
 SELECT JSON_OBJECT(
@@ -109,7 +127,10 @@ ORDER BY u.id;
             "compatibility": "CURRENT_VERSION" if cutover else "MIXED_LEGACY",
             "sinceUtc": cutover,
             "producerCompatibility": (
-                "CURRENT_VERSION" if current_producers_only else "MIXED_OR_UNKNOWN"),
+                "CURRENT_VERSION" if current_producers_only or producer
+                else "MIXED_OR_UNKNOWN"),
+            "consumerVersion": consumer,
+            "producerVersion": producer,
         },
         "usage": rows,
         "defaults": {"ttl": {"typeDefaultDays": DEFAULT_TTL_DAYS}},
@@ -377,6 +398,10 @@ def main() -> int:
     parser.add_argument(
         "--current-producers-only", action="store_true",
         help="Also require the consumed memory to have been created after the cutover")
+    parser.add_argument("--consumer-version",
+                        help="Exact run_memory_usage.consumer_version filter")
+    parser.add_argument("--producer-version",
+                        help="Exact memory_entry.producer_version filter")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--min-used", type=int, default=30)
     parser.add_argument("--retention-floor", type=float, default=0.99)
@@ -387,7 +412,8 @@ def main() -> int:
 
     if args.mysql_container:
         payload = fetch_mysql_payload(
-            args.mysql_container, args.since_utc, args.current_producers_only)
+            args.mysql_container, args.since_utc, args.current_producers_only,
+            args.consumer_version, args.producer_version)
     elif args.input:
         payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
     else:
