@@ -1542,11 +1542,20 @@ class RunExecutor:
         if single_pass_evaluation:
             action_turn_ceiling = (
                 2 if agent_id == "ProjectAgent"
-                and signals.get("has_external_urls") else 0)
+                and signals.get("has_external_urls")
+                else 1 if agent_id == "ProjectAgent"
+                and signals.get("has_projects") else 0)
         available_tool_turns = min(
             action_turn_ceiling,
             max(0, agent_tool_limit - agent_tool_calls))
-        fallback_turn_limit = max_decision_iterations + available_tool_turns
+        research_retry_turns = (
+            1 if single_pass_evaluation
+            and agent_id == "ProjectAgent"
+            and signals.get("has_projects")
+            and not signals.get("has_external_urls") else 0)
+        fallback_turn_limit = (
+            max_decision_iterations + available_tool_turns
+            + research_retry_turns)
         agent_llm_quota = self._agent_quota(
             agent_id, "llmQuota", fallback_turn_limit)
         final_turn_reserve = min(
@@ -1641,6 +1650,7 @@ class RunExecutor:
             turn_tools = [final_tool] if force_final else model_tools
             turn_messages = list(messages)
             tool_choice: Any = "auto"
+            forced_research_model_name = ""
             if force_final:
                 terminal_name = str(final_tool["function"]["name"])
                 tool_choice = {
@@ -1655,6 +1665,51 @@ class RunExecutor:
                         "不要再请求任何检索、Skill 或校验工具。"
                     ),
                 })
+            elif (agent_id == "ProjectAgent"
+                    and single_pass_evaluation
+                    and signals.get("has_projects")
+                    and not signals.get("has_external_urls")
+                    and action_turns == 0):
+                # No candidate URL does not mean "no external research". Give
+                # the model one real MCP turn to retrieve public technical or
+                # project-background context. The model still authors the
+                # search arguments; public results must not be promoted to
+                # proof of the candidate's private employment or contribution.
+                mcp_model_names = [
+                    str(entry.get("modelName") or "")
+                    for entry in catalog
+                    if (entry.get("kind") == "mcp" or entry.get("mcpServer"))
+                    and entry.get("modelName")
+                ]
+                preferred_mcp = next(
+                    (name for preferred in (
+                        "exa_web_search_exa",
+                        "microsoft_learn_microsoft_docs_search",
+                        "context7_query_docs",
+                    ) for name in mcp_model_names
+                     if name == preferred),
+                    mcp_model_names[0] if mcp_model_names else "")
+                if preferred_mcp:
+                    forced_research_model_name = preferred_mcp
+                    turn_tools = [
+                        tool for tool in model_tools
+                        if str(tool.get("function", {}).get("name") or "")
+                        == preferred_mcp
+                    ]
+                    tool_choice = {
+                        "type": "function",
+                        "function": {"name": preferred_mcp},
+                    }
+                    turn_messages.append({
+                        "role": "user",
+                        "content": (
+                            "在提交项目评价前，先完成一次公开资料研究。"
+                            f"本轮只能调用 {preferred_mcp}，禁止调用任何其他工具。"
+                            "请生成与候选人项目技术栈、项目背景或关键工程主张"
+                            "直接相关的检索参数。没有候选人公开链接时，仅把结果"
+                            "用作技术背景和面试追问依据，不得据此证明其任职或"
+                            "个人贡献。"),
+                    })
 
             # Persist memory usage once, at the first prompt that consumes it.
             # Every later round still declares it as an input attachment below,
@@ -1807,12 +1862,18 @@ class RunExecutor:
                 action_calls = [
                     call for call in turn.tool_calls
                     if call.name != "emit_decision"]
+                unexpected_final = bool(
+                    final_calls and "emit_decision" not in turn_model_names)
 
                 # When actions and a final emission appear together, execute
                 # the actions and explicitly defer the stale final proposal.
-                if action_calls:
+                if action_calls or unexpected_final:
                     action_turn_allowed = action_turns < max_action_turns
-                    if action_turn_allowed:
+                    exposed_action_calls = [
+                        call for call in action_calls
+                        if call.name in turn_model_names
+                    ]
+                    if action_turn_allowed and exposed_action_calls:
                         action_turns += 1
                     observations = ""
                     tool_messages: List[Dict[str, Any]] = []
@@ -1887,6 +1948,13 @@ class RunExecutor:
                             result_payload = await self._reject_native_proposal(
                                 agent_id, tool or proposed.name, proposed,
                                 "native action-turn budget exhausted; emit a final decision",
+                                source=source,
+                                mcp_server=entry.get("mcpServer"),
+                                trace_context=trace_context)
+                        elif proposed.name not in turn_model_names:
+                            result_payload = await self._reject_native_proposal(
+                                agent_id, tool or proposed.name, proposed,
+                                "tool was not exposed in this model turn",
                                 source=source,
                                 mcp_server=entry.get("mcpServer"),
                                 trace_context=trace_context)

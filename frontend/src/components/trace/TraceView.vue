@@ -67,6 +67,8 @@ interface RoundView {
   callIndex?: number;
   parentRoundId?: string;
   roundRole?: string;
+  purpose?: string;
+  reportSection?: string;
   contextRole?: string;
   contextAttachedAt?: string;
   memoryCount?: number;
@@ -272,6 +274,21 @@ function isGenerationRound(round: RoundView): boolean {
   const type = (round.type || '').toLowerCase();
   if (['generation', 'llm', 'llm_generation', 'llm_complete'].includes(type)) return true;
   return (round.category || '').toLowerCase() === 'llm';
+}
+
+function reportSectionLabel(round: RoundView): string {
+  const purpose = (round.purpose || '').toLowerCase();
+  const model = (round.model || '').toLowerCase().includes('pro') ? 'Pro' : 'Flash';
+  if (purpose === 'report_score') return `并行报告 · 评分与结论（${model}）`;
+  if (purpose === 'report_risk') return `并行报告 · 风险核验（${model}）`;
+  if (purpose === 'report_question') return `并行报告 · 面试追问（${model}）`;
+  return '';
+}
+
+function roundLabel(round: RoundView, index: number): string {
+  return reportSectionLabel(round)
+    || round.title
+    || `LLM 第 ${round.callIndex ?? round.roundNum ?? index + 1} 轮`;
 }
 
 function roundKey(round: RoundView, fallbackIndex: number): string {
@@ -491,7 +508,9 @@ function contextLabel(context: ContextEventView): string {
     return `MODEL_INPUT · 记忆 ${context.memoryType || context.taxonomy || ''}${memoryId}`.trim();
   }
   if (badge === 'skill') {
-    return `MODEL_INPUT · Skill ${context.skillId || context.name || ''}`.trim();
+    const stage = String(context.lifecycleStage || '').toUpperCase();
+    const state = stage.includes('APPLIED') ? '已应用' : '已加载';
+    return `Skill ${state} · ${context.skillId || context.name || ''}`.trim();
   }
   if (context.eventType === 'tool.catalog.attached' || context.category === 'tool_catalog'
     || context.toolName || context.modelName) {
@@ -597,8 +616,10 @@ const spans = computed<SpanRow[]>(() => {
           parentId: agentId,
           depth: 2,
           kind: 'round',
-          label: round.title || `LLM 第 ${round.callIndex ?? round.roundNum ?? ri + 1} 轮`,
-          sub: `输入附件 ${contexts.length} · 模型工具调用 ${tools.length}`,
+          label: roundLabel(round, ri),
+          sub: reportSectionLabel(round)
+            ? `三路同时启动 · 输入附件 ${contexts.length}`
+            : `输入附件 ${contexts.length} · 模型工具调用 ${tools.length}`,
           status: round.error ? 'FAILED'
             : tools.some((tool) => tool.status === 'FAILED') ? 'FAILED' : 'SUCCESS',
           durationMs: round.durationMs,
@@ -606,6 +627,7 @@ const spans = computed<SpanRow[]>(() => {
             || firstTime(contexts) || firstTime(tools),
           endedAt: round.endedAt,
           tokens: round.tokens,
+          parallel: Boolean(reportSectionLabel(round)),
           badge: 'llm',
           agent,
           round,
@@ -659,7 +681,9 @@ const filteredSpans = computed(() => {
   // Keep the default audit readable: prompt attachments remain available in
   // the selected LLM detail and via MEMORY/SKILL/MCP filters, but should not
   // occupy one tree row per token of model context.
-  if (kindFilter.value === 'all') return spans.value.filter((row) => row.kind !== 'context');
+  if (kindFilter.value === 'all') {
+    return spans.value.filter((row) => row.kind !== 'context' || row.badge === 'skill');
+  }
   const byId = new Map(spans.value.map((row) => [row.id, row]));
   const visible = new Set<string>();
   const includeWithAncestors = (row: SpanRow) => {
@@ -703,6 +727,8 @@ const totals = computed(() => {
   let tokens = 0;
   let llmCalls = 0;
   let toolCalls = 0;
+  const appliedSkills = new Set<string>();
+  let mcpCalls = 0;
   groups.value.forEach((group) => {
     duration += group.length > 1
       ? Math.max(...group.map((a) => a.durationMs || 0))
@@ -713,7 +739,14 @@ const totals = computed(() => {
     toolCalls += agent.toolCalls || 0;
     (agent.rounds || []).forEach((round) => { tokens += round.tokens || 0; });
   });
-  return { duration, tokens, llmCalls, toolCalls };
+  spans.value.forEach((row) => {
+    if (row.kind === 'tool' && row.badge === 'mcp') mcpCalls += 1;
+    if (row.kind === 'context' && row.badge === 'skill' && row.context?.skillId) {
+      appliedSkills.add(`${row.agent?.name || ''}:${row.context.skillId}`);
+    }
+  });
+  return { duration, tokens, llmCalls, toolCalls,
+    mcpCalls, skillsApplied: appliedSkills.size };
 });
 
 const route = computed(() => props.tree?.harnessPlan?.route || null);
@@ -778,6 +811,8 @@ async function copyText(text?: string) {
       <span class="trace-summary-item"><em>总耗时</em>{{ fmtMs(totals.duration) || '-' }}</span>
       <span class="trace-summary-item"><em>LLM 调用</em>{{ totals.llmCalls }}</span>
       <span class="trace-summary-item"><em>工具调用</em>{{ totals.toolCalls }}</span>
+      <span class="trace-summary-item"><em>Skill 已应用</em>{{ totals.skillsApplied }}</span>
+      <span class="trace-summary-item"><em>MCP 真实调用</em>{{ totals.mcpCalls }}</span>
       <span class="trace-summary-item"><em>Tokens</em>{{ totals.tokens || '-' }}</span>
       <span class="trace-summary-item" v-if="tree?.policyId"><em>策略</em>{{ tree.policyId }}</span>
       <span class="trace-summary-item" v-if="tree?.runStatus"><em>状态</em>{{ tree.runStatus }}</span>
@@ -1020,11 +1055,17 @@ async function copyText(text?: string) {
         </template>
 
         <template v-else-if="selected.kind === 'round' && selected.round">
-          <p class="detail-sub" v-if="selected.agent">{{ displayName(selected.agent.name) }} · {{ selected.round.model || 'DeepSeek' }}</p>
+          <p class="detail-sub" v-if="selected.agent">
+            {{ displayName(selected.agent.name) }} · {{ reportSectionLabel(selected.round) || selected.round.purpose || '模型推理' }} · {{ selected.round.model || 'DeepSeek' }}
+          </p>
+          <div class="causal-banner" v-if="reportSectionLabel(selected.round)">
+            <strong>并行报告生成</strong>
+            <span>评分、风险、追问三路同时启动；这里是一条独立小节，不是前一轮的串行重试。</span>
+          </div>
           <div class="causal-flow">
             <span class="causal-node input-node">输入附件 {{ selected.round.contextEvents?.length || 0 }}</span>
             <span class="causal-arrow">→</span>
-            <span class="causal-node llm-node">LLM 第 {{ selected.round.callIndex ?? selected.round.roundNum ?? '-' }} 轮</span>
+            <span class="causal-node llm-node">{{ reportSectionLabel(selected.round) || `LLM 第 ${selected.round.callIndex ?? selected.round.roundNum ?? '-'} 轮` }}</span>
             <template v-if="selected.round.toolCalls?.length">
               <span class="causal-arrow">→</span>
               <span class="causal-node tool-node">模型工具调用 {{ selected.round.toolCalls.length }}</span>

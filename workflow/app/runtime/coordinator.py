@@ -704,7 +704,13 @@ class Coordinator:
                 if agent in quotas and quotas[agent] == 0:
                     quotas[agent] = 1
                     remaining -= 1
-            if sig.get("has_external_urls") and "ProjectAgent" in quotas:
+            # A project-bearing full evaluation gets one model-authored MCP
+            # research turn even when the resume has no explicit URL. The
+            # runtime constrains this to public technical/background context;
+            # it never treats public search as proof of private employment.
+            if sig.get("has_projects") and "ProjectAgent" in quotas:
+                # action + final, with one bounded retry when the provider
+                # ignores a forced MCP tool choice.
                 while remaining > 0 and quotas["ProjectAgent"] < 3:
                     quotas["ProjectAgent"] += 1
                     remaining -= 1
@@ -721,9 +727,11 @@ class Coordinator:
                 budget[agent] = {
                     "llmQuota": quotas[agent],
                     "actionTurnQuota": (
-                        min(2, max(0, quotas[agent] - 1))
+                        min(
+                            2 if sig.get("has_external_urls") else 1,
+                            max(0, quotas[agent] - 1))
                         if agent == "ProjectAgent"
-                        and sig.get("has_external_urls") else 0),
+                        and sig.get("has_projects") else 0),
                     "toolQuota": tool_quota,
                 }
             return budget
