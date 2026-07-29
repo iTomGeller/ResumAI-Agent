@@ -298,7 +298,7 @@ async def simulate(*, live: bool = False,
     # The deterministic fake completes ProjectAgent without proposing extra
     # MCP action turns; live external research is expected to use them.
     min_calls, max_calls = (
-        (6, 15) if live and scenario == "external"
+        (6, 15) if live and scenario in {"external", "domestic_external"}
         else (6, 14) if live
         else (5, 7)
     )
@@ -314,9 +314,10 @@ async def simulate(*, live: bool = False,
         (row for row in llm.contexts if row["agent"] == "ReportAgent"), None)
     if not report_context or not report_context["qualityModel"]:
         raise SystemExit("ReportAgent is not using the quality model")
-    if scenario == "external" and summary["mcpCatalogExposures"] < 1:
+    if scenario in {"external", "domestic_external"} \
+            and summary["mcpCatalogExposures"] < 1:
         raise SystemExit("external scenario did not expose live MCP tools")
-    if live and scenario == "external" \
+    if live and scenario in {"external", "domestic_external"} \
             and summary["mcpExecutions"]["SUCCEEDED"] < 1:
         raise SystemExit(
             "external scenario did not autonomously complete MCP research")
