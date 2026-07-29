@@ -205,7 +205,9 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
             "required": ["resumeText", "claims"]},
         "verify_report_evidence": {"type": "object", "properties": {
             "resumeText": {"type": "string"}, "jdText": {"type": "string"},
-            "claims": {"type": "array"}}, "required": ["resumeText", "claims"]},
+            "claims": {"type": "array"},
+            "externalEvidence": {"type": "array"}},
+            "required": ["resumeText", "claims"]},
         "resume_lint": {"type": "object", "properties": {
             "resumeText": {"type": "string"}, "rewrittenText": {"type": "string"}}},
         "validate_report_schema": {"type": "object", "properties": {

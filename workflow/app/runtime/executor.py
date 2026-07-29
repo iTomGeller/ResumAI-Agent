@@ -4053,7 +4053,9 @@ class RunExecutor:
                               {"resumeText": resume,
                                "jdText": (artifacts.get("effectiveJd")
                                           or request.jobDescription or ""),
-                               "claims": claims}))
+                               "claims": claims,
+                               "externalEvidence": list(
+                                   artifacts.get("mcpEvidence") or [])}))
         elif definition.agent_id == "ResumeOptimizeAgent" and resume:
             steps.append(("resume_lint", {"resumeText": resume}))
         # Knowledge RAG: inject relevant evaluation guidelines from KB

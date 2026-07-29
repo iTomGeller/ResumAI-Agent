@@ -21,6 +21,8 @@ CANONICAL_ARTIFACT_KEYS = [
     "jdMatches",
     "jdCoverage",
     "timelineCheck",
+    "mcpEvidence",
+    "mcpContext",
     "finalReport",
     "inputPresence",
 ]
@@ -42,9 +44,11 @@ _SECTION_READ_MAP: Dict[str, List[str]] = {
                   "inputPresence"],
     "ProjectAgent": ["resumeFacts", "jdRequirements", "effectiveJd", "inputPresence"],
     "RiskAgent": ["resumeFacts", "timelineCheck", "inputPresence"],
-    "EvidenceAgent": ["resumeFacts", "jdRequirements", "technicalFindings",
-                      "projectFindings", "risks", "inputPresence"],
-    "ReportAgent": ["resumeFacts", "jdRequirements", "technicalFindings",
+    "EvidenceAgent": ["resumeFacts", "jdRequirements", "mcpEvidence",
+                      "projectFindings", "technicalFindings", "risks",
+                      "inputPresence"],
+    "ReportAgent": ["resumeFacts", "jdRequirements", "mcpEvidence",
+                    "technicalFindings",                     "projectFindings", "risks", "evidence", "conflicts",
                     "projectFindings", "risks", "evidence", "conflicts",
                     "recommendations", "jdCoverage", "timelineCheck",
                     "effectiveJd", "inputPresence"],
@@ -359,6 +363,8 @@ class SharedState:
             value = store.get(section)
             if value is None or value == {} or value == []:
                 continue
+            if section in {"mcpEvidence", "mcpContext"}:
+                value = self._compact_mcp_entries(value)
             view[section] = value
         # Always surface inputPresence so agents cannot claim "原文缺失"
         # when resume/JD text was actually provided upstream.
@@ -372,6 +378,33 @@ class SharedState:
                     view[section] = view[section][-6:]
             text = json.dumps(view, ensure_ascii=False, default=str)[:max_chars]
         return text
+
+    @staticmethod
+    def _compact_mcp_entries(value: Any) -> Any:
+        """Keep external provenance visible without flooding later prompts.
+
+        MCP bodies can be many kilobytes. Evidence/Report need the transport
+        outcome, source URLs and a bounded content preview to arbitrate claims;
+        they do not need the complete remote page a second time.
+        """
+        if not isinstance(value, list):
+            return value
+        compact: List[Dict[str, Any]] = []
+        for raw in value[-6:]:
+            if not isinstance(raw, dict):
+                continue
+            result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
+            compact.append({
+                "tool": raw.get("tool"),
+                "status": raw.get("status"),
+                "byAgent": raw.get("byAgent"),
+                "sourceUrls": list(raw.get("sourceUrls") or [])[:4],
+                "sourceBacked": raw.get("sourceBacked"),
+                "candidateFactEligible": raw.get("candidateFactEligible"),
+                "resultSuccess": result.get("success"),
+                "contentPreview": str(result.get("text") or "")[:1600],
+            })
+        return compact
 
     def claims_for_verification(self, limit: int = 30) -> List[Dict[str, Any]]:
         store = self.data.get("artifacts") or {}

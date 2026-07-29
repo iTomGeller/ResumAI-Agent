@@ -92,6 +92,38 @@ def test_verify_report_evidence_rejects_fabricated_numbers():
     assert "99.999" in unsupported_text
 
 
+def test_verify_report_evidence_rejects_stale_fetch_failure_claim():
+    url = "https://blog.csdn.net/example/article/details/123"
+    result = tools.verify_report_evidence({
+        "resumeText": f"技术文章：{url}",
+        "claims": [{"text": f"CSDN 链接 {url} 无法抓取验证"}],
+        "externalEvidence": [{
+            "status": "SUCCEEDED",
+            "sourceUrls": [url],
+            "result": {"success": True, "text": "文章正文"},
+        }],
+    })
+    assert result["success"] is True
+    assert result["unsupportedCount"] == 1
+    assert result["unsupported"][0]["reason"] \
+        == "contradicted_by_successful_external_fetch"
+
+
+def test_verify_report_evidence_does_not_infer_ownership_from_fetch():
+    url = "https://gitee.com/example/project"
+    result = tools.verify_report_evidence({
+        "resumeText": f"项目链接：{url}",
+        "claims": [{"text": "已确认候选人是该 Gitee 仓库维护者"}],
+        "externalEvidence": [{
+            "status": "SUCCEEDED",
+            "sourceUrls": [url],
+            "result": {"success": True, "text": "仓库 README"},
+        }],
+    })
+    assert result["success"] is True
+    assert result["unsupportedCount"] == 1
+
+
 def test_resume_lint_flags_vague_wording():
     text = "- 熟悉各种分布式系统\n- 使用Redis缓存热点数据，接口耗时从 300ms 降至 80ms"
     result = tools.resume_lint({"resumeText": text})

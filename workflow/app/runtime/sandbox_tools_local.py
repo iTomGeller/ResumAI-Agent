@@ -295,6 +295,20 @@ def verify_report_evidence(args: Dict[str, Any]) -> Dict[str, Any]:
     resume = args.get("resumeText") or ""
     jd_text = args.get("jdText") or ""
     claims = args.get("claims") or []
+    external_evidence = args.get("externalEvidence") or []
+    successful_sources: List[str] = []
+    for item in external_evidence:
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else {}
+        status = str(item.get("status") or "").upper()
+        success = result.get("success") is True or status == "SUCCEEDED"
+        if not success:
+            continue
+        for source_url in item.get("sourceUrls") or []:
+            url = str(source_url or "").strip()
+            if url and url not in successful_sources:
+                successful_sources.append(url)
     normalized: List[Dict[str, str]] = []
     for claim in claims[:40]:
         if isinstance(claim, dict):
@@ -309,6 +323,40 @@ def verify_report_evidence(args: Dict[str, Any]) -> Dict[str, Any]:
     lines = _lines(resume)
     supported, unsupported = [], []
     for claim in normalized:
+        claim_text = claim["text"]
+        claim_lower = claim_text.lower()
+        matched_sources = [
+            url for url in successful_sources
+            if url.lower() in claim_lower
+            or any(host in claim_lower and host in url.lower()
+                   for host in ("csdn", "gitee", "github", "gitcode",
+                                "cnblogs", "juejin", "zhihu"))
+        ]
+        fetch_failure_markers = (
+            "无法抓取", "抓取失败", "无法访问", "链接失效", "需登录",
+            "未成功抓取", "fetch failed", "unavailable",
+        )
+        fetch_success_markers = (
+            "成功抓取", "已成功抓取", "页面内容已取回", "内容已取回",
+            "fetch succeeded",
+        )
+        if matched_sources and any(marker in claim_lower
+                                   for marker in fetch_failure_markers):
+            unsupported.append({
+                "claim": claim_text[:200],
+                "matchRatio": 0.0,
+                "location": {"sourceUrl": matched_sources[0]},
+                "reason": "contradicted_by_successful_external_fetch",
+            })
+            continue
+        if matched_sources and any(marker in claim_lower
+                                   for marker in fetch_success_markers):
+            supported.append({
+                "claim": claim_text[:200],
+                "matchRatio": 1.0,
+                "location": {"sourceUrl": matched_sources[0]},
+            })
+            continue
         basis = claim["evidence"] or claim["text"]
         terms = _key_terms(basis)
         hits = [t for t in terms if t in corpus]

@@ -250,6 +250,27 @@ def test_shared_state_scoped_views():
     assert "technicalFindings" in report_view and "risks" in report_view
 
 
+def test_external_mcp_evidence_is_compact_and_visible_to_auditors():
+    state = SharedState()
+    url = "https://blog.csdn.net/example/article/details/123"
+    state.apply_artifacts({"mcpEvidence": [{
+        "tool": "exa.web_fetch_exa",
+        "status": "SUCCEEDED",
+        "byAgent": "ProjectAgent",
+        "sourceUrls": [url],
+        "sourceBacked": True,
+        "candidateFactEligible": False,
+        "result": {"success": True, "text": "文章正文" * 2000},
+    }]})
+    evidence_view = state.view_for("EvidenceAgent")
+    report_view = state.view_for("ReportAgent")
+    assert "mcpEvidence" in evidence_view
+    assert "resultSuccess" in evidence_view
+    assert url in evidence_view
+    assert "mcpEvidence" in report_view
+    assert len(evidence_view) < 3000
+
+
 def test_claims_for_verification_and_ratio():
     state = SharedState()
     state.apply_output(_output("TechAgent", "technical_findings",

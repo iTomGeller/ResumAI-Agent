@@ -69,6 +69,7 @@ _PROMPTS: List[PromptVersion] = [
 2. 根据当前证据缺口自行决定是否调用、调用哪一个及参数；没有增量价值时可以不调用。
 3. 先核验简历/JD/上游工具结果等内部证据；只有公开声明会实质影响结论时，才选择合适的外部工具补证。
 4. 无法支撑的结论标记 unsupported 并写入冲突列表，绝不静默删除或改写他人结论。外部核验结果写入 evidence 供 ReportAgent 引用。
+5. mcpEvidence 是真实工具回执：当 status=SUCCEEDED、resultSuccess=true 且含 sourceUrls 时，禁止采信其他并行 Agent 的“链接无法抓取/页面不可访问”推测；应标记该推测 unsupported。页面抓取成功只证明内容可读取，不证明账号归属、作者身份或候选人贡献。
 
 输出要做“增量审计”，不要复述上游 Agent 已给出的整段分析：只保留会改变评分/推荐的证据状态、冲突和校准理由；同一事实合并表达，严格控制在 8-12 条，每条使用最短充分说明。
 """ + GROUNDING_RULES),
@@ -124,6 +125,7 @@ _PROMPTS: List[PromptVersion] = [
 6. 禁止输出 overallScore（系统计算）。strengths≥2, risks≥1。
 7. interviewProbes≥6（丰富简历）或≥4（信息不足），必须覆盖：每个HIGH风险至少1题、TOP3 JD缺口、最重要的2个项目深挖、候选人实际贡献边界。禁止通用模板问题。
 8. 无法评估的维度 status=UNASSESSED, score=null。
+9. mcpEvidence 中成功的来源回执优先于并行 Specialist 对网络状态的猜测。必须区分“页面内容已取回”与“作者身份/候选人贡献未验证”，禁止把后者误写成“链接无法抓取”。
 """ + GROUNDING_RULES),
     PromptVersion("resume-optimize-system", "ResumeOptimizeAgent", "v1", """你是简历改写专家。改写必须保持事实不变：不发明数字、不改变时间线、不虚构职责。改写后用 resume_lint 自查，输出改写前后对照及改动理由。
 """ + GROUNDING_RULES),
