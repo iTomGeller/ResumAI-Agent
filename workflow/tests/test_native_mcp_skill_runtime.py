@@ -608,7 +608,7 @@ class _RepeatedActionLlm:
 def test_action_turn_and_total_llm_quota_are_hard_limits():
     request = AgentRunRequest(
         runId="r-action-cap", conversationId="c-action-cap",
-        traceId="t-action-cap", runType="full_evaluation",
+        traceId="t-action-cap", runType="project_analysis",
         resumeText="项目经历\nExample\nPython",
         jobDescription="Python backend")
     llm = _RepeatedActionLlm()
