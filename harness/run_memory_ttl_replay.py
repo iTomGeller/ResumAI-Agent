@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import subprocess
 import time
 import urllib.parse
 import urllib.request
@@ -38,6 +39,49 @@ CANDIDATE_TTL_DAYS = {
 
 AGE_BUCKETS_DAYS = [1, 7, 30, 90, 180, 365]
 
+# Keep the replay taxonomy identical to MemoryService. Historical rows remain
+# queryable under their storage names even though runtime reads canonicalize
+# them before applying TTL policy.
+LEGACY_TYPE_REMAP = {
+    "CONVERSATION": "WORKING",
+    "SHORT_TERM": "WORKING",
+    "PREFERENCE": "SEMANTIC",
+    "USER_PREFERENCE": "SEMANTIC",
+    "HR_FEEDBACK": "SEMANTIC",
+    "DOMAIN": "SEMANTIC",
+    "FAILURE": "EPISODIC",
+}
+
+
+def fetch_mysql_payload(container: str) -> dict[str, Any]:
+    """Read the complete ECS usage history without the Ops API page limit."""
+    sql = """
+SELECT JSON_OBJECT(
+  'type', m.type,
+  'decision', u.decision,
+  'ageAtUseSeconds', TIMESTAMPDIFF(
+      SECOND, m.create_time, DATE_ADD(u.create_time, INTERVAL 8 HOUR)),
+  'finalScore', u.final_score,
+  'memoryId', u.memory_id,
+  'runId', u.run_id
+)
+FROM run_memory_usage u
+JOIN memory_entry m ON m.memory_id = u.memory_id
+ORDER BY u.id;
+"""
+    command = [
+        "docker", "exec", "-i", container, "sh", "-lc",
+        'mysql -N -B --raw -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"',
+    ]
+    completed = subprocess.run(
+        command, input=sql, text=True, capture_output=True, check=True)
+    rows = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+    return {
+        "_experimentSource": f"mysql-container:{container}",
+        "usage": rows,
+        "defaults": {"ttl": {"typeDefaultDays": DEFAULT_TTL_DAYS}},
+    }
+
 
 def fetch_json(url: str, timeout: float = 30.0) -> dict[str, Any]:
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -58,13 +102,20 @@ def normalize_usage(rows: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]
     diagnostics = {
         "inputRows": 0,
         "missingType": 0,
+        "legacyTypeRemapped": 0,
+        "legacyTypeCounts": {},
         "missingAge": 0,
         "negativeAge": 0,
         "unsupportedDecision": 0,
     }
     for row in rows:
         diagnostics["inputRows"] += 1
-        memory_type = str(row.get("type") or "").strip().upper()
+        raw_type = str(row.get("type") or "").strip().upper()
+        memory_type = LEGACY_TYPE_REMAP.get(raw_type, raw_type)
+        if memory_type != raw_type:
+            diagnostics["legacyTypeRemapped"] += 1
+            counts = diagnostics["legacyTypeCounts"]
+            counts[raw_type] = counts.get(raw_type, 0) + 1
         if memory_type not in CANDIDATE_TTL_DAYS:
             diagnostics["missingType"] += 1
             continue
@@ -219,8 +270,9 @@ def build_report(
     ]
     return {
         "experiment": "memory_ttl_temporal_replay",
-        "version": 1,
+        "version": 2,
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source": payload.get("_experimentSource", "ops-memory-api"),
         "mutation": "NONE",
         "guardrail": "Never change production TTL from an inconclusive replay",
         "thresholds": {
@@ -246,6 +298,8 @@ def markdown_summary(report: dict[str, Any]) -> str:
         f"- 总体决策：**{report['overallDecision']}**",
         f"- 有效 usage：{report['diagnostics']['validRows']} / "
         f"{report['diagnostics']['inputRows']}",
+        f"- 数据源：{report['source']}",
+        f"- 历史类型归一：{report['diagnostics']['legacyTypeRemapped']} 条",
         "- 安全边界：样本不足时只保留默认值，不自动修改生产 TTL。",
         "",
         "| 类型 | 当前 TTL | USED 样本 | 最大年龄 | 是否可定论 | 建议 |",
@@ -267,6 +321,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://127.0.0.1")
     parser.add_argument("--input", help="Offline Ops memory JSON fixture")
+    parser.add_argument(
+        "--mysql-container",
+        help="Read complete history from a local ECS MySQL container (for example resumai-mysql)")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--min-used", type=int, default=30)
     parser.add_argument("--retention-floor", type=float, default=0.99)
@@ -275,7 +332,9 @@ def main() -> int:
     parser.add_argument("--require-conclusive", action="store_true")
     args = parser.parse_args()
 
-    if args.input:
+    if args.mysql_container:
+        payload = fetch_mysql_payload(args.mysql_container)
+    elif args.input:
         payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
     else:
         query = urllib.parse.urlencode({"limit": min(max(1, args.limit), 200)})

@@ -87,6 +87,11 @@ public class MemoryService {
                     + "|api[_-]?key\\s*[:=]\\s*\\S+|AKID[A-Za-z0-9]{12,}|LTAI[A-Za-z0-9]{12,})",
             Pattern.CASE_INSENSITIVE);
 
+    /**
+     * Production policy retained by EXP-13 full-history replay (2026-07-29).
+     * The 764 observed usages do not cover enough of any candidate TTL window
+     * to justify shortening it; see reports/experiments/memory_ttl_replay.json.
+     */
     private static final Map<String, Duration> TTL_BY_TYPE = Map.of(
             "WORKING", Duration.ofDays(2),
             "SEMANTIC", Duration.ofDays(90),

@@ -15,6 +15,18 @@ class MemoryTtlReplayTest(unittest.TestCase):
         self.assertEqual(1, diagnostics["negativeAge"])
         self.assertEqual(1, diagnostics["missingAge"])
 
+    def test_normalization_maps_legacy_storage_types_to_ttl_taxonomy(self):
+        rows, diagnostics = normalize_usage([
+            {"type": "CONVERSATION", "decision": "USED", "ageAtUseSeconds": 60},
+            {"type": "PREFERENCE", "decision": "USED", "ageAtUseSeconds": 120},
+            {"type": "FAILURE", "decision": "USED", "ageAtUseSeconds": 180},
+        ])
+        self.assertEqual(["WORKING", "SEMANTIC", "EPISODIC"],
+                         [row["type"] for row in rows])
+        self.assertEqual(3, diagnostics["legacyTypeRemapped"])
+        self.assertEqual({"CONVERSATION": 1, "PREFERENCE": 1, "FAILURE": 1},
+                         diagnostics["legacyTypeCounts"])
+
     def test_replay_proposes_shortest_candidate_only_after_gates_pass(self):
         samples = [
             {"decision": "USED", "ageDays": 1.0, "weight": 1.0},

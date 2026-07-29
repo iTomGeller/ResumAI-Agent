@@ -1,7 +1,8 @@
 {
   "experiment": "memory_ttl_temporal_replay",
-  "version": 1,
-  "generatedAt": "2026-07-29T08:07:59Z",
+  "version": 2,
+  "generatedAt": "2026-07-29T08:45:11Z",
+  "source": "mysql-container:resumai-mysql",
   "mutation": "NONE",
   "guardrail": "Never change production TTL from an inconclusive replay",
   "thresholds": {
@@ -11,26 +12,31 @@
     "minimumHistoryCoverageRatio": 0.8
   },
   "diagnostics": {
-    "inputRows": 200,
-    "missingType": 12,
+    "inputRows": 764,
+    "missingType": 0,
+    "legacyTypeRemapped": 48,
+    "legacyTypeCounts": {
+      "PREFERENCE": 37,
+      "CONVERSATION": 11
+    },
     "missingAge": 0,
     "negativeAge": 0,
     "unsupportedDecision": 0,
-    "validRows": 188
+    "validRows": 764
   },
   "overallDecision": "KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA",
   "typeResults": [
     {
       "type": "WORKING",
       "currentDefaultDays": 2,
-      "sampleCount": 0,
-      "usedSamples": 0,
+      "sampleCount": 11,
+      "usedSamples": 11,
       "ignoredSamples": 0,
-      "maxObservedAgeDays": 0.0,
-      "distinctObservedAgeDays": 0,
+      "maxObservedAgeDays": 0.435,
+      "distinctObservedAgeDays": 1,
       "requiredCoverageDays": 1.6,
       "ageHistogram": {
-        "0-1d": 0,
+        "0-1d": 11,
         "1-7d": 0,
         "7-30d": 0,
         "30-90d": 0,
@@ -40,9 +46,9 @@
       },
       "conclusive": false,
       "insufficientReasons": [
-        "USED 样本 0 < 30",
-        "最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 1.6d",
-        "仅覆盖 0 个不同记忆年龄日",
+        "USED 样本 11 < 30",
+        "最大观测年龄 0.4d < 当前 TTL 的 80% 覆盖门槛 1.6d",
+        "仅覆盖 1 个不同记忆年龄日",
         "候选 TTL 在当前样本上没有产生可区分结果"
       ],
       "decision": "KEEP_DEFAULT_INSUFFICIENT_DATA",
@@ -51,53 +57,53 @@
         {
           "ttlDays": 1,
           "isCurrentDefault": false,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         },
         {
           "ttlDays": 2,
           "isCurrentDefault": true,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         },
         {
           "ttlDays": 3,
           "isCurrentDefault": false,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         },
         {
           "ttlDays": 7,
           "isCurrentDefault": false,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         }
       ]
     },
     {
       "type": "SEMANTIC",
       "currentDefaultDays": 90,
-      "sampleCount": 0,
-      "usedSamples": 0,
+      "sampleCount": 37,
+      "usedSamples": 37,
       "ignoredSamples": 0,
-      "maxObservedAgeDays": 0.0,
-      "distinctObservedAgeDays": 0,
+      "maxObservedAgeDays": 5.857,
+      "distinctObservedAgeDays": 2,
       "requiredCoverageDays": 72.0,
       "ageHistogram": {
         "0-1d": 0,
-        "1-7d": 0,
+        "1-7d": 37,
         "7-30d": 0,
         "30-90d": 0,
         "90-180d": 0,
@@ -106,9 +112,8 @@
       },
       "conclusive": false,
       "insufficientReasons": [
-        "USED 样本 0 < 30",
-        "最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 72.0d",
-        "仅覆盖 0 个不同记忆年龄日",
+        "最大观测年龄 5.9d < 当前 TTL 的 80% 覆盖门槛 72.0d",
+        "仅覆盖 2 个不同记忆年龄日",
         "候选 TTL 在当前样本上没有产生可区分结果"
       ],
       "decision": "KEEP_DEFAULT_INSUFFICIENT_DATA",
@@ -117,53 +122,53 @@
         {
           "ttlDays": 30,
           "isCurrentDefault": false,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         },
         {
           "ttlDays": 60,
           "isCurrentDefault": false,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         },
         {
           "ttlDays": 90,
           "isCurrentDefault": true,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         },
         {
           "ttlDays": 180,
           "isCurrentDefault": false,
-          "usedRetention": null,
-          "weightedUsedRetention": null,
+          "usedRetention": 1.0,
+          "weightedUsedRetention": 1.0,
           "ignoredExpiredFraction": null,
-          "allInvocationRetention": null,
-          "passesQualityGate": false
+          "allInvocationRetention": 1.0,
+          "passesQualityGate": true
         }
       ]
     },
     {
       "type": "EPISODIC",
       "currentDefaultDays": 90,
-      "sampleCount": 16,
-      "usedSamples": 16,
+      "sampleCount": 424,
+      "usedSamples": 424,
       "ignoredSamples": 0,
-      "maxObservedAgeDays": 0.047,
-      "distinctObservedAgeDays": 1,
+      "maxObservedAgeDays": 3.441,
+      "distinctObservedAgeDays": 4,
       "requiredCoverageDays": 72.0,
       "ageHistogram": {
-        "0-1d": 16,
-        "1-7d": 0,
+        "0-1d": 347,
+        "1-7d": 77,
         "7-30d": 0,
         "30-90d": 0,
         "90-180d": 0,
@@ -172,9 +177,7 @@
       },
       "conclusive": false,
       "insufficientReasons": [
-        "USED 样本 16 < 30",
-        "最大观测年龄 0.0d < 当前 TTL 的 80% 覆盖门槛 72.0d",
-        "仅覆盖 1 个不同记忆年龄日",
+        "最大观测年龄 3.4d < 当前 TTL 的 80% 覆盖门槛 72.0d",
         "候选 TTL 在当前样本上没有产生可区分结果"
       ],
       "decision": "KEEP_DEFAULT_INSUFFICIENT_DATA",
@@ -221,14 +224,14 @@
     {
       "type": "PROCEDURAL",
       "currentDefaultDays": 365,
-      "sampleCount": 172,
-      "usedSamples": 172,
+      "sampleCount": 292,
+      "usedSamples": 292,
       "ignoredSamples": 0,
       "maxObservedAgeDays": 0.781,
       "distinctObservedAgeDays": 1,
       "requiredCoverageDays": 292.0,
       "ageHistogram": {
-        "0-1d": 172,
+        "0-1d": 292,
         "1-7d": 0,
         "7-30d": 0,
         "30-90d": 0,
