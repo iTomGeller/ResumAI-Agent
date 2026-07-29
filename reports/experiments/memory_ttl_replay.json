@@ -1,7 +1,7 @@
 {
   "experiment": "memory_ttl_temporal_replay",
   "version": 2,
-  "generatedAt": "2026-07-29T09:24:07Z",
+  "generatedAt": "2026-07-29T09:38:07Z",
   "source": "mysql-container:resumai-mysql",
   "cohort": {
     "compatibility": "CURRENT_VERSION",
@@ -17,14 +17,14 @@
     "minimumHistoryCoverageRatio": 0.8
   },
   "diagnostics": {
-    "inputRows": 30,
+    "inputRows": 50,
     "missingType": 0,
     "legacyTypeRemapped": 0,
     "legacyTypeCounts": {},
     "missingAge": 0,
     "negativeAge": 0,
     "unsupportedDecision": 0,
-    "validRows": 30
+    "validRows": 50
   },
   "overallDecision": "KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA",
   "typeResults": [
@@ -163,14 +163,14 @@
     {
       "type": "EPISODIC",
       "currentDefaultDays": 90,
-      "sampleCount": 30,
-      "usedSamples": 30,
+      "sampleCount": 50,
+      "usedSamples": 50,
       "ignoredSamples": 0,
-      "maxObservedAgeDays": 0.003,
+      "maxObservedAgeDays": 0.007,
       "distinctObservedAgeDays": 1,
       "requiredCoverageDays": 72.0,
       "ageHistogram": {
-        "0-1d": 30,
+        "0-1d": 50,
         "1-7d": 0,
         "7-30d": 0,
         "30-90d": 0,
