@@ -48,10 +48,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -677,18 +679,22 @@ public class OpsDebugService {
                 ? memoryUsageService.listForRun(runId, decision, limit)
                 : memoryUsageService.listRecent(null, decision, limit);
         Map<String, MemoryEntryRow> byId = new LinkedHashMap<>();
+        Set<String> memoryIds = new LinkedHashSet<>();
         for (RunMemoryUsageRow row : rows) {
-            if (row.getMemoryId() != null && !byId.containsKey(row.getMemoryId())) {
-                MemoryEntryRow entry = memoryEntryMapper.selectById(row.getMemoryId());
-                if (entry != null) {
-                    byId.put(row.getMemoryId(), entry);
-                }
+            if (row.getMemoryId() != null) {
+                memoryIds.add(row.getMemoryId());
+            }
+        }
+        if (!memoryIds.isEmpty()) {
+            for (MemoryEntryRow entry : memoryEntryMapper.selectBatchIds(memoryIds)) {
+                byId.put(entry.getMemoryId(), entry);
             }
         }
         List<MemoryUsageView> out = new ArrayList<>();
         LocalDateTime now = LocalDateTime.now();
         for (RunMemoryUsageRow row : rows) {
             MemoryEntryRow entry = byId.get(row.getMemoryId());
+            Long ageAtUseSeconds = memoryAgeAtUseSeconds(entry, row.getCreateTime());
             out.add(new MemoryUsageView(
                     row.getId(), row.getRunId(), row.getMemoryId(), row.getConsumerAgent(),
                     row.getRankNo(),
@@ -697,15 +703,33 @@ public class OpsDebugService {
                     row.getRecencyScore() != null ? row.getRecencyScore().doubleValue() : null,
                     row.getFinalScore() != null ? row.getFinalScore().doubleValue() : null,
                     row.getDecision(), row.getIgnoredReason(),
-                    localTimestamp(row.getCreateTime()),
+                    utcTimestamp(row.getCreateTime()),
                     row.getCreateTime(),
                     entry != null ? entry.getType() : null,
                     entry != null ? entry.getOwnerScope() : null,
                     entry != null ? entry.getSource() : null,
                     entry != null ? truncate(entry.getContent(), 200) : null,
+                    entry != null ? localTimestamp(entry.getCreateTime()) : null,
+                    entry != null ? localTimestamp(entry.getUpdateTime()) : null,
+                    ageAtUseSeconds,
                     entry != null ? memoryTtlView(entry, now) : null));
         }
         return out;
+    }
+
+    /**
+     * memory_entry timestamps are JVM-local, while run_memory_usage deliberately
+     * persists the workflow occurredAt instant as a UTC LocalDateTime. Compare
+     * Instants so the eight-hour storage convention difference is not mistaken
+     * for a negative memory age.
+     */
+    static Long memoryAgeAtUseSeconds(MemoryEntryRow entry, LocalDateTime usageUtc) {
+        if (entry == null || entry.getCreateTime() == null || usageUtc == null) {
+            return null;
+        }
+        Instant created = entry.getCreateTime().atZone(ZoneId.systemDefault()).toInstant();
+        Instant used = usageUtc.toInstant(ZoneOffset.UTC);
+        return Duration.between(created, used).getSeconds();
     }
 
     private McpInventory loadMcpInventory(boolean probe) {
@@ -1142,6 +1166,10 @@ public class OpsDebugService {
         return value != null
                 ? value.atZone(ZoneId.systemDefault()).toInstant().toString()
                 : null;
+    }
+
+    private static String utcTimestamp(LocalDateTime value) {
+        return value != null ? value.toInstant(ZoneOffset.UTC).toString() : null;
     }
 
     private boolean isBenchmarkMemory(MemoryEntryRow row) {

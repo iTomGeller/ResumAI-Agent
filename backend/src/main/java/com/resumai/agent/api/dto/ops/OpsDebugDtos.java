@@ -191,6 +191,9 @@ public final class OpsDebugDtos {
             String ownerScope,
             String source,
             String contentPreview,
+            String memoryCreatedAt,
+            String memoryUpdatedAt,
+            Long ageAtUseSeconds,
             MemoryTtlView ttl
     ) {
     }

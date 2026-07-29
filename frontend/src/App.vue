@@ -1090,6 +1090,9 @@ watch(activeTraceId, (id, prev) => {
   if (id) subscribeTrace(id);
 });
 watch([appView, activeTraceId, detailTab], () => { syncHash(); });
+watch(appView, (view) => {
+  if (view !== 'ops') void ensureWorkspaceInitialized();
+});
 const pagedDashboardTasks = dashboardRecentPagination.pageItems;
 const pagedCandidates = computed(() => candidateListItems.value);
 const pagedJobItems = computed(() => jobListItems.value);
@@ -1110,22 +1113,39 @@ watch(jobs, (v) => localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(v)), { 
 watch(selectedJobId, (id) => { if (id) void loadJobDetail(id); });
 watch(selectedJobId, () => { if (selectedJob.value) Object.assign(jobDraft, selectedJob.value); });
 
+let workspaceInitPromise: Promise<void> | null = null;
+let workspaceInitialized = false;
+
+async function ensureWorkspaceInitialized() {
+  if (workspaceInitialized) return;
+  if (workspaceInitPromise) return workspaceInitPromise;
+  workspaceInitPromise = (async () => {
+    if (!selectedJobId.value && jobs.value.length) selectedJobId.value = jobs.value[0].id;
+    if (selectedJob.value) Object.assign(jobDraft, selectedJob.value);
+    await refreshAll();
+    await restoreFromHash();
+    await refreshRunningStages();
+    for (const task of tasks.value.filter((t) => isTaskActive(t))) startPolling(task.traceId);
+    await loadRagConfig();
+    await loadRagAdvisor();
+    await loadKnowledgeBase();
+    await loadJobsFromBackend();
+    if (activeTraceId.value) subscribeTrace(activeTraceId.value);
+    for (const job of jobs.value) { indexJdToBackend(job); }
+    workspaceInitialized = true;
+  })().finally(() => {
+    if (!workspaceInitialized) workspaceInitPromise = null;
+  });
+  return workspaceInitPromise;
+}
+
 onMounted(async () => {
   await restoreFromHash();
   window.addEventListener('hashchange', restoreFromHash);
-  if (!selectedJobId.value && jobs.value.length) selectedJobId.value = jobs.value[0].id;
-  if (selectedJob.value) Object.assign(jobDraft, selectedJob.value);
-  await refreshAll();
-  await restoreFromHash();
-  await refreshRunningStages();
-  for (const task of tasks.value.filter((t) => isTaskActive(t))) startPolling(task.traceId);
-  await loadHealth();
-  await loadRagConfig();
-  await loadRagAdvisor();
-  await loadKnowledgeBase();
-  await loadJobsFromBackend();
-  if (activeTraceId.value) subscribeTrace(activeTraceId.value);
-  for (const job of jobs.value) { indexJdToBackend(job); }
+  // Ops has its own data plane. Do not block it behind dashboard/candidate/JD hydration.
+  void loadHealth();
+  if (appView.value === 'ops') return;
+  await ensureWorkspaceInitialized();
 });
 
 watch([activeTraceId, resumeViewMode], () => {
@@ -2039,7 +2059,10 @@ function syncHash() {
   } else if (appView.value === 'knowledge') {
     history.replaceState(null, '', '#/knowledge');
   } else if (appView.value === 'ops') {
-    history.replaceState(null, '', '#/dev/ops');
+    const current = location.hash || '';
+    if (!current.startsWith('#/dev/ops') && !current.startsWith('#/ops')) {
+      history.replaceState(null, '', '#/dev/ops');
+    }
   } else if (appView.value === 'positions') {
     history.replaceState(null, '', '#/positions');
   } else if (appView.value === 'analytics') {

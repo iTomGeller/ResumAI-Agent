@@ -18,6 +18,7 @@
 | EXP-8 | Function calling vs json_object | `harness/run_json_ab.py` | DONE（2026-07-21） | 各 60 次真实决策调用（emit_decision 生产 schema）：两通道一次通过率均 100%、0 修复 0 失败；FC avg 2645ms vs json_object avg 2030ms（p95 相当）。维持 FC 主通道（provider 端 schema 强制，防御空内容故障模式）+ json_object 兜底，数据表明两者质量无差异 |
 | EXP-9 | 进化 reward 权重敏感性 | `harness/run_reward_sensitivity.py` | DONE（2026-07-21） | 对 24 个真实 SUCCEEDED run 注入 6 档多样化反馈（强同意→强不同意）后 FEEDBACK reward 行达 28 条；±10pp×20 组重加权 champion（agent_job）**零翻转 → robust**，当前 reward 权重配置保留 |
 | EXP-10 | 并行 vs 串行 specialist | `harness/run_parallel_ab.py` | DONE（2026-07-21） | 串行 reward 略高但延迟/成本显著更差（49.2s vs 30.95s）；**拒绝 serial 默认**，上线「并行 + 冲突时串行仲裁」 |
+| EXP-13 | Memory TTL 时间回放 | `harness/run_memory_ttl_replay.py --base http://127.0.0.1` | ACTIVE（2026-07-29 首轮） | 188/200 条真实 usage 年龄有效、0 负年龄；Episodic 16 条/最长 0.047d，Procedural 172 条/最长 0.781d，时间跨度不足，结论为 **保持当前 TTL**，禁止自动调参 |
 
 ## EXP-1 Embedding 模型选型
 
@@ -124,3 +125,12 @@
 - **2026-07-21 实测**（`harness/run_parallel_ab.py`）：以 `balanced` 为基线创建 CANDIDATE 策略 `exp10-serial-balanced`（唯一差异 `parallelSpecialists=false`），gold 两例（java-backend-normal / ai-agent-resume）真实 e2e 对照。
 - 结果落 `reports/experiments/parallel_ab.json`（avgLatencySeconds / avgReward / token 详见报告）；RESUME_PROJECT_DESCRIPTION 中性能数字引用本产物。
 - **上线决策（拒绝 serial champion）**：样本上串行 reward 略高，但延迟约 49.2s vs 并行 30.95s、token/成本也更高。生产默认保持并行 Specialist；仅在 Evidence 发现冲突时做单轮串行仲裁（见 executor `_arbitrate_conflicts`），不把 serial 设为默认。
+
+## EXP-13 Memory TTL 时间回放
+
+- 假设：Working 2 天、Semantic/Episodic 90 天、Procedural 365 天可能保留过久或过短，但不能用主观经验直接改生产值。
+- 数据：真实 `run_memory_usage`，以 `ageAtUseSeconds` 回放每次 USED/IGNORED 时该条 memory 在候选 TTL 下是否仍存活；负年龄和缺失年龄明确剔除并计数。
+- 质量门：每类型至少 30 个 USED；历史最大年龄至少覆盖当前 TTL 的 80%；至少覆盖 3 个不同年龄日；候选必须实际产生差异；USED 与按 `finalScore` 加权的 USED 保留率均不低于 99%。
+- 候选：Working 1/2/3/7 天；Semantic/Episodic 30/60/90/180 天；Procedural 90/180/365/730 天。
+- 决策边界：脚本只生成 JSON/Markdown 报告，**绝不修改生产配置**。任一覆盖门不足即输出 `KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA`；只有数据充分且质量门通过才提出最短候选，仍需人工审查后才能上线。
+- **2026-07-29 ECS 首轮真实回放**：输入 200 条，188 条有效、12 条旧 taxonomy 缺失、0 条负年龄。Episodic USED=16、最大年龄 0.047 天；Procedural USED=172、最大年龄 0.781 天；Working/Semantic 暂无可用样本。虽然 Procedural 数量过门，但远未覆盖 365 天 TTL 的 80% 时间门，候选 90/180/365/730 天在现有数据上无差异，因此输出 `KEEP_CURRENT_DEFAULTS_INSUFFICIENT_DATA`，**2/90/90/365 均不调整**。产物：`reports/experiments/memory_ttl_replay.{json,md}`。

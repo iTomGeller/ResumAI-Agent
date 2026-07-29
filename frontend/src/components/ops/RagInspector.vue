@@ -127,6 +127,7 @@ const outcomeFilter = ref('ALL');
 const PAGE_SIZE = 12;
 const page = ref(0);
 const expandedKey = ref('');
+const RAG_EVENT_LIMIT = 100;
 
 const filteredEvents = computed(() => {
   const needle = search.value.trim().toLowerCase();
@@ -204,7 +205,7 @@ async function loadRagEvents() {
   loading.value = true;
   error.value = '';
   try {
-    const response = await fetch('/api/ops/rag?limit=200');
+    const response = await fetch(`/api/ops/rag?limit=${RAG_EVENT_LIMIT}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     events.value = (data.items || data.events || []).map(normalizeEvent);

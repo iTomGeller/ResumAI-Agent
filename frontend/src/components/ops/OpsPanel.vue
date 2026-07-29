@@ -25,6 +25,8 @@ const highlightSeq = ref<number | null>(null);
 const runDetail = ref<any>(null);
 const runFilter = ref({ traceId: '', runId: '', conversationId: '', status: '' });
 const memoryFilter = ref({ runId: '', decision: '' });
+const ragRefreshKey = ref(0);
+let initialized = false;
 
 const tabs: Array<{ id: OpsTab; label: string }> = [
   { id: 'runs', label: 'Runs' },
@@ -91,6 +93,8 @@ async function loadOverview() {
 }
 
 async function loadTab(tab: OpsTab, force = false) {
+  // RagInspector owns its request so its refresh button and loading state stay local.
+  if (tab === 'rag') return;
   if (!force && panel.value[tab]) return;
   tabLoading.value = true;
   error.value = '';
@@ -123,8 +127,8 @@ async function loadTab(tab: OpsTab, force = false) {
 async function refreshAll() {
   panel.value = {};
   runDetail.value = null;
-  await loadOverview();
-  await loadTab(activeTab.value, true);
+  if (activeTab.value === 'rag') ragRefreshKey.value += 1;
+  await Promise.all([loadOverview(), loadTab(activeTab.value, true)]);
   if (selectedRunId.value) await openRun(selectedRunId.value);
 }
 
@@ -163,7 +167,8 @@ function inventoryClass(status?: string) {
 }
 
 watch(activeTab, (tab) => {
-  loadTab(tab);
+  if (!initialized) return;
+  void loadTab(tab);
   syncHash();
   if (tab !== 'runs') {
     // keep selectedRunId for deep link / memory filters
@@ -174,8 +179,11 @@ watch(selectedRunId, () => syncHash());
 
 onMounted(async () => {
   parseOpsHash();
-  await loadOverview();
-  await loadTab(activeTab.value, true);
+  const initialTab = activeTab.value;
+  await Promise.all([loadOverview(), loadTab(initialTab, true)]);
+  initialized = true;
+  if (activeTab.value !== initialTab) await loadTab(activeTab.value, true);
+  syncHash();
   if (selectedRunId.value) await openRun(selectedRunId.value);
   window.addEventListener('hashchange', onHashChange);
 });
@@ -340,7 +348,7 @@ async function onMemoryFilter(payload: { runId: string; decision: string }) {
       </div>
 
       <div v-else-if="activeTab === 'rag'" class="ops-panel">
-        <RagInspector />
+        <RagInspector :key="ragRefreshKey" />
       </div>
 
       <div v-else-if="activeTab === 'observability'" class="ops-panel">

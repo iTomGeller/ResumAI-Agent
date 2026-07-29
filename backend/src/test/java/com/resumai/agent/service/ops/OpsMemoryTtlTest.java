@@ -8,6 +8,8 @@ import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryTtlView;
 import com.resumai.agent.domain.entity.MemoryEntryRow;
 import com.resumai.agent.service.MemoryService;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 
 class OpsMemoryTtlTest {
@@ -47,6 +49,21 @@ class OpsMemoryTtlTest {
         assertEquals(90L, MemoryService.ttlPolicyDays().get("SEMANTIC"));
         assertEquals(90L, MemoryService.ttlPolicyDays().get("EPISODIC"));
         assertEquals(365L, MemoryService.ttlPolicyDays().get("PROCEDURAL"));
+    }
+
+    @Test
+    void computesUsageAgeAcrossLocalMemoryAndUtcUsageStorage() {
+        MemoryEntryRow row = row(
+                "PROCEDURAL", "ACTIVE",
+                LocalDateTime.of(2026, 7, 29, 13, 0),
+                LocalDateTime.of(2027, 7, 29, 13, 0));
+
+        LocalDateTime usageUtc = LocalDateTime.ofInstant(
+                row.getCreateTime().atZone(ZoneId.systemDefault()).toInstant().plusSeconds(7200),
+                ZoneOffset.UTC);
+        Long age = OpsDebugService.memoryAgeAtUseSeconds(row, usageUtc);
+
+        assertEquals(2L * 60 * 60, age);
     }
 
     private static MemoryEntryRow row(String type, String status,
