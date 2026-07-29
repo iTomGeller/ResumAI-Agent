@@ -69,11 +69,13 @@ function durationLabel(row: any): string {
   return '未采集';
 }
 function compactLatency(value?: number | null): string {
+  if (value == null) return '-';
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) return '-';
   return numeric >= 1000 ? `${(numeric / 1000).toFixed(2)}s` : `${Math.round(numeric)}ms`;
 }
 function successRateLabel(value?: number | null): string {
+  if (value == null) return '-';
   const numeric = Number(value);
   return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : '-';
 }
