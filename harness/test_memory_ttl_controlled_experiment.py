@@ -1,4 +1,4 @@
-from scripts.ecs_memory_ttl_experiment import current_fixtures, select_ttl
+from workflow.scripts.ecs_memory_ttl_experiment import current_fixtures, select_ttl
 
 
 def test_select_ttl_uses_shortest_candidate_covering_boundary() -> None:
