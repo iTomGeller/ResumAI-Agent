@@ -1086,6 +1086,39 @@ def test_failed_mcp_result_is_error_and_never_evidence():
     assert failed and failed[-1]["payload"]["lifecycleStage"] == "ERROR"
 
 
+def test_expected_mcp_unavailability_is_observation_not_red_failure():
+    class UnavailableClient:
+        async def call_tool(self, name, arguments):
+            return {
+                "success": False,
+                "isError": True,
+                "status": "UNAVAILABLE",
+                "text": "robots.txt temporarily unreachable",
+            }
+
+    request = AgentRunRequest(
+        runId="r-unavailable", conversationId="c-unavailable",
+        traceId="t-unavailable", runType="full_evaluation",
+        resumeText="https://blog.csdn.net/example", jobDescription="Java")
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=_NativeMcpLlm())
+    _attach_demo_mcp(executor.tools, UnavailableClient())
+
+    call = run(executor.tools.execute(
+        "ProjectAgent", "demo.search", {"query": "q"},
+        tool_call_id="provider-unavailable-1"))
+
+    assert call.status == "UNAVAILABLE"
+    assert call.result["status"] == "UNAVAILABLE"
+    assert not [event for event in executor.emitter.events
+                if event["eventType"] == "tool.failed"]
+    completed = [event for event in executor.emitter.events
+                 if event["eventType"] == "tool.completed"]
+    assert completed[-1]["payload"]["outcome"] == "UNAVAILABLE"
+    assert completed[-1]["payload"]["lifecycleStage"] == "RESULT"
+
+
 def test_search_query_url_does_not_fake_result_provenance():
     class NoSourceClient:
         async def call_tool(self, name, arguments):

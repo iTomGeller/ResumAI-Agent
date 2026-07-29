@@ -26,6 +26,9 @@ CACHEABLE_TOOLS = {"parse_resume", "check_timeline", "calculate_jd_coverage",
 # OpenTelemetry GenAI / MCP semantic conventions (development schema).
 OTEL_GENAI_SCHEMA = "https://opentelemetry.io/schemas/1.28.0"
 MCP_PROTOCOL_VERSION = "2025-11-25"
+SOFT_UNAVAILABLE_STATUSES = {
+    "UNAVAILABLE", "RATE_LIMITED", "NOT_CHECKED",
+}
 
 
 @dataclass(frozen=True)
@@ -531,21 +534,28 @@ class ToolExecutor:
                 duration_ms = int((time.monotonic() - started) * 1000)
                 outcome = "SUCCEEDED"
                 if isinstance(result, dict) and result.get("success") is False:
-                    outcome = "FAILED"
+                    provider_status = str(
+                        result.get("status") or "").strip().upper()
+                    outcome = (
+                        "UNAVAILABLE"
+                        if provider_status in SOFT_UNAVAILABLE_STATUSES
+                        else "FAILED")
                 call = ToolCallResult(tool_call_id, tool, outcome, result,
                                       duration_ms=duration_ms, retries=retries)
                 self.call_log.append(call)
                 if cache_key is not None and outcome == "SUCCEEDED":
                     await cache.set_json(cache_key, result, cache.TTL_PARSE_RESUME)
                 ended_at = _utc_now()
-                event_type = "tool.completed" if outcome == "SUCCEEDED" else "tool.failed"
+                event_type = (
+                    "tool.failed" if outcome == "FAILED"
+                    else "tool.completed")
                 await self.emitter.emit(event_type, agent_id=agent_id, tool_name=tool,
                                         payload={
                                             **trace,
                                             "toolCallId": tool_call_id,
                                             "outcome": outcome,
                                             "lifecycleStage": (
-                                                "RESULT" if outcome == "SUCCEEDED"
+                                                "RESULT" if outcome != "FAILED"
                                                 else "ERROR"),
                                             "occurredAt": ended_at,
                                             "startedAt": started_at,
