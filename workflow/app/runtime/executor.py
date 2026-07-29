@@ -503,24 +503,74 @@ class RunExecutor:
     @staticmethod
     def _memory_retrieval_query(
             request: AgentRunRequest) -> Tuple[str, List[str]]:
-        """Build a bounded, evidence-bearing recall query.
+        """Build a short semantic recall query from candidate-bearing cues.
 
-        Upload endpoints often provide a generic user message.  Querying only
-        that text makes relevant semantic/procedural memory effectively
-        unreachable, so include bounded JD/resume evidence without persisting
-        or logging the raw query.
+        Memory ranking normalizes lexical overlap by the number of query
+        terms.  Feeding the whole resume made a compact candidate fact or user
+        preference score below the relevance floor even when it clearly
+        matched.  Keep identity, project/timeline lines and technical tokens,
+        but never use the raw document as the retrieval query.
         """
+        resume = request.resumeText or ""
+        lines = [line.strip() for line in resume.splitlines() if line.strip()]
+        cue_lines: List[str] = []
+        cue_pattern = re.compile(
+            r"(技能|技术|项目|经历|教育|公司|岗位|工程师|负责|实现|优化|"
+            r"skill|project|experience|education|engineer|develop|build)",
+            re.IGNORECASE)
+        for line in lines:
+            if not cue_lines or cue_pattern.search(line):
+                value = line[:140]
+                if value not in cue_lines:
+                    cue_lines.append(value)
+            if len(cue_lines) >= 4:
+                break
+        technical_tokens: List[str] = []
+        for token in re.findall(
+                r"[A-Za-z][A-Za-z0-9.+#_-]{1,30}", resume):
+            normalized = token.lower()
+            if normalized not in {value.lower() for value in technical_tokens}:
+                technical_tokens.append(token)
+            if len(technical_tokens) >= 18:
+                break
+        resume_cues = " | ".join(cue_lines)
+        if technical_tokens:
+            resume_cues = (
+                f"{resume_cues} | 技术词={','.join(technical_tokens)}"
+                if resume_cues else f"技术词={','.join(technical_tokens)}")
         parts = [
-            ("user_message", request.userMessage or ""),
-            ("current_goal", request.currentGoal or ""),
-            ("job_description", (request.jobDescription or "")[:1200]),
-            ("resume", (request.resumeText or "")[:1800]),
+            ("user_message", (request.userMessage or "")[:100]),
+            ("current_goal", (request.currentGoal or "")[:120]),
+            ("job_description", (request.jobDescription or "")[:220]),
+            ("resume_cues", resume_cues[:480]),
         ]
         query = "\n".join(
             text.strip() for _, text in parts if text and text.strip()
         ) or request.runType
         basis = [name for name, text in parts if text and text.strip()]
         return query, basis
+
+    @staticmethod
+    def _episodic_memory_query(request: AgentRunRequest) -> str:
+        """Focused query for prior evaluations and same-job comparison anchors."""
+        resume = request.resumeText or ""
+        first_line = next(
+            (line.strip()[:80] for line in resume.splitlines() if line.strip()), "")
+        technical_tokens: List[str] = []
+        for token in re.findall(
+                r"[A-Za-z][A-Za-z0-9.+#_-]{1,30}", resume):
+            if token.lower() not in {value.lower() for value in technical_tokens}:
+                technical_tokens.append(token)
+            if len(technical_tokens) >= 10:
+                break
+        parts = [
+            "历史评估 评估结果 同岗位对比 风险 结论",
+            (request.currentGoal or "")[:100],
+            (request.jobDescription or "")[:240],
+            first_line,
+            " ".join(technical_tokens),
+        ]
+        return "\n".join(part.strip() for part in parts if part and part.strip())
 
     @staticmethod
     def _procedural_memory_query(request: AgentRunRequest) -> str:
@@ -545,14 +595,53 @@ class RunExecutor:
     @staticmethod
     def _merge_memory_hits(
             procedures: List[Dict[str, Any]],
-            candidate_hits: List[Dict[str, Any]],
+            semantic_hits: List[Dict[str, Any]],
+            episodic_hits: List[Dict[str, Any]],
             *,
             limit: int,
     ) -> List[Dict[str, Any]]:
-        """Keep a real procedure hit visible without duplicating memory rows."""
+        """Fuse real hits with a reserved slot per safe memory class.
+
+        The old procedure-first concatenation let two PROCEDURAL rows dominate
+        short result sets.  Reserve the first available hit for candidate facts
+        or preferences, same-conversation episodes, cross-candidate comparison
+        anchors and procedures, then fill remaining capacity by score.
+        """
+        safe_semantic_hits: List[Dict[str, Any]] = []
+        for hit in semantic_hits:
+            scope = str(hit.get("ownerScope") or hit.get("scope") or "").upper()
+            source = str(hit.get("source") or "")
+            # Candidate facts are conversation-isolated by the backend. At
+            # USER scope only explicit preferences are safe; legacy evaluation
+            # conclusions must never become facts for another candidate.
+            if scope == "CONVERSATION" or (
+                    scope == "USER" and source == "user_explicit"):
+                safe_semantic_hits.append(hit)
+
+        same_conversation_episodes: List[Dict[str, Any]] = []
+        comparison_anchors: List[Dict[str, Any]] = []
+        other_safe_episodes: List[Dict[str, Any]] = []
+        for hit in episodic_hits:
+            scope = str(hit.get("ownerScope") or hit.get("scope") or "").upper()
+            source = str(hit.get("source") or "")
+            if source == "cross_candidate_anchor":
+                comparison_anchors.append(hit)
+            elif scope == "CONVERSATION":
+                same_conversation_episodes.append(hit)
+            elif scope != "USER":
+                other_safe_episodes.append(hit)
+
+        buckets = [
+            safe_semantic_hits,
+            same_conversation_episodes,
+            comparison_anchors,
+            list(procedures),
+            other_safe_episodes,
+        ]
         merged: List[Dict[str, Any]] = []
         seen = set()
-        for hit in list(procedures) + list(candidate_hits):
+
+        def add(hit: Dict[str, Any]) -> bool:
             memory_id = str(hit.get("memoryId") or "")
             identity = memory_id or (
                 str(hit.get("type") or ""),
@@ -560,10 +649,27 @@ class RunExecutor:
                 str(hit.get("content") or ""),
             )
             if identity in seen:
-                continue
+                return False
             seen.add(identity)
             merged.append(hit)
-            if len(merged) >= max(1, int(limit)):
+            return True
+
+        capacity = max(1, int(limit))
+        # First pass: protect diversity whenever those classes really exist.
+        for bucket in buckets:
+            if bucket:
+                add(bucket.pop(0))
+            if len(merged) >= capacity:
+                return merged
+
+        # Second pass: quality-ranked fill across the remaining real hits.
+        remaining = [hit for bucket in buckets for hit in bucket]
+        remaining.sort(
+            key=lambda hit: float(hit.get("score") or hit.get("finalScore") or 0.0),
+            reverse=True)
+        for hit in remaining:
+            add(hit)
+            if len(merged) >= capacity:
                 break
         return merged
 
@@ -625,32 +731,40 @@ class RunExecutor:
                         f"失效 {len(self.revision_reuse['invalidatedArtifacts'])} 个"),
                     **self.revision_reuse,
                 })
-            # Candidate facts/episodes and reusable execution procedures use
-            # separate queries.  A focused procedural query prevents a long raw
-            # resume from diluting the lexical signal, while the merge remains
-            # bounded and contains only records returned by the durable store.
+            # Candidate facts, prior episodes and reusable procedures use
+            # independent focused queries. Run them concurrently so diversity
+            # does not add control-plane latency.
             memory_query, memory_query_basis = self._memory_retrieval_query(
                 request)
-            procedure_hits = await self.memory.search(
-                self._procedural_memory_query(request),
-                types=["PROCEDURAL"],
-                top_k=min(2, self.policy.memoryRetrieval.topK),
-                min_confidence=self.policy.memoryRetrieval.minConfidence,
-                consumer_agent="SpecialistAgent")
-            candidate_hits = await self.memory.search(
-                memory_query, types=["SEMANTIC", "EPISODIC"],
-                top_k=self.policy.memoryRetrieval.topK,
-                min_confidence=self.policy.memoryRetrieval.minConfidence,
-                consumer_agent="SpecialistAgent")
+            episodic_query = self._episodic_memory_query(request)
+            recall_limit = self.policy.memoryRetrieval.topK
+            procedure_hits, semantic_hits, episodic_hits, failure_hits = (
+                await asyncio.gather(
+                    self.memory.search(
+                        self._procedural_memory_query(request),
+                        types=["PROCEDURAL"], top_k=min(2, recall_limit),
+                        min_confidence=self.policy.memoryRetrieval.minConfidence,
+                        consumer_agent="SpecialistAgent"),
+                    self.memory.search(
+                        memory_query, types=["SEMANTIC"],
+                        top_k=min(4, recall_limit),
+                        min_confidence=self.policy.memoryRetrieval.minConfidence,
+                        consumer_agent="SpecialistAgent"),
+                    self.memory.search(
+                        episodic_query, types=["EPISODIC"],
+                        top_k=min(5, recall_limit),
+                        min_confidence=self.policy.memoryRetrieval.minConfidence,
+                        consumer_agent="SpecialistAgent"),
+                    self.memory.search(
+                        episodic_query, types=["FAILURE"], top_k=3,
+                        min_confidence=self.policy.memoryRetrieval.minConfidence,
+                        consumer_agent="CoordinatorAgent"),
+                ))
             self.memory_hits = self._merge_memory_hits(
-                procedure_hits, candidate_hits,
+                procedure_hits, semantic_hits, episodic_hits,
                 limit=self.policy.memoryRetrieval.topK)
             # FAILURE is Coordinator / policy-evolution only.
-            self.failure_hits = await self.memory.search(
-                memory_query, types=["FAILURE"],
-                top_k=3,
-                min_confidence=self.policy.memoryRetrieval.minConfidence,
-                consumer_agent="CoordinatorAgent")
+            self.failure_hits = failure_hits
             self.failure_notes = [
                 str(h.get("content", ""))[:160] for h in self.failure_hits][:3]
             # Memory retrieval must be observable in the trace, not a black box.
@@ -674,7 +788,13 @@ class RunExecutor:
                             f"（FAILURE 仅 Coordinator {len(self.failure_hits)} 条）"),
                 "memoryHits": len(self.memory_hits),
                 "failureHits": len(self.failure_hits),
-                "queryBasis": memory_query_basis + ["runtime_strategy"],
+                "queryBasis": memory_query_basis + [
+                    "evaluation_history", "runtime_strategy"],
+                "retrievedTypeCounts": {
+                    "SEMANTIC": len(semantic_hits),
+                    "EPISODIC": len(episodic_hits),
+                    "PROCEDURAL": len(procedure_hits),
+                },
                 "memoryTypeCounts": type_counts,
                 "memoryTrace": observe_trace[:12],
                 "memoryTop": [

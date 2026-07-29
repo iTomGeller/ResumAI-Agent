@@ -1446,7 +1446,7 @@ def test_memory_writeback_learns_candidate_free_procedure_from_actual_run():
     assert "Java 后端工程师" not in procedure["content"]
 
 
-def test_procedural_recall_is_focused_and_merged_ahead_of_candidate_memory():
+def test_memory_recall_fusion_reserves_real_hits_across_memory_classes():
     request = AgentRunRequest(
         runId="r-procedure-query", conversationId="c-procedure-query",
         runType="full_evaluation",
@@ -1459,13 +1459,31 @@ def test_procedural_recall_is_focused_and_merged_ahead_of_candidate_memory():
     assert "证据核验" in query
 
     merged = RunExecutor._merge_memory_hits(
-        [{"memoryId": "proc-1", "type": "PROCEDURAL"}],
         [
-            {"memoryId": "episode-1", "type": "EPISODIC"},
-            {"memoryId": "proc-1", "type": "PROCEDURAL"},
+            {"memoryId": "proc-1", "type": "PROCEDURAL", "score": 0.95},
+            {"memoryId": "proc-2", "type": "PROCEDURAL", "score": 0.94},
         ],
-        limit=2)
-    assert [row["memoryId"] for row in merged] == ["proc-1", "episode-1"]
+        [
+            {"memoryId": "semantic-1", "type": "SEMANTIC", "score": 0.52,
+             "ownerScope": "CONVERSATION", "source": "candidate_fact"},
+            {"memoryId": "unsafe-user-semantic", "type": "SEMANTIC",
+             "score": 0.99, "ownerScope": "USER",
+             "source": "evaluation_result"},
+        ],
+        [
+            {"memoryId": "episode-1", "type": "EPISODIC", "score": 0.61,
+             "ownerScope": "CONVERSATION", "source": "evaluation_insight"},
+            {"memoryId": "anchor-1", "type": "EPISODIC", "score": 0.48,
+             "ownerScope": "USER", "source": "cross_candidate_anchor"},
+            # A USER-scoped candidate episode is not a safe comparison anchor.
+            {"memoryId": "unsafe-user-episode", "type": "EPISODIC", "score": 0.99,
+             "ownerScope": "USER", "source": "evaluation_result"},
+        ],
+        limit=4)
+    assert [row["memoryId"] for row in merged] == [
+        "semantic-1", "episode-1", "anchor-1", "proc-1"]
+    assert "unsafe-user-episode" not in {row["memoryId"] for row in merged}
+    assert "unsafe-user-semantic" not in {row["memoryId"] for row in merged}
 
 
 def test_memory_recall_query_uses_resume_and_jd_not_only_generic_message():
@@ -1483,7 +1501,13 @@ def test_memory_recall_query_uses_resume_and_jd_not_only_generic_message():
     assert "Java 21" in query
     assert "Kubernetes" in query
     assert basis == [
-        "user_message", "current_goal", "job_description", "resume"]
+        "user_message", "current_goal", "job_description", "resume_cues"]
+    assert len(query) < 1000
+
+    episodic_query = RunExecutor._episodic_memory_query(request)
+    assert "历史评估" in episodic_query
+    assert "Java 21" in episodic_query
+    assert len(episodic_query) < 700
 
 
 def test_mcp_registry_is_main_thread_safe_and_expands_url_env():
