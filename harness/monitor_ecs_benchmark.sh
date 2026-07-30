@@ -1,0 +1,56 @@
+#!/bin/sh
+set -u
+
+OUT_FILE="${1:-/tmp/resumai-benchmark-monitor.csv}"
+STOP_FILE="${2:-/tmp/resumai-benchmark-monitor.stop}"
+INTERVAL_SECONDS="${3:-5}"
+
+mkdir -p "$(dirname "$OUT_FILE")"
+rm -f "$STOP_FILE"
+printf '%s\n' 'timestamp|docker_stats|task_queue|run_queue|mysql|redis|disk' > "$OUT_FILE"
+
+one_line() {
+  tr '\r\n|' ',,;' | sed 's/,,*/,/g; s/,$//'
+}
+
+while [ ! -f "$STOP_FILE" ]; do
+  timestamp="$(date --iso-8601=seconds)"
+  docker_stats="$(
+    docker stats --no-stream \
+      --format '{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}},{{.PIDs}}' \
+      ai-resume-backend ai-resume-workflow resumai-mysql resumai-redis \
+      2>/dev/null | one_line
+  )"
+  task_queue="$(
+    docker exec ai-resume-backend sh -lc \
+      'curl -fsS --max-time 3 http://127.0.0.1:8080/api/task-queue/status' \
+      2>/dev/null | one_line
+  )"
+  run_queue="$(
+    docker exec ai-resume-backend sh -lc \
+      'curl -fsS --max-time 3 http://127.0.0.1:8080/api/runs/queue/status' \
+      2>/dev/null | one_line
+  )"
+  mysql_status="$(
+    docker exec resumai-mysql sh -lc '
+      mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+        SHOW GLOBAL STATUS WHERE Variable_name IN (
+          '\''Threads_connected'\'', '\''Threads_running'\'',
+          '\''Max_used_connections'\'', '\''Innodb_row_lock_current_waits'\'',
+          '\''Innodb_row_lock_time'\'', '\''Slow_queries'\''
+        );" 2>/dev/null
+    ' 2>/dev/null | one_line
+  )"
+  redis_status="$(
+    docker exec resumai-redis sh -lc '
+      redis-cli -a "$REDIS_PASSWORD" --no-auth-warning INFO memory stats clients
+    ' 2>/dev/null \
+      | grep -E '^(used_memory_human|mem_fragmentation_ratio|instantaneous_ops_per_sec|connected_clients|blocked_clients|evicted_keys):' \
+      | one_line
+  )"
+  disk_status="$(df -P / /data 2>/dev/null | tail -n +2 | one_line)"
+  printf '%s|%s|%s|%s|%s|%s|%s\n' \
+    "$timestamp" "$docker_stats" "$task_queue" "$run_queue" \
+    "$mysql_status" "$redis_status" "$disk_status" >> "$OUT_FILE"
+  sleep "$INTERVAL_SECONDS"
+done

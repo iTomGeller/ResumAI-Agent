@@ -1884,21 +1884,29 @@ class RunExecutor:
             }
             if (is_report and single_pass_evaluation
                     and self._parallel_report_sections_enabled()):
-                section_output, section_calls = (
-                    await self._run_parallel_report_sections(
-                        messages,
-                        round_id=round_id,
-                        memory_refs=memory_refs,
-                        skill_refs=skill_refs,
-                        observed_tool_call_ids=observed_tool_call_ids,
-                        is_sparse_resume=bool(
-                            signals.get("is_sparse_resume"))))
-                agent_llm_calls += section_calls
-                if section_output is not None:
-                    decision_iterations += 1
-                    output = self._build_output(
-                        definition, section_output, tool_results_block)
-                    break
+                terminal_available = self.budget.available_llm_calls_for_scope(
+                    self.policy.maxLlmCalls, "terminal")
+                # Keep three calls for the monolithic quality-model fallback
+                # (initial + provider retries). The section fan-out may use
+                # only the remainder, preventing 3 + N + 3 call storms.
+                section_call_budget = max(0, terminal_available - 3)
+                if section_call_budget >= 3:
+                    section_output, section_calls = (
+                        await self._run_parallel_report_sections(
+                            messages,
+                            round_id=round_id,
+                            memory_refs=memory_refs,
+                            skill_refs=skill_refs,
+                            observed_tool_call_ids=observed_tool_call_ids,
+                            is_sparse_resume=bool(
+                                signals.get("is_sparse_resume")),
+                            max_calls=section_call_budget))
+                    agent_llm_calls += section_calls
+                    if section_output is not None:
+                        decision_iterations += 1
+                        output = self._build_output(
+                            definition, section_output, tool_results_block)
+                        break
             await self.emitter.emit(
                 "llm.context.attached", agent_id=agent_id, payload={
                     **trace_context,
@@ -2378,7 +2386,8 @@ class RunExecutor:
             if "trace_context" in inspect.signature(
                     self.llm.chat).parameters:
                 kwargs["trace_context"] = trace_context
-            raw = await self.llm.chat(messages, **kwargs)
+            raw = await self.llm.chat(
+                self._json_only_messages(messages), **kwargs)
             return LlmTurn(
                 content=str(raw or ""), tool_calls=[],
                 finish_reason="json_repair")
@@ -2397,6 +2406,28 @@ class RunExecutor:
                 tool_calls=[], finish_reason="legacy_native_repair")
         return legacy_turn
 
+    @staticmethod
+    def _json_only_messages(
+            messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Flatten provider-native history before switching to JSON mode.
+
+        Some OpenAI-compatible gateways reject historical ``tool_calls`` when
+        the current request uses ``response_format=json_object``, even when
+        every call id has a tool response. Tool observations are already in
+        the assembled context, so omit protocol frames but retain ordinary
+        system/user/assistant content.
+        """
+        clean: List[Dict[str, Any]] = []
+        for message in messages:
+            role = str(message.get("role") or "")
+            if role == "tool" or message.get("tool_calls"):
+                continue
+            content = message.get("content")
+            if role not in {"system", "user", "assistant"} or not content:
+                continue
+            clean.append({"role": role, "content": str(content)})
+        return clean
+
     def _parallel_report_sections_enabled(self) -> bool:
         configured = _os.getenv(
             "REPORT_PARALLEL_SECTIONS", "1").strip().lower()
@@ -2412,6 +2443,7 @@ class RunExecutor:
             skill_refs: List[Dict[str, Any]],
             observed_tool_call_ids: List[str],
             is_sparse_resume: bool,
+            max_calls: int = 4,
     ) -> Tuple[Optional[Dict[str, Any]], int]:
         """Generate score, risk and interview sections concurrently.
 
@@ -2437,6 +2469,7 @@ class RunExecutor:
                     },
                 },
             }
+            uses_json_mode = isinstance(self.llm, ResilientLlmClient)
             section_messages = list(messages) + [{
                 "role": "user",
                 "content": (
@@ -2444,7 +2477,11 @@ class RunExecutor:
                     f"{spec['instruction']}\n"
                     + ("这是质量闸门后的定向重试，必须严格满足数量、"
                        "证据引用和结构要求。\n" if attempt > 1 else "")
-                    + "必须调用 emit_report_section，一次提交完整结果。"),
+                    + (
+                        "直接输出一个完整 JSON 对象，不要使用 markdown。"
+                        if uses_json_mode else
+                        "必须调用 emit_report_section，一次提交完整结果。"
+                    )),
             }]
             trace_context = {
                 "roundId": section_round,
@@ -2466,7 +2503,7 @@ class RunExecutor:
                     "skillInstructionCount": sum(
                         1 for ref in skill_refs
                         if ref.get("instructionsAttached")),
-                    "toolCatalogRefs": [{
+                    "toolCatalogRefs": [] if uses_json_mode else [{
                         "toolName": "emit_report_section",
                         "modelName": "emit_report_section",
                         "source": "runtime_terminal",
@@ -2474,26 +2511,41 @@ class RunExecutor:
                         "description": tool["function"]["description"],
                         "inputSchema": tool["function"]["parameters"],
                     }],
-                    "toolCatalogCount": 1,
+                    "toolCatalogCount": 0 if uses_json_mode else 1,
                     "messageCount": len(section_messages),
-                    "toolChoice": {
+                    "toolChoice": "json_object" if uses_json_mode else {
                         "type": "function",
                         "function": {"name": "emit_report_section"},
                     },
                     "occurredAt": _utc_now(),
                 })
-            turn = await self._chat_native_turn(
-                section_messages,
-                agent_id="ReportAgent",
-                purpose=f"report_{section}",
-                max_tokens=int(spec["maxTokens"]),
-                tools=[tool],
-                tool_choice={
-                    "type": "function",
-                    "function": {"name": "emit_report_section"},
-                },
-                use_quality=bool(spec["useQuality"]),
-                trace_context=trace_context)
+            if uses_json_mode:
+                raw = await self.llm.chat(
+                    self._json_only_messages(section_messages),
+                    agent_id="ReportAgent",
+                    purpose=f"report_{section}",
+                    max_tokens=int(spec["maxTokens"]),
+                    json_mode=True,
+                    tools=None,
+                    tool_choice=None,
+                    use_quality=bool(spec["useQuality"]),
+                    trace_context=trace_context)
+                turn = LlmTurn(
+                    content=str(raw or ""), tool_calls=[],
+                    finish_reason="json_section")
+            else:
+                turn = await self._chat_native_turn(
+                    section_messages,
+                    agent_id="ReportAgent",
+                    purpose=f"report_{section}",
+                    max_tokens=int(spec["maxTokens"]),
+                    tools=[tool],
+                    tool_choice={
+                        "type": "function",
+                        "function": {"name": "emit_report_section"},
+                    },
+                    use_quality=bool(spec["useQuality"]),
+                    trace_context=trace_context)
             call = next(
                 (candidate for candidate in turn.tool_calls
                  if candidate.name == "emit_report_section"), None)
@@ -2548,6 +2600,10 @@ class RunExecutor:
                 names: List[str], attempt: int,
         ) -> Dict[str, str]:
             nonlocal call_count
+            if not names:
+                return {}
+            remaining_call_budget = max(0, int(max_calls) - call_count)
+            names = names[:remaining_call_budget]
             if not names:
                 return {}
             call_count += len(names)

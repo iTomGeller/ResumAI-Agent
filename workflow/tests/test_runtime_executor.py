@@ -16,7 +16,12 @@ from app.runtime.coordinator import Coordinator, TASK_PIPELINES
 from app.runtime.agents import default_agent_registry
 from app.runtime.events import NullEmitter
 from app.runtime.executor import RunExecutor
-from app.runtime.llm import LlmToolCall, LlmTurn
+from app.runtime.llm import (
+    CircuitBreaker,
+    LlmToolCall,
+    LlmTurn,
+    ResilientLlmClient,
+)
 from app.runtime.memory import NullMemoryClient
 from app.runtime.models import (
     AgentOutput,
@@ -645,6 +650,73 @@ def test_parallel_report_retries_only_the_failed_section():
         assert llm.calls.count("report_score") == 1
         assert llm.calls.count("report_risk") == 1
         assert llm.calls.count("report_question") == 2
+
+    run(scenario())
+
+
+def test_parallel_report_production_client_uses_json_mode_and_call_cap():
+    ref = {
+        "sourceType": "RESUME", "sourceId": "resume",
+        "quote": "candidate evidence",
+    }
+
+    async def scenario():
+        request = make_request(run_type="full_evaluation")
+        executor, emitter = make_executor(request, llm=FakeLlm())
+        client = ResilientLlmClient(
+            emitter, executor.budget,
+            max_llm_calls=executor.policy.maxLlmCalls,
+            llm_timeout_seconds=5,
+            breaker=CircuitBreaker(threshold=5))
+        calls = []
+
+        async def fake_chat(messages, *, purpose="", json_mode=True,
+                            tools=None, tool_choice=None, **kwargs):
+            calls.append({
+                "purpose": purpose, "jsonMode": json_mode,
+                "tools": tools, "toolChoice": tool_choice,
+            })
+            if purpose == "report_score":
+                payload = {
+                    "summary": "summary",
+                    "recommendation": "NEED_MANUAL_REVIEW",
+                    "dataQuality": "PARTIAL",
+                    "dimensions": [
+                        {"name": name, "score": 60, "status": "ASSESSED",
+                         "rationale": "evidence", "evidenceRefs": [ref]}
+                        for name in (
+                            "技术能力", "项目深度", "JD匹配", "履历可信度")],
+                    "strengths": ["one", "two"],
+                }
+            elif purpose == "report_risk":
+                payload = {
+                    "risks": [
+                        {"claim": f"risk {i}", "evidenceRefs": [ref]}
+                        for i in range(4)],
+                    "missingEvidence": [],
+                }
+            else:
+                payload = {
+                    "interviewQuestions": [
+                        {"question": f"question {i}",
+                         "evidenceRefs": [ref]}
+                        for i in range(8)]}
+            return json.dumps(payload, ensure_ascii=False)
+
+        client.chat = fake_chat
+        executor.llm = client
+        executor.tools.llm = client
+        output, call_count = await executor._run_parallel_report_sections(
+            [{"role": "system", "content": "json report"}],
+            round_id="r:ReportAgent:round:1", memory_refs=[],
+            skill_refs=[], observed_tool_call_ids=[], is_sparse_resume=False,
+            max_calls=3)
+
+        assert output is not None
+        assert call_count == 3
+        assert len(calls) == 3
+        assert all(call["jsonMode"] is True for call in calls)
+        assert all(call["tools"] is None for call in calls)
 
     run(scenario())
 

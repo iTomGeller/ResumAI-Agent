@@ -911,6 +911,9 @@ def test_malformed_native_final_repairs_through_provider_json_mode():
             "jsonMode": json_mode,
             "toolCount": len(tools or []),
             "toolChoice": tool_choice,
+            "hasProtocolFrames": any(
+                message.get("role") == "tool" or message.get("tool_calls")
+                for message in messages),
         })
         if tools:
             return (
@@ -955,6 +958,7 @@ def test_malformed_native_final_repairs_through_provider_json_mode():
     assert invocations[0]["jsonMode"] is False
     assert invocations[1]["toolCount"] == 0
     assert invocations[1]["jsonMode"] is True
+    assert invocations[1]["hasProtocolFrames"] is False
 
 
 class _ReportFinalizationLlm:
