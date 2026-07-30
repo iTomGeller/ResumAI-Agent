@@ -87,7 +87,14 @@ public class TaskQueueService {
         if (messageId == null || !properties.isEnabled()) {
             return;
         }
-        stream().ack(properties.getConsumerGroup(), messageId);
+        RStream<String, String> stream = stream();
+        long acknowledged = stream.ack(properties.getConsumerGroup(), messageId);
+        if (acknowledged > 0) {
+            // ACK alone retains every historical message forever. Production
+            // has one consumer group, so delete only after its ACK; unconsumed
+            // backlog and pending messages are never trimmed away.
+            stream.remove(messageId);
+        }
     }
 
     public long pendingCount() {

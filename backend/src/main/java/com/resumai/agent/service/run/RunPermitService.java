@@ -1,6 +1,7 @@
 package com.resumai.agent.service.run;
 
 import com.resumai.agent.config.AgentRunProperties;
+import jakarta.annotation.PostConstruct;
 import java.util.concurrent.TimeUnit;
 import org.redisson.api.RPermitExpirableSemaphore;
 import org.redisson.api.RedissonClient;
@@ -33,9 +34,25 @@ public class RunPermitService {
         this.properties = properties;
     }
 
+    @PostConstruct
+    public void initializeGlobalCapacity() {
+        RPermitExpirableSemaphore semaphore =
+                redisson.getPermitExpirableSemaphore(GLOBAL_KEY);
+        int desired = Math.max(1, properties.getMaxGlobalConcurrent());
+        if (!semaphore.trySetPermits(desired)
+                && semaphore.getPermits() != desired) {
+            // trySetPermits initializes only a missing key. Reconcile an
+            // existing semaphore so a measured capacity change takes effect
+            // after deployment without deleting active permit leases.
+            semaphore.setPermits(desired);
+        }
+        log.info("global run permit capacity={} available={} acquired={}",
+                semaphore.getPermits(), semaphore.availablePermits(),
+                semaphore.acquiredPermits());
+    }
+
     private RPermitExpirableSemaphore globalSemaphore() {
         RPermitExpirableSemaphore semaphore = redisson.getPermitExpirableSemaphore(GLOBAL_KEY);
-        semaphore.trySetPermits(properties.getMaxGlobalConcurrent());
         return semaphore;
     }
 

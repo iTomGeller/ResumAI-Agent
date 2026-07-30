@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,6 +32,7 @@ public class TaskWorkerService {
 
     private final AtomicInteger activeWorkers = new AtomicInteger(0);
     private final ThreadPoolExecutor workerPool;
+    private final Semaphore workerPermits;
     private ExecutorService poller;
     private volatile boolean running = true;
     private volatile long lastRecoveryAt = 0L;
@@ -43,7 +45,9 @@ public class TaskWorkerService {
         this.taskQueueRepository = taskQueueRepository;
         this.properties = properties;
         this.evaluationService = evaluationService;
-        this.workerPool = (ThreadPoolExecutor) Executors.newFixedThreadPool(Math.max(1, properties.getMaxWorkers()));
+        int maxWorkers = Math.max(1, properties.getMaxWorkers());
+        this.workerPool = (ThreadPoolExecutor) Executors.newFixedThreadPool(maxWorkers);
+        this.workerPermits = new Semaphore(maxWorkers, true);
     }
 
     @PostConstruct
@@ -80,17 +84,32 @@ public class TaskWorkerService {
             try {
                 maybeRecoverStuckTasks();
                 requeueRetryReadyTasks();
-                var messageOpt = taskQueueService.pollMessage();
+                // Reserve execution capacity before XREADGROUP. Reading first
+                // and checking capacity afterwards strands the already claimed
+                // message in the PEL whenever all workers are busy.
+                if (!workerPermits.tryAcquire()) {
+                    Thread.sleep(properties.getPollIntervalMs());
+                    continue;
+                }
+                final java.util.Optional<TaskQueueService.QueuedTaskMessage> messageOpt;
+                try {
+                    messageOpt = taskQueueService.pollMessage();
+                } catch (RuntimeException pollFailure) {
+                    workerPermits.release();
+                    throw pollFailure;
+                }
                 if (messageOpt.isEmpty()) {
+                    workerPermits.release();
                     Thread.sleep(properties.getPollIntervalMs());
                     continue;
                 }
                 TaskQueueService.QueuedTaskMessage message = messageOpt.get();
-                if (activeWorkers.get() >= properties.getMaxWorkers()) {
-                    Thread.sleep(properties.getPollIntervalMs());
-                    continue;
+                try {
+                    workerPool.submit(() -> processMessage(message));
+                } catch (RuntimeException submitFailure) {
+                    workerPermits.release();
+                    throw submitFailure;
                 }
-                workerPool.submit(() -> processMessage(message));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
@@ -119,6 +138,7 @@ public class TaskWorkerService {
             handleFailure(traceId, messageId, e);
         } finally {
             activeWorkers.decrementAndGet();
+            workerPermits.release();
         }
     }
 

@@ -14,9 +14,9 @@ spring:
     username: ${MYSQL_USER:resumai}
     password: ${MYSQL_PASSWORD:}
     hikari:
-      maximum-pool-size: 10
-      minimum-idle: 2
-      connection-timeout: 30000
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:30000}
   data:
     redis:
       host: ${REDIS_HOST:redis}
