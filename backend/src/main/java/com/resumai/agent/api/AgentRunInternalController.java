@@ -2,9 +2,7 @@ package com.resumai.agent.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.dao.ContextSnapshotMapper;
-import com.resumai.agent.dao.SandboxExecutionMapper;
 import com.resumai.agent.domain.entity.ContextSnapshotRow;
-import com.resumai.agent.domain.entity.SandboxExecutionRow;
 import com.resumai.agent.service.InternalWorkflowService;
 import com.resumai.agent.service.MemoryService;
 import com.resumai.agent.service.RunMemoryUsageService;
@@ -27,8 +25,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Docker-internal control plane for the Python agent runtime: run events,
- * final results, layered memory access, context snapshots and sandbox
- * execution records. Protected by the shared internal token.
+ * final results, layered memory access and context snapshots. Protected by the
+ * shared internal token.
  */
 @RestController
 @RequestMapping("/api/internal/agent-runs")
@@ -40,7 +38,6 @@ public class AgentRunInternalController {
     private final MemoryService memoryService;
     private final RunMemoryUsageService runMemoryUsageService;
     private final ContextSnapshotMapper contextSnapshotMapper;
-    private final SandboxExecutionMapper sandboxExecutionMapper;
     private final ObjectMapper objectMapper;
 
     public AgentRunInternalController(InternalWorkflowService internalWorkflowService,
@@ -49,7 +46,6 @@ public class AgentRunInternalController {
                                       MemoryService memoryService,
                                       RunMemoryUsageService runMemoryUsageService,
                                       ContextSnapshotMapper contextSnapshotMapper,
-                                      SandboxExecutionMapper sandboxExecutionMapper,
                                       ObjectMapper objectMapper) {
         this.internalWorkflowService = internalWorkflowService;
         this.lifecycleService = lifecycleService;
@@ -57,7 +53,6 @@ public class AgentRunInternalController {
         this.memoryService = memoryService;
         this.runMemoryUsageService = runMemoryUsageService;
         this.contextSnapshotMapper = contextSnapshotMapper;
-        this.sandboxExecutionMapper = sandboxExecutionMapper;
         this.objectMapper = objectMapper;
     }
 
@@ -281,7 +276,7 @@ public class AgentRunInternalController {
     }
 
     // ------------------------------------------------------------------
-    // Context snapshots + sandbox execution records
+    // Context snapshots
     // ------------------------------------------------------------------
 
     public record ContextSnapshotRequest(String runId, String conversationId, Integer summaryVersion,
@@ -308,60 +303,6 @@ public class AgentRunInternalController {
         row.setCreateTime(LocalDateTime.now());
         contextSnapshotMapper.insert(row);
         return Map.of("status", "OK", "id", row.getId());
-    }
-
-    public record SandboxExecutionRequest(String sandboxId, String runId, String conversationId,
-                                          String toolName, String containerId, String status,
-                                          String purpose, String experimentId, String trialId,
-                                          Integer exitCode, Long durationMs, String stdoutTail,
-                                          String stderrTail, String error, String expireAt) {
-    }
-
-    @PostMapping("/sandbox-executions")
-    public Map<String, Object> saveSandboxExecution(@RequestHeader("X-Internal-Token") String token,
-                                                    @RequestBody SandboxExecutionRequest request) {
-        authorize(token);
-        SandboxExecutionRow existing = sandboxExecutionMapper.selectOne(
-                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<SandboxExecutionRow>()
-                        .eq("sandbox_id", request.sandboxId()).last("limit 1"));
-        SandboxExecutionRow row = existing != null ? existing : new SandboxExecutionRow();
-        row.setSandboxId(request.sandboxId());
-        row.setRunId(request.runId());
-        row.setConversationId(request.conversationId());
-        row.setToolName(request.toolName());
-        row.setContainerId(request.containerId());
-        row.setStatus(request.status());
-        if (request.purpose() != null && !request.purpose().isBlank()) {
-            row.setPurpose(request.purpose());
-        }
-        if (request.experimentId() != null) {
-            row.setExperimentId(request.experimentId());
-        }
-        if (request.trialId() != null) {
-            row.setTrialId(request.trialId());
-        }
-        row.setExitCode(request.exitCode());
-        row.setDurationMs(request.durationMs());
-        row.setStdoutTail(trim(request.stdoutTail(), 3900));
-        row.setStderrTail(trim(request.stderrTail(), 1900));
-        row.setError(trim(request.error(), 1900));
-        if (request.expireAt() != null && !request.expireAt().isBlank()) {
-            try {
-                row.setExpireAt(LocalDateTime.parse(request.expireAt().substring(0, 19)));
-            } catch (Exception ignored) {
-                // best effort — expire_at is advisory metadata
-            }
-        }
-        if (existing == null) {
-            row.setCreateTime(LocalDateTime.now());
-            sandboxExecutionMapper.insert(row);
-        } else {
-            if (request.status() != null && !"RUNNING".equals(request.status())) {
-                row.setFinishedAt(LocalDateTime.now());
-            }
-            sandboxExecutionMapper.updateById(row);
-        }
-        return Map.of("status", "OK");
     }
 
     // ------------------------------------------------------------------

@@ -140,10 +140,8 @@ def test_canonical_taxonomy_and_agent_routes_are_diverse():
 
     parser = allowed_types_for("ResumeParserAgent")
     report = allowed_types_for("ReportAgent")
-    policy = allowed_types_for("PolicyEvolution")
     assert parser == frozenset({"SEMANTIC", "WORKING"})
     assert "EPISODIC" in report and "WORKING" not in report
-    assert policy == frozenset({"PROCEDURAL", "EPISODIC"})
 
 
 def test_usage_decision_has_taxonomy_namespace_reason_and_real_time():

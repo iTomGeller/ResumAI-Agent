@@ -9,7 +9,6 @@ public enum RunStatus {
     RUNNING,
     WAITING_LLM,
     WAITING_TOOL,
-    WAITING_SANDBOX,
     PAUSING,
     PAUSED,
     RESUMING,
@@ -27,7 +26,7 @@ public enum RunStatus {
     /** States holding permits and expected to make progress (watchdog scope). */
     public static final Set<String> ACTIVE = Set.of(
             STARTING.name(), RUNNING.name(), WAITING_LLM.name(),
-            WAITING_TOOL.name(), WAITING_SANDBOX.name(),
+            WAITING_TOOL.name(),
             PAUSING.name(), RESUMING.name(), CANCELLING.name());
 
     public static boolean isTerminal(String status) {

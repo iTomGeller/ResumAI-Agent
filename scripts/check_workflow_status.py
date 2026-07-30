@@ -33,7 +33,6 @@ def main():
     ssh.connect(env["ALIYUN_HOST"], username="root", password=env["ALIYUN_PASSWORD"], look_for_keys=False, allow_agent=False)
     run(ssh, "ps aux | grep -E 'docker|compose' | grep -v grep | head -10")
     run(ssh, "docker ps --format 'table {{.Names}}\t{{.Status}}' | grep workflow")
-    run(ssh, "docker exec ai-resume-workflow python -c \"import langfuse; print(langfuse.__version__); from langfuse import Langfuse; lf=Langfuse(); print('trace', hasattr(lf,'trace'))\" 2>&1 || true")
     ssh.close()
 
 

@@ -44,7 +44,7 @@ from app.runtime.models import (  # noqa: E402
     PolicyBundle,
     RunBudget,
 )
-from app.runtime.sandbox_tools_local import run_tool  # noqa: E402
+from app.runtime.builtin_tools import run_tool  # noqa: E402
 from app.runtime.skills import SkillManager  # noqa: E402
 from app.runtime.state import SharedState  # noqa: E402
 from app.runtime.builtin_tools import BuiltinToolRegistry  # noqa: E402
@@ -208,7 +208,7 @@ def scenario_shared_state_conflicts() -> None:
           state.data["resumeFacts"].get("years") == 3)
 
 
-def scenario_sandbox_tool_contracts() -> None:
+def scenario_builtin_tool_contracts() -> None:
     parsed = run_tool("parse_resume", {"resumeText": "技能：Java\n项目：订单系统"})
     check("parse_resume_contract", parsed.get("success") is True
           and "skills" in parsed)
@@ -478,7 +478,7 @@ def main() -> int:
     scenario_llm_budget_reservations()
     scenario_context_compaction()
     scenario_shared_state_conflicts()
-    scenario_sandbox_tool_contracts()
+    scenario_builtin_tool_contracts()
     scenario_native_mcp_and_progressive_skills()
     scenario_revision_artifact_reuse()
     scenario_turn_routing()

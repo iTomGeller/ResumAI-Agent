@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue';
 
 /**
- * Langfuse 风格的两栏 Trace 视图：
+ * 两栏 Trace 视图：
  * 左栏是紧凑 span 树（规划 → 并行组 → Agent → 轮次/工具），
  * 右栏是选中 span 的详情面板（目标 / 判断 / 入参出参 / tokens / 耗时）。
  */
@@ -159,10 +159,8 @@ interface ExecTree {
   memoryTop?: Array<{ type?: string; confidence?: number; content?: string }>;
   runId?: string;
   runStatus?: string;
-  policyId?: string;
   attemptNo?: number;
   historicalAttempts?: HistoricalAttempt[];
-  langfuseTraceUrl?: string;
 }
 
 const props = defineProps<{
@@ -241,7 +239,6 @@ function purpose(agent: AgentView): string {
 function normalizeCategory(raw?: string, toolName?: string, isLlm = false): ToolCategory {
   if (isLlm) return 'llm';
   const value = (raw || '').toLowerCase();
-  if (value === 'sandbox') return 'builtin';
   if (value === 'gateway') return 'external';
   if (value === 'mcp' || value === 'skill' || value === 'memory' || value === 'builtin'
       || value === 'retrieval' || value === 'llm' || value === 'external') {
@@ -814,7 +811,6 @@ async function copyText(text?: string) {
       <span class="trace-summary-item"><em>Skill 已应用</em>{{ totals.skillsApplied }}</span>
       <span class="trace-summary-item"><em>MCP 真实调用</em>{{ totals.mcpCalls }}</span>
       <span class="trace-summary-item"><em>Tokens</em>{{ totals.tokens || '-' }}</span>
-      <span class="trace-summary-item" v-if="tree?.policyId"><em>策略</em>{{ tree.policyId }}</span>
       <span class="trace-summary-item" v-if="tree?.runStatus"><em>状态</em>{{ tree.runStatus }}</span>
       <span class="trace-summary-item" v-if="tree?.attemptNo"><em>当前尝试</em>#{{ tree.attemptNo }}</span>
     </div>
@@ -1145,7 +1141,7 @@ async function copyText(text?: string) {
             <pre>{{ selected.round.finalOutput || selected.round.output || selected.round.decisionText }}</pre>
           </div>
           <p class="text-muted-sm" v-if="!selected.round.error && !(selected.round.toolCalls || []).length && !selected.round.input && !selected.round.output && !selected.round.decisionText && !selected.round.finalOutput">
-            本轮为 LLM 生成（{{ selected.round.tokens || '-' }} tokens）；完整入出参可在 Langfuse 深度调试中查看。
+            本轮为 LLM 生成（{{ selected.round.tokens || '-' }} tokens），暂无可展示的输入/输出摘要。
           </p>
         </template>
       </div>
@@ -1264,7 +1260,6 @@ async function copyText(text?: string) {
 .badge-mcp { background: #dcfce7; color: #15803d; }
 .badge-skill { background: #f3e8ff; color: #7e22ce; }
 .badge-memory { background: #fef3c7; color: #92400e; }
-.badge-sandbox { background: #ffedd5; color: #c2410c; }
 .badge-builtin { background: #ecfdf5; color: #047857; }
 .badge-retrieval { background: #eef2ff; color: #4338ca; }
 .badge-external { background: #f1f5f9; color: #475569; }

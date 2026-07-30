@@ -64,9 +64,6 @@ public class AgentRun {
     @TableField("metrics")
     private String metrics;
 
-    @TableField("policy_id")
-    private String policyId;
-
     @TableField("prompt_versions")
     private String promptVersions;
 

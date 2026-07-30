@@ -82,7 +82,6 @@ class TimeoutPolicy(BaseModel):
     runTimeoutSeconds: int = 900
     llmTimeoutSeconds: int = 120
     toolTimeoutSeconds: int = 30
-    sandboxTimeoutSeconds: int = 90
 
 
 _BALANCED_MIN_LLM_CALLS = 17

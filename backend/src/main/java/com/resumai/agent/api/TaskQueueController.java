@@ -3,7 +3,6 @@ package com.resumai.agent.api;
 import com.resumai.agent.api.dto.PageResult;
 import com.resumai.agent.api.dto.TaskListItemResponse;
 import com.resumai.agent.api.dto.TaskQueueStatusResponse;
-import com.resumai.agent.config.TaskQueueMetricsCollector;
 import com.resumai.agent.config.TaskQueueProperties;
 import com.resumai.agent.domain.entity.ResumeTask;
 import com.resumai.agent.domain.enums.QueueStatus;
@@ -27,20 +26,17 @@ public class TaskQueueController {
     private final TaskQueueService taskQueueService;
     private final TaskWorkerService taskWorkerService;
     private final TaskQueueProperties properties;
-    private final TaskQueueMetricsCollector metricsCollector;
     private final com.resumai.agent.service.ResumeEvaluationService evaluationService;
 
     public TaskQueueController(TaskQueueRepository taskQueueRepository,
                                TaskQueueService taskQueueService,
                                TaskWorkerService taskWorkerService,
                                TaskQueueProperties properties,
-                               TaskQueueMetricsCollector metricsCollector,
                                com.resumai.agent.service.ResumeEvaluationService evaluationService) {
         this.taskQueueRepository = taskQueueRepository;
         this.taskQueueService = taskQueueService;
         this.taskWorkerService = taskWorkerService;
         this.properties = properties;
-        this.metricsCollector = metricsCollector;
         this.evaluationService = evaluationService;
     }
 

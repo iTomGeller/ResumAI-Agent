@@ -17,7 +17,6 @@ import com.resumai.agent.api.dto.ops.OpsDebugDtos.McpOpsResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryOpsResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryTtlView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.MemoryUsageView;
-import com.resumai.agent.api.dto.ops.OpsDebugDtos.ObservabilityView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.PlanDebugView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagChunkView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagOpsResponse;
@@ -33,7 +32,6 @@ import com.resumai.agent.api.dto.ops.OpsDebugDtos.SkillManifestItem;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.SkillOpsResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.SkillUsageView;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.TimelineEventView;
-import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.dao.AgentRunMapper;
 import com.resumai.agent.dao.MemoryEntryMapper;
 import com.resumai.agent.dao.RunEventMapper;
@@ -98,7 +96,6 @@ public class OpsDebugService {
     private final RunMemoryUsageService memoryUsageService;
     private final AgentMemoryService agentMemoryService;
     private final AgentRuntimeClient runtimeClient;
-    private final LangfuseHealthService langfuseHealth;
     private final ObjectMapper objectMapper;
 
     public OpsDebugService(AgentRunMapper agentRunMapper,
@@ -107,7 +104,6 @@ public class OpsDebugService {
                            RunMemoryUsageService memoryUsageService,
                            AgentMemoryService agentMemoryService,
                            AgentRuntimeClient runtimeClient,
-                           LangfuseHealthService langfuseHealth,
                            ObjectMapper objectMapper) {
         this.agentRunMapper = agentRunMapper;
         this.runEventMapper = runEventMapper;
@@ -115,7 +111,6 @@ public class OpsDebugService {
         this.memoryUsageService = memoryUsageService;
         this.agentMemoryService = agentMemoryService;
         this.runtimeClient = runtimeClient;
-        this.langfuseHealth = langfuseHealth;
         this.objectMapper = objectMapper;
     }
 
@@ -232,7 +227,6 @@ public class OpsDebugService {
                 mcpCalls,
                 skills,
                 memory,
-                new ObservabilityView(langfuseHealth.snapshot()),
                 truncated,
                 nextSeq);
     }
@@ -510,7 +504,7 @@ public class OpsDebugService {
         return new RunDebugSummary(
                 run.getRunId(), run.getConversationId(), run.getUserId(), run.getTraceId(),
                 run.getSourceTaskTraceId(), run.getRevisionNo(), run.getRunType(), run.getStatus(),
-                run.getCurrentAgent(), run.getCurrentTool(), run.getCurrentPhase(), run.getPolicyId(),
+                run.getCurrentAgent(), run.getCurrentTool(), run.getCurrentPhase(),
                 run.getErrorCode(), truncate(run.getErrorMessage(), 500),
                 parseJson(run.getSkillVersions()), parseJson(run.getPromptVersions()),
                 parseJson(run.getMetrics()),
@@ -532,7 +526,6 @@ public class OpsDebugService {
         item.put("currentAgent", s.currentAgent());
         item.put("currentTool", s.currentTool());
         item.put("currentPhase", s.currentPhase());
-        item.put("policyId", s.policyId());
         item.put("errorCode", s.errorCode());
         item.put("errorMessage", truncate(s.errorMessage(), 200));
         item.put("skillVersions", s.skillVersions());
@@ -559,13 +552,6 @@ public class OpsDebugService {
         item.put("createTime", event.getCreateTime());
         item.put("outcome", deriveOutcome(event.getEventType()).name());
         return item;
-    }
-
-    public String sandboxPurpose(String purpose) {
-        if (StringUtils.hasText(purpose)) {
-            return purpose.trim();
-        }
-        return "LEGACY_CANDIDATE_EVALUATION";
     }
 
     public Object redact(Object value) {
@@ -631,7 +617,7 @@ public class OpsDebugService {
         }
         return new CorrelationView(
                 run.getRunId(), run.getConversationId(), run.getTraceId(),
-                run.getSourceTaskTraceId(), run.getRevisionNo(), run.getPolicyId(),
+                run.getSourceTaskTraceId(), run.getRevisionNo(),
                 siblings, retries);
     }
 
@@ -654,7 +640,6 @@ public class OpsDebugService {
                 plan, groups,
                 str(map.get("reason")),
                 str(map.get("requiredTerminalAgent")),
-                str(map.get("policyId")),
                 selected, skipped, edges, goals, budget != null ? budget : Map.of(),
                 true);
     }

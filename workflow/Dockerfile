@@ -17,11 +17,7 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
     # the import in the image build.
     && pip install --no-cache-dir "redis>=5.0" \
          "mcp>=1.1.3,<2" "mcp-server-fetch==2026.7.10" \
-    && python -c "import mcp_server_fetch" \
-    && pip install --no-cache-dir \
-         "opentelemetry-api>=1.27.0" \
-         "opentelemetry-sdk>=1.27.0" \
-         "opentelemetry-exporter-otlp-proto-http>=1.27.0"
+    && python -c "import mcp_server_fetch"
 
 COPY workflow/app ./app
 COPY workflow/tests ./tests

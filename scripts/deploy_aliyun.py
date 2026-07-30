@@ -14,7 +14,6 @@ When the remote deployment has no `.env` yet, first bootstrap also requires:
   MINIO_ROOT_PASSWORD
   WORKFLOW_INTERNAL_TOKEN
   WORKFLOW_POSTGRES_PASSWORD  URL-safe characters only (A-Z a-z 0-9 . _ ~ -)
-  GRAFANA_PASSWORD
 
 Optional environment variables:
   ALIYUN_USER          default root
@@ -78,7 +77,6 @@ class DeployConfig:
     minio_root_password: Optional[str]
     workflow_internal_token: Optional[str]
     workflow_postgres_password: Optional[str]
-    grafana_password: Optional[str]
 
 
 BOOTSTRAP_REQUIRED_KEYS = (
@@ -93,7 +91,6 @@ BOOTSTRAP_REQUIRED_KEYS = (
     "MINIO_ROOT_PASSWORD",
     "WORKFLOW_INTERNAL_TOKEN",
     "WORKFLOW_POSTGRES_PASSWORD",
-    "GRAFANA_PASSWORD",
 )
 
 # Only these local values may update an existing remote .env. Connection and
@@ -113,7 +110,6 @@ REMOTE_ENV_OVERRIDE_KEYS = (
     "MINIO_ROOT_PASSWORD",
     "WORKFLOW_INTERNAL_TOKEN",
     "WORKFLOW_POSTGRES_PASSWORD",
-    "GRAFANA_PASSWORD",
     "OBJECT_STORAGE_ENABLED",
     "MINIO_BUCKET",
     "EXA_API_KEY",
@@ -121,11 +117,6 @@ REMOTE_ENV_OVERRIDE_KEYS = (
     "GITHUB_TOKEN",
     "TAVILY_API_KEY",
     "BRAVE_API_KEY",
-    "LANGFUSE_PUBLIC_KEY",
-    "LANGFUSE_SECRET_KEY",
-    "LANGFUSE_HOST",
-    "LANGFUSE_PUBLIC_URL",
-    "LANGFUSE_OTEL_ENDPOINT",
 )
 
 
@@ -196,7 +187,6 @@ def load_config() -> DeployConfig:
         minio_root_password=os.getenv("MINIO_ROOT_PASSWORD"),
         workflow_internal_token=os.getenv("WORKFLOW_INTERNAL_TOKEN"),
         workflow_postgres_password=os.getenv("WORKFLOW_POSTGRES_PASSWORD"),
-        grafana_password=os.getenv("GRAFANA_PASSWORD"),
     )
 
 
@@ -368,7 +358,6 @@ def upload_env(ssh: paramiko.SSHClient, config: DeployConfig) -> None:
             "MINIO_ROOT_PASSWORD": config.minio_root_password or "",
             "WORKFLOW_INTERNAL_TOKEN": config.workflow_internal_token or "",
             "WORKFLOW_POSTGRES_PASSWORD": config.workflow_postgres_password or "",
-            "GRAFANA_PASSWORD": config.grafana_password or "",
         }
         existing_values.update(bootstrap_values)
         values_to_write.update(bootstrap_values)

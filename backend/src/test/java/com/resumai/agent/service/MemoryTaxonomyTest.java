@@ -24,13 +24,14 @@ class MemoryTaxonomyTest {
                 null, "ResumeParserAgent", "解析当前候选人简历事实");
         var report = MemoryService.retrievalPlan(
                 null, "ReportAgent", "参考上次评估结果生成报告");
-        var policy = MemoryService.retrievalPlan(
-                null, "PolicyEvolution", "采用已批准的评分规则");
+        var coordinator = MemoryService.retrievalPlan(
+                null, "CoordinatorAgent", "采用已批准的评分规则");
 
         assertEquals(List.of("SEMANTIC", "WORKING"), parser.allowedTypes());
         assertTrue(report.allowedTypes().contains("EPISODIC"));
         assertFalse(report.allowedTypes().contains("WORKING"));
-        assertEquals(List.of("PROCEDURAL", "EPISODIC"), policy.allowedTypes());
+        assertEquals(List.of("WORKING", "SEMANTIC", "PROCEDURAL", "EPISODIC"),
+                coordinator.allowedTypes());
     }
 
     @Test

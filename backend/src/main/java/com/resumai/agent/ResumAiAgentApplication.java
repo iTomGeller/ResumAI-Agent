@@ -3,7 +3,6 @@ package com.resumai.agent;
 import com.resumai.agent.config.DeepSeekProperties;
 import com.resumai.agent.config.EmbeddingProperties;
 import com.resumai.agent.config.MilvusProperties;
-import com.resumai.agent.config.MysqlObservabilityProperties;
 import com.resumai.agent.config.ObjectStorageProperties;
 import com.resumai.agent.config.TaskQueueProperties;
 import com.resumai.agent.config.WorkflowProperties;
@@ -22,7 +21,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         DeepSeekProperties.class,
         MilvusProperties.class,
         EmbeddingProperties.class,
-        MysqlObservabilityProperties.class,
         ObjectStorageProperties.class,
         TaskQueueProperties.class,
         WorkflowProperties.class

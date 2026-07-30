@@ -318,17 +318,6 @@ interface CandidateListItem {
 }
 
 
-interface FeedbackResponse {
-  id: number;
-  traceId: string;
-  ratingScore: number;
-  feedbackType: string;
-  humanComment: string;
-  fixAction: string;
-  reviewer: string;
-  createTime: string;
-}
-
 interface JobProfile {
   id: string;
   title: string;
@@ -379,7 +368,7 @@ const defaultJobs: JobProfile[] = [
 ];
 
 type ViewName = 'dashboard' | 'positions' | 'candidates' | 'knowledge' | 'detail' | 'analytics' | 'ops';
-type DetailTab = 'resume' | 'report' | 'trace' | 'graph' | 'feedback';
+type DetailTab = 'resume' | 'report' | 'trace' | 'graph';
 
 const KB_DOC_TYPE_ENUMS = [
   'interview_rubric', 'tech_guide', 'policy', 'verification_checklist',
@@ -413,11 +402,9 @@ const tasks = ref<TaskResponse[]>([]);
 const traces = ref<TraceEvent[]>([]);
 const metrics = ref<Metrics | null>(null);
 const hrDashboard = ref<HrDashboardResponse | null>(null);
-const feedbacks = ref<FeedbackResponse[]>([]);
 const activeTraceId = ref('');
 const agentExecutionTree = ref<any>(null);
 const expandedAgentNodes = reactive(new Set<number>([0]));
-const feedbackText = ref('');
 const errorMessage = ref('');
 const successMessage = ref('');
 const healthStatus = ref('...');
@@ -718,35 +705,6 @@ const resumeSourceHint = computed(() => {
   return '原文缺失：后端没有返回 resumeText，需检查任务结果持久化或历史任务是否保存原文。';
 });
 
-const langfuseTraceUrl = computed(() => {
-  const url = agentExecutionTree.value?.langfuseTraceUrl;
-  if (typeof url === 'string' && /^https?:\/\//i.test(url)) return url;
-  return '';
-});
-
-const langfuseStatus = computed(() => {
-  const tree = agentExecutionTree.value || {};
-  return String(tree.langfuseStatus || '').toUpperCase();
-});
-
-const langfuseStatusHint = computed(() => {
-  const reason = agentExecutionTree.value?.langfuseStatusReason;
-  if (typeof reason === 'string' && reason.trim()) return reason.trim();
-  const status = langfuseStatus.value;
-  if (status === 'DISABLED') {
-    return 'Langfuse 未配置：需同时设置 LANGFUSE_OTEL_ENDPOINT、LANGFUSE_PUBLIC_KEY、LANGFUSE_SECRET_KEY。';
-  }
-  if (status === 'AUTH_REQUIRED') {
-    return 'Langfuse 认证未配置：已有 endpoint 但缺少 key，exporter 已停用以避免 401。';
-  }
-  if (status === 'AUTH_FAILED') {
-    return 'Langfuse 认证失败：请检查 PUBLIC/SECRET key。';
-  }
-  if (status === 'UNREACHABLE') {
-    return 'Langfuse 不可达：请检查容器与网络连通性。';
-  }
-  return 'Langfuse 外链不可用：请配置有效的 LANGFUSE_PUBLIC_URL（http/https）。';
-});
 const selectedJob = computed(() => jobs.value.find((j) => j.id === selectedJobId.value) ?? jobs.value[0]);
 const runningTasks = computed(() => tasks.value.filter((t) => ['RUNNING', 'RESUMING'].includes(resolveQueueStatus(t))));
 const completedTasks = computed(() => tasks.value.filter((t) => t.status === 'SUCCESS'));
@@ -1022,24 +980,14 @@ const scoreBand70 = computed(() => scoredCompletedTasks.value.filter((t) => {
   return s >= 70 && s < 80;
 }).length);
 const scoreBandLow = computed(() => scoredCompletedTasks.value.filter((t) => (t.overallScore as number) < 70).length);
-const validFeedbacks = computed(() => {
-  const taskTraceIds = new Set(tasks.value.map(t => t.traceId));
-  return feedbacks.value.filter(f => taskTraceIds.has(f.traceId) && f.humanComment && !f.humanComment.includes('验证反馈'));
-});
-const feedbackAgreeCount = computed(() => validFeedbacks.value.filter(f => f.feedbackType === 'LIKE').length);
-const feedbackDisagreeCount = computed(() => validFeedbacks.value.filter(f => f.feedbackType !== 'LIKE').length);
-
 const candidatePagination = candidateServerPag;
 const jobPagination = jobServerPag;
 const dashboardRecentPagination = usePagination(tasks, 8);
 const jobCategoryStatsPagination = usePagination(jobCategoryStats, 6);
 const pendingReviewPagination = usePagination(pendingReviewTasks, 6);
-const analyticsFeedbackPagination = usePagination(validFeedbacks, 8);
 const jdMatchPagination = usePagination(jdMatchCards, 3);
 const resumeTextPages = computed(() => splitTextPages(activeTask.value?.resumeText || '', 2400));
 const resumeTextPagination = usePagination(resumeTextPages, 1);
-const activeTaskFeedbacks = computed(() => feedbacks.value.filter((f) => f.traceId === activeTraceId.value));
-const taskFeedbackPagination = usePagination(activeTaskFeedbacks, 5);
 
 const showJdMatchPagination = computed(() => jdMatchCards.value.length > 5);
 const displayJdMatches = computed(() =>
@@ -1076,7 +1024,6 @@ watch([() => jobPagination.page.value, () => jobPagination.pageSize.value], () =
 watch(() => jobDraft.description, () => { jobDescriptionPage.value = 1; });
 watch(activeTraceId, (id, prev) => {
   resumeTextPagination.resetPage();
-  taskFeedbackPagination.resetPage();
   expandedListKeys.value = {};
   if (id !== prev) {
     agentExecutionTree.value = null;
@@ -1096,10 +1043,8 @@ watch(appView, (view) => {
 const pagedDashboardTasks = dashboardRecentPagination.pageItems;
 const pagedCandidates = computed(() => candidateListItems.value);
 const pagedJobItems = computed(() => jobListItems.value);
-const pagedTaskFeedbacks = taskFeedbackPagination.pageItems;
 const pagedJobCategoryStats = jobCategoryStatsPagination.pageItems;
 const pagedPendingReview = pendingReviewPagination.pageItems;
-const pagedAnalyticsFeedbacks = analyticsFeedbackPagination.pageItems;
 const currentResumeTextPage = computed(() => resumeTextPagination.pageItems.value[0] || activeTask.value?.resumeText || '');
 
 function loadJobs(): JobProfile[] {
@@ -1159,7 +1104,7 @@ onBeforeUnmount(() => { eventSource?.close(); pollTimers.forEach((t) => clearTim
 async function refreshAll() {
   refreshing.value = true;
   try {
-    await Promise.allSettled([loadTasks(), loadMetrics(), loadHrDashboard(), loadFeedbacks(), loadCandidateList(), loadJobList(), loadTaskQueueStatus()]);
+    await Promise.allSettled([loadTasks(), loadMetrics(), loadHrDashboard(), loadCandidateList(), loadJobList(), loadTaskQueueStatus()]);
     await refreshRunningStages();
     if (activeTraceId.value) {
       await Promise.allSettled([loadTraces(activeTraceId.value)]);
@@ -1744,15 +1689,6 @@ async function loadHrDashboard() {
   }
 }
 
-async function loadFeedbacks() {
-  const q = buildQuery({ page: 1, pageSize: 200 });
-  const r = await fetch(`/api/feedback${q}`);
-  if (r.ok) {
-    const page = (await r.json()) as PageResult<FeedbackResponse>;
-    feedbacks.value = page.items;
-  }
-}
-
 async function loadJobList() {
   jobPagination.loading.value = true;
   try {
@@ -2074,7 +2010,7 @@ function syncHash() {
 
 async function restoreFromHash() {
   const hash = location.hash || '#/';
-  const taskMatch = hash.match(/^#\/task\/([^/?#]+)(?:\/(resume|report|trace|graph|feedback))?$/);
+  const taskMatch = hash.match(/^#\/task\/([^/?#]+)(?:\/(resume|report|trace|graph))?$/);
   if (taskMatch) {
     restoringDeepLink.value = true;
     try {
@@ -2599,26 +2535,6 @@ function importResume(event: Event) {
   input.value = '';
 }
 
-async function sendFeedback(score: number) {
-  if (!activeTask.value) return;
-  const r = await fetch('/api/feedback', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      traceId: activeTask.value.traceId,
-      ratingScore: score,
-      feedbackType: score >= 4 ? 'LIKE' : 'DISLIKE',
-      humanComment: feedbackText.value || 'HR 已确认。',
-      reviewer: 'HR'
-    })
-  });
-  if (r.ok) {
-    feedbackText.value = '';
-    successMessage.value = '反馈已提交。';
-    await loadFeedbacks();
-  }
-}
-
 function createJob() {
   const newJob: JobProfile = { id: `job-${Date.now()}`, title: '新岗位', department: '', level: '', category: 'TECH', description: '', createdAt: new Date().toISOString() };
   jobs.value.unshift(newJob);
@@ -2702,7 +2618,6 @@ function statusText(status?: string) {
   if (status === 'SUPERSEDED') return '已被新版本替代';
   if (status === 'FAILED') return '失败';
   if (status === 'CANCELLED') return '已取消';
-  if (status === 'WAITING_SANDBOX') return '工具执行中';
   return '等待中';
 }
 
@@ -3398,7 +3313,6 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <button :class="{ active: detailTab === 'report' }" @click="detailTab = 'report'">评估报告</button>
           <button :class="{ active: detailTab === 'trace' }" @click="detailTab = 'trace'">Trace 详情</button>
           <button :class="{ active: detailTab === 'graph' }" @click="detailTab = 'graph'">JD 匹配</button>
-          <button :class="{ active: detailTab === 'feedback' }" @click="detailTab = 'feedback'">HR 反馈</button>
         </div>
 
         <!-- Resume Tab -->
@@ -3601,7 +3515,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <div class="empty-state" v-else-if="!richReportSections.strengths.length"><p>报告生成中...</p></div>
         </div>
 
-        <!-- Trace Tab: two-pane span tree + detail (Langfuse-style) -->
+        <!-- Trace Tab: two-pane span tree + detail -->
         <div v-if="detailTab === 'trace'" class="trace-link-panel">
           <div
             v-if="activeTask.evaluationState === 'SYSTEM_FAILED' && activeTask.systemError"
@@ -3619,16 +3533,6 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             这不是聊天记录，而是 AI 工作流审计链路：左侧是执行 span 树（规划 → 并行组 → Agent → 轮次/工具），点任意一行在右侧查看入参、出参与耗时。
           </div>
           <TraceView :tree="agentExecutionTree" :agent-names="AGENT_NAME_CN" :agent-purposes="AGENT_PURPOSE_CN" />
-          <!-- Langfuse External Link -->
-          <div class="card" style="padding:var(--space-lg);text-align:center">
-            <p style="margin-bottom:var(--space-md);color:var(--text-secondary);font-size:0.9rem">
-              深度调试入口：用于查看完整底层 trace。日常看上面的中文链路即可。
-            </p>
-            <a v-if="langfuseTraceUrl" :href="langfuseTraceUrl" target="_blank" class="langfuse-link">打开 Langfuse Trace</a>
-            <div v-else class="trace-health-warning">
-              {{ langfuseStatusHint }}
-            </div>
-          </div>
         </div>
 
         <!-- JD Match Tab: real retrieval + evaluation data only -->
@@ -3747,27 +3651,6 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           </div>
         </div>
 
-        <!-- Feedback Tab -->
-        <div v-if="detailTab === 'feedback'" class="feedback-section">
-          <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">对本次评估的反馈</h3>
-          <textarea class="form-input" v-model="feedbackText" rows="4" placeholder="评估结论是否准确？有哪些需要调整？" />
-          <div class="feedback-actions">
-            <button class="btn btn-primary" @click="sendFeedback(5)">认可结论</button>
-            <button class="btn btn-danger" @click="sendFeedback(2)">需要复核</button>
-          </div>
-          <div v-if="feedbacks.filter(f => f.traceId === activeTraceId).length" class="mt-lg">
-            <h3 style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--color-text-secondary)">历史反馈</h3>
-            <div v-for="fb in pagedTaskFeedbacks" :key="fb.id" style="padding:8px 0;border-bottom:1px solid var(--color-border-light);font-size:13px">
-              <span class="badge" :class="fb.feedbackType === 'LIKE' ? 'badge-success' : 'badge-danger'">{{ fb.feedbackType === 'LIKE' ? '认可' : '复核' }}</span>
-              <span class="text-muted" style="margin-left:8px">{{ fb.humanComment }}</span>
-            </div>
-            <div v-if="activeTaskFeedbacks.length > 5" class="pagination-bar compact">
-              <button class="btn btn-ghost btn-sm" :disabled="!taskFeedbackPagination.canPrev" @click="taskFeedbackPagination.goPrev()">上一页</button>
-              <span class="pagination-meta">{{ taskFeedbackPagination.page }}/{{ taskFeedbackPagination.totalPages }}</span>
-              <button class="btn btn-ghost btn-sm" :disabled="!taskFeedbackPagination.canNext" @click="taskFeedbackPagination.goNext()">下一页</button>
-            </div>
-          </div>
-        </div>
           </div>
         </div>
       </section>
@@ -3775,7 +3658,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
       <!-- ========== ANALYTICS (HR-focused) ========== -->
       <section v-if="appView === 'analytics'">
         <div class="page-header">
-          <div><h1>招聘洞察</h1><p>候选人漏斗、评分分布与 AI-HR 一致性分析</p></div>
+          <div><h1>招聘洞察</h1><p>候选人漏斗、评分分布与岗位维度分析</p></div>
         </div>
 
         <div class="kpi-grid">
@@ -3862,7 +3745,7 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
           <div class="analytics-card">
             <h3>待复核原因入口</h3>
             <div v-if="pendingReviewTasks.length" style="display:flex;flex-direction:column;gap:6px;margin-top:var(--space-md)">
-              <div v-for="t in pagedPendingReview" :key="t.traceId" class="review-queue-item" @click="openCandidate(t.traceId, 'feedback')">
+              <div v-for="t in pagedPendingReview" :key="t.traceId" class="review-queue-item" @click="openCandidate(t.traceId, 'report')">
                 <strong :title="t.fileName">{{ candidateDisplayName(t.fileName) }}</strong>
                 <span class="text-muted"> — {{ stripMarkdown(t.decisionRationale || t.riskSummary || '需人工复核') }}</span>
               </div>
@@ -3880,42 +3763,6 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
             <p style="font-size:24px;font-weight:700;margin-top:var(--space-md)">{{ avgEvalTime }}</p>
           </div>
 
-          <div class="analytics-card">
-            <h3>AI-HR 反馈一致性</h3>
-            <div v-if="validFeedbacks.length >= 3" style="margin-top:var(--space-md)">
-              <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:var(--space-lg)">
-                <div><span style="font-size:28px;font-weight:700;color:var(--color-success)">{{ feedbackAgreeCount }}</span><span style="font-size:12px;color:var(--color-text-muted);margin-left:4px">认可</span></div>
-                <div><span style="font-size:28px;font-weight:700;color:var(--color-danger)">{{ feedbackDisagreeCount }}</span><span style="font-size:12px;color:var(--color-text-muted);margin-left:4px">需复核</span></div>
-              </div>
-              <div style="height:8px;background:var(--color-border-light);border-radius:4px;overflow:hidden;display:flex">
-                <div :style="{ width: (feedbackAgreeCount / validFeedbacks.length * 100) + '%', height: '100%', background: 'var(--color-success)' }"></div>
-                <div :style="{ width: (feedbackDisagreeCount / validFeedbacks.length * 100) + '%', height: '100%', background: 'var(--color-danger)' }"></div>
-              </div>
-              <p style="font-size:12px;color:var(--color-text-muted);margin-top:8px">AI 评估与 HR 判断的一致率：{{ Math.round(feedbackAgreeCount / validFeedbacks.length * 100) }}%</p>
-            </div>
-            <div v-else style="margin-top:var(--space-md)">
-              <p class="text-muted text-sm">暂无足够数据计算一致性</p>
-              <p style="font-size:12px;color:var(--color-text-muted);margin-top:4px">需要至少 3 条有效 HR 反馈（当前：{{ validFeedbacks.length }} 条有效 / {{ feedbacks.length }} 条总计）</p>
-            </div>
-          </div>
-
-          <div class="analytics-card">
-            <h3>最近 HR 反馈</h3>
-            <div v-if="validFeedbacks.length" style="display:flex;flex-direction:column;gap:6px;margin-top:var(--space-md)">
-              <div v-for="fb in pagedAnalyticsFeedbacks" :key="fb.id" style="font-size:12px;display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--color-border-light)">
-                <span class="badge" :class="fb.feedbackType === 'LIKE' ? 'badge-success' : 'badge-danger'" style="font-size:10px">{{ fb.feedbackType === 'LIKE' ? '认可' : '复核' }}</span>
-                <span class="text-muted text-xs">{{ candidateDisplayName(tasks.find(t => t.traceId === fb.traceId)?.fileName) || fb.traceId.substring(0, 8) }}</span>
-                <span class="truncate" style="flex:1">{{ fb.humanComment }}</span>
-                <span class="text-muted text-xs">{{ fb.reviewer }}</span>
-              </div>
-            </div>
-            <div v-if="validFeedbacks.length > 8" class="pagination-bar compact">
-              <button class="btn btn-ghost btn-sm" :disabled="!analyticsFeedbackPagination.canPrev" @click="analyticsFeedbackPagination.goPrev()">上一页</button>
-              <span class="pagination-meta">{{ analyticsFeedbackPagination.page }}/{{ analyticsFeedbackPagination.totalPages }}</span>
-              <button class="btn btn-ghost btn-sm" :disabled="!analyticsFeedbackPagination.canNext" @click="analyticsFeedbackPagination.goNext()">下一页</button>
-            </div>
-            <p v-if="!validFeedbacks.length" class="text-muted text-sm">暂无有效反馈</p>
-          </div>
         </div>
       </section>
 

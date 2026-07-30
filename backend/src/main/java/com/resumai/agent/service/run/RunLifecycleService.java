@@ -16,7 +16,6 @@ import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ConversationMessage;
 import com.resumai.agent.domain.entity.ConversationSession;
 import com.resumai.agent.domain.entity.MemoryEntryRow;
-import com.resumai.agent.domain.entity.PolicyBundleRow;
 import com.resumai.agent.domain.entity.ToolCallLog;
 import com.resumai.agent.domain.enums.RunStatus;
 import com.resumai.agent.service.MemoryService;
@@ -37,8 +36,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * Drives one run from STARTING to a terminal state: policy selection, runtime
- * start, event/status ingestion, cancellation propagation, permit release and
+ * Drives one run from STARTING to a terminal state: runtime start, event/status
+ * ingestion, cancellation propagation, permit release and
  * episodic memory write-back. Java owns the authoritative status; a late
  * runtime callback can never resurrect a terminal run.
  */
@@ -55,8 +54,6 @@ public class RunLifecycleService {
     private final ResumeTaskMapper resumeTaskMapper;
     private final RunEventService eventService;
     private final RunPermitService permitService;
-    private final PolicyService policyService;
-    private final RewardService rewardService;
     private final AgentRuntimeClient runtimeClient;
     private final MemoryService memoryService;
     private final AgentRunProperties properties;
@@ -72,8 +69,6 @@ public class RunLifecycleService {
                                ResumeTaskMapper resumeTaskMapper,
                                RunEventService eventService,
                                RunPermitService permitService,
-                               PolicyService policyService,
-                               RewardService rewardService,
                                AgentRuntimeClient runtimeClient,
                                @Lazy MemoryService memoryService,
                                AgentRunProperties properties,
@@ -88,8 +83,6 @@ public class RunLifecycleService {
         this.resumeTaskMapper = resumeTaskMapper;
         this.eventService = eventService;
         this.permitService = permitService;
-        this.policyService = policyService;
-        this.rewardService = rewardService;
         this.runtimeClient = runtimeClient;
         this.memoryService = memoryService;
         this.properties = properties;
@@ -110,22 +103,12 @@ public class RunLifecycleService {
             return;
         }
         try {
-            Map<String, Object> selectionContext = selectionContext(run, session);
-            // PRODUCTION_DECISION: champion only — never epsilon-explore on candidate traffic.
-            PolicyService.Selection selection = StringUtils.hasText(run.getPolicyId())
-                    ? policyService.forcedSelection(runId, category(run), run.getPolicyId())
-                    : policyService.selectPolicy(runId, category(run), selectionContext,
-                            PolicyService.ExecutionPurpose.PRODUCTION_DECISION);
-            PolicyBundleRow bundle = selection.bundle();
-            JsonNode config = readJson(bundle.getConfig());
-            int runTimeout = config.path("timeoutPolicy").path("runTimeoutSeconds")
-                    .asInt(properties.getRunTimeoutSeconds());
+            int runTimeout = properties.getRunTimeoutSeconds();
 
             LocalDateTime now = LocalDateTime.now();
             UpdateWrapper<AgentRun> update = new UpdateWrapper<>();
             update.eq("run_id", runId)
                     .eq("status", RunStatus.STARTING.name())
-                    .set("policy_id", bundle.getPolicyId())
                     .set("status", RunStatus.RUNNING.name())
                     .set("started_at", now)
                     .set("timeout_at", now.plusSeconds(runTimeout))
@@ -135,18 +118,10 @@ public class RunLifecycleService {
                 return;
             }
             Map<String, Object> startedPayload = new LinkedHashMap<>();
-            startedPayload.put("policyId", bundle.getPolicyId());
-            startedPayload.put("policyName", bundle.getName() != null ? bundle.getName() : "");
-            startedPayload.put("selectionMode", selection.mode().storageValue());
-            startedPayload.put("assignmentVersion", selection.assignmentVersion());
-            startedPayload.put("executionPurpose",
-                    PolicyService.ExecutionPurpose.PRODUCTION_DECISION.name());
             startedPayload.put("runType", category(run));
             eventService.publish(runId, run.getConversationId(), run.getTraceId(),
                     "run.started", null, null, startedPayload);
-            Map<String, Object> payload = buildRuntimePayload(run, session, bundle);
-            // Candidate evaluation never carries sandbox fields. Policy Lab /
-            // benchmark isolation goes through /api/internal/policy-lab/* only.
+            Map<String, Object> payload = buildRuntimePayload(run, session);
             // Checkpoint retry: a queued run created from a failed run carries
             // its snapshot — the runtime resumes after the last finished group.
             if (StringUtils.hasText(run.getExecutionSnapshot())) {
@@ -156,15 +131,6 @@ public class RunLifecycleService {
                 }
             }
             runtimeClient.startRun(payload);
-        } catch (PolicySelectionPersistenceException e) {
-            log.warn("policy selection persist failed run={}: {}", runId, e.getMessage());
-            AgentRun latest = runMapper.selectById(runId);
-            if (latest != null && !RunStatus.isTerminal(latest.getStatus())) {
-                finishInternal(latest, RunStatus.FAILED, null,
-                        "POLICY_SELECTION_PERSIST_FAILED", trim(e.getMessage(), 1800), null,
-                        controlPlaneMeta("POLICY_SELECTION_PERSIST_FAILED", latest,
-                                "policy_selection"));
-            }
         } catch (Exception e) {
             log.warn("run start failed run={}: {}", runId, e.getMessage());
             AgentRun latest = runMapper.selectById(runId);
@@ -189,8 +155,7 @@ public class RunLifecycleService {
         if (session == null) {
             throw new IllegalStateException("conversation missing for run " + runId);
         }
-        PolicyBundleRow bundle = policyService.getBundle(run.getPolicyId());
-        Map<String, Object> payload = buildRuntimePayload(run, session, bundle);
+        Map<String, Object> payload = buildRuntimePayload(run, session);
         payload.put("resumeSnapshot", readJsonAsMap(run.getExecutionSnapshot()));
         runtimeClient.resumeRun(runId, payload);
         UpdateWrapper<AgentRun> toRunning = new UpdateWrapper<>();
@@ -199,7 +164,6 @@ public class RunLifecycleService {
                         RunStatus.RUNNING.name(),
                         RunStatus.WAITING_LLM.name(),
                         RunStatus.WAITING_TOOL.name(),
-                        RunStatus.WAITING_SANDBOX.name(),
                         RunStatus.RESUMING.name(),
                         RunStatus.STARTING.name()))
                 .set("status", RunStatus.RUNNING.name())
@@ -212,27 +176,7 @@ public class RunLifecycleService {
                         "controlPlaneStage", "resume"));
     }
 
-    private Map<String, Object> selectionContext(AgentRun run, ConversationSession session) {
-        Map<String, Object> context = new LinkedHashMap<>();
-        String resume = session.getResumeText() != null ? session.getResumeText() : "";
-        String jd = session.getJobDescription() != null ? session.getJobDescription() : "";
-        context.put("goal", trim(run.getUserMessage(), 300));
-        context.put("runType", category(run));
-        context.put("goalCategory", category(run));
-        context.put("jobCategory", session.getJobCategory());
-        context.put("resumeLength", resume.length());
-        context.put("resumePages", Math.max(1, resume.length() / 2600));
-        context.put("projectCount", countOccurrences(resume, "项目"));
-        context.put("workExperienceCount", countOccurrences(resume, "公司"));
-        context.put("jdRequirementCount", countOccurrences(jd, "\n"));
-        context.put("conversationRevision", session.getActiveRevision());
-        context.put("executionPurpose",
-                PolicyService.ExecutionPurpose.PRODUCTION_DECISION.name());
-        return context;
-    }
-
-    private Map<String, Object> buildRuntimePayload(AgentRun run, ConversationSession session,
-                                                    PolicyBundleRow bundle) {
+    private Map<String, Object> buildRuntimePayload(AgentRun run, ConversationSession session) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("runId", run.getRunId());
         payload.put("conversationId", run.getConversationId());
@@ -247,8 +191,6 @@ public class RunLifecycleService {
         payload.put("jobCategory", session.getJobCategory());
         payload.put("conversationSummary", session.getSummary());
         payload.put("currentGoal", session.getCurrentGoal());
-        payload.put("policyId", bundle.getPolicyId());
-        payload.put("policyConfig", readJsonAsMap(bundle.getConfig()));
         List<Map<String, Object>> recent = recentMessages(run.getConversationId(), 12);
         payload.put("recentMessages", recent);
         addPreviousRevisionContext(payload, run, recent);
@@ -382,10 +324,7 @@ public class RunLifecycleService {
             "llm.failed", RunStatus.RUNNING.name(),
             "tool.started", RunStatus.WAITING_TOOL.name(),
             "tool.completed", RunStatus.RUNNING.name(),
-            "tool.failed", RunStatus.RUNNING.name(),
-            "sandbox.started", RunStatus.WAITING_SANDBOX.name(),
-            "sandbox.completed", RunStatus.RUNNING.name(),
-            "sandbox.failed", RunStatus.RUNNING.name());
+            "tool.failed", RunStatus.RUNNING.name());
 
     public void applyRuntimeEvent(String runId, String eventType, String agentId,
                                   String toolName, Map<String, Object> payload) {
@@ -624,7 +563,6 @@ public class RunLifecycleService {
                         RunStatus.RUNNING.name(),
                         RunStatus.WAITING_LLM.name(),
                         RunStatus.WAITING_TOOL.name(),
-                        RunStatus.WAITING_SANDBOX.name(),
                         RunStatus.PAUSING.name(),
                         RunStatus.RESUMING.name()))
                 .set("status", RunStatus.PAUSED.name())
@@ -747,8 +685,7 @@ public class RunLifecycleService {
         AgentRun latest = runMapper.selectById(run.getRunId());
         try {
             ConversationSession session = sessionMapper.selectById(latest.getConversationId());
-            PolicyBundleRow bundle = policyService.getBundle(latest.getPolicyId());
-            Map<String, Object> payload = buildRuntimePayload(latest, session, bundle);
+            Map<String, Object> payload = buildRuntimePayload(latest, session);
             payload.put("resumeSnapshot", readJsonAsMap(latest.getExecutionSnapshot()));
             runtimeClient.resumeRun(latest.getRunId(), payload);
             UpdateWrapper<AgentRun> toRunning = new UpdateWrapper<>();
@@ -981,16 +918,6 @@ public class RunLifecycleService {
                     log.debug("memory rollback retry failed run={}", finished.getRunId());
                 }
             }
-        }
-        try {
-            if (StringUtils.hasText(finished.getPolicyId())) {
-                policyService.recordRunOutcome(finished.getPolicyId(), category(finished),
-                        succeeded);
-                rewardService.recordAutoReward(finished, terminal == RunStatus.SUCCEEDED);
-            }
-        } catch (Exception e) {
-            log.debug("post-run reward hooks failed run={}: {}",
-                    finished.getRunId(), e.getMessage());
         }
         log.info("run finished run={} status={} conversation={}",
                 finished.getRunId(), terminal, finished.getConversationId());
@@ -1369,7 +1296,6 @@ public class RunLifecycleService {
         retry.setMergedMessageIds("[]");
         retry.setStatus(RunStatus.QUEUED.name());
         retry.setRetryCount((failed.getRetryCount() != null ? failed.getRetryCount() : 0) + 1);
-        retry.setPolicyId(failed.getPolicyId());
         retry.setSourceTaskTraceId(failed.getSourceTaskTraceId());
         // snapshot.runId keeps the lineage back to the failed run.
         retry.setExecutionSnapshot(failed.getExecutionSnapshot());

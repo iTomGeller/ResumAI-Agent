@@ -44,7 +44,7 @@ def main():
     time.sleep(10)
 
     print("=== Backend logs after reset ===")
-    run(ssh, "docker logs ai-resume-backend --tail 20 2>&1 | grep -i 'worker\\|task\\|queue\\|evaluat\\|otel\\|span' | tail -15")
+    run(ssh, "docker logs ai-resume-backend --tail 20 2>&1 | grep -i 'worker\\|task\\|queue\\|evaluat' | tail -15")
 
     print("=== Check task 1034 status ===")
     run(ssh, f"docker exec -i resumai-mysql mysql -uroot -p'{mysql_root}' resumai_agent -e \"SELECT id, status, queue_status, started_at, finished_at FROM resume_task WHERE id=1034;\"")

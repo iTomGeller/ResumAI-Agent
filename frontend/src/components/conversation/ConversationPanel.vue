@@ -53,7 +53,6 @@ function onResizeStart(event: PointerEvent) {
 }
 
 const draft = ref('');
-const feedbackSent = ref<Record<string, boolean>>({});
 const {
   activeTraceId,
   activeRevision,
@@ -71,7 +70,6 @@ const {
   sendMessage,
   controlTask,
   cancelRun,
-  submitRunFeedback,
   reset,
 } = useConversation();
 
@@ -115,7 +113,6 @@ const runStatusLabels: Record<string, string> = {
   RUNNING: '分析中',
   WAITING_LLM: '模型生成中',
   WAITING_TOOL: '工具执行中',
-  WAITING_SANDBOX: '工具执行中',
   CANCELLING: '取消中',
   CANCELLED: '已取消',
   SUCCEEDED: '已完成',
@@ -207,16 +204,6 @@ async function approvePlan() {
   } finally {
     approving.value = false;
   }
-}
-
-async function sendRunFeedback(runId: string, positive: boolean) {
-  const result = await submitRunFeedback(runId, {
-    ratingScore: positive ? 5 : 2,
-    accepted: positive,
-    recommendationAgreed: positive,
-    comment: positive ? '结果可用' : '结果需要改进',
-  });
-  if (result) feedbackSent.value = { ...feedbackSent.value, [runId]: true };
 }
 
 const statusLabels: Record<string, string> = {
@@ -383,18 +370,9 @@ function friendlyError(raw: string): string {
         <span v-if="activeRun.currentTool">工具: {{ activeRun.currentTool }}</span>
         <span v-if="activeRun.llmActive" class="run-llm">● LLM 调用中</span>
         <span v-if="activeRun.retrying" class="run-retry">重试中…</span>
-        <span v-if="activeRun.policyId">策略: {{ activeRun.policyId }}</span>
       </div>
       <div v-if="activeRun.errorMessage" class="run-monitor-row run-error">
         {{ activeRun.errorCode }} {{ activeRun.errorMessage }}
-      </div>
-      <div v-if="lastFinishedRun && !feedbackSent[lastFinishedRun.runId]" class="run-monitor-row run-feedback">
-        <span>这次结果有帮助吗？</span>
-        <button type="button" @click="sendRunFeedback(lastFinishedRun.runId, true)">👍 有用</button>
-        <button type="button" @click="sendRunFeedback(lastFinishedRun.runId, false)">👎 不准</button>
-      </div>
-      <div v-else-if="lastFinishedRun && feedbackSent[lastFinishedRun.runId]" class="run-monitor-row run-feedback">
-        <span>反馈已记录，将用于策略学习。</span>
       </div>
     </div>
 
@@ -668,16 +646,8 @@ function friendlyError(raw: string): string {
   font-weight: 600;
 }
 .run-error { color: var(--color-danger); }
-.run-feedback button {
-  padding: 2px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-surface);
-  font-size: 12px;
-}
 .conversation-status[data-status="WAITING_LLM"],
 .conversation-status[data-status="WAITING_TOOL"],
-.conversation-status[data-status="WAITING_SANDBOX"],
 .conversation-status[data-status="STARTING"],
 .conversation-status[data-status="CANCELLING"] { background: var(--color-warning-light); color: var(--color-warning); }
 .conversation-status[data-status="SUCCEEDED"] { background: var(--color-success-light); color: var(--color-success); }

@@ -1,6 +1,5 @@
 package com.resumai.agent.service;
 
-import com.resumai.agent.config.AgentMetrics;
 import com.resumai.agent.config.EmbeddingAvailability;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentSplitter;
@@ -32,18 +31,15 @@ public class ResumeRagService {
 
     private final MilvusEmbeddingStore embeddingStore;
     private final EmbeddingModel embeddingModel;
-    private final AgentMetrics agentMetrics;
     private final EmbeddingAvailability embeddingAvailability;
     private final MilvusVectorMaintenanceService vectorMaintenanceService;
 
     public ResumeRagService(@org.springframework.lang.Nullable MilvusEmbeddingStore embeddingStore,
                             EmbeddingModel embeddingModel,
-                            AgentMetrics agentMetrics,
                             EmbeddingAvailability embeddingAvailability,
                             MilvusVectorMaintenanceService vectorMaintenanceService) {
         this.embeddingStore = embeddingStore;
         this.embeddingModel = embeddingModel;
-        this.agentMetrics = agentMetrics;
         this.embeddingAvailability = embeddingAvailability;
         this.vectorMaintenanceService = vectorMaintenanceService;
     }
@@ -85,7 +81,6 @@ public class ResumeRagService {
         }
         if (!embeddingAvailability.isOperational()) {
             log.info("Skipping Milvus index for traceId={}: {}", traceId, embeddingAvailability.disabledReason());
-            agentMetrics.recordToolCall("milvus_index", "HybridRagStrategy", "WARNING", System.currentTimeMillis() - start);
             return new IndexResult(0, false, embeddingAvailability.disabledReason());
         }
         try {
@@ -97,15 +92,11 @@ public class ResumeRagService {
             List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
             embeddingStore.addAll(embeddings, segments);
             log.info("Indexed {} chunks for traceId={}", segments.size(), traceId);
-            agentMetrics.recordMilvusChunksIndexed(segments.size());
-            agentMetrics.recordToolCall("milvus_index", "HybridRagStrategy", "SUCCESS",
-                    System.currentTimeMillis() - start);
 
             List<String> verify = retrieveInternal(traceId, resumeText.substring(0, Math.min(200, resumeText.length())), 3);
             boolean verified = !verify.isEmpty();
             if (!verified) {
                 log.warn("Read-after-write verification failed for traceId={}", traceId);
-                agentMetrics.recordRagRetrievalEmptyResults();
             }
             return new IndexResult(segments.size(), verified, verified ? null : "read_after_write_miss");
         } catch (Exception e) {
@@ -114,10 +105,6 @@ public class ResumeRagService {
                 errorType = "CollectionNotFoundException";
             }
             log.warn("Milvus indexResume failed for traceId={}: {} - {}", traceId, errorType, e.getMessage());
-            agentMetrics.recordMilvusChunksIndexed(0);
-            agentMetrics.recordToolCallError("milvus_index", errorType);
-            agentMetrics.recordToolCall("milvus_index", "HybridRagStrategy", "FAILED",
-                    System.currentTimeMillis() - start);
             return new IndexResult(0, false, errorType);
         }
     }
@@ -136,13 +123,11 @@ public class ResumeRagService {
         String mode = StringUtils.hasText(strategy) ? strategy.trim().toLowerCase() : "hybrid";
         List<String> lexicalChunks = lexicalRetrieve(resumeText, query, topK);
         if ("hybrid".equals(mode) && shouldUseLexicalOnly(resumeText, lexicalChunks)) {
-            agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "SUCCESS", System.currentTimeMillis() - start);
             return new RagRetrieveResult(lexicalChunks, lexicalChunks.size(), 0.42, null, false,
                     "hybrid", "lexical_short_resume", null, query, false);
         }
         if ("lexical".equals(mode)) {
             if (!lexicalChunks.isEmpty()) {
-                agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "SUCCESS", System.currentTimeMillis() - start);
                 return new RagRetrieveResult(lexicalChunks, lexicalChunks.size(), 0.42, null, false,
                         "lexical", "bm25_like", null, query, false);
             }
@@ -151,13 +136,10 @@ public class ResumeRagService {
         }
         if (!embeddingAvailability.isOperational()) {
             if (!lexicalChunks.isEmpty()) {
-                agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "WARNING", System.currentTimeMillis() - start);
                 return new RagRetrieveResult(lexicalChunks, lexicalChunks.size(), 0.42,
                         embeddingAvailability.disabledReason(), false,
                         "hybrid", "lexical_only_embedding_disabled", embeddingAvailability.disabledReason(), query, false);
             }
-            agentMetrics.recordRagRetrievalEmptyResults();
-            agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "WARNING", System.currentTimeMillis() - start);
             return withResumeTextFallback(List.of(), 0, 0, embeddingAvailability.disabledReason(), true,
                     "hybrid", "disabled", embeddingAvailability.disabledReason(), query, resumeText, topK);
         }
@@ -168,29 +150,17 @@ public class ResumeRagService {
                     ? vectorChunks
                     : mergeChunks(vectorChunks, lexicalChunks, topK);
             double topScore = !vectorChunks.isEmpty() ? 0.72 : (!lexicalChunks.isEmpty() ? 0.42 : 0);
-            agentMetrics.recordMilvusChunksRetrieved(vectorChunks.size());
-            agentMetrics.recordMilvusSimilarityScore(topScore);
             if (chunks.isEmpty()) {
-                agentMetrics.recordRagRetrievalEmptyResults();
-                agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "SUCCESS",
-                        System.currentTimeMillis() - start);
                 return withResumeTextFallback(
                         List.of(), 0, 0, "empty_" + mode + "_hits", true,
                         "hybrid", mode, null, query, resumeText, topK);
             }
-            agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "SUCCESS",
-                    System.currentTimeMillis() - start);
             String resolvedStrategy = "embedding".equals(mode) ? "embedding" : "hybrid_embedding_bm25";
             return new RagRetrieveResult(chunks, chunks.size(), topScore, null, false,
                     "hybrid", resolvedStrategy, null, query, false);
         } catch (Exception e) {
             String errorType = classifyEmbeddingError(e);
             log.warn("Milvus retrieve failed: {}", errorType);
-            agentMetrics.recordMilvusChunksRetrieved(0);
-            agentMetrics.recordRagRetrievalEmptyResults();
-            agentMetrics.recordToolCallError("milvus_retrieve", errorType);
-            agentMetrics.recordToolCall("milvus_retrieve", "HybridRagStrategy", "FAILED",
-                    System.currentTimeMillis() - start);
             if (!lexicalChunks.isEmpty() && !"embedding".equals(mode)) {
                 return new RagRetrieveResult(lexicalChunks, lexicalChunks.size(), 0.42, errorType, false,
                         "hybrid", "lexical_after_embedding_error", errorType, query, false);
@@ -411,9 +381,6 @@ public class ResumeRagService {
                 .collect(Collectors.toList());
         if (chunks.isEmpty()) {
             return List.of();
-        }
-        if (matches.stream().allMatch(match -> match.score() < SIMILARITY_THRESHOLD)) {
-            agentMetrics.recordRagRetrievalBelowThreshold();
         }
         return chunks;
     }

@@ -25,7 +25,6 @@ public final class OpsDebugDtos {
             String currentAgent,
             String currentTool,
             String currentPhase,
-            String policyId,
             String errorCode,
             String errorMessage,
             Object skillVersions,
@@ -47,7 +46,6 @@ public final class OpsDebugDtos {
             String traceId,
             String sourceTaskTraceId,
             Integer revisionNo,
-            String policyId,
             List<Map<String, Object>> siblingRevisions,
             List<Map<String, Object>> retryChain
     ) {
@@ -58,7 +56,6 @@ public final class OpsDebugDtos {
             List<List<String>> parallelGroups,
             String reason,
             String requiredTerminalAgent,
-            String policyId,
             Map<String, Object> selectedBecause,
             Map<String, Object> skippedBecause,
             List<Object> artifactEdges,
@@ -67,7 +64,7 @@ public final class OpsDebugDtos {
             boolean present
     ) {
         public static PlanDebugView empty() {
-            return new PlanDebugView(List.of(), List.of(), null, null, null,
+            return new PlanDebugView(List.of(), List.of(), null, null,
                     Map.of(), Map.of(), List.of(), List.of(), Map.of(), false);
         }
     }
@@ -200,11 +197,6 @@ public final class OpsDebugDtos {
     ) {
     }
 
-    public record ObservabilityView(
-            Map<String, Object> langfuse
-    ) {
-    }
-
     public record RunDebugDetailResponse(
             RunDebugSummary run,
             CorrelationView correlation,
@@ -216,7 +208,6 @@ public final class OpsDebugDtos {
             List<McpInvocationView> mcpCalls,
             List<SkillUsageView> skills,
             List<MemoryUsageView> memory,
-            ObservabilityView observability,
             boolean truncated,
             Integer nextSeq
     ) {

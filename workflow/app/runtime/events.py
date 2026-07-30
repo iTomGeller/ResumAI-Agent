@@ -23,7 +23,6 @@ RUN_EVENT_TYPES = {
     "memory.selected", "memory.used", "memory.written", "memory.skipped",
     # Legacy aliases retained for reading historical events only — do not emit for new runs.
     "skill.started", "skill.completed",
-    "sandbox.started", "sandbox.progress", "sandbox.completed", "sandbox.failed",
     "context.compacted",
     "run.cancelling", "run.cancelled", "run.completed", "run.failed", "run.timed_out",
 }

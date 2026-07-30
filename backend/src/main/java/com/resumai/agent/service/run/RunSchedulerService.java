@@ -318,7 +318,6 @@ public class RunSchedulerService {
         return RunStatus.RUNNING.name().equals(status)
                 || RunStatus.WAITING_LLM.name().equals(status)
                 || RunStatus.WAITING_TOOL.name().equals(status)
-                || RunStatus.WAITING_SANDBOX.name().equals(status)
                 || RunStatus.RESUMING.name().equals(status);
     }
 

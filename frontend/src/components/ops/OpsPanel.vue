@@ -9,9 +9,8 @@ import RagInspector from './RagInspector.vue';
 import RunExplorer from './RunExplorer.vue';
 import RunTimeline from './RunTimeline.vue';
 import SkillInspector from './SkillInspector.vue';
-import PolicyLabPanel from './PolicyLabPanel.vue';
 
-type OpsTab = 'runs' | 'memory' | 'policyLab' | 'policy' | 'mcp' | 'skills' | 'rag' | 'observability';
+type OpsTab = 'runs' | 'memory' | 'mcp' | 'skills' | 'rag';
 
 const props = defineProps<{ initialTab?: OpsTab }>();
 const activeTab = ref<OpsTab>(props.initialTab || 'runs');
@@ -34,20 +33,14 @@ const tabs: Array<{ id: OpsTab; label: string }> = [
   { id: 'mcp', label: 'MCP' },
   { id: 'skills', label: 'Skills' },
   { id: 'rag', label: 'RAG' },
-  { id: 'policyLab', label: 'Policy Lab' },
-  { id: 'policy', label: 'Policy Optimization Lab' },
-  { id: 'observability', label: 'Observability' },
 ];
 
 const endpointByTab: Record<OpsTab, string> = {
   runs: '/api/ops/runs',
   memory: '/api/ops/memory',
-  policyLab: '/api/ops/policy-lab',
-  policy: '/api/ops/policy',
   mcp: '/api/ops/mcp',
   skills: '/api/ops/skills',
   rag: '/api/ops/rag',
-  observability: '/api/ops/observability',
 };
 
 function parseOpsHash() {
@@ -212,8 +205,7 @@ async function onMemoryFilter(payload: { runId: string; decision: string }) {
       <div>
         <h1>Agent Ops · Debug Console</h1>
         <p>
-          以 Run 为中心的开发者调试台。MCP/Skills 来自 Python runtime 真实状态；
-          Sandbox 仅属 Policy Optimization Lab（无 GPU），不是候选人评估。
+          以 Run 为中心查看执行链路、Memory、MCP、Skills 与 RAG 的真实运行状态。
         </p>
       </div>
       <div class="ops-hero-actions">
@@ -262,7 +254,6 @@ async function onMemoryFilter(payload: { runId: string; decision: string }) {
                 <div class="ops-row-head" style="margin-bottom:8px">
                   <span class="ops-chip" :class="statusClass(runDetail.run?.status)">{{ runDetail.run?.status }}</span>
                   <span class="mono text-xs">{{ runDetail.run?.runId }}</span>
-                  <span class="text-muted text-xs">{{ runDetail.run?.policyId || '-' }}</span>
                 </div>
                 <p class="text-muted text-xs">
                   corr: conv={{ runDetail.correlation?.conversationId || '-' }}
@@ -318,22 +309,6 @@ async function onMemoryFilter(payload: { runId: string; decision: string }) {
         />
       </div>
 
-      <div v-else-if="activeTab === 'policyLab'" class="ops-panel">
-        <PolicyLabPanel
-          :bundles="panel.policy?.bundles || panel.policyLab?.bundles || []"
-          :recent-rewards="panel.policy?.recentRewards || []"
-          :sandbox-executions="panel.policyLab?.executions || []"
-        />
-      </div>
-
-      <div v-else-if="activeTab === 'policy'" class="ops-panel">
-        <PolicyLabPanel
-          :bundles="panel.policy?.bundles || []"
-          :recent-rewards="panel.policy?.recentRewards || []"
-          :sandbox-executions="panel.policyLab?.executions || []"
-        />
-      </div>
-
       <div v-else-if="activeTab === 'mcp'" class="ops-panel">
         <McpInspector
           :panel="panel.mcp"
@@ -351,23 +326,6 @@ async function onMemoryFilter(payload: { runId: string; decision: string }) {
         <RagInspector :key="ragRefreshKey" />
       </div>
 
-      <div v-else-if="activeTab === 'observability'" class="ops-panel">
-        <div class="card ops-note">
-          <strong>Langfuse Exporter</strong>
-          <p>仅当 endpoint + public key + secret key 三者齐全才启用。</p>
-        </div>
-        <div class="ops-metrics">
-          <div>
-            <span>状态</span>
-            <strong>
-              <span class="ops-chip" :class="statusClass(panel.observability?.langfuse?.status || overview?.observability?.langfuse?.status)">
-                {{ panel.observability?.langfuse?.status || overview?.observability?.langfuse?.status || 'UNKNOWN' }}
-              </span>
-            </strong>
-          </div>
-          <div><span>Exporter</span><strong>{{ (panel.observability || overview?.observability)?.langfuse?.enabled ? 'ON' : 'OFF' }}</strong></div>
-        </div>
-      </div>
     </template>
   </section>
 </template>

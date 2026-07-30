@@ -39,8 +39,8 @@ from app.runtime.events import NullEmitter  # noqa: E402
 from app.runtime.executor import RunExecutor  # noqa: E402
 from app.runtime.memory import NullMemoryClient  # noqa: E402
 from app.runtime.models import AgentRunRequest  # noqa: E402
-from app.runtime.sandbox_tools_local import (  # noqa: E402
-    evaluate_policy_output,
+from app.runtime.builtin_tools import (  # noqa: E402
+    evaluate_report_quality,
     locate_evidence,
 )
 from scripts.ecs_workflow_simulator import LiveContextRecorder  # noqa: E402
@@ -152,7 +152,7 @@ def evaluate_result(case: dict[str, Any], result: dict[str, Any]) -> dict[str, A
     answer = str(result.get("answer") or "")
     metrics = result.get("metrics") or {}
     shared = result.get("sharedState") or {}
-    evaluation = evaluate_policy_output({
+    evaluation = evaluate_report_quality({
         "answer": answer,
         "resumeText": case["resume"],
         "mustFind": case.get("mustFind") or [],

@@ -1,6 +1,5 @@
 package com.resumai.agent.service;
 
-import com.resumai.agent.config.AgentMetrics;
 import com.resumai.agent.config.TaskQueueProperties;
 import com.resumai.agent.domain.entity.ResumeTask;
 import com.resumai.agent.domain.enums.QueueStatus;
@@ -29,7 +28,6 @@ public class TaskWorkerService {
     private final TaskQueueRepository taskQueueRepository;
     private final TaskQueueProperties properties;
     private final ResumeEvaluationService evaluationService;
-    private final AgentMetrics agentMetrics;
 
     private final AtomicInteger activeWorkers = new AtomicInteger(0);
     private final ThreadPoolExecutor workerPool;
@@ -40,19 +38,12 @@ public class TaskWorkerService {
     public TaskWorkerService(TaskQueueService taskQueueService,
                              TaskQueueRepository taskQueueRepository,
                              TaskQueueProperties properties,
-                             ResumeEvaluationService evaluationService,
-                             AgentMetrics agentMetrics) {
+                             ResumeEvaluationService evaluationService) {
         this.taskQueueService = taskQueueService;
         this.taskQueueRepository = taskQueueRepository;
         this.properties = properties;
         this.evaluationService = evaluationService;
-        this.agentMetrics = agentMetrics;
         this.workerPool = (ThreadPoolExecutor) Executors.newFixedThreadPool(Math.max(1, properties.getMaxWorkers()));
-        agentMetrics.registerExecutorActiveThreadsGauge(workerPool::getActiveCount);
-        agentMetrics.registerExecutorQueueSizeGauge(() -> workerPool.getQueue().size());
-        agentMetrics.registerTaskWorkerActiveGauge(activeWorkers::get);
-        agentMetrics.registerTaskWorkerCapacityGauge(() -> properties.getMaxWorkers());
-        agentMetrics.registerTaskWorkerUtilizationGauge(activeWorkers::get, () -> properties.getMaxWorkers());
     }
 
     @PostConstruct
@@ -121,10 +112,7 @@ public class TaskWorkerService {
                 taskQueueService.ack(messageId);
                 return;
             }
-            agentMetrics.recordTaskQueueWaitDuration(System.currentTimeMillis() - waitStart);
-            long execStart = System.currentTimeMillis();
             evaluationService.runQueuedEvaluation(traceId);
-            agentMetrics.recordTaskExecutionDuration(System.currentTimeMillis() - execStart);
             taskQueueService.ack(messageId);
         } catch (Exception e) {
             log.warn("Task execution failed trace={}: {}", traceId, e.getMessage());
@@ -139,13 +127,11 @@ public class TaskWorkerService {
         int attempts = row != null && row.getAttemptCount() != null ? row.getAttemptCount() + 1 : 1;
         if (attempts >= properties.getMaxAttempts()) {
             taskQueueRepository.markQueueFailed(traceId, e.getMessage());
-            agentMetrics.recordTaskFail(e.getClass().getSimpleName());
             taskQueueService.ack(messageId);
             return;
         }
         LocalDateTime nextRetry = LocalDateTime.now().plusSeconds((long) properties.getRetryBackoffSeconds() * attempts);
         taskQueueRepository.markRetrying(traceId, attempts, nextRetry);
-        agentMetrics.recordTaskRetry();
         taskQueueService.ack(messageId);
         taskQueueService.enqueue(traceId,
                 row != null ? row.getId() : null,
@@ -168,7 +154,6 @@ public class TaskWorkerService {
         int recovered = taskQueueRepository.recoverStuckRunning(cutoff);
         if (recovered > 0) {
             log.info("Recovered {} stuck RUNNING tasks", recovered);
-            agentMetrics.recordTaskStuck(recovered);
         }
         List<ResumeTask> retryRows = taskQueueRepository.listStuckForRequeue(LocalDateTime.now(), 100);
         for (ResumeTask row : retryRows) {

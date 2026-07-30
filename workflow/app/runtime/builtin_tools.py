@@ -1,9 +1,7 @@
 """Deterministic resume-analysis builtin tools for candidate evaluation.
 
 These are pure in-process functions (stdlib + optional pypdf) with no network
-IO. They are the production path for candidate evaluation — NOT a sandbox.
-Policy Lab / benchmark / replay may import the same kernels via
-``app.policy_lab.tool_kernels`` when Docker isolation is required.
+IO. They are the production path for candidate evaluation.
 """
 from __future__ import annotations
 
@@ -459,7 +457,7 @@ def validate_report_schema(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "valid": not errors, "errors": errors}
 
 
-def evaluate_policy_output(args: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate_report_quality(args: Dict[str, Any]) -> Dict[str, Any]:
     """Benchmark evaluator: does the answer find what it must find, avoid
     what it must not claim, and stay grounded in the resume?"""
     answer = str(args.get("answer") or "")
@@ -584,7 +582,7 @@ TOOL_IMPLS = {
     "verify_report_evidence": verify_report_evidence,
     "resume_lint": resume_lint,
     "validate_report_schema": validate_report_schema,
-    "evaluate_policy_output": evaluate_policy_output,
+    "evaluate_report_quality": evaluate_report_quality,
 }
 
 
@@ -604,7 +602,7 @@ BUILTIN_TOOLS = set(TOOL_IMPLS.keys())
 class BuiltinToolRegistry:
     """In-process registry for production candidate-evaluation tools.
 
-    Candidate runtime must never depend on SandboxClient / LocalSandboxFallback.
+    Candidate runtime executes deterministic tools directly in process.
     """
 
     def __init__(self) -> None:

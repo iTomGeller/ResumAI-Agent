@@ -41,9 +41,6 @@ def main():
     print("=== Frontend health ===")
     run(ssh, "curl -fsS http://127.0.0.1/ -o /dev/null -w '%{http_code}' 2>&1")
 
-    print("=== Backend logs: OTel/Langfuse ===")
-    run(ssh, "docker logs ai-resume-backend 2>&1 | grep -i 'langfuse\\|otel\\|opentelemetry' | tail -10")
-
     ssh.close()
 
 if __name__ == "__main__":

@@ -23,8 +23,6 @@ logger = logging.getLogger(__name__)
 CACHEABLE_TOOLS = {"parse_resume", "check_timeline", "calculate_jd_coverage",
                    "resume_lint", "jd_requirements_extract"}
 
-# OpenTelemetry GenAI / MCP semantic conventions (development schema).
-OTEL_GENAI_SCHEMA = "https://opentelemetry.io/schemas/1.28.0"
 MCP_PROTOCOL_VERSION = "2025-11-25"
 SOFT_UNAVAILABLE_STATUSES = {
     "UNAVAILABLE", "RATE_LIMITED", "NOT_CHECKED",
@@ -212,7 +210,7 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
             "resumeText": {"type": "string"}, "rewrittenText": {"type": "string"}}},
         "validate_report_schema": {"type": "object", "properties": {
             "report": {}}, "required": ["report"]},
-        "evaluate_policy_output": {"type": "object", "properties": {
+        "evaluate_report_quality": {"type": "object", "properties": {
             "answer": {"type": "string"}, "resumeText": {"type": "string"},
             "mustFind": {"type": "array"}, "mustNotClaim": {"type": "array"}},
             "required": ["answer"]},
@@ -287,7 +285,7 @@ class ToolExecutor:
         return int(registry.register_into(self) or 0)
 
     def _tool_event_meta(self, defn: ToolDefinition) -> Dict[str, Any]:
-        """Contract fields for Trace / Langfuse (kind, origin, MCP, skill)."""
+        """Contract fields for Trace (kind, origin, MCP, skill)."""
         meta: Dict[str, Any] = {
             "kind": defn.kind,
             "origin": defn.kind,
@@ -488,7 +486,6 @@ class ToolExecutor:
         await self.emitter.emit("tool.started", agent_id=agent_id, tool_name=tool,
                                 payload=started_payload)
         started = time.monotonic()
-        otel_span = _start_tool_span(defn, tool, tool_call_id)
 
         # Deterministic tools: content-hash cache (30d) — repeat evaluations
         # of the same resume/JD skip builtin re-execution entirely.
@@ -516,7 +513,6 @@ class ToolExecutor:
                                             "resultPreview": _preview(cached),
                                             **meta,
                                         })
-                _end_tool_span(otel_span, "SUCCEEDED", duration_ms)
                 return call
         retries = 0
         max_retries = defn.max_retries if (defn.idempotent and defn.side_effect_level == "read_only") else 0
@@ -568,7 +564,6 @@ class ToolExecutor:
                                             "resultPreview": _preview(result),
                                             **meta,
                                         })
-                _end_tool_span(otel_span, outcome, duration_ms)
                 return call
             except asyncio.CancelledError:
                 await self.emitter.emit("tool.failed", agent_id=agent_id, tool_name=tool,
@@ -580,8 +575,6 @@ class ToolExecutor:
                                                  "startedAt": started_at,
                                                  "endedAt": _utc_now(),
                                                  **meta})
-                _end_tool_span(otel_span, "CANCELLED",
-                               int((time.monotonic() - started) * 1000))
                 raise
             except asyncio.TimeoutError:
                 last_error = f"TIMEOUT after {defn.timeout_seconds}s"
@@ -610,7 +603,6 @@ class ToolExecutor:
             "endedAt": _utc_now(),
             "arguments": _preview_args(args),
             "durationMs": duration_ms, "retryCount": retries, **meta})
-        _end_tool_span(otel_span, "FAILED", duration_ms, last_error)
         return call
 
     def _deepwiki_context_policy(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1016,33 +1008,3 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
         "+00:00", "Z")
 
-
-def _start_tool_span(defn: ToolDefinition, tool: str, tool_call_id: str) -> Any:
-    """Start an OTel span with GenAI/MCP attributes; no-op when OTel disabled."""
-    try:
-        from app.runtime.otel_tracing import start_span
-    except Exception:  # noqa: BLE001
-        return None
-    attrs = {
-        "gen_ai.operation.name": "execute_tool",
-        "gen_ai.tool.name": tool,
-        "gen_ai.tool.call.id": tool_call_id,
-        "tool.kind": defn.kind,
-        "otel.schema_url": OTEL_GENAI_SCHEMA,
-    }
-    if defn.kind == "mcp":
-        attrs["mcp.method.name"] = "tools/call"
-        attrs["mcp.server.name"] = defn.mcp_server or "unknown"
-        attrs["mcp.protocol.version"] = defn.protocol_version or MCP_PROTOCOL_VERSION
-    return start_span(f"execute_tool {tool}", attrs)
-
-
-def _end_tool_span(span: Any, status: str, duration_ms: int,
-                   error: Optional[str] = None) -> None:
-    if span is None:
-        return
-    try:
-        from app.runtime.otel_tracing import end_span
-        end_span(span, status=status, duration_ms=duration_ms, error=error)
-    except Exception:  # noqa: BLE001
-        pass

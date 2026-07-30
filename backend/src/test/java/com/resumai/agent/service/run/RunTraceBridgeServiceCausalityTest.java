@@ -10,7 +10,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.dao.AgentRunMapper;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.RunEvent;
@@ -199,9 +198,7 @@ class RunTraceBridgeServiceCausalityTest {
         when(runs.selectOne(any())).thenReturn(run);
         when(runs.selectList(any())).thenReturn(List.of());
         when(eventService.listSince(anyString(), anyInt(), anyInt())).thenReturn(events);
-        return new RunTraceBridgeService(
-                runs, eventService, json,
-                LangfuseHealthService.forTest("", "", "", ""));
+        return new RunTraceBridgeService(runs, eventService, json);
     }
 
     private RunEvent event(long id, String type, String agent,

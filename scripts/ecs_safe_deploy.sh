@@ -132,17 +132,6 @@ if [[ ! -f .env ]]; then
   fi
 fi
 
-# Ensure sandbox flags exist without printing secrets.
-# Semantics since the replay-only cutover: user requests always run their
-# deterministic tools in-process (isolatedSandbox=false on the run), so
-# SANDBOX_ENABLED=true only keeps the Docker isolation path available for
-# benchmark / policy-evolution runs — it no longer sits on the request path.
-grep -q '^SANDBOX_ENABLED=' .env || echo 'SANDBOX_ENABLED=true' >> .env
-grep -q '^SANDBOX_MAX_CONCURRENT=' .env || echo 'SANDBOX_MAX_CONCURRENT=2' >> .env
-grep -q '^SANDBOX_MEM_LIMIT=' .env || echo 'SANDBOX_MEM_LIMIT=384m' >> .env
-grep -q '^SANDBOX_CPU=' .env || echo 'SANDBOX_CPU=0.5' >> .env
-grep -q '^SANDBOX_TTL_SECONDS=' .env || echo 'SANDBOX_TTL_SECONDS=240' >> .env
-
 # Embedding defaults: Bailian is the EXP-1 winner and reachable from this ECS.
 # Never silently fall back to local MiniLM for production deploys.
 if grep -qE '^DASHSCOPE_API_KEY=.+' .env || grep -qE '^EMBEDDING_PROVIDER=bailian' .env; then
@@ -158,14 +147,6 @@ else
   log "WARN: no DashScope/OpenRouter key — ensure EMBEDDING_* already set in .env"
 fi
 grep -q '^CACHE_ENABLED=' .env || echo 'CACHE_ENABLED=true' >> .env
-
-# Pin the sandbox worker image to this exact commit (never latest).
-if grep -q '^SANDBOX_WORKER_TAG=' .env; then
-  sed -i "s/^SANDBOX_WORKER_TAG=.*/SANDBOX_WORKER_TAG=${GIT_SHA}/" .env
-else
-  echo "SANDBOX_WORKER_TAG=${GIT_SHA}" >> .env
-fi
-log "sandbox worker image tag: resumai-sandbox-worker:${GIT_SHA}"
 
 # Memory producer/consumer cohort telemetry must identify the code that is
 # actually running.  Never carry a previous deploy's build version forward.
@@ -373,25 +354,12 @@ log "prepare frontend ecs image context"
 mkdir -p "$SRC_DIR/frontend/.nginx-cache"
 # Dockerfile.ecs expects dist/ already built
 
-log "build app images (sandbox manager is policy-lab profile only — not default prod)"
+log "build app images"
 cd "$SRC_DIR"
-# Optional: pin worker image for when --profile policy-lab is enabled later.
-$COMPOSE --profile build build resumai-sandbox-worker-image || \
-  log "WARN: sandbox worker image build skipped/failed (ok for candidate runtime)"
 $COMPOSE build ai-resume-workflow ai-resume-backend ai-resume-frontend
 
-log "bring up stack (volumes preserved; neo4j optional under profile graph; sandbox under policy-lab)"
+log "bring up stack (volumes preserved)"
 $COMPOSE up -d mysql redis minio etcd milvus
-# Prometheus/Grafana are auxiliary exporters for the Ops UI, not part of the
-# request path. Do not block an application release on a cross-border image
-# CDN when those optional images are not already cached on this ECS.
-if docker image inspect docker.m.daocloud.io/prom/prometheus:v2.53.0 >/dev/null 2>&1 \
-    && docker image inspect docker.m.daocloud.io/grafana/grafana:11.1.0 >/dev/null 2>&1; then
-  $COMPOSE up -d prometheus grafana || \
-    log "WARN: optional Prometheus/Grafana startup failed"
-else
-  log "optional Prometheus/Grafana images not cached; skip without pulling"
-fi
 # The original backend was launched outside the current Compose project and
 # therefore cannot be recreated in place despite sharing the same fixed name.
 # Remove only that orphan application container; named data/log/upload
@@ -406,11 +374,6 @@ if docker inspect ai-resume-backend >/dev/null 2>&1; then
   fi
 fi
 $COMPOSE up -d ai-resume-workflow ai-resume-backend ai-resume-frontend
-# Stop leftover sandbox manager if previous deploy started it without profile.
-if docker ps --format '{{.Names}}' | grep -q '^resumai-sandbox-manager$'; then
-  log "stopping leftover sandbox manager (policy-lab profile only)"
-  docker stop resumai-sandbox-manager || true
-fi
 # Knowledge graph removed: stop a leftover neo4j container (volume untouched).
 if docker ps --format '{{.Names}}' | grep -q '^resumai-neo4j$'; then
   log "stopping legacy neo4j container (volume preserved)"
@@ -522,7 +485,7 @@ docker inspect resumai-redis --format '{{range .Mounts}}{{.Name}} -> {{.Destinat
 
 log "schema tables"
 docker exec resumai-mysql mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" \
-  -e "SHOW TABLES LIKE 'agent_run'; SHOW TABLES LIKE 'policy_bundle'; SHOW TABLES LIKE 'schema_migration'; SELECT version FROM schema_migration ORDER BY version;" \
+  -e "SHOW TABLES LIKE 'agent_run'; SHOW TABLES LIKE 'schema_migration'; SELECT version FROM schema_migration ORDER BY version;" \
   2>/dev/null | tail -40 || true
 
 log "post-deploy: knowledge base seed + vector reindex (idempotent)"
@@ -530,17 +493,6 @@ python3 "$SRC_DIR/scripts/seed_knowledge_base.py" --base http://127.0.0.1 || \
   log "WARN: knowledge seed failed (retry manually)"
 curl -fsS -X POST http://127.0.0.1/api/rag/knowledge-base/reindex || \
   log "WARN: kb reindex endpoint unavailable (vector store may be lexical-only)"
-
-log "policy-lab cron: only when profile enabled; otherwise remove direct evolve cron"
-if docker ps --format '{{.Names}}' | grep -q '^policy-lab-worker$'; then
-  CRON_LINE="0 3 * * * curl -fsS -X POST http://127.0.0.1/api/dev/policy-lab/experiments -H 'Content-Type: application/json' -d '{\"kind\":\"OFFLINE_SEARCH\",\"basePolicyId\":\"balanced\",\"runType\":\"full_evaluation\",\"cohortKey\":\"nightly\",\"evalDataset\":\"gold\",\"gateDataset\":\"regression\",\"safetyDataset\":\"safety\",\"seeds\":[42],\"repeatsPerCase\":1,\"caseLimit\":3,\"budgetCny\":5,\"note\":\"nightly\"}' >> /var/log/resumai-evolution.log 2>&1"
-  ( crontab -l 2>/dev/null | grep -v 'evolve_policies.py' | grep -v 'policy-lab/experiments' ; echo "$CRON_LINE" ) | crontab - || \
-    log "WARN: policy-lab cron install failed"
-else
-  ( crontab -l 2>/dev/null | grep -v 'evolve_policies.py' | grep -v 'policy-lab/experiments' || true ) | crontab - || \
-    log "WARN: cron cleanup failed"
-  log "policy-lab profile not running — nightly auto-evolution cron removed"
-fi
 
 log "container status"
 $COMPOSE ps

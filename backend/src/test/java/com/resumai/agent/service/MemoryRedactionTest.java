@@ -44,10 +44,8 @@ class MemoryRedactionTest {
     }
 
     @Test
-    void failureOnlyForCoordinatorAndPolicy() {
+    void failureOnlyForCoordinator() {
         assertTrue(MemoryService.allowsFailure("CoordinatorAgent"));
-        assertTrue(MemoryService.allowsFailure("PolicyEvolution"));
-        assertTrue(MemoryService.allowsFailure("POLICY_EVOLUTION"));
         assertFalse(MemoryService.allowsFailure("ReportAgent"));
         assertFalse(MemoryService.allowsFailure("RiskAgent"));
         assertFalse(MemoryService.allowsFailure("TechAgent"));

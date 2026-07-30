@@ -12,7 +12,7 @@ from typing import Dict
 import httpx
 
 from app.config import settings
-from app.runtime.sandbox_tools_local import check_timeline
+from app.runtime.builtin_tools import check_timeline
 
 
 def _headers() -> Dict[str, str]:
@@ -65,7 +65,6 @@ async def java_external_profile(resume_text: str) -> str:
 
 
 async def timeline_validator(resume_text: str) -> str:
-    """In-process deterministic timeline check (same logic as the sandbox
-    tool, without container overhead) for quick validation paths."""
+    """In-process deterministic timeline check for quick validation paths."""
     return json.dumps(check_timeline({"resumeText": resume_text}),
                       ensure_ascii=False)

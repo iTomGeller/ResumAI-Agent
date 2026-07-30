@@ -519,23 +519,9 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   margin-top: 1px;
 }
 
-/* === LANGFUSE TRACE LINK === */
+/* === TRACE DETAIL === */
 .trace-link-panel {
   padding: var(--space-xl);
-}
-.langfuse-link {
-  display: inline-block;
-  padding: 12px 28px;
-  background: #6366f1;
-  color: #fff;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 14px;
-  text-decoration: none;
-  transition: background 0.15s;
-}
-.langfuse-link:hover {
-  background: #4f46e5;
 }
 
 /* === GRAPH === */
@@ -774,25 +760,6 @@ body.copilot-fullscreen-lock {
   border: 1px solid var(--color-border-light);
   border-radius: var(--radius-xs);
   color: var(--color-text-secondary);
-}
-
-/* === FEEDBACK === */
-.feedback-section textarea {
-  width: 100%;
-  padding: var(--space-md);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  resize: vertical;
-  min-height: 100px;
-}
-
-.feedback-section textarea:focus { border-color: var(--color-primary); }
-
-.feedback-actions {
-  display: flex;
-  gap: var(--space-sm);
-  margin-top: var(--space-md);
 }
 
 /* === NOTICES === */

@@ -13,11 +13,7 @@ import com.resumai.agent.util.MarkdownTextUtil;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
-import com.resumai.agent.config.AgentMetrics;
-import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.api.dto.DashboardMetricsResponse;
-import com.resumai.agent.api.dto.FeedbackRequest;
-import com.resumai.agent.api.dto.FeedbackResponse;
 import com.resumai.agent.api.dto.JdMatchResult;
 import com.resumai.agent.api.dto.PageResult;
 import com.resumai.agent.api.dto.TaskListItemResponse;
@@ -27,7 +23,6 @@ import com.resumai.agent.dao.AgentExecutionTraceMapper;
 import com.resumai.agent.dao.AgentRunMapper;
 import com.resumai.agent.dao.ConversationSessionMapper;
 import com.resumai.agent.dao.DynamicSkillPromptMapper;
-import com.resumai.agent.dao.HumanFeedbackLogMapper;
 import com.resumai.agent.dao.MetaEvolutionHistoryMapper;
 import com.resumai.agent.dao.ResumeTaskMapper;
 import com.resumai.agent.dao.SystemOrchestrationRuleMapper;
@@ -36,7 +31,6 @@ import com.resumai.agent.domain.entity.AgentExecutionTrace;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ConversationSession;
 import com.resumai.agent.domain.entity.DynamicSkillPrompt;
-import com.resumai.agent.domain.entity.HumanFeedbackLog;
 import com.resumai.agent.domain.entity.MetaEvolutionHistory;
 import com.resumai.agent.domain.entity.ResumeTask;
 import com.resumai.agent.domain.enums.EvolutionType;
@@ -87,7 +81,7 @@ import org.springframework.web.multipart.MultipartFile;
 /**
  * 简历评估核心服务 — 管理评估任务生命周期、Agent执行追踪与持久化。
  *
- * <p>MySQL 承担任务/JD/反馈/Trace 的事实查询，内存与 Redis 仅承接 RUNNING 运行态缓存。</p>
+ * <p>MySQL 承担任务/JD/Trace 的事实查询，内存与 Redis 仅承接 RUNNING 运行态缓存。</p>
  */
 @Service
 public class ResumeEvaluationService {
@@ -103,23 +97,19 @@ public class ResumeEvaluationService {
             "RUNNING", "PAUSING", "RESUMING");
 
     private final AtomicLong taskId = new AtomicLong(1000);
-    private final AtomicLong feedbackId = new AtomicLong(3000);
     private final Map<String, MutableTask> tasks = new ConcurrentHashMap<>();
     private final Map<String, List<TraceEventResponse>> traces = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> traceSequences = new ConcurrentHashMap<>();
     private final Map<String, Map<String, AtomicInteger>> traceRoundCounters = new ConcurrentHashMap<>();
-    private final List<FeedbackResponse> feedbacks = new ArrayList<>();
     private final TaskQueueService taskQueueService;
     private final SseTraceHub sseTraceHub;
     private final ResumeRagService resumeRagService;
     private final ResumeTaskMapper resumeTaskMapper;
     private final AgentRunMapper agentRunMapper;
     private final AgentExecutionTraceMapper agentExecutionTraceMapper;
-    private final HumanFeedbackLogMapper humanFeedbackLogMapper;
     private final MetaEvolutionHistoryMapper metaEvolutionHistoryMapper;
     private final SystemOrchestrationRuleMapper ruleMapper;
     private final DynamicSkillPromptMapper skillPromptMapper;
-    private final AgentMetrics agentMetrics;
     private final ExternalProfileService externalProfileService;
     private final JdRagService jdRagService;
     private final HybridRagService hybridRagService;
@@ -132,7 +122,6 @@ public class ResumeEvaluationService {
     private final RunSchedulerService runSchedulerService;
     private final RunLifecycleService runLifecycleService;
     private final ConversationSessionMapper conversationSessionMapper;
-    private final LangfuseHealthService langfuseHealth;
     private final CandidateService candidateService;
 
     public ResumeEvaluationService(SseTraceHub sseTraceHub,
@@ -140,11 +129,9 @@ public class ResumeEvaluationService {
                                 ResumeTaskMapper resumeTaskMapper,
                                 AgentRunMapper agentRunMapper,
                                 AgentExecutionTraceMapper agentExecutionTraceMapper,
-                                HumanFeedbackLogMapper humanFeedbackLogMapper,
                                 MetaEvolutionHistoryMapper metaEvolutionHistoryMapper,
                                 SystemOrchestrationRuleMapper ruleMapper,
                                 DynamicSkillPromptMapper skillPromptMapper,
-                                AgentMetrics agentMetrics,
                                 ExternalProfileService externalProfileService,
                                 JdRagService jdRagService,
                                 HybridRagService hybridRagService,
@@ -158,18 +145,15 @@ public class ResumeEvaluationService {
                                 @Lazy RunSchedulerService runSchedulerService,
                                 @Lazy RunLifecycleService runLifecycleService,
                                 ConversationSessionMapper conversationSessionMapper,
-                                LangfuseHealthService langfuseHealth,
                                 CandidateService candidateService) {
         this.sseTraceHub = sseTraceHub;
         this.resumeRagService = resumeRagService;
         this.resumeTaskMapper = resumeTaskMapper;
         this.agentRunMapper = agentRunMapper;
         this.agentExecutionTraceMapper = agentExecutionTraceMapper;
-        this.humanFeedbackLogMapper = humanFeedbackLogMapper;
         this.metaEvolutionHistoryMapper = metaEvolutionHistoryMapper;
         this.ruleMapper = ruleMapper;
         this.skillPromptMapper = skillPromptMapper;
-        this.agentMetrics = agentMetrics;
         this.externalProfileService = externalProfileService;
         this.jdRagService = jdRagService;
         this.hybridRagService = hybridRagService;
@@ -183,18 +167,13 @@ public class ResumeEvaluationService {
         this.runSchedulerService = runSchedulerService;
         this.runLifecycleService = runLifecycleService;
         this.conversationSessionMapper = conversationSessionMapper;
-        this.langfuseHealth = langfuseHealth;
         this.candidateService = candidateService;
-        agentMetrics.registerSseActiveSubscribersGauge(sseTraceHub::getActiveSubscriberCount);
-        agentMetrics.registerTaskCacheSizeGauge(() -> tasks.size());
-        agentMetrics.registerMilvusConnectionAliveGauge(() -> resumeRagService.isMilvusAvailable() ? 1 : 0);
     }
 
     @PostConstruct
     void restorePersistedState() {
         initTaskIdFromDb();
         restoreTasksFromDb();
-        restoreFeedbacksFromDb();
     }
 
     /**
@@ -238,9 +217,6 @@ public class ResumeEvaluationService {
                 }
             }
             runtimeStateService.evictRunningTask(event.traceId());
-            agentMetrics.agentTaskFinished();
-            agentMetrics.recordFunnelEvaluationCompleted(
-                    row.getJobCategory(), event.status(), "NONE");
         } catch (Exception e) {
             log.debug("task cache refresh failed trace={}: {}", event.traceId(), e.getMessage());
         }
@@ -280,15 +256,6 @@ public class ResumeEvaluationService {
             }
         } catch (Exception e) {
             log.warn("[eval] restore tasks from db failed: {}", e.getMessage());
-        }
-    }
-
-    private void restoreFeedbacksFromDb() {
-        try {
-            PageResult<FeedbackResponse> page = queryFeedbacks(null, null, 1, 200);
-            feedbacks.addAll(page.items());
-        } catch (Exception e) {
-            log.warn("[eval] restore feedbacks failed: {}", e.getMessage());
         }
     }
 
@@ -481,7 +448,6 @@ public class ResumeEvaluationService {
         persistResumeTask(task, resumeObjectKey);
         tasks.put(traceId, task);
         traces.put(traceId, new ArrayList<>());
-        agentMetrics.recordFunnelEvaluationStarted(task.jobCategory, task.executionMode);
         appendDagTrace(task.traceId, null, "OrchestratorAgent", "TASK_CREATED",
                 "任务创建", "TraceId 已生成，任务已进入 Redis Stream 队列。", "SUCCESS", 18L, 0,
                 null, null, "task_create", "BOTH",
@@ -704,24 +670,20 @@ public class ResumeEvaluationService {
             task.finishedAt = null;
             runtimeStateService.cacheRunningTask(toResponse(task));
             if ("PAUSED".equals(previousStatus)) {
-                agentMetrics.agentTaskStarted();
             }
         }
         if ("RESUMING".equals(status)) {
             task.finishedAt = null;
             runtimeStateService.cacheRunningTask(toResponse(task));
             if ("PAUSED".equals(previousStatus)) {
-                agentMetrics.agentTaskStarted();
             }
         }
         if ("PAUSED".equals(status) && "RESUMING".equals(previousStatus)) {
             runtimeStateService.evictRunningTask(task.traceId);
-            agentMetrics.agentTaskFinished();
         }
         if (Set.of("CANCELLED", "SUPERSEDED").contains(status)
                 && Set.of("RUNNING", "PAUSING").contains(previousStatus)) {
             runtimeStateService.evictRunningTask(task.traceId);
-            agentMetrics.agentTaskFinished();
         }
         updateResumeTask(task);
         return toResponse(task);
@@ -767,7 +729,6 @@ public class ResumeEvaluationService {
             }
             if (("PAUSED".equals(status) || terminal)
                     && Set.of("RUNNING", "PAUSING", "RESUMING").contains(previousStatus)) {
-                agentMetrics.agentTaskFinished();
             }
         }
         return true;
@@ -856,8 +817,6 @@ public class ResumeEvaluationService {
         String normalizedCategory = normalizeJobCategory(jobCategory);
         String fileType = detectFileType(fileName);
         if (file != null && !file.isEmpty()) {
-            agentMetrics.recordFunnelUpload(fileType, normalizedCategory);
-            agentMetrics.recordFunnelUploadSize(fileType, file.getSize());
         }
         String resumeText = extractResumeText(file, fileType, normalizedCategory);
         String traceId = "trace-" + UUID.randomUUID();
@@ -887,8 +846,6 @@ public class ResumeEvaluationService {
         String fileName = file == null ? "" : file.getOriginalFilename();
         String fileType = detectFileType(fileName);
         if (file != null && !file.isEmpty()) {
-            agentMetrics.recordFunnelUpload(fileType, "AUTO");
-            agentMetrics.recordFunnelUploadSize(fileType, file.getSize());
         }
         String resumeText = extractResumeText(file, fileType, "AUTO");
         String traceId = "trace-" + UUID.randomUUID();
@@ -941,11 +898,9 @@ public class ResumeEvaluationService {
 
     private String extractResumeText(MultipartFile file, String fileType, String jobCategory) {
         if (file == null || file.isEmpty()) {
-            agentMetrics.recordFunnelParseFailure(fileType, "empty_file");
             throw new IllegalArgumentException("请上传一份 PDF、TXT、Markdown 或 CSV 简历。");
         }
         if (file.getSize() > MAX_UPLOAD_BYTES) {
-            agentMetrics.recordFunnelParseFailure(fileType, "file_too_large");
             throw new IllegalArgumentException("简历文件不能超过 20MB。");
         }
         String fileName = file.getOriginalFilename() == null ? "resume" : file.getOriginalFilename();
@@ -954,31 +909,21 @@ public class ResumeEvaluationService {
             String text;
             if (lowerName.endsWith(".pdf")) {
                 try (PDDocument document = Loader.loadPDF(file.getBytes())) {
-                    agentMetrics.recordPdfPagesExtracted(document.getNumberOfPages());
                     text = new PDFTextStripper().getText(document);
                 }
             } else if (lowerName.endsWith(".txt") || lowerName.endsWith(".md") || lowerName.endsWith(".csv")) {
                 text = new String(file.getBytes(), StandardCharsets.UTF_8);
             } else {
-                agentMetrics.recordFunnelParseFailure(fileType, "unsupported_type");
                 throw new IllegalArgumentException("暂不支持该文件类型，请上传 PDF/TXT/Markdown/CSV，或将 Word 简历正文复制到文本框。");
             }
             String normalized = text == null ? "" : text.replace('\u0000', ' ').trim();
-            agentMetrics.recordPdfTextLength(normalized.length());
             if (!StringUtils.hasText(normalized)) {
-                agentMetrics.recordFunnelParseFailure(fileType, "empty_text");
                 throw new IllegalArgumentException("未能从简历文件中抽取到有效文本，请检查文件内容或改用粘贴文本方式。");
             }
-            agentMetrics.recordFunnelParseSuccess(fileType);
-            agentMetrics.recordToolCall("resume_parser", "ResumeParserAgent", "SUCCESS", 0L);
-            agentMetrics.recordToolInputSize("resume_parser", (int) Math.min(file.getSize(), Integer.MAX_VALUE));
-            agentMetrics.recordToolOutputSize("resume_parser", normalized.length());
             return normalized.length() > MAX_RESUME_TEXT_LENGTH
                     ? normalized.substring(0, MAX_RESUME_TEXT_LENGTH)
                     : normalized;
         } catch (IOException e) {
-            agentMetrics.recordFunnelParseFailure(fileType, "io_error");
-            agentMetrics.recordToolCallError("resume_parser", e.getClass().getSimpleName());
             throw new IllegalArgumentException("简历文件解析失败：" + e.getMessage(), e);
         }
     }
@@ -1426,7 +1371,6 @@ public class ResumeEvaluationService {
         // (TaskController) falls back to the unified run-event bridge.
         tree.put("executionTree", executionTree);
         tree.put("harnessPlan", extractHarnessPlan(deduped));
-        tree.putAll(langfuseHealth.linkMeta(traceId));
         return tree;
     }
 
@@ -1928,7 +1872,7 @@ public class ResumeEvaluationService {
                 stringValue(payload.get("outputSummary"), row.getOutputSummary()),
                 (List<String>) payload.get("toolCalls"),
                 (List<String>) payload.get("mcpCalls"),
-                stringValue(payload.get("sandboxSummary"), null),
+                stringValue(payload.get("executionSummary"), null),
                 stringValue(payload.get("llmInvocationId"), null),
                 stringValue(payload.get("nodeId"), row.getNodeId()),
                 (List<String>) payload.get("dependsOn"),
@@ -2237,7 +2181,7 @@ public class ResumeEvaluationService {
     private String normalizeCallKind(String existing, String stepKind, List<String> toolCalls,
                                      List<String> mcpCalls, String llmInvocationId) {
         String inferred = inferCallKind(stepKind, toolCalls, mcpCalls, llmInvocationId);
-        if ("skill".equals(existing) || "sandbox".equals(existing) || !StringUtils.hasText(existing)) {
+        if ("skill".equals(existing) || !StringUtils.hasText(existing)) {
             return inferred;
         }
         if ("tool".equals(existing) && toolCalls.isEmpty() && !StringUtils.hasText(llmInvocationId)
@@ -2271,7 +2215,7 @@ public class ResumeEvaluationService {
                 event.dagGroupId(), event.laneId(), event.stepKind(), event.viewType(),
                 event.businessLabel(), event.evidenceSummary(), event.interviewHints(),
                 event.developerLabel(), event.skillName(), event.promptPreview(), event.inputSummary(), event.outputSummary(),
-                toolCalls == null || toolCalls.isEmpty() ? null : toolCalls, event.mcpCalls(), event.sandboxSummary(), event.llmInvocationId(),
+                toolCalls == null || toolCalls.isEmpty() ? null : toolCalls, event.mcpCalls(), event.executionSummary(), event.llmInvocationId(),
                 event.nodeId(), event.dependsOn(), event.edgeLabel(), event.phase(), event.expected(), event.sortOrder(),
                 event.fullPrompt(), event.fullInput(), event.fullOutput(),
                 event.sequence(), roundIndex, roundRole, callKind, callName,
@@ -2332,85 +2276,6 @@ public class ResumeEvaluationService {
                     return false;
                 })
                 .toList();
-    }
-
-    /**
-     * 记录 HR 反馈。
-     *
-     * @param request 反馈请求
-     * @return 反馈响应
-     */
-    public synchronized FeedbackResponse addFeedback(FeedbackRequest request) {
-        long feedbackStart = System.currentTimeMillis();
-        LocalDateTime now = LocalDateTime.now();
-        long id = feedbackId.incrementAndGet();
-        String feedbackType = StringUtils.hasText(request.feedbackType()) ? request.feedbackType() : "COMMENT";
-        String reviewer = StringUtils.hasText(request.reviewer()) ? request.reviewer() : "HR";
-        FeedbackResponse response = new FeedbackResponse(
-                id,
-                request.traceId(),
-                request.ratingScore(),
-                feedbackType,
-                request.humanComment(),
-                request.fixAction(),
-                reviewer,
-                now
-        );
-        feedbacks.add(response);
-        try {
-            HumanFeedbackLog entity = new HumanFeedbackLog();
-            entity.setId(id);
-            entity.setTraceId(request.traceId());
-            entity.setRatingScore(request.ratingScore());
-            entity.setHumanComment(request.humanComment());
-            entity.setFixAction(request.fixAction());
-            entity.setFeedbackType(feedbackType);
-            entity.setReviewer(reviewer);
-            entity.setAdopted(0);
-            entity.setCreateTime(now);
-            entity.setUpdateTime(now);
-            humanFeedbackLogMapper.insert(entity);
-        } catch (DataAccessException e) {
-            log.warn("[eval] persist human_feedback_log failed (trace={}): {}", request.traceId(), e.getMessage());
-        }
-        agentMetrics.recordFunnelFeedbackSubmitted(request.ratingScore() == null ? 0 : request.ratingScore());
-        agentMetrics.recordFunnelFeedbackAgreement(computeFeedbackAgreement(request));
-        agentMetrics.recordFunnelFeedbackLatency(System.currentTimeMillis() - feedbackStart);
-        appendTrace(request.traceId(), null, "HumanFeedback", "HUMAN_FEEDBACK", "人工反馈已记录",
-                "评分 " + request.ratingScore() + "，已持久化用于离线审计；系统不会据此自动在线训练。",
-                "SUCCESS", System.currentTimeMillis() - feedbackStart, 0);
-        return response;
-    }
-
-    /**
-     * MySQL 分页查询 HR 反馈。
-     */
-    public PageResult<FeedbackResponse> queryFeedbacks(String traceId, String feedbackType, int page, int pageSize) {
-        int safePage = Math.max(page, 1);
-        int safeSize = Math.min(Math.max(pageSize, 1), 100);
-        QueryWrapper<HumanFeedbackLog> wrapper = new QueryWrapper<>();
-        if (StringUtils.hasText(traceId)) {
-            wrapper.eq("trace_id", traceId.trim());
-        }
-        if (StringUtils.hasText(feedbackType) && !"ALL".equalsIgnoreCase(feedbackType)) {
-            wrapper.eq("feedback_type", feedbackType.trim());
-        }
-        wrapper.orderByDesc("create_time", "id");
-        Page<HumanFeedbackLog> mpPage = humanFeedbackLogMapper.selectPage(new Page<>(safePage, safeSize), wrapper);
-        List<FeedbackResponse> items = new ArrayList<>(mpPage.getRecords().size());
-        for (HumanFeedbackLog row : mpPage.getRecords()) {
-            items.add(new FeedbackResponse(
-                    row.getId(),
-                    row.getTraceId(),
-                    row.getRatingScore(),
-                    row.getFeedbackType(),
-                    row.getHumanComment(),
-                    row.getFixAction(),
-                    row.getReviewer(),
-                    row.getCreateTime()
-            ));
-        }
-        return PageResult.of(items, mpPage.getTotal(), safePage, safeSize);
     }
 
     /**
@@ -2539,7 +2404,6 @@ public class ResumeEvaluationService {
      * shared scheduler drive it (same queue, permits, watchdog, recovery).
      */
     private void executeTaskViaAgentRuntime(MutableTask task) {
-        agentMetrics.agentTaskStarted();
         try {
             String conversationId = ensureTaskConversation(task);
             String runId = StringUtils.hasText(task.workflowRunId)
@@ -2562,11 +2426,8 @@ public class ResumeEvaluationService {
             task.summary = "启动 Agent 运行失败：" + e.getMessage();
             task.finishedAt = LocalDateTime.now();
             task.updateTime = LocalDateTime.now();
-            agentMetrics.recordAgentError("AgentRuntime", e.getClass().getSimpleName());
-            agentMetrics.recordFunnelEvaluationCompleted(task.jobCategory, "FAILED", "NONE");
             updateResumeTask(task);
             runtimeStateService.evictRunningTask(task.traceId);
-            agentMetrics.agentTaskFinished();
         }
     }
 
@@ -2669,12 +2530,12 @@ public class ResumeEvaluationService {
                                 String developerLabel, String skillName, String promptPreview,
                                 String inputSummary, String outputSummary,
                                 java.util.List<String> toolCalls, java.util.List<String> mcpCalls,
-                                String sandboxSummary, String llmInvocationId,
+                                String executionSummary, String llmInvocationId,
                                 String fullPrompt, String fullInput, String fullOutput) {
         appendDagTraceFull(traceId, parentSpanId, agentRole, eventType, title, detail, status, durationMs, tokenCost,
                 dagGroupId, laneId, stepKind, viewType, businessLabel, evidenceSummary, interviewHints,
                 developerLabel, skillName, promptPreview, inputSummary, outputSummary, toolCalls, mcpCalls,
-                sandboxSummary, llmInvocationId, fullPrompt, fullInput, fullOutput);
+                executionSummary, llmInvocationId, fullPrompt, fullInput, fullOutput);
     }
 
     private void appendDagTraceFull(String traceId, String parentSpanId, String agentRole, String eventType,
@@ -2684,11 +2545,11 @@ public class ResumeEvaluationService {
                                     String developerLabel, String skillName, String promptPreview,
                                     String inputSummary, String outputSummary,
                                     java.util.List<String> toolCalls, java.util.List<String> mcpCalls,
-                                    String sandboxSummary, String llmInvocationId) {
+                                    String executionSummary, String llmInvocationId) {
         appendDagTraceFull(traceId, parentSpanId, agentRole, eventType, title, detail, status, durationMs, tokenCost,
                 dagGroupId, laneId, stepKind, viewType, businessLabel, evidenceSummary, interviewHints,
                 developerLabel, skillName, promptPreview, inputSummary, outputSummary, toolCalls, mcpCalls,
-                sandboxSummary, llmInvocationId, null, null, null);
+                executionSummary, llmInvocationId, null, null, null);
     }
 
     private void appendDagTraceFull(String traceId, String parentSpanId, String agentRole, String eventType,
@@ -2698,7 +2559,7 @@ public class ResumeEvaluationService {
                                     String developerLabel, String skillName, String promptPreview,
                                     String inputSummary, String outputSummary,
                                     java.util.List<String> toolCalls, java.util.List<String> mcpCalls,
-                                    String sandboxSummary, String llmInvocationId,
+                                    String executionSummary, String llmInvocationId,
                                     String fullPrompt, String fullInput, String fullOutput) {
         String spanId = "span-" + UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
@@ -2726,7 +2587,7 @@ public class ResumeEvaluationService {
                 dagGroupId, laneId, stepKind, viewType,
                 businessLabel, evidenceSummary, interviewHints,
                 developerLabel, skillName, previewPrompt, previewInput, previewOutput,
-                sanitizedToolCalls.isEmpty() ? null : sanitizedToolCalls, mcpCalls, sandboxSummary, llmInvocationId,
+                sanitizedToolCalls.isEmpty() ? null : sanitizedToolCalls, mcpCalls, executionSummary, llmInvocationId,
                 nodeId, dependsOn, edgeLabel, phase, false, sortOrder,
                 fullPrompt, fullInput, fullOutput,
                 sequence, roundIndex, roundRole, callKind, callName, parentAgentSpanId, parentRoundId, ioJson
@@ -2777,7 +2638,7 @@ public class ResumeEvaluationService {
         payload.put("outputSummary", event.outputSummary());
         payload.put("toolCalls", event.toolCalls());
         payload.put("mcpCalls", event.mcpCalls());
-        payload.put("sandboxSummary", event.sandboxSummary());
+        payload.put("executionSummary", event.executionSummary());
         payload.put("llmInvocationId", event.llmInvocationId());
         payload.put("nodeId", event.nodeId());
         payload.put("dependsOn", event.dependsOn());
@@ -2843,11 +2704,9 @@ public class ResumeEvaluationService {
                             .eq("enabled", 1)
                             .orderByDesc("version")
                             .last("limit 1"));
-            agentMetrics.recordRoutingDecision(rule != null ? "RULE_FOUND" : "RULE_MISSING", jobCategory);
             return rule;
         } catch (Exception e) {
             log.warn("加载编排规则失败(jobCategory={}): {}", jobCategory, e.getMessage());
-            agentMetrics.recordRoutingDecision("RULE_ERROR", jobCategory);
             return null;
         }
     }
@@ -2861,13 +2720,11 @@ public class ResumeEvaluationService {
                             .orderByDesc("version")
                             .last("limit 1"));
             boolean found = skill != null && StringUtils.hasText(skill.getPromptTemplate());
-            agentMetrics.recordSkillInvoked(agent, skillName, found);
             if (found) {
                 return skill.getPromptTemplate();
             }
         } catch (Exception e) {
             log.warn("加载 Skill Prompt 失败(skill={}): {}", skillName, e.getMessage());
-            agentMetrics.recordSkillInvoked(agent, skillName, false);
         }
         return fallback;
     }
@@ -3015,7 +2872,7 @@ public class ResumeEvaluationService {
             case "SUCCESS", "PARTIAL_SUCCESS" -> "COMPLETED";
             case "FAILED", "TIMED_OUT" -> "SYSTEM_FAILED";
             case "QUEUED", "RUNNING", "STARTING", "PAUSING", "PAUSED", "RESUMING",
-                 "WAITING_LLM", "WAITING_TOOL", "WAITING_SANDBOX", "CANCELLING", "RETRYING" -> "RUNNING";
+                 "WAITING_LLM", "WAITING_TOOL", "CANCELLING", "RETRYING" -> "RUNNING";
             default -> "NOT_STARTED";
         };
     }
@@ -3200,21 +3057,6 @@ public class ResumeEvaluationService {
         }
         return "other";
     }
-
-    private boolean computeFeedbackAgreement(FeedbackRequest request) {
-        MutableTask task = tasks.get(request.traceId());
-        if (task == null || request.ratingScore() == null || !StringUtils.hasText(task.recommendation)) {
-            return false;
-        }
-        boolean positiveRecommendation = "STRONG_RECOMMEND".equals(task.recommendation)
-                || "RECOMMEND".equals(task.recommendation);
-        boolean positiveRating = request.ratingScore() >= 4;
-        boolean negativeRecommendation = "NEED_MANUAL_REVIEW".equals(task.recommendation);
-        boolean negativeRating = request.ratingScore() <= 2;
-        return (positiveRecommendation && positiveRating) || (negativeRecommendation && negativeRating);
-    }
-
-
 
     private static final class MutableTask {
         private final Long id;

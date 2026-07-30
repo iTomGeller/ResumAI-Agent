@@ -22,11 +22,6 @@ app.include_router(ops_router)
 @app.on_event("startup")
 async def startup() -> None:
     try:
-        from app.runtime.otel_tracing import init_otel
-        init_otel()
-    except Exception as exc:  # noqa: BLE001
-        logger.info("otel init skipped: %s", exc)
-    try:
         from app.runtime.skills import default_skill_manager
         count = default_skill_manager.reload()
         logger.info("skills ready: %d from %s", count, default_skill_manager.root)

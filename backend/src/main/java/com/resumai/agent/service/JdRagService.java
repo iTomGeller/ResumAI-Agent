@@ -10,7 +10,6 @@ import com.resumai.agent.api.dto.JdMatchResult;
 import com.resumai.agent.api.dto.JdSummaryResponse;
 import com.resumai.agent.api.dto.PageResult;
 import com.resumai.agent.api.dto.UpsertJdRequest;
-import com.resumai.agent.config.AgentMetrics;
 import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.dao.JdLibraryMapper;
 import com.resumai.agent.domain.entity.JdLibrary;
@@ -57,7 +56,6 @@ public class JdRagService {
     private final JdLibraryMapper jdLibraryMapper;
     private final EmbeddingAvailability embeddingAvailability;
     private final MilvusVectorMaintenanceService vectorMaintenanceService;
-    private final AgentMetrics agentMetrics;
 
     private final Map<String, JdMeta> jdMetaCache = new ConcurrentHashMap<>();
 
@@ -108,15 +106,13 @@ public class JdRagService {
                         DeepSeekClient deepSeekClient,
                         JdLibraryMapper jdLibraryMapper,
                         EmbeddingAvailability embeddingAvailability,
-                        MilvusVectorMaintenanceService vectorMaintenanceService,
-                        AgentMetrics agentMetrics) {
+                        MilvusVectorMaintenanceService vectorMaintenanceService) {
         this.jdEmbeddingStore = jdEmbeddingStore;
         this.embeddingModel = embeddingModel;
         this.deepSeekClient = deepSeekClient;
         this.jdLibraryMapper = jdLibraryMapper;
         this.embeddingAvailability = embeddingAvailability;
         this.vectorMaintenanceService = vectorMaintenanceService;
-        this.agentMetrics = agentMetrics;
     }
 
     public int ensureDefaultJdsSeeded() {
@@ -408,8 +404,6 @@ public class JdRagService {
         }
         scored.sort((a, b) -> Double.compare(b.matchScore(), a.matchScore()));
         List<JdMatchResult> top = scored.stream().limit(topK).collect(Collectors.toList());
-        agentMetrics.recordRagRetrieval("jd_lexical_bm25", top.isEmpty(),
-                top.isEmpty() ? 0 : top.get(0).matchScore());
         return top;
     }
 

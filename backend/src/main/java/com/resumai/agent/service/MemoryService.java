@@ -55,8 +55,7 @@ public class MemoryService {
             "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED", "START_STUCK");
 
     private static final Set<String> FAILURE_CONSUMERS = Set.of(
-            "COORDINATORAGENT", "COORDINATOR", "POLICYEVOLUTION", "POLICY_EVOLUTION",
-            "POLICY-LAB", "POLICYLAB");
+            "COORDINATORAGENT", "COORDINATOR");
 
     /**
      * Read/write compatibility for rows created before the canonical taxonomy.
@@ -67,19 +66,17 @@ public class MemoryService {
             Map.entry("SHORT_TERM", "WORKING"),
             Map.entry("PREFERENCE", "SEMANTIC"),
             Map.entry("USER_PREFERENCE", "SEMANTIC"),
-            Map.entry("HR_FEEDBACK", "SEMANTIC"),
             Map.entry("DOMAIN", "SEMANTIC"),
             Map.entry("FAILURE", "EPISODIC"));
 
     private static final Map<String, Set<String>> STORAGE_TYPES = Map.of(
-            "SEMANTIC", Set.of("SEMANTIC", "PREFERENCE", "USER_PREFERENCE", "HR_FEEDBACK", "DOMAIN"),
+            "SEMANTIC", Set.of("SEMANTIC", "PREFERENCE", "USER_PREFERENCE", "DOMAIN"),
             "EPISODIC", Set.of("EPISODIC", "FAILURE"),
             "PROCEDURAL", Set.of("PROCEDURAL"),
             "WORKING", Set.of("WORKING", "CONVERSATION", "SHORT_TERM"));
 
     private static final Set<String> TRUSTED_PROCEDURAL_SOURCES = Set.of(
-            "approved_policy", "approved_skill", "policy_approval",
-            "skill_registry", "system_approved");
+            "approved_skill", "skill_registry", "system_approved");
     private static final String RUNTIME_STRATEGY_SOURCE = "runtime_strategy";
 
     private static final Pattern SECRET_PATTERN = Pattern.compile(
@@ -823,7 +820,6 @@ public class MemoryService {
         Map<String, Object> structured = new LinkedHashMap<>();
         structured.put("runId", run.getRunId());
         structured.put("errorCode", errorCode);
-        structured.put("policyId", run.getPolicyId());
         structured.put("runType", run.getRunType());
         boolean controlPlane = isControlPlaneErrorCode(errorCode);
         if (controlPlane) {
@@ -833,18 +829,11 @@ public class MemoryService {
         String content = "失败记录: 类别=" + run.getRunType() + " | 错误=" + errorCode
                 + " | 详情=" + trim(errorMessage, 300);
         // A failed run is still an EPISODIC event. GLOBAL scope is reserved
-        // for Coordinator/policy learning and is excluded from evaluation.
+        // for the Coordinator and is excluded from specialist evaluation.
         write(new WriteRequest("EPISODIC", "GLOBAL", run.getUserId(), run.getConversationId(),
                 run.getRunId(), content, structured,
                 controlPlane ? "control_plane" : "failed_run",
                 "failure:" + run.getRunId(), 0.9, "NORMAL", 60));
-    }
-
-    public void writeHrFeedbackMemory(AgentRun run, String comment, Map<String, Object> structured) {
-        write(new WriteRequest("SEMANTIC", "CONVERSATION", run.getUserId(),
-                run.getConversationId(), run.getRunId(),
-                "HR 反馈: " + trim(comment, 500), structured, "hr_feedback",
-                "feedback:" + run.getRunId() + ":" + System.currentTimeMillis(), 0.95, "NORMAL", null));
     }
 
     @Scheduled(fixedDelayString = "${resumai.memory.cleanup-interval-ms:600000}")

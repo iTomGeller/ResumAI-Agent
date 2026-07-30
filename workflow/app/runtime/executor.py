@@ -428,9 +428,7 @@ class RunExecutor:
         self.pause_event = pause_event
         self.memory = memory or MemoryClient(request.runId, request.conversationId,
                                              request.userId)
-        # Production candidate evaluation always uses in-process builtin tools.
-        # Docker Sandbox is reserved for Policy Lab / benchmark / replay and
-        # must not appear in this dependency graph.
+        # Candidate evaluation uses in-process deterministic builtin tools.
         self.builtin_tools = builtin_tools or BuiltinToolRegistry()
         run_context = {
             "resumeText": request.resumeText or "",

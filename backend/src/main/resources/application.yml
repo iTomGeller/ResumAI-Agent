@@ -36,18 +36,10 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 management:
-  metrics:
-    distribution:
-      percentiles-histogram:
-        resumai.dag.node.duration: true
-        resumai.tool.call.duration: true
-        resumai.mcp.call.duration: true
-        resumai.funnel.time_to_screen: true
-        resumai.mysql.query.duration: true
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        include: health,info
   endpoint:
     health:
       probes:
@@ -86,22 +78,6 @@ resumai:
   intent:
     # EXP-6: below this LLM confidence the turn degrades to a clarify question
     confidence-floor: ${INTENT_CONFIDENCE_FLOOR:0.7}
-  trace:
-    langsmith-api-key: ${LANGSMITH_API_KEY:}
-    otel-exporter-otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
-  mysql:
-    observability:
-      enabled: true
-      slow-query-threshold-ms: ${MYSQL_SLOW_QUERY_THRESHOLD_MS:200}
-      table-refresh-interval-ms: ${MYSQL_TABLE_REFRESH_INTERVAL_MS:60000}
-      monitored-tables:
-        - jd_library
-        - resume_task
-        - agent_execution_trace
-        - llm_invocation
-        - human_feedback_log
-        - ragas_eval_metrics
-        - system_orchestration_rule
   object-storage:
     enabled: ${OBJECT_STORAGE_ENABLED:false}
     endpoint: ${MINIO_ENDPOINT:http://minio:9000}
@@ -135,16 +111,8 @@ resumai:
     start-grace-seconds: ${RUN_START_GRACE_SECONDS:90}
     permit-lease-minutes: ${RUN_PERMIT_LEASE_MINUTES:30}
     worker-id: ${TASK_WORKER_ID:backend-1}
-  policy:
-    epsilon: ${POLICY_EPSILON:0.10}
   memory:
     cleanup-interval-ms: ${MEMORY_CLEANUP_INTERVAL_MS:600000}
-
-langfuse:
-  otel-endpoint: ${LANGFUSE_OTEL_ENDPOINT:${OTEL_EXPORTER_OTLP_ENDPOINT:}}
-  public-key: ${LANGFUSE_PUBLIC_KEY:}
-  secret-key: ${LANGFUSE_SECRET_KEY:}
-  public-url: ${LANGFUSE_PUBLIC_URL:}
 
 app:
   mcp:

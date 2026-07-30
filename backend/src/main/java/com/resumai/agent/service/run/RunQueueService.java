@@ -55,29 +55,12 @@ public class RunQueueService {
                                             int revision, String runType, boolean supersede,
                                             String userMessage, Long messageId) {
         return submit(conversationId, userId, traceId, revision, runType,
-                supersede ? "interrupt" : "collect", userMessage, messageId, null);
+                supersede ? "interrupt" : "collect", userMessage, messageId);
     }
 
-    /**
-     * @deprecated Prefer {@link #submitEvaluationRun}; kept for internal callers
-     *             that still pass queueMode explicitly.
-     */
-    @Deprecated
     public SubmitResult submit(String conversationId, String userId, String traceId,
                                int revision, String runType, String queueMode,
                                String userMessage, Long messageId) {
-        return submit(conversationId, userId, traceId, revision, runType,
-                queueMode, userMessage, messageId, null);
-    }
-
-    /**
-     * @param forcedPolicyId non-null only for benchmark/replay turns: pins the
-     *                       policy (recorded as a FORCED selection at start).
-     */
-    public SubmitResult submit(String conversationId, String userId, String traceId,
-                               int revision, String runType, String queueMode,
-                               String userMessage, Long messageId,
-                               String forcedPolicyId) {
         boolean interrupt = "interrupt".equalsIgnoreCase(queueMode);
         AgentRun active = findActiveRun(conversationId);
         AgentRun interrupted = null;
@@ -131,9 +114,6 @@ public class RunQueueService {
         run.setMergedMessageIds(writeJson(messageId != null ? List.of(messageId) : List.of()));
         run.setStatus(RunStatus.QUEUED.name());
         run.setRetryCount(0);
-        if (StringUtils.hasText(forcedPolicyId)) {
-            run.setPolicyId(forcedPolicyId); // pre-pinned; startRun records FORCED
-        }
         LocalDateTime now = LocalDateTime.now();
         run.setCreatedAt(now);
         run.setUpdatedAt(now);

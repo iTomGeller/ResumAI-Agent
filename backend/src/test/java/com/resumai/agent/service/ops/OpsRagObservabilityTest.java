@@ -17,7 +17,7 @@ class OpsRagObservabilityTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OpsDebugService service = new OpsDebugService(
-            null, null, null, null, null, null, null, objectMapper);
+            null, null, null, null, null, null, objectMapper);
 
     @Test
     void joinsInvocationAndRetrievalTelemetryWithoutInventingQualityTruth() throws Exception {

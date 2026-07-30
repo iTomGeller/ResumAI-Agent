@@ -21,11 +21,6 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-resumai}
       SPRING_PROFILES_ACTIVE: prod
-      LANGFUSE_OTEL_ENDPOINT: ${LANGFUSE_OTEL_ENDPOINT:-}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-}
       WORKFLOW_BASE_URL: http://ai-resume-workflow:8090
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       WORKFLOW_MODE: python
@@ -87,11 +82,6 @@ services:
       # EXP-7 replan sensitivity knob (default matches executor fallback)
       REPLAN_CONFIDENCE_THRESHOLD: ${REPLAN_CONFIDENCE_THRESHOLD:-0.55}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
-      LANGFUSE_OTEL_ENDPOINT: ${LANGFUSE_OTEL_ENDPOINT:-}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-}
     expose:
       - "8090"
     extra_hosts:
@@ -119,74 +109,6 @@ services:
     restart: "no"
     networks:
       - resumai-net
-
-  # Policy Lab isolation only — not started with the default production stack.
-  # Enable with: docker compose --profile policy-lab up -d
-  resumai-sandbox-manager:
-    build:
-      context: .
-      dockerfile: sandbox/manager/Dockerfile
-    container_name: resumai-sandbox-manager
-    profiles: ["policy-lab"]
-    restart: unless-stopped
-    user: "1000:1000"
-    environment:
-      WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
-      JAVA_BACKEND_URL: http://ai-resume-backend:8080
-      # Pinned per deployment to the exact git commit — never a floating latest.
-      SANDBOX_WORKER_IMAGE: resumai-sandbox-worker:${SANDBOX_WORKER_TAG:?SANDBOX_WORKER_TAG must be set to the git sha}
-      SANDBOX_MAX_CONCURRENT: ${SANDBOX_MAX_CONCURRENT:-2}
-      SANDBOX_MEM_LIMIT: ${SANDBOX_MEM_LIMIT:-384m}
-      SANDBOX_CPU: ${SANDBOX_CPU:-0.5}
-      SANDBOX_TTL_SECONDS: ${SANDBOX_TTL_SECONDS:-240}
-    expose:
-      - "8070"
-    volumes:
-      # ECS currently runs Docker as root. Prefer rootless when available:
-      #   /run/user/1000/docker.sock:/run/user/1000/docker.sock
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - resumai-net
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8070/health', timeout=4)\" || exit 1"]
-      interval: 20s
-      timeout: 6s
-      retries: 10
-      start_period: 15s
-
-  # Runs PolicyExperimentRunner against /api/dev/policy-lab/* — no production
-  # MySQL / MinIO credentials injected.
-  policy-lab-worker:
-    build:
-      context: .
-      dockerfile: harness/Dockerfile.policy-lab
-    profiles: ["policy-lab"]
-    container_name: policy-lab-worker
-    restart: unless-stopped
-    environment:
-      WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
-      POLICY_LAB_REDIS_STREAM: policy-lab:experiments
-      SANDBOX_MANAGER_URL: http://resumai-sandbox-manager:8070
-      JAVA_BACKEND_URL: http://ai-resume-backend:8080
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
-    depends_on:
-      resumai-sandbox-manager:
-        condition: service_started
-    networks:
-      - resumai-net
-
-  resumai-sandbox-worker-image:
-    # build-only pseudo service: `docker compose --profile build build`
-    build:
-      context: .
-      dockerfile: sandbox/worker/Dockerfile
-    image: resumai-sandbox-worker:${SANDBOX_WORKER_TAG:?SANDBOX_WORKER_TAG must be set to the git sha}
-    profiles: ["build"]
-    command: ["python", "-c", "print('worker image ok')"]
-    restart: "no"
-    network_mode: "none"
 
   ai-resume-frontend:
     build:
@@ -353,53 +275,6 @@ services:
     networks:
       - resumai-net
 
-  prometheus:
-    image: docker.m.daocloud.io/prom/prometheus:v2.53.0
-    container_name: resumai-prometheus
-    restart: unless-stopped
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.retention.time=15d'
-      - '--web.enable-lifecycle'
-    expose:
-      - "9090"
-    healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:9090/-/healthy || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-    networks:
-      - resumai-net
-
-  grafana:
-    image: docker.m.daocloud.io/grafana/grafana:11.1.0
-    container_name: resumai-grafana
-    restart: unless-stopped
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set}
-      GF_SERVER_ROOT_URL: http://${PUBLIC_HOST:-localhost}/grafana/
-      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
-      GF_USERS_DEFAULT_LANGUAGE: zh-Hans
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-    ports:
-      - "3000:3000"
-    depends_on:
-      prometheus:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:3000/api/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-    networks:
-      - resumai-net
-
 networks:
   resumai-net:
     driver: bridge
@@ -429,10 +304,6 @@ volumes:
     name: resumai-uploads-data
   backend-logs:
     name: resumai-backend-logs
-  prometheus-data:
-    name: resumai-prometheus-data
-  grafana-data:
-    name: resumai-grafana-data
   # resumai-workflow-postgres-data still exists on the host from the legacy
   # LangGraph checkpoint store. It is no longer mounted by any service and is
   # deliberately not deleted (no volume is ever pruned by deployment).

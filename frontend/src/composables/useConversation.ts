@@ -83,7 +83,6 @@ export interface RunView {
   currentAgent?: string;
   currentTool?: string;
   currentPhase?: string;
-  policyId?: string;
   answer?: string;
   errorCode?: string;
   errorMessage?: string;
@@ -252,7 +251,6 @@ export function useConversation() {
         break;
       case 'run.started':
         run.status = 'RUNNING';
-        run.policyId = String(payload.policyId ?? '') || undefined;
         run.queuePosition = undefined;
         break;
       case 'llm.started':
@@ -275,14 +273,6 @@ export function useConversation() {
       case 'tool.failed':
         run.status = 'RUNNING';
         run.currentTool = undefined;
-        break;
-      case 'sandbox.started':
-        // Candidate UI: avoid WAITING_SANDBOX jargon; treat as tool work.
-        run.status = 'WAITING_TOOL';
-        break;
-      case 'sandbox.completed':
-      case 'sandbox.failed':
-        run.status = 'RUNNING';
         break;
       case 'run.cancelling':
         run.status = 'CANCELLING';
@@ -346,30 +336,6 @@ export function useConversation() {
     } catch (caught) {
       error.value = caught instanceof Error ? caught.message : '取消失败';
       return false;
-    }
-  }
-
-  async function submitRunFeedback(runId: string, payload: {
-    ratingScore: number;
-    comment?: string;
-    accepted?: boolean;
-    recommendationAgreed?: boolean;
-    scoreDelta?: number;
-    missedEvidenceCount?: number;
-    unsupportedClaimCount?: number;
-    riskJudgementCorrect?: boolean;
-  }): Promise<{ reward?: number } | null> {
-    try {
-      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/feedback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) throw new Error(await responseError(response));
-      return await response.json() as { reward?: number };
-    } catch (caught) {
-      error.value = caught instanceof Error ? caught.message : '反馈提交失败';
-      return null;
     }
   }
 
@@ -520,7 +486,6 @@ export function useConversation() {
     sendMessage,
     controlTask,
     cancelRun,
-    submitRunFeedback,
     createConversation,
     watchRun,
     reset,

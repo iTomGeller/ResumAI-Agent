@@ -32,7 +32,7 @@ public record TraceEventResponse(
         String outputSummary,
         List<String> toolCalls,
         List<String> mcpCalls,
-        String sandboxSummary,
+        String executionSummary,
         String llmInvocationId,
         // DAG 契约扩展
         String nodeId,

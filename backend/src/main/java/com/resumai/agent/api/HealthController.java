@@ -2,7 +2,6 @@ package com.resumai.agent.api;
 
 import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.config.EmbeddingProperties;
-import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.config.WorkflowProperties;
 import com.resumai.agent.service.ResumeRagService;
 import java.time.LocalDateTime;
@@ -23,18 +22,15 @@ public class HealthController {
     private final EmbeddingProperties embeddingProperties;
     private final ResumeRagService resumeRagService;
     private final WorkflowProperties workflowProperties;
-    private final LangfuseHealthService langfuseHealth;
 
     public HealthController(EmbeddingAvailability embeddingAvailability,
                             EmbeddingProperties embeddingProperties,
                             ResumeRagService resumeRagService,
-                            WorkflowProperties workflowProperties,
-                            LangfuseHealthService langfuseHealth) {
+                            WorkflowProperties workflowProperties) {
         this.embeddingAvailability = embeddingAvailability;
         this.embeddingProperties = embeddingProperties;
         this.resumeRagService = resumeRagService;
         this.workflowProperties = workflowProperties;
-        this.langfuseHealth = langfuseHealth;
     }
 
     /**
@@ -53,7 +49,6 @@ public class HealthController {
                 "provider", embeddingProperties.getProvider() == null ? "local" : embeddingProperties.getProvider(),
                 "message", embeddingAvailability.statusMessage()
         ));
-        body.put("langfuse", langfuseHealth.snapshot());
         return body;
     }
 
@@ -74,7 +69,6 @@ public class HealthController {
         deps.put("workflow", Map.of(
                 "mcpResumeToolsAuthorized", mcpAuthorized
         ));
-        deps.put("langfuse", langfuseHealth.snapshot());
         return Map.of("status", "UP", "dependencies", deps);
     }
 }

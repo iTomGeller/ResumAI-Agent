@@ -164,7 +164,6 @@ public class ConversationController {
         view.put("status", run.getStatus());
         view.put("runType", run.getRunType());
         view.put("queueMode", run.getQueueMode());
-        view.put("policyId", run.getPolicyId());
         view.put("currentAgent", run.getCurrentAgent());
         view.put("currentTool", run.getCurrentTool());
         view.put("errorCode", run.getErrorCode());

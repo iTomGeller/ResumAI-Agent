@@ -3,7 +3,6 @@ package com.resumai.agent.service.run;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.api.dto.TraceEventResponse;
-import com.resumai.agent.config.LangfuseHealthService;
 import com.resumai.agent.dao.AgentRunMapper;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.RunEvent;
@@ -35,16 +34,13 @@ public class RunTraceBridgeService {
     private final AgentRunMapper runMapper;
     private final RunEventService eventService;
     private final ObjectMapper objectMapper;
-    private final LangfuseHealthService langfuseHealth;
 
     public RunTraceBridgeService(AgentRunMapper runMapper,
                                  RunEventService eventService,
-                                 ObjectMapper objectMapper,
-                                 LangfuseHealthService langfuseHealth) {
+                                 ObjectMapper objectMapper) {
         this.runMapper = runMapper;
         this.eventService = eventService;
         this.objectMapper = objectMapper;
-        this.langfuseHealth = langfuseHealth;
     }
 
     /** Latest run whose traceId or bridged task trace matches. */
@@ -211,12 +207,6 @@ public class RunTraceBridgeService {
                 detail = preview(payload, 300);
                 status = "SUCCESS";
             }
-            case "sandbox.started", "sandbox.completed", "sandbox.failed" -> {
-                // Candidate Trace must not present sandbox; keep for Policy Lab history only.
-                title = "PolicyLab " + event.getToolName();
-                detail = preview(payload, 300);
-                status = type.endsWith("failed") ? "FAILED" : "SUCCESS";
-            }
             case "context.compacted" -> {
                 title = "上下文压缩";
                 detail = "tokens " + payload.getOrDefault("beforeTokens", "?")
@@ -274,12 +264,11 @@ public class RunTraceBridgeService {
         AgentRun run = findRunForTrace(traceId);
         Map<String, Object> tree = new LinkedHashMap<>();
         tree.put("traceId", traceId);
-        tree.put("framework", "Unified Agent Runtime + DeepSeek + Sandbox Tools");
+        tree.put("framework", "Unified Agent Runtime + DeepSeek");
         tree.put("architecture", "Coordinator 动态规划 + 并行 Specialist");
         if (run == null) {
             tree.put("executionTree", List.of());
             tree.put("historicalAttempts", List.of());
-            tree.putAll(langfuseHealth.linkMeta(traceId));
             return tree;
         }
         // Current attempt only — prior control-plane failures go to historicalAttempts.
@@ -640,7 +629,6 @@ public class RunTraceBridgeService {
         tree.put("parallelGroups", groups);
         tree.put("runId", run.getRunId());
         tree.put("runStatus", run.getStatus());
-        tree.put("policyId", run.getPolicyId());
         tree.put("attemptNo", (run.getRetryCount() != null ? run.getRetryCount() : 0) + 1);
 
         List<String> planned = new ArrayList<>(nodes.keySet());
@@ -666,8 +654,6 @@ public class RunTraceBridgeService {
         tree.put("memoryTop", memoryTop);
 
         tree.put("historicalAttempts", buildHistoricalAttempts(traceId, run.getRunId()));
-        String otelTraceId = run.getTraceId() != null ? run.getTraceId() : traceId;
-        tree.putAll(langfuseHealth.linkMeta(otelTraceId));
         return tree;
     }
 
@@ -896,7 +882,7 @@ public class RunTraceBridgeService {
         eventIds.add("run-ev-" + event.getId());
         copyIfPresent(tool, payload,
                 "mcpServer", "protocolVersion", "skillId", "skillVersion",
-                "sandboxExecutionId", "executionBackend", "lifecycleStage");
+                "executionBackend", "lifecycleStage");
         String type = event.getEventType();
         String stage = stringOf(payload.get("lifecycleStage"));
         if (StringUtils.hasText(stage)) {
@@ -1256,10 +1242,6 @@ public class RunTraceBridgeService {
         if (eventType != null && eventType.startsWith("skill.")) {
             return "skill";
         }
-        if (eventType != null && eventType.startsWith("sandbox.")) {
-            // Policy Lab only — candidate UI remaps/hides this.
-            return "policy_lab";
-        }
         if (toolName == null) {
             return "builtin";
         }
@@ -1272,7 +1254,7 @@ public class RunTraceBridgeService {
         }
         if (Set.of("parse_resume", "check_timeline", "calculate_jd_coverage",
                 "locate_evidence", "verify_report_evidence", "resume_lint",
-                "validate_report_schema", "evaluate_policy_output").contains(toolName)) {
+                "validate_report_schema").contains(toolName)) {
             return "builtin";
         }
         if (Set.of("knowledge_search", "resume_semantic_search", "jd_match_search")
@@ -1313,9 +1295,6 @@ public class RunTraceBridgeService {
         }
         if (type.startsWith("tool.")) {
             return "LLM_TOOL_CALL";
-        }
-        if (type.startsWith("sandbox.")) {
-            return "POLICY_LAB";
         }
         if (type.startsWith("agent.")) {
             return "AGENT_EXECUTION";

@@ -21,7 +21,6 @@ LEGACY_TYPE_MAP = {
     "SHORT_TERM": "WORKING",
     "PREFERENCE": "SEMANTIC",
     "USER_PREFERENCE": "SEMANTIC",
-    "HR_FEEDBACK": "SEMANTIC",
     "DOMAIN": "SEMANTIC",
     "FAILURE": "EPISODIC",
 }
@@ -31,8 +30,7 @@ CONTROL_PLANE_ERROR_CODES = frozenset({
     "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED", "START_STUCK",
 })
 FAILURE_CONSUMERS = frozenset({
-    "CoordinatorAgent", "Coordinator", "PolicyEvolution", "POLICY_EVOLUTION",
-    "PolicyLab",
+    "CoordinatorAgent", "Coordinator",
 })
 REPORT_OR_RISK = frozenset({"ReportAgent", "RiskAgent"})
 _BENCHMARK_SOURCE_RE = re.compile(r"^exp\d*_benchmark$", re.IGNORECASE)

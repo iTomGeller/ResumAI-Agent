@@ -43,7 +43,7 @@ class OpsControllerContractTest {
     }
 
     @Test
-    void exposesRunCentricAndPolicyLabEndpoints() throws Exception {
+    void exposesRunCentricOpsEndpoints() throws Exception {
         Method runs = OpsController.class.getMethod("runs",
                 String.class, String.class, String.class, String.class, int.class);
         Method mcp = OpsController.class.getMethod("mcp",
@@ -51,12 +51,10 @@ class OpsControllerContractTest {
         Method skills = OpsController.class.getMethod("skills", boolean.class, int.class);
         Method rag = OpsController.class.getMethod("rag",
                 int.class, String.class, String.class, String.class);
-        Method policyLab = OpsController.class.getMethod("policyLabSandbox", int.class);
         assertTrue(runs.getName().equals("runs"));
         assertTrue(mcp.getName().equals("mcp"));
         assertTrue(skills.getName().equals("skills"));
         assertTrue(rag.getName().equals("rag"));
-        assertTrue(policyLab.getName().equals("policyLabSandbox"));
     }
 
     @Test
@@ -217,7 +215,7 @@ class OpsControllerContractTest {
     @Test
     void deriveOutcomeMapsSkillAndLifecycleCorrectly() {
         OpsDebugService svc = new OpsDebugService(
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
         assertEquals(EventOutcome.FAILED, svc.deriveOutcome("tool.failed"));
         assertEquals(EventOutcome.FAILED, svc.deriveOutcome("run.timed_out"));
         assertEquals(EventOutcome.SUCCESS, svc.deriveOutcome("tool.completed"));
@@ -230,20 +228,10 @@ class OpsControllerContractTest {
         assertEquals(EventOutcome.INFO, svc.deriveOutcome("agent.selected"));
     }
 
-    @Test
-    void sandboxPurposeNeverHardcodesPolicyLab() {
-        OpsDebugService svc = new OpsDebugService(
-                null, null, null, null, null, null, null, null);
-        assertEquals("LEGACY_CANDIDATE_EVALUATION", svc.sandboxPurpose(null));
-        assertEquals("LEGACY_CANDIDATE_EVALUATION", svc.sandboxPurpose(""));
-        assertEquals("POLICY_EVOLUTION", svc.sandboxPurpose("POLICY_EVOLUTION"));
-        assertEquals("BENCHMARK", svc.sandboxPurpose("BENCHMARK"));
-    }
-
     private static OpsDebugService service(
             RunEventMapper events, AgentRuntimeClient runtime) {
         return new OpsDebugService(
-                null, events, null, null, null, runtime, null,
+                null, events, null, null, null, runtime,
                 new ObjectMapper());
     }
 

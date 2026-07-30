@@ -23,7 +23,7 @@ def main() -> None:
         'docker ps -a --format "table {{.Names}}\t{{.Status}}" | sed -n "1,25p"',
         "ls -la /opt/ai-resume-agent-platform/backend/settings.xml 2>&1",
         "curl -fsS -m 5 http://127.0.0.1/api/health 2>&1 || echo health-fail",
-        'docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "resumai|milvus|mysql|redis|neo4j|minio|prometheus|grafana|etcd" | sed -n "1,30p"',
+        'docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "resumai|milvus|mysql|redis|neo4j|minio|etcd" | sed -n "1,30p"',
         "pgrep -af 'docker pull|docker compose' || echo no-docker-deploy-process",
         "pgrep -af 'docker compose.*build' || echo no-build-running",
         "free -h && df -h / && docker system df",
