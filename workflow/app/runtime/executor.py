@@ -1704,6 +1704,7 @@ class RunExecutor:
         decision_iterations = 0
         action_turns = 0
         borrowed_repair_turns = 0
+        json_repair_pending = False
         loaded_skills: Dict[str, Any] = {}
         loaded_skill_call_ids: Dict[str, str] = {}
         applied_skill_ids: set = set()
@@ -1778,10 +1779,24 @@ class RunExecutor:
                 action_turns >= max_action_turns
                 or iteration >= max_turns
             )
-            turn_tools = [final_tool] if force_final else model_tools
+            turn_tools = (
+                [] if json_repair_pending
+                else [final_tool] if force_final
+                else model_tools
+            )
             turn_messages = list(messages)
             tool_choice: Any = "auto"
-            if force_final:
+            if json_repair_pending:
+                tool_choice = None
+                turn_messages.append({
+                    "role": "user",
+                    "content": (
+                        "上一次原生函数参数不是合法 JSON。"
+                        "本轮不要调用任何工具，直接输出一个符合输出 schema "
+                        "的 JSON 对象，不要使用 markdown 或 DSML 包装。"
+                    ),
+                })
+            elif force_final:
                 terminal_name = str(final_tool["function"]["name"])
                 tool_choice = {
                     "type": "function",
@@ -1903,23 +1918,32 @@ class RunExecutor:
                     "toolChoice": tool_choice,
                     "occurredAt": _utc_now(),
                 })
-            turn = await self._chat_native_turn(
-                turn_messages, agent_id=agent_id,
-                purpose=definition.output_type,
-                # Full reports routinely exceed 4k tokens because every score,
-                # risk and interview probe is evidence-bound. A 4096 ceiling
-                # truncated provider-native emit_decision arguments twice in
-                # production, leaving no JSON object for schema repair.
-                max_tokens=(
-                    8192 if is_report
-                    else 6144 if definition.agent_id == "EvidenceAgent"
-                    and single_pass_evaluation
-                    else 3600 if definition.agent_id in TERMINAL_AGENTS
-                    else 4096),
-                tools=turn_tools,
-                tool_choice=tool_choice,
-                use_quality=is_report,
-                trace_context=trace_context)
+            turn_max_tokens = (
+                8192 if is_report
+                else 6144 if definition.agent_id == "EvidenceAgent"
+                and single_pass_evaluation
+                else 3600 if definition.agent_id in TERMINAL_AGENTS
+                else 4096)
+            if json_repair_pending:
+                turn = await self._chat_json_repair_turn(
+                    turn_messages, agent_id=agent_id,
+                    purpose=definition.output_type,
+                    max_tokens=turn_max_tokens,
+                    use_quality=is_report,
+                    fallback_tool=final_tool,
+                    trace_context=trace_context)
+                json_repair_pending = False
+            else:
+                turn = await self._chat_native_turn(
+                    turn_messages, agent_id=agent_id,
+                    purpose=definition.output_type,
+                    # Full reports routinely exceed 4k tokens because every
+                    # score, risk and interview probe is evidence-bound.
+                    max_tokens=turn_max_tokens,
+                    tools=turn_tools,
+                    tool_choice=tool_choice,
+                    use_quality=is_report,
+                    trace_context=trace_context)
             agent_llm_calls += 1
             raw = turn.content
             final_calls: List[Any] = []
@@ -2136,6 +2160,11 @@ class RunExecutor:
 
             decision_iterations += 1
             decision, schema_error = self._parse_decision(raw)
+            if (decision is None and final_calls
+                    and final_calls[0].arguments_error):
+                schema_error = (
+                    "provider function arguments are not valid JSON: "
+                    f"{final_calls[0].arguments_error[:300]}")
             if (decision is not None
                     and agent_id == "ReportAgent"
                     and self._requires_score_contract()):
@@ -2178,6 +2207,7 @@ class RunExecutor:
                             "occurredAt": _utc_now(),
                         })
                 if repair_allowed and iteration < max_turns:
+                    json_repair_pending = bool(final_calls)
                     repair_message = (
                         "上面的输出未通过 json schema 校验："
                         f"{schema_error[:400]}。"
@@ -2322,6 +2352,50 @@ class RunExecutor:
         raw = await chat(messages, **kwargs)
         return LlmTurn(content=str(raw or ""), tool_calls=[],
                        finish_reason="legacy_adapter")
+
+    async def _chat_json_repair_turn(
+            self, messages: List[Dict[str, Any]], *, agent_id: str,
+            purpose: str, max_tokens: int, use_quality: bool,
+            fallback_tool: Dict[str, Any],
+            trace_context: Optional[Dict[str, Any]] = None) -> LlmTurn:
+        """Repair malformed terminal function arguments through JSON mode.
+
+        Repeating the same forced-function request caused DeepSeek-compatible
+        providers to repeat malformed DSML/function arguments.  Production's
+        resilient client supports a separate ``json_object`` channel; test and
+        legacy adapters without that channel retain the native repair path.
+        """
+        if isinstance(self.llm, ResilientLlmClient):
+            kwargs: Dict[str, Any] = {
+                "agent_id": agent_id,
+                "purpose": purpose,
+                "max_tokens": max_tokens,
+                "json_mode": True,
+                "tools": None,
+                "tool_choice": None,
+                "use_quality": use_quality,
+            }
+            if "trace_context" in inspect.signature(
+                    self.llm.chat).parameters:
+                kwargs["trace_context"] = trace_context
+            raw = await self.llm.chat(messages, **kwargs)
+            return LlmTurn(
+                content=str(raw or ""), tool_calls=[],
+                finish_reason="json_repair")
+        legacy_turn = await self._chat_native_turn(
+            messages, agent_id=agent_id, purpose=purpose,
+            max_tokens=max_tokens, tools=[fallback_tool],
+            tool_choice={
+                "type": "function",
+                "function": {
+                    "name": fallback_tool["function"]["name"]},
+            },
+            use_quality=use_quality, trace_context=trace_context)
+        if legacy_turn.tool_calls:
+            return LlmTurn(
+                content=legacy_turn.tool_calls[0].raw_arguments,
+                tool_calls=[], finish_reason="legacy_native_repair")
+        return legacy_turn
 
     def _parallel_report_sections_enabled(self) -> bool:
         configured = _os.getenv(

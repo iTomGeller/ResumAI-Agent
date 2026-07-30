@@ -17,7 +17,12 @@ from app.runtime.builtin_tools import BuiltinToolRegistry
 from app.runtime.coordinator import Coordinator
 from app.runtime.events import NullEmitter
 from app.runtime.executor import RunExecutor
-from app.runtime.llm import LlmToolCall, LlmTurn
+from app.runtime.llm import (
+    CircuitBreaker,
+    LlmToolCall,
+    LlmTurn,
+    ResilientLlmClient,
+)
 from app.runtime.mcp_registry import (
     DEGRADED_REPROBE_TTL_S,
     McpError,
@@ -876,6 +881,80 @@ def test_parse_decision_normalizes_provider_dsml_handoff_string():
     assert error == ""
     assert decision is not None
     assert decision["handoff"]["to"] == "ReportAgent"
+
+
+def test_malformed_native_final_repairs_through_provider_json_mode():
+    request = AgentRunRequest(
+        runId="r-json-channel-repair", conversationId="c-json-channel-repair",
+        traceId="t-json-channel-repair", runType="full_evaluation",
+        resumeText=(
+            "张三\nJava 后端工程师\n2019.01 - Present 示例科技\n"
+            "负责支付系统、Redis 缓存和 Kafka 消息处理。"),
+        jobDescription="Java 后端工程师")
+    emitter = NullEmitter(
+        request.runId, request.conversationId, request.traceId)
+    executor = RunExecutor(
+        request, emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(),
+        llm=_MultipleMalformedFinalCallsLlm())
+    client = ResilientLlmClient(
+        emitter, executor.budget,
+        max_llm_calls=executor.policy.maxLlmCalls,
+        llm_timeout_seconds=5,
+        breaker=CircuitBreaker(threshold=5))
+    client.api_key = "test-only"
+    invocations = []
+
+    async def fake_invoke(messages, model, max_tokens, temperature,
+                          json_mode, *, tools=None, tool_choice=None):
+        invocations.append({
+            "jsonMode": json_mode,
+            "toolCount": len(tools or []),
+            "toolChoice": tool_choice,
+        })
+        if tools:
+            return (
+                LlmTurn(
+                    content="",
+                    tool_calls=[LlmToolCall(
+                        tool_call_id="provider-dsml-final",
+                        name="emit_decision", arguments={},
+                        raw_arguments="<｜DSML｜malformed function args>",
+                        arguments_error="Expecting value")],
+                    finish_reason="tool_calls"),
+                {"prompt_tokens": 10, "completion_tokens": 10},
+                "tool_calls",
+            )
+        decision = {
+            "thought": "repaired through json_object",
+            "output": {
+                "summary": "风险输出已恢复",
+                "claims": [], "evidence": [], "confidence": 0.8,
+            },
+            "done": True,
+        }
+        return (
+            LlmTurn(content=json.dumps(decision), finish_reason="stop"),
+            {"prompt_tokens": 10, "completion_tokens": 10},
+            "stop",
+        )
+
+    client._invoke = fake_invoke
+    executor.llm = client
+    executor.tools.llm = client
+    executor.budget_plan["RiskAgent"] = {
+        "llmQuota": 1, "actionTurnQuota": 0, "toolQuota": 2}
+    executor.state.apply_artifacts({
+        "resumeFacts": {"experiences": [{"company": "示例科技"}]}})
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("RiskAgent")))
+
+    assert output.summary == "风险输出已恢复"
+    assert invocations[0]["toolCount"] == 1
+    assert invocations[0]["jsonMode"] is False
+    assert invocations[1]["toolCount"] == 0
+    assert invocations[1]["jsonMode"] is True
 
 
 class _ReportFinalizationLlm:
