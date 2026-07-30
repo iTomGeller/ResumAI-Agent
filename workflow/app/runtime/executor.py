@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.runtime.agents import AgentDefinition, AgentRegistry, default_agent_registry
 from app.runtime.context import ContextManager
-from app.runtime.coordinator import Coordinator, TERMINAL_AGENTS
+from app.runtime.coordinator import Coordinator, FULL_EVAL_TYPES, TERMINAL_AGENTS
 from app.runtime.events import RuntimeEmitter
 from app.runtime.llm import (
     LlmError,
@@ -856,6 +856,12 @@ class RunExecutor:
                 "revisionReuse": dict(self.revision_reuse),
                 "budget": self.budget_plan,
             }
+            if request.runType in FULL_EVAL_TYPES:
+                # Full evaluations use the deterministic, signal-driven
+                # artifact planner above.  Keeping four unused control-plane
+                # calls reserved stranded late specialists behind capacity
+                # that this run type can never consume.
+                self.budget.release_llm_reservation("control")
             await self.emitter.emit("agent.selected", agent_id="CoordinatorAgent", payload={
                 "plan": self.plan, "reason": planned["reason"],
                 "parallelGroups": self.parallel_groups,
@@ -1249,7 +1255,13 @@ class RunExecutor:
             "missingArtifacts": missing[:6],
             "inputPresence": arts.get("inputPresence") or {},
         }, ensure_ascii=False)
-        adjusted = await coordinator.adaptive_replan(
+        replan_coordinator = coordinator
+        if self.request.runType in FULL_EVAL_TYPES:
+            # Preserve deterministic artifact/handoff repair without spending
+            # or re-reserving a provider call in the single-pass workflow.
+            replan_coordinator = Coordinator(
+                self.registry, self.policy, None)
+        adjusted = await replan_coordinator.adaptive_replan(
             remaining=remaining, executed=self.executed,
             shared_digest=shared_digest, trigger=trigger,
             failure_notes=self.failure_notes,
@@ -2171,16 +2183,20 @@ class RunExecutor:
                         f"{schema_error[:400]}。"
                         "请使用 emit_decision/emit_report 提交修正后的结构化结果。")
                     if final_calls:
-                        native_history.append({
-                            "role": "tool",
-                            "tool_call_id": final_calls[0].tool_call_id,
-                            "name": final_calls[0].name,
-                            "content": json.dumps({
-                                "success": False,
-                                "error": schema_error[:400],
-                                "retryable": True,
-                            }, ensure_ascii=False),
-                        })
+                        # The assistant declared every call id in this turn.
+                        # OpenAI-compatible providers require one tool response
+                        # for *each* id before any user/assistant repair message.
+                        for final_call in final_calls:
+                            native_history.append({
+                                "role": "tool",
+                                "tool_call_id": final_call.tool_call_id,
+                                "name": final_call.name,
+                                "content": json.dumps({
+                                    "success": False,
+                                    "error": schema_error[:400],
+                                    "retryable": True,
+                                }, ensure_ascii=False),
+                            })
                     elif raw:
                         native_history.append({
                             "role": "assistant", "content": raw[:1500]})

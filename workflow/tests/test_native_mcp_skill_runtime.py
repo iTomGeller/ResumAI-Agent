@@ -790,6 +790,94 @@ def test_malformed_native_final_borrows_one_traced_repair_turn():
     assert counters["borrowedRepairTurns"] == 1
 
 
+class _MultipleMalformedFinalCallsLlm:
+    def __init__(self):
+        self.turn = 0
+        self.messages = []
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.turn += 1
+        self.messages.append(messages)
+        if self.turn == 1:
+            return LlmTurn(
+                content="",
+                tool_calls=[
+                    LlmToolCall(
+                        tool_call_id="malformed-final-a",
+                        name="emit_decision", arguments={},
+                        raw_arguments='{"thought":',
+                        arguments_error="unexpected end"),
+                    LlmToolCall(
+                        tool_call_id="malformed-final-b",
+                        name="emit_decision", arguments={},
+                        raw_arguments='{"output":',
+                        arguments_error="unexpected end"),
+                ],
+                finish_reason="tool_calls")
+        decision = {
+            "thought": "all provider call ids were answered",
+            "output": {
+                "summary": "multi-call repair succeeded",
+                "claims": [], "evidence": [], "confidence": 0.7,
+            },
+            "done": True,
+        }
+        return LlmTurn(
+            content="",
+            tool_calls=[LlmToolCall(
+                tool_call_id="repaired-final",
+                name="emit_decision", arguments=decision,
+                raw_arguments=json.dumps(decision))],
+            finish_reason="tool_calls")
+
+
+def test_repair_answers_every_declared_native_tool_call_id():
+    request = AgentRunRequest(
+        runId="r-multi-final-repair", conversationId="c-multi-final-repair",
+        traceId="t-multi-final-repair", runType="project_analysis",
+        resumeText="项目经历\n支付系统\nJava Spring Boot",
+        jobDescription="Java 后端工程师")
+    llm = _MultipleMalformedFinalCallsLlm()
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    executor.budget_plan["ProjectAgent"] = {
+        "llmQuota": 2, "actionTurnQuota": 0, "toolQuota": 0}
+    executor.state.apply_artifacts({
+        "resumeFacts": {"projects": [{"name": "支付系统"}]}})
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("ProjectAgent")))
+
+    assert output.summary == "multi-call repair succeeded"
+    repair_messages = llm.messages[1]
+    responded_ids = {
+        message.get("tool_call_id") for message in repair_messages
+        if message.get("role") == "tool"
+    }
+    assert {"malformed-final-a", "malformed-final-b"} <= responded_ids
+
+
+def test_parse_decision_normalizes_provider_dsml_handoff_string():
+    raw = json.dumps({
+        "thought": "handoff formatting came from provider wrapper",
+        "output": {
+            "summary": "usable specialist output",
+            "claims": [], "evidence": [], "confidence": 0.8,
+        },
+        "handoff": "<｜DSML｜param name=target>ReportAgent",
+        "done": True,
+    })
+
+    decision, error = RunExecutor._parse_decision(raw)
+
+    assert error == ""
+    assert decision is not None
+    assert decision["handoff"]["to"] == "ReportAgent"
+
+
 class _ReportFinalizationLlm:
     def __init__(self):
         self.turn = 0

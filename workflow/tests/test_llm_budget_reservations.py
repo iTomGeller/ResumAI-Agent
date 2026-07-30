@@ -66,6 +66,35 @@ def test_scope_availability_does_not_misreport_terminal_reserve_as_repair():
     assert budget.available_llm_calls_for_scope(3, "terminal") == 2
 
 
+def test_releasing_unused_control_reserve_unblocks_late_evidence_agent():
+    """Regression for the 100-resume preflight EvidenceAgent failure.
+
+    Full evaluation planning is deterministic, so its unused control reserve
+    must not strand Evidence after earlier specialist/provider retries.
+    """
+    budget = RunBudget()
+    budget.configure_llm_budget(
+        17, {"terminal": 3, "control": 4},
+        scope_limits={"control": 4})
+    for _ in range(5):
+        budget.claim_llm_call(17, "agent:TechAgent")
+    for _ in range(4):
+        budget.claim_llm_call(17, "agent:ProjectAgent")
+    budget.claim_llm_call(17, "agent:RiskAgent")
+
+    with pytest.raises(BudgetExceeded) as blocked:
+        budget.claim_llm_call(17, "agent:EvidenceAgent")
+    assert blocked.value.kind == "llmReservation"
+
+    budget.release_llm_reservation("control")
+    budget.claim_llm_call(17, "agent:EvidenceAgent")
+    for _ in range(3):
+        budget.claim_llm_call(17, "terminal")
+
+    assert budget.llm_calls == 14
+    assert budget.llm_reservations == {"terminal": 3, "control": 0}
+
+
 def test_coordinator_allocates_only_agent_assignable_remaining_calls():
     budget = RunBudget()
     budget.configure_llm_budget(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Dict, List, Literal, Optional
 
@@ -184,6 +185,38 @@ class AgentDecision(BaseModel):
     output: Optional[Dict[str, Any]] = None
     handoff: Optional[HandoffRequest] = None
     done: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_optional_handoff(cls, data: Any) -> Any:
+        """Keep a provider formatting glitch in an optional handoff from
+        invalidating an otherwise usable specialist decision.
+
+        Some OpenAI-compatible providers return their internal DSML fragment
+        (for example ``...ReportAgent``) instead of the declared handoff
+        object.  Preserve a recognizable Agent target; otherwise drop only the
+        optional hint.  The executor still validates the target against the
+        live Agent registry before scheduling it.
+        """
+        if not isinstance(data, dict):
+            return data
+        handoff = data.get("handoff")
+        if handoff is None or isinstance(handoff, dict):
+            return data
+        normalized = dict(data)
+        if isinstance(handoff, str):
+            match = re.search(
+                r"([A-Za-z][A-Za-z0-9_]*Agent)\b", handoff)
+            normalized["handoff"] = (
+                {
+                    "to": match.group(1),
+                    "reason": "normalized provider handoff",
+                }
+                if match else None
+            )
+        else:
+            normalized["handoff"] = None
+        return normalized
 
 
 class SourceRef(BaseModel):
