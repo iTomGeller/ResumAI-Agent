@@ -754,7 +754,7 @@ class Coordinator:
                         10, self.policy.toolBudget.maxToolCallsPerAgent)
                 if agent == "ProjectAgent" and sig.get("has_external_urls"):
                     tool_quota = min(
-                        6, self.policy.toolBudget.maxToolCallsPerAgent)
+                        10, self.policy.toolBudget.maxToolCallsPerAgent)
                 budget[agent] = {
                     "llmQuota": quotas[agent],
                     "actionTurnQuota": min(

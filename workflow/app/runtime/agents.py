@@ -82,7 +82,9 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         skills=("ground-project-claims", "retrieve-public-candidate-evidence"),
         tools=("locate_evidence", "resume_semantic_search"),
         mcp_servers=("exa", "deepwiki", "fetch"),
-        max_iterations=2, max_tool_calls=6, timeout_seconds=240,
+        # External evidence may require preflight + two Skills + several live
+        # provider calls in one model-authored action batch.
+        max_iterations=2, max_tool_calls=10, timeout_seconds=240,
         output_type="project_findings",
         requires_artifacts=("resume_facts",),
         produces_artifacts=("project_findings",),
