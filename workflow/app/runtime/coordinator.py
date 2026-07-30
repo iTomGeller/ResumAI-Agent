@@ -751,7 +751,7 @@ class Coordinator:
                     # progressive Skill and documentation MCP actions. Keep
                     # enough capacity for preflight + load + docs lookup.
                     tool_quota = min(
-                        6, self.policy.toolBudget.maxToolCallsPerAgent)
+                        10, self.policy.toolBudget.maxToolCallsPerAgent)
                 if agent == "ProjectAgent" and sig.get("has_external_urls"):
                     tool_quota = min(
                         6, self.policy.toolBudget.maxToolCallsPerAgent)

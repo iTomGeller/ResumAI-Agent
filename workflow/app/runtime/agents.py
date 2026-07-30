@@ -69,7 +69,9 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         tools=("calculate_jd_coverage", "resume_semantic_search", "knowledge_search",
                "context7.resolve-library-id", "context7.query-docs"),
         mcp_servers=("context7", "microsoft-learn", "exa"),
-        max_iterations=2, max_tool_calls=5, timeout_seconds=240,
+        # Four deterministic pre-steps may precede Skill + documentation MCP
+        # calls; five made valid provider actions fail as budget exhausted.
+        max_iterations=2, max_tool_calls=10, timeout_seconds=240,
         output_type="technical_findings",
         requires_artifacts=("resume_facts", "jd_requirements"),
         produces_artifacts=("technical_findings",),

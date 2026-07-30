@@ -176,7 +176,7 @@ def test_sparse_resume_keeps_parallel_evidence_pipeline():
     assert planned["budgetPlan"]["ReportAgent"]["llmQuota"] == 3
     assert planned["budgetPlan"]["ProjectAgent"]["actionTurnQuota"] == 2
     assert planned["budgetPlan"]["TechAgent"]["actionTurnQuota"] == 3
-    assert planned["budgetPlan"]["TechAgent"]["toolQuota"] == 6
+    assert planned["budgetPlan"]["TechAgent"]["toolQuota"] == 10
 
 
 def test_sparse_resume_with_project_hint_keeps_project_and_evidence():
