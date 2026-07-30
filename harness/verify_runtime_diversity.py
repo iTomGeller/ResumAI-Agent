@@ -37,6 +37,8 @@ DEFAULT_RESUMES = (
     ROOT / "testdata" / "resumes" / "career_gap_risk_014.pdf",
     ROOT / "testdata" / "resumes" / "harness_no_project_frontend.txt",
     ROOT / "testdata" / "resumes" / "product_manager_llm.pdf",
+    ROOT / "testdata" / "resumes" / "mcp_cn_gitee_backend.txt",
+    ROOT / "testdata" / "resumes" / "mcp_dotnet_backend.txt",
 )
 TASK_TERMINAL = {
     "SUCCESS",
@@ -158,11 +160,20 @@ def occurrence(row: Dict[str, Any]) -> str:
         or row.get("retrievedAt") or "")
 
 
+def parse_timestamp(value: str) -> datetime:
+    # Java emits nanoseconds while Python 3.8 accepts microseconds. Truncate
+    # only excess fractional precision and preserve the timezone offset.
+    normalized = str(value or "").replace("Z", "+00:00")
+    normalized = re.sub(
+        r"(\.\d{6})\d+(?=\+\d\d:\d\d$|$)", r"\1", normalized)
+    return datetime.fromisoformat(normalized)
+
+
 def valid_timestamp(value: str) -> bool:
     if not value:
         return False
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parse_timestamp(value)
         return True
     except ValueError:
         return False
@@ -178,10 +189,8 @@ def event_happened_before(first: Dict[str, Any],
     except (TypeError, ValueError):
         pass
     try:
-        first_at = datetime.fromisoformat(
-            occurrence(first).replace("Z", "+00:00"))
-        second_at = datetime.fromisoformat(
-            occurrence(second).replace("Z", "+00:00"))
+        first_at = parse_timestamp(occurrence(first))
+        second_at = parse_timestamp(occurrence(second))
         return first_at <= second_at
     except ValueError:
         return False
@@ -204,6 +213,41 @@ def verified_mcp_executions(
 
     verified: List[Dict[str, Any]] = []
     for call_id, chain in grouped.items():
+        # Current Ops API consolidates one lifecycle into a terminal row. A
+        # row is execution proof only when it carries both start and terminal
+        # timestamps plus provider/tool identity; catalog-only rows do not.
+        consolidated = next((
+            event for event in chain
+            if str(event.get("lifecycleStage") or "").upper()
+            in {"COMPLETED", "FAILED", "REJECTED"}
+            and valid_timestamp(str(event.get("startedAt") or ""))
+            and valid_timestamp(str(
+                event.get("finishedAt") or event.get("endedAt")
+                or event.get("occurredAt") or ""))
+            and str(event.get("server") or event.get("mcpServer") or "").strip()
+            and str(event.get("tool") or event.get("toolName") or "").strip()
+        ), None)
+        if consolidated is not None:
+            server = str(
+                consolidated.get("server")
+                or consolidated.get("mcpServer") or "").strip()
+            tool = str(
+                consolidated.get("tool")
+                or consolidated.get("toolName") or "").strip()
+            verified.append({
+                "toolCallId": call_id,
+                "server": server,
+                "tool": tool,
+                "startedAt": str(consolidated.get("startedAt") or ""),
+                "resultAt": str(
+                    consolidated.get("finishedAt")
+                    or consolidated.get("endedAt")
+                    or consolidated.get("occurredAt") or ""),
+                "outcome": str(
+                    consolidated.get("outcome")
+                    or consolidated.get("status") or "UNKNOWN"),
+            })
+            continue
         starts = [
             event for event in chain
             if str(event.get("lifecycleStage") or "").upper()
@@ -645,7 +689,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base", default="http://127.0.0.1")
     parser.add_argument(
         "--resume", action="append", type=Path,
-        help="resume path; repeat to override the four default fixtures")
+        help="resume path; repeat to override the six default fixtures")
     parser.add_argument("--timeout-seconds", type=int, default=600)
     parser.add_argument("--poll-seconds", type=int, default=5)
     parser.add_argument("--out", type=Path)

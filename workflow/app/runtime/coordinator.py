@@ -744,6 +744,14 @@ class Coordinator:
             budget: Dict[str, Dict[str, int]] = {}
             for agent in ordered:
                 tool_quota = per_agent_tools
+                if agent == "TechAgent" and (
+                        sig.get("has_framework_stack")
+                        or sig.get("has_microsoft_stack")):
+                    # Deterministic JD/RAG pre-steps share this counter with
+                    # progressive Skill and documentation MCP actions. Keep
+                    # enough capacity for preflight + load + docs lookup.
+                    tool_quota = min(
+                        6, self.policy.toolBudget.maxToolCallsPerAgent)
                 if agent == "ProjectAgent" and sig.get("has_external_urls"):
                     tool_quota = min(
                         6, self.policy.toolBudget.maxToolCallsPerAgent)

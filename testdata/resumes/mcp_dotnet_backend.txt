@@ -1,0 +1,19 @@
+赵敏
+.NET / Azure 后端工程师｜5 年经验
+
+技能
+C#、ASP.NET Core、Azure Functions、Azure Service Bus、SQL Server、Redis、PowerShell、Docker
+
+工作经历
+2021.03 - 至今  SaaS 平台  高级后端工程师
+- 使用 ASP.NET Core Minimal API 建设租户与计费服务，负责依赖注入、中间件和鉴权设计。
+- 基于 Azure Functions 与 Service Bus 实现异步账单任务，补充幂等、死信处理和重放工具。
+- 优化 SQL Server 索引与批量写入，将月末账单任务从 48 分钟缩短至 17 分钟。
+
+项目经历
+多租户计费平台
+- 设计租户隔离、配额校验和审计日志，支持运行中取消与失败恢复。
+- 使用 xUnit 完成核心计费规则测试，并通过灰度发布控制变更风险。
+
+教育经历
+2016.09 - 2020.06  软件工程本科

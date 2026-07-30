@@ -194,6 +194,18 @@ def test_mcp_catalog_is_signal_gated_not_coverage_rotated():
         }
 
 
+def test_technical_skill_advertises_both_documentation_families():
+    manager = SkillManager(resolve_skills_root())
+    skill = manager.get("assess-technical-evidence")
+    assert set(skill.required_tools) == {
+        "context7.resolve-library-id",
+        "context7.query-docs",
+        "microsoft-learn.microsoft_docs_search",
+        "microsoft-learn.microsoft_docs_fetch",
+        "microsoft-learn.microsoft_code_sample_search",
+    }
+
+
 def test_artifact_planner_is_primary_not_task_pipelines():
     policy = PolicyBundle.from_config("balanced", {})
     coordinator = Coordinator(default_agent_registry, policy, None)
