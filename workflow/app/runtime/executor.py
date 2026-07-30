@@ -2620,8 +2620,12 @@ class RunExecutor:
             {"dimensions": 2, "strengths": 1, "risks": 2,
              "questions": 4, "refs": 4}
             if is_sparse_resume else
-            {"dimensions": 4, "strengths": 2, "risks": 4,
-             "questions": 8, "refs": 8}
+            # Three evidence-bound core risks are more useful than forcing a
+            # fourth filler item. Production traces showed the old 4/8 floor
+            # discarded a complete 4-dimension/8-question report with three
+            # risks and seven refs, then spent ~140s on a worse fallback.
+            {"dimensions": 4, "strengths": 2, "risks": 3,
+             "questions": 8, "refs": 6}
         )
         sections: Dict[str, Dict[str, Any]] = {}
         call_count = 0

@@ -615,7 +615,7 @@ def test_parallel_report_retries_only_the_failed_section():
                 payload = {
                     "risks": [
                         {"claim": f"risk {i}", "evidenceRefs": [ref]}
-                        for i in range(4)],
+                        for i in range(3)],
                     "missingEvidence": [],
                 }
             elif self.calls.count("report_question") == 1:
