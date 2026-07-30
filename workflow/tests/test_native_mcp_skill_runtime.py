@@ -883,6 +883,67 @@ def test_parse_decision_normalizes_provider_dsml_handoff_string():
     assert decision["handoff"]["to"] == "ReportAgent"
 
 
+class _IncompleteFinalThenCompleteLlm:
+    def __init__(self):
+        self.turn = 0
+        self.messages = []
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.turn += 1
+        self.messages.append(messages)
+        if self.turn == 1:
+            incomplete = {
+                "thought": "not actually final", "output": None,
+                "done": False,
+            }
+            return LlmTurn(
+                content="", tool_calls=[LlmToolCall(
+                    tool_call_id="incomplete-final",
+                    name="emit_decision", arguments=incomplete,
+                    raw_arguments=json.dumps(incomplete))],
+                finish_reason="tool_calls")
+        complete = {
+            "thought": "complete now",
+            "output": {
+                "summary": "completed after empty final repair",
+                "claims": [], "evidence": [], "confidence": 0.8,
+            },
+            "done": True,
+        }
+        return LlmTurn(
+            content="", tool_calls=[LlmToolCall(
+                tool_call_id="complete-final", name="emit_decision",
+                arguments=complete, raw_arguments=json.dumps(complete))],
+            finish_reason="tool_calls")
+
+
+def test_empty_done_false_final_is_repaired_with_tool_response():
+    request = AgentRunRequest(
+        runId="r-incomplete-final", conversationId="c-incomplete-final",
+        traceId="t-incomplete-final", runType="project_analysis",
+        resumeText="项目经历\n订单系统\nJava Spring Boot",
+        jobDescription="Java 后端工程师")
+    llm = _IncompleteFinalThenCompleteLlm()
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    executor.budget_plan["ProjectAgent"] = {
+        "llmQuota": 2, "actionTurnQuota": 0, "toolQuota": 0}
+    executor.state.apply_artifacts({
+        "resumeFacts": {"projects": [{"name": "订单系统"}]}})
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("ProjectAgent")))
+
+    assert output.summary == "completed after empty final repair"
+    assert any(
+        message.get("role") == "tool"
+        and message.get("tool_call_id") == "incomplete-final"
+        for message in llm.messages[1])
+
+
 def test_malformed_native_final_repairs_through_provider_json_mode():
     request = AgentRunRequest(
         runId="r-json-channel-repair", conversationId="c-json-channel-repair",

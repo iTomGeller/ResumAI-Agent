@@ -721,6 +721,74 @@ def test_parallel_report_production_client_uses_json_mode_and_call_cap():
     run(scenario())
 
 
+def test_full_evaluation_arbitration_does_not_call_released_control_scope():
+    class NoControlLlm(FakeLlm):
+        async def chat(self, *args, **kwargs):
+            raise AssertionError("released control scope must not call LLM")
+
+    request = make_request(run_type="full_evaluation")
+    executor, emitter = make_executor(request, llm=NoControlLlm())
+    executor.budget.release_llm_reservation("control")
+    executor.state.apply_artifacts({
+        "conflicts": [{
+            "claim": "项目吞吐指标缺少压测口径",
+            "reason": "缺少外部证据",
+        }],
+    })
+
+    run(executor._arbitrate_conflicts())
+
+    conflict = executor.state.artifact("conflicts")[0]
+    assert conflict["resolution"] == "uncertain"
+    assert any(
+        event["eventType"] == "run.progress"
+        and event["payload"].get("mode")
+        == "deterministic_no_control_budget"
+        for event in emitter.events)
+
+
+def test_parallel_report_multiple_failures_never_exceed_four_section_calls():
+    class MalformedSectionsLlm:
+        supports_parallel_report_sections = True
+
+        def __init__(self):
+            self.calls = []
+
+        async def chat_turn(self, messages, *, agent_id, purpose="",
+                            max_tokens=2048, tools=None, tool_choice=None,
+                            use_quality=False, trace_context=None):
+            self.calls.append(purpose)
+            if purpose == "report_risk":
+                payload = {"risks": [], "missingEvidence": []}
+                return LlmTurn(
+                    content="", tool_calls=[LlmToolCall(
+                        tool_call_id="risk-ok", name="emit_report_section",
+                        arguments=payload,
+                        raw_arguments=json.dumps(payload))],
+                    finish_reason="tool_calls")
+            return LlmTurn(
+                content="", tool_calls=[LlmToolCall(
+                    tool_call_id=f"bad-{len(self.calls)}",
+                    name="emit_report_section", arguments={},
+                    raw_arguments="{bad", arguments_error="malformed")],
+                finish_reason="tool_calls")
+
+    async def scenario():
+        request = make_request(run_type="full_evaluation")
+        llm = MalformedSectionsLlm()
+        executor, _ = make_executor(request, llm=llm)
+        output, call_count = await executor._run_parallel_report_sections(
+            [{"role": "system", "content": "json report"}],
+            round_id="r:ReportAgent:round:1", memory_refs=[],
+            skill_refs=[], observed_tool_call_ids=[], is_sparse_resume=False,
+            max_calls=4)
+        assert output is None
+        assert call_count == 4
+        assert len(llm.calls) == 4
+
+    run(scenario())
+
+
 def test_pause_snapshot_and_resume_skips_completed_agents():
     async def scenario():
         request = make_request(run_type="full_evaluation")

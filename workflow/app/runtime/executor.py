@@ -1146,6 +1146,24 @@ class RunExecutor:
         if not conflicts or self._arbitrated:
             return
         self._arbitrated = True
+        if self.budget.available_llm_calls_for_scope(
+                self.policy.maxLlmCalls, "control") <= 0:
+            # Full evaluation releases the unused control-plane reservation
+            # after deterministic planning. Do not emit a guaranteed red
+            # llm.failed node for best-effort arbitration; conservatively mark
+            # unresolved conflicts as uncertain for ReportAgent disclosure.
+            for conflict in conflicts:
+                conflict["resolution"] = "uncertain"
+                conflict["resolutionReason"] = (
+                    "证据不足，保留为面试核验项")
+            await self.emitter.emit("run.progress", payload={
+                "stage": "arbitration",
+                "mode": "deterministic_no_control_budget",
+                "message": f"冲突保守标记：{len(conflicts)} 条待面试核验",
+                "resolved": len(conflicts),
+                "total": len(conflicts),
+            })
+            return
         items = [{"claim": str(c.get("claim", c.get("key", "")))[:200],
                   "reason": str(c.get("reason", c.get("type", "")))[:200]}
                  for c in conflicts[:6]]
@@ -1889,7 +1907,8 @@ class RunExecutor:
                 # Keep three calls for the monolithic quality-model fallback
                 # (initial + provider retries). The section fan-out may use
                 # only the remainder, preventing 3 + N + 3 call storms.
-                section_call_budget = max(0, terminal_available - 3)
+                section_call_budget = min(
+                    4, max(0, terminal_available - 3))
                 if section_call_budget >= 3:
                     section_output, section_calls = (
                         await self._run_parallel_report_sections(
@@ -2173,6 +2192,17 @@ class RunExecutor:
                 schema_error = (
                     "provider function arguments are not valid JSON: "
                     f"{final_calls[0].arguments_error[:300]}")
+            if (decision is not None and final_calls
+                    and not decision.get("done")
+                    and not decision.get("output")):
+                # Calling the terminal function is a final-emission contract.
+                # Treating an empty done=false emission as a normal reasoning
+                # turn left its tool_call_id unanswered and guaranteed the
+                # next provider request would be rejected.
+                decision = None
+                schema_error = (
+                    "emit_decision returned done=false with no output; "
+                    "submit a complete final decision")
             if (decision is not None
                     and agent_id == "ReportAgent"
                     and self._requires_score_contract()):
