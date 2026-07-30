@@ -21,19 +21,10 @@ logger = logging.getLogger(__name__)
 # Reviewed production catalog. Selection remains signal-gated and capped per
 # agent; membership here means "eligible", never "always inject/call".
 PRODUCTION_SKILLS = frozenset({
-    "route-conversation-turn",
-    "plan-evaluation-revision",
-    "assess-ats-compatibility",
     "assess-technical-evidence",
-    "audit-job-relevant-evaluation",
     "calibrate-evidence-confidence",
-    "compare-target-roles",
-    "explain-evaluation-decision",
-    "generate-interview-probes",
     "ground-project-claims",
-    "handle-knowledge-no-evidence",
     "inspect-github-portfolio",
-    "normalize-job-description",
     "retrieve-public-candidate-evidence",
     "risk_pattern_detection",
 })
@@ -49,27 +40,23 @@ ADMIN_ONLY_SKILLS = frozenset({
 # from the production catalog. Unknown dynamically installed packages are
 # likewise non-production until explicitly reviewed into PRODUCTION_SKILLS.
 DEPRECATED_SKILLS = frozenset({
+    "assess-ats-compatibility",
+    "audit-job-relevant-evaluation",
+    "calibrate-and-explain-decision",
+    "compare-target-roles",
     "evidence_synthesis",
+    "evaluate-candidate-evidence",
+    "explain-evaluation-decision",
+    "generate-interview-probes",
+    "handle-knowledge-no-evidence",
     "intent_routing",
+    "normalize-job-description",
+    "plan-evaluation-revision",
     "project_depth_analysis",
+    "route-conversation-turn",
     "tech_stack_assessment",
     *ADMIN_ONLY_SKILLS,
 })
-
-_REVISION_HINT = re.compile(
-    r"(修改|更换|换成|改成|调整|重新评估|重跑|补充.{0,8}(事实|证据)|"
-    r"(简历|JD|岗位|职位|目标|重点|权重|rubric).{0,8}(改|换|调整|更新)|"
-    r"\b(change|replace|update|revise|rerun)\b)",
-    re.IGNORECASE,
-)
-
-_ROLE_COMPARE_HINT = re.compile(
-    r"(比较|对比|更适合|哪个岗位|哪个方向|投递优先级|offer|\bcompare\b|\bversus\b|\bvs\b)",
-    re.IGNORECASE,
-)
-_ATS_HINT = re.compile(r"(ATS|机器筛选|关键词|投递前|简历筛选|解析兼容)", re.IGNORECASE)
-_INTERVIEW_HINT = re.compile(r"(面试|追问|拷打|模拟面试|interview)", re.IGNORECASE)
-_KNOWLEDGE_HINT = re.compile(r"(知识库|检索结果|没有证据|无证据|依据|RAG)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -359,23 +346,6 @@ class SkillManager:
                 return
             selected_ids.append(skill_id)
 
-        # Conversation routing is a control/conversation capability, not a
-        # deterministic resume-parser capability.
-        if agent_id == "CoordinatorAgent" or (
-                agent_id == "ReportAgent"
-                and run_type in ("followup", "quick_answer")):
-            add("route-conversation-turn")
-
-        is_revision_turn = bool(_REVISION_HINT.search(user_message or ""))
-        if agent_id == "CoordinatorAgent" and is_revision_turn:
-            add("plan-evaluation-revision")
-
-        if agent_id == "CoordinatorAgent" and _ROLE_COMPARE_HINT.search(user_message or ""):
-            add("compare-target-roles")
-
-        if agent_id == "JDAnalysisAgent" and signals.get("has_jd"):
-            add("normalize-job-description")
-
         if agent_id == "TechAgent":
             if signals.get("has_jd_requirements") or signals.get("has_jd") \
                     or run_type in ("tech_match", "jd_gap", "full_evaluation",
@@ -398,28 +368,8 @@ class SkillManager:
         if agent_id == "EvidenceAgent":
             add("calibrate-evidence-confidence")
 
-        if agent_id == "ReportAgent":
-            if run_type in ("followup", "quick_answer"):
-                if is_revision_turn:
-                    add("plan-evaluation-revision")
-                else:
-                    add("explain-evaluation-decision")
-            else:
-                add("audit-job-relevant-evaluation")
-            if _ATS_HINT.search(user_message or ""):
-                add("assess-ats-compatibility")
-            elif _INTERVIEW_HINT.search(user_message or ""):
-                add("generate-interview-probes")
-            elif _KNOWLEDGE_HINT.search(user_message or ""):
-                add("handle-knowledge-no-evidence")
-
-        if agent_id == "InterviewQuestionAgent":
-            add("generate-interview-probes")
-
         if agent_id == "ResumeOptimizeAgent":
             add("ground-project-claims")
-            if _ATS_HINT.search(user_message or ""):
-                add("assess-ats-compatibility")
 
         # Legacy DB overrides cannot resurrect hidden aliases.
         override = overrides.get(agent_id)

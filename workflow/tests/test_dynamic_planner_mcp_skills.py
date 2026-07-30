@@ -49,8 +49,7 @@ def test_skills_load_from_backend_resources():
         agent_id="ReportAgent", run_type="full_evaluation",
         job_focus=None, overrides={},
         signals={"has_jd": True, "has_projects": True})
-    assert [skill.skill_id for skill in selected] == [
-        "audit-job-relevant-evaluation"]
+    assert selected == [], "parallel Report synthesis has no native Skill loop"
 
 
 def test_skill_selection_is_one_or_two_and_revision_aware():
@@ -64,15 +63,13 @@ def test_skill_selection_is_one_or_two_and_revision_aware():
         agent_id="ReportAgent", run_type="followup",
         job_focus=None, overrides={},
         signals={}, user_message="为什么项目深度只有 60 分？")
-    assert [skill.skill_id for skill in why] == [
-        "route-conversation-turn", "explain-evaluation-decision"]
+    assert why == [], "Copilot routing is owned by the conversation runtime"
 
     revision = manager.select_for(
         agent_id="ReportAgent", run_type="followup",
         job_focus=None, overrides={},
         signals={}, user_message="把 JD 换成 AI 产品经理并重新评估")
-    assert [skill.skill_id for skill in revision] == [
-        "route-conversation-turn", "plan-evaluation-revision"]
+    assert revision == [], "revision routing is deterministic Java control-plane logic"
 
     for agent_id in (
             "ResumeParserAgent", "JDAnalysisAgent", "TechAgent",
@@ -115,18 +112,16 @@ def test_skill_selection_varies_with_candidate_and_request_signals():
         agent_id="ProjectAgent", run_type="full_evaluation",
         job_focus=None, overrides={},
         signals={"has_projects": True, "has_external_urls": False})
-    interview = manager.select_for(
-        agent_id="ReportAgent", run_type="full_evaluation",
-        job_focus=None, overrides={}, signals={},
-        user_message="请给出大厂面试追问")
 
     assert [skill.skill_id for skill in github] == [
         "inspect-github-portfolio", "ground-project-claims"]
     assert [skill.skill_id for skill in public_url] == [
         "retrieve-public-candidate-evidence", "ground-project-claims"]
     assert [skill.skill_id for skill in no_url] == ["ground-project-claims"]
-    assert [skill.skill_id for skill in interview] == [
-        "audit-job-relevant-evaluation", "generate-interview-probes"]
+    assert [skill.skill_id for skill in manager.select_for(
+        agent_id="EvidenceAgent", run_type="full_evaluation",
+        job_focus=None, overrides={}, signals={})] == [
+            "calibrate-evidence-confidence"]
 
 
 class _CatalogRegistry:

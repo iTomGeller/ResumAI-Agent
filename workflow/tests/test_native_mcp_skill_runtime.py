@@ -805,16 +805,6 @@ class _ReportFinalizationLlm:
         self.tool_choices.append(tool_choice)
         self.tool_names.append(names)
         self.max_tokens.append(max_tokens)
-        if tool_choice == "auto":
-            arguments = {"skill_id": "audit-job-relevant-evaluation"}
-            return LlmTurn(
-                content="",
-                tool_calls=[LlmToolCall(
-                    tool_call_id="report-skill-load-1",
-                    name="load_skill",
-                    arguments=arguments,
-                    raw_arguments=json.dumps(arguments))],
-                finish_reason="tool_calls")
         decision = {
             "thought": "finalize after observing the loaded audit skill",
             "output": {
@@ -878,15 +868,11 @@ def test_report_agent_hides_evaluation_retrieval_and_forces_final_output():
     assert "knowledge_search" not in llm.tool_names[0]
     assert "resume_semantic_search" not in llm.tool_names[0]
     assert "validate_report_schema" not in llm.tool_names[0]
-    assert llm.tool_names == [
-        ["load_skill", "read_skill_resource", "emit_decision"],
-        ["emit_decision"],
-    ]
+    assert llm.tool_names == [["emit_decision"]]
     assert llm.tool_choices == [
-        "auto",
         {"type": "function", "function": {"name": "emit_decision"}},
     ]
-    assert llm.max_tokens == [8192, 8192]
+    assert llm.max_tokens == [8192]
 
 
 class _ReportRepairLlm:

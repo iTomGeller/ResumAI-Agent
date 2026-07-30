@@ -33,7 +33,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "CoordinatorAgent": AgentDefinition(
         "CoordinatorAgent", "协调者", "分析用户目标并动态选择 Agent 流水线",
         ("planning", "routing", "replanning"),
-        skills=("route-conversation-turn", "plan-evaluation-revision"),
+        skills=(),
         tools=(), max_iterations=1, max_tool_calls=0, timeout_seconds=60,
         failure_policy="degrade", output_type="plan",
         requires_artifacts=(), produces_artifacts=("execution_plan",),
@@ -113,8 +113,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "ReportAgent": AgentDefinition(
         "ReportAgent", "报告生成", "汇总证据生成最终回答",
         ("report_generation",),
-        skills=("audit-job-relevant-evaluation",
-                "explain-evaluation-decision"),
+        skills=(),
         # knowledge_search / resume_semantic_search: Copilot 追问（followup/
         # quick_answer 只有 ReportAgent）需要对话式 RAG——先查评估标准与简历
         # 证据再回答。Report 不直接调用公网 MCP。
@@ -132,7 +131,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "ResumeOptimizeAgent": AgentDefinition(
         "ResumeOptimizeAgent", "简历优化", "事实不变前提下的改写",
         ("resume_rewrite",),
-        skills=("ground-project-claims", "assess-ats-compatibility"),
+        skills=("ground-project-claims",),
         tools=("resume_lint", "locate_evidence"),
         max_iterations=2, max_tool_calls=4, timeout_seconds=240,
         output_type="rewrite",
@@ -142,7 +141,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "InterviewQuestionAgent": AgentDefinition(
         "InterviewQuestionAgent", "面试追问", "针对风险与缺口生成追问",
         ("interview_questions",),
-        skills=("generate-interview-probes",),
+        skills=(),
         tools=("context7.resolve-library-id", "context7.query-docs"),
         mcp_servers=("context7", "microsoft-learn"),
         max_iterations=2, max_tool_calls=2, timeout_seconds=150,
