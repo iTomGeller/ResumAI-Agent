@@ -1,0 +1,63 @@
+{
+  "experiment": "EXP-RUN-CONCURRENCY-20260730",
+  "workflow": "current full_evaluation",
+  "casesPerConfiguration": 4,
+  "caseSet": [
+    "Gitee Java backend",
+    ".NET/Azure backend",
+    "frontend without project evidence",
+    "AI Agent backend with declared GitHub dependency"
+  ],
+  "selectionRule": "zero failures; batch makespan improves by at least 20%; maximum per-run runtime does not inflate by more than 25%",
+  "results": [
+    {
+      "maxGlobalConcurrent": 2,
+      "batchWallSeconds": 167.64,
+      "successCount": 4,
+      "failureCount": 0,
+      "runtimeP50Seconds": 72.80,
+      "runtimeMaxSeconds": 103.42,
+      "queueMaxSeconds": 118.17,
+      "backendCpuPeak": "165.86%",
+      "backendMemory": "604.9MiB",
+      "workflowCpuPeak": "39.42%",
+      "workflowMemory": "127.2MiB",
+      "runIds": [
+        "run-rcb2-1785381088-1",
+        "run-rcb2-1785381088-2",
+        "run-rcb2-1785381088-3",
+        "run-rcb2-1785381088-4"
+      ],
+      "llmCallsPerRun": [15, 13, 12, 13],
+      "toolCallsPerRun": [13, 11, 9, 12]
+    },
+    {
+      "maxGlobalConcurrent": 4,
+      "batchWallSeconds": 81.34,
+      "successCount": 4,
+      "failureCount": 0,
+      "runtimeP50Seconds": 73.96,
+      "runtimeMaxSeconds": 76.51,
+      "queueMaxSeconds": 14.39,
+      "backendCpuPeak": "56.87%",
+      "backendMemory": "566.4MiB",
+      "workflowCpuPeak": "20.90%",
+      "workflowMemory": "135.9MiB",
+      "runIds": [
+        "run-rcb4-1785381276-1",
+        "run-rcb4-1785381276-2",
+        "run-rcb4-1785381276-3",
+        "run-rcb4-1785381276-4"
+      ],
+      "llmCallsPerRun": [14, 13, 12, 14],
+      "toolCallsPerRun": [13, 11, 9, 13]
+    }
+  ],
+  "winner": {
+    "maxGlobalConcurrent": 4,
+    "batchMakespanImprovementPercent": 51.48,
+    "runtimeP50InflationPercent": 1.59,
+    "runtimeMaxImprovementPercent": 26.02,
+    "appliedOnEcs": true
+  }
+}
