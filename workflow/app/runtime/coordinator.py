@@ -336,6 +336,14 @@ class Coordinator:
         present = self._present_artifacts(artifacts, shared)
         is_rich_resume = len(text) > 2000 and has_projects and has_timeline
         has_github = bool(re.search(r"github\.com/\w+", text, re.I))
+        stack_text = f"{text}\n{job_description or ''}"
+        has_microsoft_stack = bool(re.search(
+            r"(?:\.NET|ASP\.NET|C#|Azure|PowerShell|Microsoft\s+365|Dynamics\s+365|MSSQL|SQL\s+Server)",
+            stack_text, re.I))
+        has_framework_stack = bool(re.search(
+            r"(?:Spring(?:\s*Boot)?|React|Vue|Angular|Next\.js|Nuxt|Kubernetes|K8s|Kafka|"
+            r"LangChain|LangGraph|FastAPI|Django|Flask|PyTorch|TensorFlow|Redis|MyBatis|Hibernate)",
+            stack_text, re.I)) and not has_microsoft_stack
         has_publications = bool(re.search(
             r"(论文|paper|publish|arxiv|conference|journal)", text, re.I))
         is_senior = bool(re.search(
@@ -358,6 +366,8 @@ class Coordinator:
             "has_external_urls": has_external_urls,
             "is_sparse_resume": is_sparse_resume,
             "has_github": has_github,
+            "has_framework_stack": has_framework_stack,
+            "has_microsoft_stack": has_microsoft_stack,
             "has_publications": has_publications,
             "is_rich_resume": is_rich_resume,
             "is_senior": is_senior,
@@ -704,19 +714,24 @@ class Coordinator:
                 if agent in quotas and quotas[agent] == 0:
                     quotas[agent] = 1
                     remaining -= 1
-            # A project-bearing full evaluation gets one model-authored MCP
-            # research turn even when the resume has no explicit URL. The
-            # runtime constrains this to public technical/background context;
-            # it never treats public search as proof of private employment.
-            if sig.get("has_projects") and "ProjectAgent" in quotas:
-                # Optional action(s) + final. Tool choice remains provider
-                # `auto`; this is capacity, never a forced MCP invocation.
+            # Documentation MCPs are useful only for recognized stacks. Three
+            # action turns allow Skill load + Context7 resolve -> query before
+            # the Tech final (Microsoft Learn normally finishes in fewer).
+            if ((sig.get("has_framework_stack") or sig.get("has_microsoft_stack"))
+                    and "TechAgent" in quotas):
+                while remaining > 0 and quotas["TechAgent"] < 4:
+                    quotas["TechAgent"] += 1
+                    remaining -= 1
+            # Public project evidence gets extra turns only when the candidate
+            # actually declared an external URL/repository.
+            if (sig.get("has_external_urls") and "ProjectAgent" in quotas):
                 while remaining > 0 and quotas["ProjectAgent"] < 3:
                     quotas["ProjectAgent"] += 1
                     remaining -= 1
             # Give the other reasoning specialists room to activate one Skill
             # from metadata. They keep the turn when no activation is useful.
-            for agent in ("TechAgent", "RiskAgent", "EvidenceAgent"):
+            for agent in (
+                    "TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent"):
                 if remaining <= 0:
                     break
                 if agent in quotas and quotas[agent] == 1:
@@ -735,7 +750,10 @@ class Coordinator:
                 budget[agent] = {
                     "llmQuota": quotas[agent],
                     "actionTurnQuota": min(
-                        (2 if agent == "ProjectAgent"
+                        (3 if agent == "TechAgent" and (
+                            sig.get("has_framework_stack")
+                            or sig.get("has_microsoft_stack"))
+                         else 2 if agent == "ProjectAgent"
                          and sig.get("has_external_urls") else 1),
                         max(0, quotas[agent] - 1)),
                     "toolQuota": tool_quota,

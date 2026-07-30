@@ -75,6 +75,16 @@ _DEEPWIKI_REPOSITORY_KEYS = {
     "repo", "reponame", "repo_name", "repository", "repositoryname",
     "repository_name",
 }
+_PUBLIC_URL = re.compile(r"https?://[^\s)\]}>]+", re.IGNORECASE)
+_MICROSOFT_STACK = re.compile(
+    r"(?:\.NET|ASP\.NET|C#|Azure|PowerShell|Microsoft\s+365|Dynamics\s+365|MSSQL|SQL\s+Server)",
+    re.IGNORECASE,
+)
+_FRAMEWORK_STACK = re.compile(
+    r"(?:Spring(?:\s*Boot)?|React|Vue|Angular|Next\.js|Nuxt|Kubernetes|K8s|Kafka|"
+    r"LangChain|LangGraph|FastAPI|Django|Flask|PyTorch|TensorFlow|Redis|MyBatis|Hibernate)",
+    re.IGNORECASE,
+)
 
 
 def _normalize_repository_slug(value: Any) -> str:
@@ -124,6 +134,17 @@ def _declared_github_repositories(run_context: Dict[str, Any]) -> Dict[str, str]
             if slug:
                 declared[slug] = f"https://github.com/{owner}/{repo}"
     return declared
+
+
+def _tool_context_signals(run_context: Dict[str, Any]) -> Dict[str, bool]:
+    text = "\n".join(str(run_context.get(key) or "") for key in (
+        "resumeText", "jobDescription", "userMessage"))
+    microsoft = bool(_MICROSOFT_STACK.search(text))
+    return {
+        "has_external_url": bool(_PUBLIC_URL.search(text)),
+        "microsoft_stack": microsoft,
+        "framework_stack": bool(_FRAMEWORK_STACK.search(text)) and not microsoft,
+    }
 
 
 def _validate(schema: Dict[str, Any], payload: Dict[str, Any], direction: str) -> None:
@@ -339,6 +360,7 @@ class ToolExecutor:
                 if extra not in names:
                     names.append(extra)
         declared_repositories = _declared_github_repositories(self.run_context)
+        context_signals = _tool_context_signals(self.run_context)
         filtered = []
         for name in names:
             defn = self.definitions.get(name)
@@ -354,6 +376,20 @@ class ToolExecutor:
             # runtime policy would necessarily reject for this candidate.
             if (defn.mcp_server == "deepwiki"
                     and not declared_repositories):
+                continue
+            # URL fetchers are candidate-bound evidence tools. Do not expose
+            # them when no URL was declared in the resume/JD/request.
+            if (name in {"fetch.fetch", "exa.web_fetch_exa", "exa.web_search_exa"}
+                    and not context_signals["has_external_url"]):
+                continue
+            # Documentation providers are selected by the actual stack, not
+            # rotated for coverage. Microsoft Learn owns Microsoft stacks;
+            # Context7 covers other recognized frameworks/libraries.
+            if (defn.mcp_server == "microsoft-learn"
+                    and not context_signals["microsoft_stack"]):
+                continue
+            if (defn.mcp_server == "context7"
+                    and not context_signals["framework_stack"]):
                 continue
             filtered.append(name)
         names = filtered

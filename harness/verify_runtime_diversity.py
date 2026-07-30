@@ -498,6 +498,13 @@ def check_report(base: str, evaluations: Sequence[Evaluation]) -> Dict[str, Any]
         for calls in verified_mcp_by_run.values()
         for call in calls
     ]
+    mcp_endpoint_variants = {
+        (call["server"], call["tool"])
+        for call in all_verified_mcp
+    }
+    mcp_server_variants = {
+        call["server"] for call in all_verified_mcp
+    }
     lifecycle_events = {str(event.get("eventType") or "") for event in skill_events}
 
     if len(route_variants) < 2:
@@ -528,6 +535,10 @@ def check_report(base: str, evaluations: Sequence[Evaluation]) -> Dict[str, Any]
         failures.append(
             "no real MCP execution was proven by a matching toolCallId "
             "EXECUTION_STARTED -> RESULT chain")
+    elif len(mcp_endpoint_variants) < 2 or len(mcp_server_variants) < 2:
+        failures.append(
+            "MCP execution stayed fixed on one provider/endpoint across "
+            "differentiated resumes")
     if not ({"skill.loaded", "skill.applied"} & lifecycle_events):
         failures.append("Skills were advertised/selected but never progressively loaded")
 
@@ -614,6 +625,12 @@ def check_report(base: str, evaluations: Sequence[Evaluation]) -> Dict[str, Any]
         "routeVariantCount": len(route_variants),
         "skillVariantCount": len(skill_variants),
         "verifiedMcpExecutionCount": len(all_verified_mcp),
+        "mcpServerVariantCount": len(mcp_server_variants),
+        "mcpEndpointVariantCount": len(mcp_endpoint_variants),
+        "mcpEndpoints": [
+            {"server": server, "tool": tool}
+            for server, tool in sorted(mcp_endpoint_variants)
+        ],
         "memoryRoutingVariantCount": len(memory_routing_variants),
         "memoryRecordSelectionVariantCount": len(memory_selection_variants),
         "selectedMemorySemanticCount": len(selected_record_semantics),

@@ -1663,8 +1663,10 @@ class RunExecutor:
             research_turn_ceiling = (
                 2 if agent_id == "ProjectAgent"
                 and signals.get("has_external_urls")
-                else 1 if agent_id == "ProjectAgent"
-                and signals.get("has_projects") else 0)
+                else 3 if agent_id == "TechAgent"
+                and (signals.get("has_framework_stack")
+                     or signals.get("has_microsoft_stack"))
+                else 0)
             # Skill metadata is present in the model context, but the body is
             # disclosed only if the model calls load_skill. Reserving a turn
             # makes that choice real without requiring any Skill invocation.
@@ -1673,14 +1675,7 @@ class RunExecutor:
         available_tool_turns = min(
             action_turn_ceiling,
             max(0, agent_tool_limit - agent_tool_calls))
-        research_retry_turns = (
-            1 if single_pass_evaluation
-            and agent_id == "ProjectAgent"
-            and signals.get("has_projects")
-            and not signals.get("has_external_urls") else 0)
-        fallback_turn_limit = (
-            max_decision_iterations + available_tool_turns
-            + research_retry_turns)
+        fallback_turn_limit = max_decision_iterations + available_tool_turns
         agent_llm_quota = self._agent_quota(
             agent_id, "llmQuota", fallback_turn_limit)
         final_turn_reserve = min(
@@ -1788,54 +1783,6 @@ class RunExecutor:
                         "不要再请求任何检索、Skill 或校验工具。"
                     ),
                 })
-            elif (agent_id == "ProjectAgent"
-                    and single_pass_evaluation
-                    and signals.get("has_projects")
-                    and not signals.get("has_external_urls")
-                    and action_turns == 0):
-                # Policy grants one public-research turn; it never selects a
-                # concrete server/tool. Build the choice set from the live MCP
-                # catalog and whether required arguments can be grounded in
-                # current input. The model chooses the tool and authors args.
-                applicable_mcp_names: set[str] = set()
-                for entry in catalog:
-                    if not (entry.get("kind") == "mcp"
-                            or entry.get("mcpServer")):
-                        continue
-                    schema = entry.get("inputSchema")
-                    required = (
-                        schema.get("required") if isinstance(schema, dict)
-                        else []) or []
-                    requires_external_identifier = any(
-                        any(marker in str(field).lower()
-                            for marker in ("url", "uri", "repo", "repository"))
-                        for field in required)
-                    if requires_external_identifier:
-                        continue
-                    model_name = str(entry.get("modelName") or "")
-                    if model_name:
-                        applicable_mcp_names.add(model_name)
-                if applicable_mcp_names:
-                    all_mcp_model_names = {
-                        str(entry.get("modelName") or "")
-                        for entry in catalog
-                        if entry.get("kind") == "mcp"
-                        or entry.get("mcpServer")
-                    }
-                    # Send applicable MCP schemas alongside Skill activation,
-                    # builtin and terminal schemas. This `tools` array is part
-                    # of the model input. `auto` lets the model select one,
-                    # another action, or finish without an MCP call.
-                    turn_tools = [
-                        tool for tool in model_tools
-                        if (
-                            str(tool.get("function", {}).get("name") or "")
-                            not in all_mcp_model_names
-                            or str(tool.get("function", {}).get("name") or "")
-                            in applicable_mcp_names
-                        )
-                    ]
-
             # Persist memory usage once, at the first prompt that consumes it.
             # Every later round still declares it as an input attachment below,
             # without duplicating durable usage rows or sibling trace nodes.

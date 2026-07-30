@@ -88,7 +88,13 @@
   "optionalMcpServers": {},
   "agentToolRouting": {
     "JDAnalysisAgent": [],
-    "TechAgent": [],
+    "TechAgent": [
+      "context7.resolve-library-id",
+      "context7.query-docs",
+      "microsoft-learn.microsoft_docs_search",
+      "microsoft-learn.microsoft_docs_fetch",
+      "microsoft-learn.microsoft_code_sample_search"
+    ],
     "ProjectAgent": [
       "exa.web_search_exa",
       "exa.web_fetch_exa",
@@ -111,6 +117,7 @@
       "context7.resolve-library-id",
       "context7.query-docs",
       "microsoft-learn.microsoft_docs_search",
+      "microsoft-learn.microsoft_docs_fetch",
       "microsoft-learn.microsoft_code_sample_search"
     ]
   }

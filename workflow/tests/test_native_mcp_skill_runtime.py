@@ -806,7 +806,7 @@ class _ReportFinalizationLlm:
         self.tool_names.append(names)
         self.max_tokens.append(max_tokens)
         if tool_choice == "auto":
-            arguments = {"skill_id": "calibrate-and-explain-decision"}
+            arguments = {"skill_id": "audit-job-relevant-evaluation"}
             return LlmTurn(
                 content="",
                 tool_calls=[LlmToolCall(
@@ -1182,7 +1182,7 @@ class _ProgressiveSkillLlm:
         self.saw_instructions |= "BODY_SENTINEL" in content
         self.saw_resource |= "RESOURCE_SENTINEL" in content
         if self.turn == 1:
-            arguments = {"skill_id": "evaluate-candidate-evidence"}
+            arguments = {"skill_id": "ground-project-claims"}
             return LlmTurn(
                 content="",
                 tool_calls=[LlmToolCall(
@@ -1193,7 +1193,7 @@ class _ProgressiveSkillLlm:
                 finish_reason="tool_calls")
         if self.turn == 2:
             arguments = {
-                "skill_id": "evaluate-candidate-evidence",
+                "skill_id": "ground-project-claims",
                 "path": "references/details.md",
             }
             return LlmTurn(
@@ -1227,12 +1227,12 @@ class _ProgressiveSkillLlm:
 def test_progressive_skill_action_turns_are_reserved(monkeypatch, tmp_path):
     from app.runtime import executor as executor_module
 
-    package = tmp_path / "skills" / "evaluate-candidate-evidence"
+    package = tmp_path / "skills" / "ground-project-claims"
     references = package / "references"
     references.mkdir(parents=True)
     (package / "SKILL.md").write_text(
         "---\n"
-        "name: evaluate-candidate-evidence\n"
+        "name: ground-project-claims\n"
         "description: Unified candidate evidence skill metadata.\n"
         "version: v-test\n"
         "---\n\n"
