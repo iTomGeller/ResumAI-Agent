@@ -1,0 +1,87 @@
+{
+  "experiment": "EXP-QUEUE-20260730",
+  "host": {
+    "cpuCores": 4,
+    "memoryMiB": 15317
+  },
+  "workload": {
+    "tasksPerConfiguration": 200,
+    "path": "Redis Stream -> MySQL task CAS -> Conversation -> AgentRun -> RunEvent",
+    "agentRunSchedulerEnabled": false,
+    "llmCalls": 0
+  },
+  "monitorCorrection": {
+    "rawClockUnit": "nanoseconds",
+    "reportedLatencyUnit": "milliseconds",
+    "note": "The first two low-capacity variants produced no AgentRun within the 120 second window and are invalid, not zero-latency winners."
+  },
+  "results": [
+    {
+      "workers": 1,
+      "pollMs": 500,
+      "dbPool": 4,
+      "valid": false,
+      "reason": "0/200 AgentRun rows within 120s"
+    },
+    {
+      "workers": 2,
+      "pollMs": 250,
+      "dbPool": 4,
+      "valid": false,
+      "reason": "0/200 AgentRun rows within 120s"
+    },
+    {
+      "workers": 4,
+      "pollMs": 100,
+      "dbPool": 6,
+      "valid": true,
+      "p50DrainMs": 3397,
+      "p95DrainMs": 5788,
+      "fullDrainMs": 6081,
+      "throughputPerSecond": 32.89,
+      "backendCpuPeak": "164.75%",
+      "backendMemoryAtP50": "571.3MiB",
+      "mysqlRowLockWaitDelta": 0,
+      "redisPendingAfter": 0
+    },
+    {
+      "workers": 6,
+      "pollMs": 100,
+      "dbPool": 8,
+      "valid": true,
+      "p50DrainMs": 3521,
+      "p95DrainMs": 5513,
+      "fullDrainMs": 5678,
+      "throughputPerSecond": 35.22,
+      "backendCpuPeak": "265.55%",
+      "backendMemoryAtP50": "468.8MiB",
+      "mysqlRowLockWaitDelta": 0,
+      "redisPendingAfter": 0
+    },
+    {
+      "workers": 8,
+      "pollMs": 50,
+      "dbPool": 10,
+      "valid": true,
+      "p50DrainMs": 2380,
+      "p95DrainMs": null,
+      "fullDrainMs": 4367,
+      "throughputPerSecond": 45.80,
+      "backendCpuPeak": "313.33%",
+      "backendMemoryAtP50": "488.7MiB",
+      "mysqlRowLockWaitDelta": 0,
+      "redisPendingAfter": 0
+    }
+  ],
+  "selection": {
+    "workers": 4,
+    "pollMs": 100,
+    "dbPool": 6,
+    "reason": "It drains twice the planned 100-resume load in 6.08s with no PEL or MySQL row-lock growth. Six workers improve drain time only 6.6% while increasing observed CPU by 61%; eight workers optimize an upstream queue that is already much faster than the four-slot, multi-second Agent Run consumer."
+  },
+  "cleanup": {
+    "syntheticDatabaseRowsRemaining": 0,
+    "redisPendingRemaining": 0,
+    "acknowledgedLegacyStreamEntriesTrimmed": 2738
+  }
+}

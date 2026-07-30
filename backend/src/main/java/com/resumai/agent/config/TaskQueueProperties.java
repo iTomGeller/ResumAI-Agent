@@ -8,8 +8,9 @@ public class TaskQueueProperties {
     private String streamKey = "resumai:task_queue";
     private String consumerGroup = "resume-workers";
     private String workerId = "worker-1";
-    private int maxWorkers = 6;
-    private long pollIntervalMs = 500L;
+    /** EXP-QUEUE-20260730 knee on the 4-vCPU ECS: 200 tasks drained in 6.08s. */
+    private int maxWorkers = 4;
+    private long pollIntervalMs = 100L;
     private int runningTimeoutMinutes = 30;
     private int maxAttempts = 3;
     private int retryBackoffSeconds = 60;

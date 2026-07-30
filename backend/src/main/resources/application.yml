@@ -14,7 +14,7 @@ spring:
     username: ${MYSQL_USER:resumai}
     password: ${MYSQL_PASSWORD:}
     hikari:
-      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:6}
       minimum-idle: ${DB_POOL_MIN_IDLE:2}
       connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:30000}
   data:
@@ -90,8 +90,8 @@ resumai:
     stream-key: resumai:task_queue
     consumer-group: resume-workers
     worker-id: ${TASK_WORKER_ID:worker-1}
-    max-workers: ${TASK_QUEUE_MAX_WORKERS:6}
-    poll-interval-ms: ${TASK_QUEUE_POLL_MS:500}
+    max-workers: ${TASK_QUEUE_MAX_WORKERS:4}
+    poll-interval-ms: ${TASK_QUEUE_POLL_MS:100}
     running-timeout-minutes: ${TASK_QUEUE_RUNNING_TIMEOUT_MIN:30}
     max-attempts: ${TASK_QUEUE_MAX_ATTEMPTS:3}
     retry-backoff-seconds: ${TASK_QUEUE_RETRY_BACKOFF_SEC:60}
