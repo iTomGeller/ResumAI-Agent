@@ -77,8 +77,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "ProjectAgent": AgentDefinition(
         "ProjectAgent", "项目分析", "项目复杂度、贡献与真实性",
         ("project_analysis",),
-        skills=("ground-project-claims", "inspect-github-portfolio",
-                "retrieve-public-candidate-evidence"),
+        skills=("ground-project-claims", "retrieve-public-candidate-evidence"),
         tools=("locate_evidence", "resume_semantic_search"),
         mcp_servers=("exa", "deepwiki", "fetch"),
         max_iterations=2, max_tool_calls=6, timeout_seconds=240,

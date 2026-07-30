@@ -114,7 +114,7 @@ def test_skill_selection_varies_with_candidate_and_request_signals():
         signals={"has_projects": True, "has_external_urls": False})
 
     assert [skill.skill_id for skill in github] == [
-        "inspect-github-portfolio", "ground-project-claims"]
+        "retrieve-public-candidate-evidence", "ground-project-claims"]
     assert [skill.skill_id for skill in public_url] == [
         "retrieve-public-candidate-evidence", "ground-project-claims"]
     assert [skill.skill_id for skill in no_url] == ["ground-project-claims"]

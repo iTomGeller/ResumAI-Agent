@@ -24,7 +24,6 @@ PRODUCTION_SKILLS = frozenset({
     "assess-technical-evidence",
     "calibrate-evidence-confidence",
     "ground-project-claims",
-    "inspect-github-portfolio",
     "retrieve-public-candidate-evidence",
     "risk_pattern_detection",
 })
@@ -49,6 +48,7 @@ DEPRECATED_SKILLS = frozenset({
     "explain-evaluation-decision",
     "generate-interview-probes",
     "handle-knowledge-no-evidence",
+    "inspect-github-portfolio",
     "intent_routing",
     "normalize-job-description",
     "plan-evaluation-revision",
@@ -353,9 +353,7 @@ class SkillManager:
                 add("assess-technical-evidence")
 
         if agent_id == "ProjectAgent":
-            if signals.get("has_github"):
-                add("inspect-github-portfolio")
-            elif signals.get("has_external_urls"):
+            if signals.get("has_external_urls"):
                 add("retrieve-public-candidate-evidence")
             if signals.get("has_projects", True):
                 add("ground-project-claims")
