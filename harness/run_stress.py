@@ -37,7 +37,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "testdata" / "stress_resumes" / "manifest.json"
-OUTDIR = ROOT / "reports" / "stress_e2e"
+DEFAULT_OUTDIR = ROOT / "reports" / "stress_e2e"
+OUTDIR = DEFAULT_OUTDIR
 CHECKPOINT = OUTDIR / "checkpoint.json"
 RAW_RESULTS = OUTDIR / "raw_results.json"
 
@@ -388,7 +389,7 @@ def save_checkpoint(state: dict) -> None:
 
 
 def main() -> None:
-    global BASE, AUTH_TOKEN
+    global BASE, AUTH_TOKEN, OUTDIR, CHECKPOINT, RAW_RESULTS, TASK_TIMEOUT_S
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--base-url",
@@ -401,6 +402,11 @@ def main() -> None:
         help="Allow plain HTTP for a non-loopback target",
     )
     ap.add_argument("--concurrency", type=int, default=4)
+    ap.add_argument(
+        "--outdir", type=Path, default=DEFAULT_OUTDIR,
+        help="isolated checkpoint/result directory; use a fresh directory for each build",
+    )
+    ap.add_argument("--task-timeout", type=int, default=TASK_TIMEOUT_S)
     ap.add_argument("--limit", type=int, default=0, help="run only first N manifest entries")
     ap.add_argument("--ids", nargs="*", default=None, help="run only these manifest ids")
     ap.add_argument("--retry-failed", action="store_true", help="re-run non-SUCCESS checkpoint entries")
@@ -416,6 +422,10 @@ def main() -> None:
     if parsed_base.scheme == "http" and not is_loopback and not args.allow_insecure_http:
         ap.error("refusing non-loopback plain HTTP; use HTTPS or explicitly pass --allow-insecure-http")
     AUTH_TOKEN = os.environ.get("RESUMAI_API_TOKEN", "").strip()
+    OUTDIR = args.outdir.resolve()
+    CHECKPOINT = OUTDIR / "checkpoint.json"
+    RAW_RESULTS = OUTDIR / "raw_results.json"
+    TASK_TIMEOUT_S = max(60, args.task_timeout)
 
     OUTDIR.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
