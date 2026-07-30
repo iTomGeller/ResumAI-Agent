@@ -7,18 +7,46 @@ INTERVAL_SECONDS="${3:-5}"
 
 mkdir -p "$(dirname "$OUT_FILE")"
 rm -f "$STOP_FILE"
-printf '%s\n' 'timestamp|docker_stats|task_queue|run_queue|mysql|redis|disk' > "$OUT_FILE"
+printf '%s\n' 'timestamp|docker_stats|container_state|backend_proc|workflow_proc|workflow_health|task_queue|run_queue|mysql|redis|disk' > "$OUT_FILE"
 
 one_line() {
   tr '\r\n|' ',,;' | sed 's/,,*/,/g; s/,$//'
 }
 
 while [ ! -f "$STOP_FILE" ]; do
+  cycle_started="$(date +%s)"
   timestamp="$(date --iso-8601=seconds)"
   docker_stats="$(
     docker stats --no-stream \
       --format '{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}},{{.PIDs}}' \
       ai-resume-backend ai-resume-workflow resumai-mysql resumai-redis \
+      2>/dev/null | one_line
+  )"
+  container_state="$(
+    docker inspect \
+      --format '{{.Name}},restarts={{.RestartCount}},oom={{.State.OOMKilled}},status={{.State.Status}}' \
+      ai-resume-backend ai-resume-workflow resumai-mysql resumai-redis \
+      2>/dev/null | one_line
+  )"
+  backend_proc="$(
+    docker exec ai-resume-backend sh -lc '
+      grep -E "^(VmRSS|VmHWM|Threads):" /proc/1/status
+      printf "open_fds:%s\n" "$(ls /proc/1/fd 2>/dev/null | wc -l)"
+      grep -E "^(nr_throttled|throttled_usec) " /sys/fs/cgroup/cpu.stat 2>/dev/null || true
+      grep -E "^(oom|oom_kill) " /sys/fs/cgroup/memory.events 2>/dev/null || true
+    ' 2>/dev/null | one_line
+  )"
+  workflow_proc="$(
+    docker exec ai-resume-workflow sh -lc '
+      grep -E "^(VmRSS|VmHWM|Threads):" /proc/1/status
+      printf "open_fds:%s\n" "$(ls /proc/1/fd 2>/dev/null | wc -l)"
+      grep -E "^(nr_throttled|throttled_usec) " /sys/fs/cgroup/cpu.stat 2>/dev/null || true
+      grep -E "^(oom|oom_kill) " /sys/fs/cgroup/memory.events 2>/dev/null || true
+    ' 2>/dev/null | one_line
+  )"
+  workflow_health="$(
+    docker exec ai-resume-workflow sh -lc \
+      'curl -fsS --max-time 3 http://127.0.0.1:8090/health' \
       2>/dev/null | one_line
   )"
   task_queue="$(
@@ -49,8 +77,13 @@ while [ ! -f "$STOP_FILE" ]; do
       | one_line
   )"
   disk_status="$(df -P / /data 2>/dev/null | tail -n +2 | one_line)"
-  printf '%s|%s|%s|%s|%s|%s|%s\n' \
-    "$timestamp" "$docker_stats" "$task_queue" "$run_queue" \
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    "$timestamp" "$docker_stats" "$container_state" "$backend_proc" \
+    "$workflow_proc" "$workflow_health" "$task_queue" "$run_queue" \
     "$mysql_status" "$redis_status" "$disk_status" >> "$OUT_FILE"
-  sleep "$INTERVAL_SECONDS"
+  cycle_elapsed="$(( $(date +%s) - cycle_started ))"
+  cycle_remaining="$(( INTERVAL_SECONDS - cycle_elapsed ))"
+  if [ "$cycle_remaining" -gt 0 ]; then
+    sleep "$cycle_remaining"
+  fi
 done

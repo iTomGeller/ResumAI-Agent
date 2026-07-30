@@ -1022,6 +1022,67 @@ def test_malformed_native_final_repairs_through_provider_json_mode():
     assert invocations[1]["hasProtocolFrames"] is False
 
 
+class _DoubleMalformedThenValidLlm:
+    def __init__(self):
+        self.turn = 0
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.turn += 1
+        if self.turn == 1:
+            return LlmTurn(
+                content="", tool_calls=[LlmToolCall(
+                    tool_call_id="first-malformed", name="emit_decision",
+                    arguments={}, raw_arguments='{"output":',
+                    arguments_error="unexpected end")],
+                finish_reason="tool_calls")
+        if self.turn == 2:
+            return LlmTurn(
+                content="not-json-after-first-repair",
+                finish_reason="json_repair")
+        decision = {
+            "thought": "second conditional repair succeeded",
+            "output": {
+                "summary": "double malformed output recovered",
+                "claims": [], "evidence": [], "confidence": 0.75,
+            },
+            "done": True,
+        }
+        return LlmTurn(
+            content=json.dumps(decision), finish_reason="json_repair")
+
+
+def test_single_pass_allows_second_conditional_json_repair():
+    request = AgentRunRequest(
+        runId="r-double-json-repair", conversationId="c-double-json-repair",
+        traceId="t-double-json-repair", runType="full_evaluation",
+        resumeText="安全开发工程师\nJava Spring Security",
+        jobDescription="安全开发工程师")
+    llm = _DoubleMalformedThenValidLlm()
+    emitter = NullEmitter(
+        request.runId, request.conversationId, request.traceId)
+    executor = RunExecutor(
+        request, emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    executor.budget_plan["TechAgent"] = {
+        "llmQuota": 2, "actionTurnQuota": 0, "toolQuota": 0}
+    executor.state.apply_artifacts({
+        "resumeFacts": {"skills": ["Java", "Spring Security"]}})
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("TechAgent")))
+
+    assert output.summary == "double malformed output recovered"
+    assert llm.turn == 3
+    reallocations = [
+        event for event in emitter.events
+        if event["eventType"] == "run.progress"
+        and event["payload"].get("stage") == "budget_reallocated"]
+    assert len(reallocations) == 1
+    assert reallocations[0]["payload"]["borrowedRepairTurns"] == 1
+
+
 class _ReportFinalizationLlm:
     def __init__(self):
         self.turn = 0

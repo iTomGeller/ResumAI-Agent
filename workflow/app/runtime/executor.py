@@ -1682,10 +1682,12 @@ class RunExecutor:
         max_decision_iterations = min(
             definition.max_iterations, self.policy.maxIterationsPerAgent)
         if single_pass_evaluation:
-            # Normal path is still one decision. Keep a second decision slot
-            # solely as a malformed-native-final repair allowance; it consumes
-            # no call unless the provider's structured arguments fail schema.
-            max_decision_iterations = 2
+            # Normal path is still one decision. Keep two conditional repair
+            # slots for malformed provider JSON. Under sustained load we have
+            # observed both the native function arguments and the first JSON
+            # repair arrive truncated; the third decision is never consumed
+            # on a valid path and remains governed by the run-wide ledger.
+            max_decision_iterations = 3
         action_turn_ceiling = (
             3 if agent_id == "ProjectAgent"
             and signals.get("has_external_urls") else 2)
@@ -1951,6 +1953,7 @@ class RunExecutor:
                 and single_pass_evaluation
                 else 3600 if definition.agent_id in TERMINAL_AGENTS
                 else 4096)
+            was_json_repair_turn = json_repair_pending
             if json_repair_pending:
                 turn = await self._chat_json_repair_turn(
                     turn_messages, agent_id=agent_id,
@@ -2225,7 +2228,7 @@ class RunExecutor:
                     else f"agent:{agent_id}")
                 can_borrow_repair = (
                     repair_allowed
-                    and bool(final_calls)
+                    and (bool(final_calls) or was_json_repair_turn)
                     and iteration >= max_turns
                     and borrowed_repair_turns < 1
                     and runtime_budget.available_llm_calls_for_scope(
@@ -2245,7 +2248,11 @@ class RunExecutor:
                             "occurredAt": _utc_now(),
                         })
                 if repair_allowed and iteration < max_turns:
-                    json_repair_pending = bool(final_calls)
+                    # Once schema validation fails, stay on the provider's
+                    # JSON-only repair channel. Returning to native function
+                    # arguments after a malformed JSON repair merely repeats
+                    # the truncation mode observed under sustained load.
+                    json_repair_pending = True
                     repair_message = (
                         "上面的输出未通过 json schema 校验："
                         f"{schema_error[:400]}。"
