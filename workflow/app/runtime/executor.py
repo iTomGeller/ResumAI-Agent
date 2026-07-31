@@ -3374,7 +3374,10 @@ class RunExecutor:
         if not isinstance(result, dict):
             return
         chunks: List[Any] = []
-        for key in ("chunks", "results", "hits", "items"):
+        # Prefer structured ranked items when the provider also keeps legacy
+        # string chunks for model compatibility.  This preserves per-result
+        # scores and current-candidate provenance in Ops.
+        for key in ("items", "results", "hits", "chunks"):
             if isinstance(result.get(key), list):
                 chunks = result[key]
                 break
@@ -4433,7 +4436,8 @@ class RunExecutor:
             query = request.userMessage.strip()[:200]
             steps.append(("knowledge_search", {"query": query}))
             if resume:
-                steps.append(("resume_semantic_search", {"query": query}))
+                steps.append(("resume_semantic_search", {
+                    "query": query, "resumeText": resume, "topK": 5}))
         return steps
 
     def _build_knowledge_query(self, agent_id: str, resume: str,

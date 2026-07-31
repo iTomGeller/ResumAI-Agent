@@ -12,7 +12,6 @@ import com.resumai.agent.service.AgentMemoryService;
 import com.resumai.agent.service.HybridRagService;
 import com.resumai.agent.service.InternalWorkflowService;
 import com.resumai.agent.service.JdRagService;
-import com.resumai.agent.service.KnowledgeBaseDocumentService;
 import com.resumai.agent.service.ResumeRagService;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -36,7 +35,6 @@ public class InternalWorkflowController {
     private final HybridRagService hybridRagService;
     private final ExternalProfileService externalProfileService;
     private final SkillProvider skillProvider;
-    private final KnowledgeBaseDocumentService knowledgeBaseDocumentService;
     private final AgentMemoryService agentMemoryService;
 
     public InternalWorkflowController(InternalWorkflowService internalWorkflowService,
@@ -45,7 +43,6 @@ public class InternalWorkflowController {
                                       HybridRagService hybridRagService,
                                       ExternalProfileService externalProfileService,
                                       SkillProvider skillProvider,
-                                      KnowledgeBaseDocumentService knowledgeBaseDocumentService,
                                       AgentMemoryService agentMemoryService) {
         this.internalWorkflowService = internalWorkflowService;
         this.resumeRagService = resumeRagService;
@@ -53,7 +50,6 @@ public class InternalWorkflowController {
         this.hybridRagService = hybridRagService;
         this.externalProfileService = externalProfileService;
         this.skillProvider = skillProvider;
-        this.knowledgeBaseDocumentService = knowledgeBaseDocumentService;
         this.agentMemoryService = agentMemoryService;
     }
 
@@ -67,6 +63,7 @@ public class InternalWorkflowController {
     public Map<String, Object> resumeSearch(@RequestHeader("X-Internal-Token") String token,
                                             @RequestBody InternalResumeSearchRequest request) {
         authorize(token);
+        long started = System.nanoTime();
         int topK = request.topK() != null ? request.topK() : 5;
         ResumeRagService.RagRetrieveResult result = resumeRagService.retrieveDetailed(
                 request.query(), topK, request.resumeText(), request.jdRequirements(), request.strategy());
@@ -75,7 +72,9 @@ public class InternalWorkflowController {
         body.put("hitCount", result.hitCount());
         body.put("topScore", result.topScore());
         body.put("fallbackUsed", result.fallbackUsed());
+        body.put("fallback", result.fallbackUsed());
         body.put("fallbackReason", result.fallbackReason());
+        body.put("fallbackStage", result.fallbackUsed() ? result.strategy() : null);
         body.put("backend", result.backend());
         body.put("strategy", result.strategy());
         body.put("errorType", result.errorType());
@@ -83,18 +82,31 @@ public class InternalWorkflowController {
         body.put("usedResumeTextFallback", result.usedResumeTextFallback());
         Map<String, Object> rerank = rerankChunks(request.query(), result.chunks());
         body.put("selectedChunks", rerank.get("selectedChunks"));
+        body.put("items", rerank.get("items"));
         body.put("usefulnessScore", rerank.get("usefulnessScore"));
+        body.put("topScore", rerank.get("usefulnessScore"));
         body.put("rerankStrategy", rerank.get("rerankStrategy"));
         body.put("rerankScores", rerank.get("rerankScores"));
         // Agentic RAG: explicit, inspectable pipeline + self-reflection on evidence sufficiency
-        // (ReflectiveRAG pattern). Makes it clear this is hybrid + rerank + reflect, not naive embedding.
+        // (ReflectiveRAG pattern). Current-resume retrieval is deliberately
+        // candidate-scoped; dense search is not advertised without a scoped
+        // vector index.
         body.put("ragPipeline", List.of(
-                "hybrid_retrieve(dense=Milvus + lexical=bm25-like)",
-                "rrf_merge",
+                "scope_guard(request_resume_text)",
+                "candidate_recall(section-aware + bm25-like)",
+                "rrf_merge(structural + lexical)",
                 "rerank(overlap-density + length)",
                 "reflect(evidence_sufficiency)"));
         body.put("evidenceSufficiency", rerank.get("evidenceSufficiency"));
-        body.put("knowledgeHits", knowledgeBaseDocumentService.search(request.query(), Math.min(topK, 5)));
+        body.put("candidateCount", result.hitCount());
+        body.put("rerankApplied", true);
+        body.put("rerankProvider", "overlap_density_v2");
+        body.put("source", "current_resume");
+        body.put("indexName", "current_resume");
+        body.put("fusion", result.strategy().contains("rrf")
+                ? "rrf_structural_lexical" : "none");
+        body.put("latencyMs", Math.round(
+                (System.nanoTime() - started) / 1_000_000.0));
         return body;
     }
 
@@ -102,8 +114,9 @@ public class InternalWorkflowController {
         Map<String, Object> out = new LinkedHashMap<>();
         if (chunks == null || chunks.isEmpty()) {
             out.put("selectedChunks", List.of());
+            out.put("items", List.of());
             out.put("usefulnessScore", 0.0);
-            out.put("rerankStrategy", "hybrid_rrf_rerank_reflect");
+            out.put("rerankStrategy", "section_bm25_rrf_rerank_reflect");
             out.put("rerankScores", List.of());
             out.put("evidenceSufficiency", Map.of("sufficient", false, "reason", "no_candidates_retrieved", "action", "fallback_to_resume_text"));
             return out;
@@ -133,6 +146,26 @@ public class InternalWorkflowController {
             selected = scored.stream().map(Map.Entry::getKey).limit(1).toList();
         }
         List<Double> topScores = scored.stream().limit(3).map(e -> Math.round(e.getValue() * 1000.0) / 1000.0).toList();
+        List<Map<String, Object>> items = new java.util.ArrayList<>();
+        int rank = 1;
+        for (Map.Entry<String, Double> entry : scored) {
+            String text = entry.getKey();
+            double rounded = Math.round(entry.getValue() * 10000.0) / 10000.0;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("chunkId", "current_resume#" + Integer.toHexString(text.hashCode()));
+            item.put("documentId", "current_resume");
+            item.put("title", "当前简历证据片段");
+            item.put("source", "current_resume");
+            item.put("content", text);
+            item.put("rank", rank++);
+            item.put("finalScore", rounded);
+            item.put("rerankScore", rounded);
+            item.put("provenance", Map.of(
+                    "documentId", "current_resume",
+                    "scope", "request_resume_text"));
+            items.add(item);
+        }
+        out.put("items", items);
         double usefulness = scored.stream().mapToDouble(Map.Entry::getValue).max().orElse(0.0);
         long usefulCount = scored.stream().filter(e -> e.getValue() >= 0.25).count();
         // Self-reflection: is the retrieved evidence sufficient, or should we flag a fallback?
@@ -147,7 +180,7 @@ public class InternalWorkflowController {
         sufficiency.put("action", sufficient ? "inject_selected_chunks" : "downweight_rag_use_resume_text");
         out.put("selectedChunks", selected);
         out.put("usefulnessScore", usefulness);
-        out.put("rerankStrategy", "hybrid_rrf_rerank_reflect");
+        out.put("rerankStrategy", "section_bm25_rrf_rerank_reflect");
         out.put("rerankScores", topScores);
         out.put("evidenceSufficiency", sufficiency);
         return out;
