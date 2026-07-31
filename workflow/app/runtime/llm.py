@@ -159,7 +159,8 @@ class ResilientLlmClient:
                    use_quality: bool = False,
                    _return_turn: bool = False,
                    budget_scope: str = "",
-                   trace_context: Optional[Dict[str, Any]] = None) -> Any:
+                   trace_context: Optional[Dict[str, Any]] = None,
+                   max_output_tokens_hard: Optional[int] = None) -> Any:
         """LLM chat completion.
 
         The legacy string return remains the default. Native agent loops call
@@ -211,6 +212,8 @@ class ResilientLlmClient:
         delay = 1.5
         last_error: Optional[Exception] = None
         effective_max_tokens = max_tokens
+        output_token_ceiling = max(
+            1, int(max_output_tokens_hard or 8192))
         while attempts <= max_retries:
             attempts += 1
             try:
@@ -256,13 +259,16 @@ class ResilientLlmClient:
                 if json_mode and not tools and finish_reason == "length":
                     # Truncated mid-JSON: the payload can never parse. Retry
                     # once with a doubled output budget before giving up.
-                    if effective_max_tokens < 8192:
-                        effective_max_tokens = min(effective_max_tokens * 2, 8192)
+                    if effective_max_tokens < output_token_ceiling:
+                        effective_max_tokens = min(
+                            effective_max_tokens * 2,
+                            output_token_ceiling)
                         raise LlmError("JSON_TRUNCATED",
                                        f"finish_reason=length at {usage.get('completion_tokens', 0)} tokens",
                                        True)
                     raise LlmError("JSON_TRUNCATED",
-                                   "output exceeds model limit even at 8192", False)
+                                   "output exceeds configured repair limit "
+                                   f"{output_token_ceiling}", False)
                 self.breaker.record_success()
                 prompt_tokens = usage.get("prompt_tokens", 0)
                 completion_tokens = usage.get("completion_tokens", 0)

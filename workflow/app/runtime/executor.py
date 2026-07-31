@@ -1978,26 +1978,50 @@ class RunExecutor:
                 else 3600 if definition.agent_id in TERMINAL_AGENTS
                 else 4096)
             was_json_repair_turn = json_repair_pending
-            if json_repair_pending:
-                turn = await self._chat_json_repair_turn(
-                    turn_messages, agent_id=agent_id,
-                    purpose=definition.output_type,
-                    max_tokens=turn_max_tokens,
-                    use_quality=is_report,
-                    fallback_tool=final_tool,
-                    trace_context=trace_context)
-                json_repair_pending = False
-            else:
-                turn = await self._chat_native_turn(
-                    turn_messages, agent_id=agent_id,
-                    purpose=definition.output_type,
-                    # Full reports routinely exceed 4k tokens because every
-                    # score, risk and interview probe is evidence-bound.
-                    max_tokens=turn_max_tokens,
-                    tools=turn_tools,
-                    tool_choice=tool_choice,
-                    use_quality=is_report,
-                    trace_context=trace_context)
+            try:
+                if json_repair_pending:
+                    repair_max_tokens = (
+                        min(turn_max_tokens, 2400)
+                        if agent_id == "RiskAgent" else turn_max_tokens)
+                    turn = await self._chat_json_repair_turn(
+                        turn_messages, agent_id=agent_id,
+                        purpose=definition.output_type,
+                        max_tokens=repair_max_tokens,
+                        use_quality=is_report,
+                        fallback_tool=final_tool,
+                        trace_context=trace_context)
+                    json_repair_pending = False
+                else:
+                    turn = await self._chat_native_turn(
+                        turn_messages, agent_id=agent_id,
+                        purpose=definition.output_type,
+                        # Full reports routinely exceed 4k tokens because every
+                        # score, risk and interview probe is evidence-bound.
+                        max_tokens=turn_max_tokens,
+                        tools=turn_tools,
+                        tool_choice=tool_choice,
+                        use_quality=is_report,
+                        trace_context=trace_context)
+            except LlmError as exc:
+                if (was_json_repair_turn
+                        and agent_id == "RiskAgent"
+                        and exc.code == "JSON_TRUNCATED"):
+                    note = (
+                        "RiskAgent JSON repair exceeded 2400 tokens; "
+                        "kept deterministic timeline checks and delegated "
+                        "grounded risk synthesis to ReportAgent")
+                    self.failure_notes.append(note)
+                    await self.emitter.emit(
+                        "run.progress", agent_id=agent_id, payload={
+                            "stage": "specialist_repair_compacted",
+                            "reason": "risk_json_repair_truncated",
+                            "error": str(exc)[:240],
+                            "occurredAt": _utc_now(),
+                        })
+                    output = self._build_output(
+                        definition, None, tool_results_block)
+                    break
+                raise
             agent_llm_calls += 1
             raw = turn.content
             final_calls: List[Any] = []
@@ -2456,6 +2480,10 @@ class RunExecutor:
             if "trace_context" in inspect.signature(
                     self.llm.chat).parameters:
                 kwargs["trace_context"] = trace_context
+            if (agent_id == "RiskAgent"
+                    and "max_output_tokens_hard" in inspect.signature(
+                        self.llm.chat).parameters):
+                kwargs["max_output_tokens_hard"] = max_tokens
             raw = await self.llm.chat(
                 self._json_only_messages(messages), **kwargs)
             return LlmTurn(
