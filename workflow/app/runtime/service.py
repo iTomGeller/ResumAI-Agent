@@ -194,6 +194,12 @@ async def _execute_run(handle: _AgentRunHandle) -> None:
             "errorCode": "RUNTIME_CRASH",
             "errorMessage": str(exc)[:600],
         })
+    finally:
+        try:
+            await emitter.aclose()
+        except Exception as exc:  # noqa: BLE001 - transport cleanup only
+            logger.warning("run emitter close failed run=%s: %s",
+                           request.runId, exc)
 
 
 @router.post("/agent/runs")

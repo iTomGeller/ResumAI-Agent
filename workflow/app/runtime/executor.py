@@ -997,10 +997,10 @@ class RunExecutor:
             # new conflict / handoff / group failure / low confidence.
             await self._maybe_replan(coordinator, ok, conflicts_before)
 
-            # Group-boundary checkpoint (fire-and-forget): a later FAILED /
-            # TIMED_OUT run can be retried from here, skipping finished work.
-            asyncio.ensure_future(
-                self.emitter.save_checkpoint(self.export_snapshot()))
+            # Group-boundary checkpoint: persist before advancing so the
+            # per-run emitter connection can be closed without racing a
+            # detached HTTP task, and a later retry never loses this boundary.
+            await self.emitter.save_checkpoint(self.export_snapshot())
 
         if not self.final_answer:
             self.degraded_reasons.append("no_terminal_answer")

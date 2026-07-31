@@ -1,0 +1,1920 @@
+[
+  {
+    "resumeId": "senior_backend_001",
+    "runId": "run-ad8152fb-ccf7-4ee5-a699-5f6f5d9d83a7",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 96936,
+    "durationMs": 96953,
+    "metrics": {
+      "costCny": 0.0772,
+      "llmCalls": 12,
+      "llmBudget": {
+        "used": 12,
+        "limit": 17,
+        "remaining": 5,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 4,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 5
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 69350,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 37994,
+        "TechAgent": 38019,
+        "ReportAgent": 42079,
+        "ProjectAgent": 38005,
+        "EvidenceAgent": 15890
+      },
+      "latencySeconds": 96.9,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 15575,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.525,
+      "logicalAgentLlmTurns": 12,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 25856
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_002",
+    "runId": "run-f3acc43a-39e0-4190-b831-cb9d53d0087f",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 86924,
+    "durationMs": 86941,
+    "metrics": {
+      "costCny": 0.0885,
+      "llmCalls": 13,
+      "llmBudget": {
+        "used": 13,
+        "limit": 17,
+        "remaining": 4,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 3,
+          "agent:ProjectAgent": 4,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 4
+      },
+      "toolCalls": 12,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 74361,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 44542,
+        "TechAgent": 44559,
+        "ReportAgent": 22642,
+        "ProjectAgent": 44551,
+        "EvidenceAgent": 18763
+      },
+      "latencySeconds": 86.89,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 17184,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.655,
+      "logicalAgentLlmTurns": 13,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 22528
+    },
+    "notableEvents": [
+      {
+        "seq": 108,
+        "eventType": "run.progress",
+        "agentId": "ProjectAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      }
+    ],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_003",
+    "runId": "run-4a966b9a-bf2c-421f-b51b-253d201cda50",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 15,
+    "runtimeMs": 94253,
+    "durationMs": 94268,
+    "metrics": {
+      "costCny": 0.0999,
+      "llmCalls": 12,
+      "llmBudget": {
+        "used": 12,
+        "limit": 17,
+        "remaining": 5,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 3
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 5
+      },
+      "toolCalls": 13,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 84718,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 34212,
+        "TechAgent": 34226,
+        "ReportAgent": 22190,
+        "ProjectAgent": 34219,
+        "EvidenceAgent": 36968
+      },
+      "latencySeconds": 94.22,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 17073,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.58,
+      "logicalAgentLlmTurns": 12,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 21120
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_004",
+    "runId": "run-ac382d9c-81f2-49b8-947d-a976cc2ddd45",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 19,
+    "runtimeMs": 63543,
+    "durationMs": 63562,
+    "metrics": {
+      "costCny": 0.0632,
+      "llmCalls": 10,
+      "llmBudget": {
+        "used": 10,
+        "limit": 17,
+        "remaining": 7,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 7
+      },
+      "toolCalls": 10,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 54352,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 29487,
+        "TechAgent": 29503,
+        "ReportAgent": 23960,
+        "ProjectAgent": 29495,
+        "EvidenceAgent": 9211
+      },
+      "latencySeconds": 63.5,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 12496,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.63,
+      "logicalAgentLlmTurns": 10,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 17920
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_005",
+    "runId": "run-cbb76693-8c50-4870-a7a2-1f7dc14c0c9c",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 16,
+    "runtimeMs": 61981,
+    "durationMs": 61997,
+    "metrics": {
+      "costCny": 0.0812,
+      "llmCalls": 11,
+      "llmBudget": {
+        "used": 11,
+        "limit": 17,
+        "remaining": 6,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 6
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 68909,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 27185,
+        "TechAgent": 27200,
+        "ReportAgent": 25095,
+        "ProjectAgent": 27192,
+        "EvidenceAgent": 8717
+      },
+      "latencySeconds": 61.95,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 14918,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.718,
+      "logicalAgentLlmTurns": 11,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 19456
+    },
+    "notableEvents": [
+      {
+        "seq": 100,
+        "eventType": "run.progress",
+        "agentId": "RiskAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      }
+    ],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_006",
+    "runId": "run-9adcb2ab-1244-47f9-90db-79015153db71",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 71900,
+    "durationMs": 71917,
+    "metrics": {
+      "costCny": 0.0856,
+      "llmCalls": 11,
+      "llmBudget": {
+        "used": 11,
+        "limit": 17,
+        "remaining": 6,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 6
+      },
+      "toolCalls": 12,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 74609,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 27215,
+        "TechAgent": 27230,
+        "ReportAgent": 21946,
+        "ProjectAgent": 27223,
+        "EvidenceAgent": 21802
+      },
+      "latencySeconds": 71.85,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 14604,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.632,
+      "logicalAgentLlmTurns": 11,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 20224
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_007",
+    "runId": "run-07bfe199-c678-496b-a873-de8335380c13",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 18,
+    "runtimeMs": 63087,
+    "durationMs": 63105,
+    "metrics": {
+      "costCny": 0.0692,
+      "llmCalls": 11,
+      "llmBudget": {
+        "used": 11,
+        "limit": 17,
+        "remaining": 6,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 6
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 58382,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 26329,
+        "TechAgent": 26346,
+        "ReportAgent": 24316,
+        "ProjectAgent": 26338,
+        "EvidenceAgent": 11409
+      },
+      "latencySeconds": 63.05,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 13757,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.696,
+      "logicalAgentLlmTurns": 11,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 18560
+    },
+    "notableEvents": [
+      {
+        "seq": 101,
+        "eventType": "run.progress",
+        "agentId": "RiskAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      }
+    ],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_008",
+    "runId": "run-93cd4890-1cab-4518-9580-b678e1f24336",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 65974,
+    "durationMs": 65991,
+    "metrics": {
+      "costCny": 0.0725,
+      "llmCalls": 10,
+      "llmBudget": {
+        "used": 10,
+        "limit": 17,
+        "remaining": 7,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 7
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 63812,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 30070,
+        "TechAgent": 30085,
+        "ReportAgent": 24266,
+        "ProjectAgent": 30077,
+        "EvidenceAgent": 10782
+      },
+      "latencySeconds": 65.94,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 12396,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.653,
+      "logicalAgentLlmTurns": 10,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 17920
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_009",
+    "runId": "run-49f56042-daeb-44b3-aa71-c09bc62f57ac",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 18,
+    "runtimeMs": 86209,
+    "durationMs": 86227,
+    "metrics": {
+      "costCny": 0.0752,
+      "llmCalls": 11,
+      "llmBudget": {
+        "used": 11,
+        "limit": 17,
+        "remaining": 6,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 6
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 63212,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 36661,
+        "TechAgent": 36678,
+        "ReportAgent": 28294,
+        "ProjectAgent": 36669,
+        "EvidenceAgent": 20295
+      },
+      "latencySeconds": 86.16,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 14970,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.768,
+      "logicalAgentLlmTurns": 11,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 19968
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_010",
+    "runId": "run-07d83d6f-0cfe-41d3-b22a-ea9c53839909",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 69019,
+    "durationMs": 69036,
+    "metrics": {
+      "costCny": 0.0694,
+      "llmCalls": 10,
+      "llmBudget": {
+        "used": 10,
+        "limit": 17,
+        "remaining": 7,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 7
+      },
+      "toolCalls": 12,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 62956,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 31871,
+        "TechAgent": 31886,
+        "ReportAgent": 24755,
+        "ProjectAgent": 31879,
+        "EvidenceAgent": 11520
+      },
+      "latencySeconds": 68.99,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 10828,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.733,
+      "logicalAgentLlmTurns": 10,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 16896
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_011",
+    "runId": "run-e0c2feff-e034-4815-8c95-6ae1e047c99a",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 135065,
+    "durationMs": 135082,
+    "metrics": {
+      "costCny": 0.0692,
+      "llmCalls": 10,
+      "llmBudget": {
+        "used": 10,
+        "limit": 17,
+        "remaining": 7,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 2,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 2,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 7
+      },
+      "toolCalls": 12,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 55230,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 18848,
+        "TechAgent": 18863,
+        "ReportAgent": 91898,
+        "ProjectAgent": 18855,
+        "EvidenceAgent": 23456
+      },
+      "latencySeconds": 135.03,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 12752,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.528,
+      "logicalAgentLlmTurns": 9,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 12800
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "senior_backend_012",
+    "runId": "run-f6a8f686-51a8-4a61-b721-3ec885fe4991",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 67068,
+    "durationMs": 67085,
+    "metrics": {
+      "costCny": 0.0656,
+      "llmCalls": 10,
+      "llmBudget": {
+        "used": 10,
+        "limit": 17,
+        "remaining": 7,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 7
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 55645,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 31688,
+        "TechAgent": 31705,
+        "ReportAgent": 22819,
+        "ProjectAgent": 31697,
+        "EvidenceAgent": 11682
+      },
+      "latencySeconds": 67.03,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 13190,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.667,
+      "logicalAgentLlmTurns": 10,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 18304
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_013",
+    "runId": "run-dc0747d1-f921-4c25-9897-ec93219760fa",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 18,
+    "runtimeMs": 102163,
+    "durationMs": 102181,
+    "metrics": {
+      "costCny": 0.0647,
+      "llmCalls": 9,
+      "llmBudget": {
+        "used": 9,
+        "limit": 17,
+        "remaining": 8,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 1,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 8
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 49743,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 32016,
+        "TechAgent": 32031,
+        "ReportAgent": 57310,
+        "ProjectAgent": 32024,
+        "EvidenceAgent": 11788
+      },
+      "latencySeconds": 102.12,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 12696,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.524,
+      "logicalAgentLlmTurns": 9,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 11648
+    },
+    "notableEvents": [
+      {
+        "seq": 96,
+        "eventType": "run.progress",
+        "agentId": "ProjectAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      }
+    ],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_014",
+    "runId": "run-cdcf89c3-ffda-43e6-b8de-ab4ba929c5de",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 74887,
+    "durationMs": 74904,
+    "metrics": {
+      "costCny": 0.0972,
+      "llmCalls": 12,
+      "llmBudget": {
+        "used": 12,
+        "limit": 17,
+        "remaining": 5,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 5
+      },
+      "toolCalls": 13,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 82917,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 31205,
+        "TechAgent": 31221,
+        "ReportAgent": 24109,
+        "ProjectAgent": 31213,
+        "EvidenceAgent": 18635
+      },
+      "latencySeconds": 74.84,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 15681,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.696,
+      "logicalAgentLlmTurns": 12,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 18944
+    },
+    "notableEvents": [
+      {
+        "seq": 106,
+        "eventType": "run.progress",
+        "agentId": "RiskAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      }
+    ],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_015",
+    "runId": "run-ea6f99d8-c0f8-4786-94af-31c92c924078",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 54469,
+    "durationMs": 54486,
+    "metrics": {
+      "costCny": 0.0721,
+      "llmCalls": 10,
+      "llmBudget": {
+        "used": 10,
+        "limit": 17,
+        "remaining": 7,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 7
+      },
+      "toolCalls": 12,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 64789,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 26806,
+        "TechAgent": 26830,
+        "ReportAgent": 20625,
+        "ProjectAgent": 26822,
+        "EvidenceAgent": 6096
+      },
+      "latencySeconds": 54.42,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 11279,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.429,
+      "logicalAgentLlmTurns": 10,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 16896
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_016",
+    "runId": "run-8bad2290-b609-4f67-8580-00a21f0565dc",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 15,
+    "runtimeMs": 99826,
+    "durationMs": 99841,
+    "metrics": {
+      "costCny": 0.0782,
+      "llmCalls": 13,
+      "llmBudget": {
+        "used": 13,
+        "limit": 17,
+        "remaining": 4,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 4,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 4
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 71901,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 34004,
+        "TechAgent": 34022,
+        "ReportAgent": 45570,
+        "ProjectAgent": 34013,
+        "EvidenceAgent": 19290
+      },
+      "latencySeconds": 99.79,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 15549,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.468,
+      "logicalAgentLlmTurns": 13,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 27520
+    },
+    "notableEvents": [
+      {
+        "seq": 99,
+        "eventType": "run.progress",
+        "agentId": "RiskAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      }
+    ],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_017",
+    "runId": "run-a55d6d12-7ef2-4ae0-bb74-9034201e9147",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 76274,
+    "durationMs": 76291,
+    "metrics": {
+      "costCny": 0.0715,
+      "llmCalls": 12,
+      "llmBudget": {
+        "used": 12,
+        "limit": 17,
+        "remaining": 5,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 4,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 5
+      },
+      "toolCalls": 10,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 61327,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 45080,
+        "TechAgent": 45098,
+        "ReportAgent": 21885,
+        "ProjectAgent": 45089,
+        "EvidenceAgent": 8401
+      },
+      "latencySeconds": 76.22,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 14228,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.75,
+      "logicalAgentLlmTurns": 12,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 20352
+    },
+    "notableEvents": [
+      {
+        "seq": 91,
+        "eventType": "run.progress",
+        "agentId": "RiskAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      },
+      {
+        "seq": 107,
+        "eventType": "run.progress",
+        "agentId": "ProjectAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      }
+    ],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_019",
+    "runId": "run-797e840e-004c-4382-8ef7-592803755474",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 74890,
+    "durationMs": 74907,
+    "metrics": {
+      "costCny": 0.0908,
+      "llmCalls": 11,
+      "llmBudget": {
+        "used": 11,
+        "limit": 17,
+        "remaining": 6,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 6
+      },
+      "toolCalls": 13,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 78452,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 27111,
+        "TechAgent": 27126,
+        "ReportAgent": 23563,
+        "ProjectAgent": 27118,
+        "EvidenceAgent": 23351
+      },
+      "latencySeconds": 74.85,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 15042,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.51,
+      "logicalAgentLlmTurns": 11,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 19712
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_020",
+    "runId": "run-862a435e-5a64-4d5d-995e-722915d6a791",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 16,
+    "runtimeMs": 60698,
+    "durationMs": 60714,
+    "metrics": {
+      "costCny": 0.0622,
+      "llmCalls": 11,
+      "llmBudget": {
+        "used": 11,
+        "limit": 17,
+        "remaining": 6,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 6
+      },
+      "toolCalls": 10,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 56033,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 25580,
+        "TechAgent": 25598,
+        "ReportAgent": 24048,
+        "ProjectAgent": 25590,
+        "EvidenceAgent": 10174
+      },
+      "latencySeconds": 60.65,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 11053,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.543,
+      "logicalAgentLlmTurns": 11,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 17664
+    },
+    "notableEvents": [
+      {
+        "seq": 94,
+        "eventType": "run.progress",
+        "agentId": "RiskAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      }
+    ],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_021",
+    "runId": "run-a06870c8-4b53-4220-8fb4-5423e724bac4",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 16,
+    "runtimeMs": 58325,
+    "durationMs": 58341,
+    "metrics": {
+      "costCny": 0.062,
+      "llmCalls": 10,
+      "llmBudget": {
+        "used": 10,
+        "limit": 17,
+        "remaining": 7,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 7
+      },
+      "toolCalls": 10,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 53652,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 24113,
+        "TechAgent": 24132,
+        "ReportAgent": 20880,
+        "ProjectAgent": 24124,
+        "EvidenceAgent": 12455
+      },
+      "latencySeconds": 58.28,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 11891,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.673,
+      "logicalAgentLlmTurns": 10,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 17152
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_018",
+    "runId": "run-bc5c2500-6286-4638-b2bb-a261499dc692",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 16,
+    "runtimeMs": 120562,
+    "durationMs": 120578,
+    "metrics": {
+      "costCny": 0.0552,
+      "llmCalls": 9,
+      "llmBudget": {
+        "used": 9,
+        "limit": 17,
+        "remaining": 8,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 2,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 2,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 8
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 45085,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 18831,
+        "TechAgent": 18848,
+        "ReportAgent": 88730,
+        "ProjectAgent": 18840,
+        "EvidenceAgent": 12113
+      },
+      "latencySeconds": 120.53,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 9962,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.757,
+      "logicalAgentLlmTurns": 8,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 10880
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "llm_rag_engineer_024",
+    "runId": "run-d856ad74-e596-4d22-b480-6cb8d941d4ad",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 23,
+    "runtimeMs": 58037,
+    "durationMs": 58060,
+    "metrics": {
+      "costCny": 0.0665,
+      "llmCalls": 10,
+      "llmBudget": {
+        "used": 10,
+        "limit": 17,
+        "remaining": 7,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 7
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 62275,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 23149,
+        "TechAgent": 23164,
+        "ReportAgent": 23849,
+        "ProjectAgent": 23157,
+        "EvidenceAgent": 10120
+      },
+      "latencySeconds": 58.0,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 9728,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.451,
+      "logicalAgentLlmTurns": 10,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 16896
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "llm_rag_engineer_023",
+    "runId": "run-01a728d4-1427-4887-8e27-fc7ab8d9fc28",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 19,
+    "runtimeMs": 83011,
+    "durationMs": 83030,
+    "metrics": {
+      "costCny": 0.0763,
+      "llmCalls": 11,
+      "llmBudget": {
+        "used": 11,
+        "limit": 17,
+        "remaining": 6,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 6
+      },
+      "toolCalls": 11,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 62696,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 39423,
+        "TechAgent": 39441,
+        "ReportAgent": 23045,
+        "ProjectAgent": 39432,
+        "EvidenceAgent": 19634
+      },
+      "latencySeconds": 82.97,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 15803,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.6,
+      "logicalAgentLlmTurns": 11,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 19968
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "ai_agent_engineer_022",
+    "runId": "run-71ca917d-cd02-4ccd-82ec-6b87532c4f53",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 15,
+    "runtimeMs": 101152,
+    "durationMs": 101167,
+    "metrics": {
+      "costCny": 0.0404,
+      "llmCalls": 6,
+      "llmBudget": {
+        "used": 6,
+        "limit": 17,
+        "remaining": 11,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 1,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:EvidenceAgent": 1
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 11
+      },
+      "toolCalls": 9,
+      "agentsUsed": [
+        "TechAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 30431,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 19778,
+        "TechAgent": 19787,
+        "ReportAgent": 72210,
+        "EvidenceAgent": 8364
+      },
+      "latencySeconds": 101.11,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 9039,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.727,
+      "logicalAgentLlmTurns": 6,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 8960
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "llm_rag_engineer_027",
+    "runId": "run-3709ea48-b445-434b-bb2d-c1756b5f9d29",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 20,
+    "runtimeMs": 71699,
+    "durationMs": 71719,
+    "metrics": {
+      "costCny": 0.0844,
+      "llmCalls": 11,
+      "llmBudget": {
+        "used": 11,
+        "limit": 17,
+        "remaining": 6,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 3,
+          "agent:RiskAgent": 1,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 6
+      },
+      "toolCalls": 12,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 74716,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 26298,
+        "TechAgent": 26313,
+        "ReportAgent": 22642,
+        "ProjectAgent": 26305,
+        "EvidenceAgent": 21810
+      },
+      "latencySeconds": 71.66,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 13717,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.552,
+      "logicalAgentLlmTurns": 11,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 19712
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "llm_rag_engineer_025",
+    "runId": "run-37b77c33-bf69-46c9-903a-e3896bed1c5f",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 17,
+    "runtimeMs": 121682,
+    "durationMs": 121699,
+    "metrics": {
+      "costCny": 0.0775,
+      "llmCalls": 10,
+      "llmBudget": {
+        "used": 10,
+        "limit": 17,
+        "remaining": 7,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 1,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:ProjectAgent": 3,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 7
+      },
+      "toolCalls": 12,
+      "agentsUsed": [
+        "TechAgent",
+        "ProjectAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 60820,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 25448,
+        "TechAgent": 25463,
+        "ReportAgent": 75504,
+        "ProjectAgent": 25455,
+        "EvidenceAgent": 19842
+      },
+      "latencySeconds": 121.64,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 14334,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.737,
+      "logicalAgentLlmTurns": 10,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 13312
+    },
+    "notableEvents": [
+      {
+        "seq": 98,
+        "eventType": "run.progress",
+        "agentId": "ProjectAgent",
+        "stage": "budget_reallocated",
+        "error": ""
+      }
+    ],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "llm_rag_engineer_026",
+    "runId": "run-da7343e5-665f-485e-8335-c8a37a8014b5",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 19,
+    "runtimeMs": 126655,
+    "durationMs": 126674,
+    "metrics": {
+      "costCny": 0.0484,
+      "llmCalls": 8,
+      "llmBudget": {
+        "used": 8,
+        "limit": 17,
+        "remaining": 9,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 2,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 9
+      },
+      "toolCalls": 10,
+      "agentsUsed": [
+        "TechAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 38223,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 16698,
+        "TechAgent": 16710,
+        "ReportAgent": 92410,
+        "EvidenceAgent": 16754
+      },
+      "latencySeconds": 126.62,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 9866,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.7,
+      "logicalAgentLlmTurns": 7,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 10624
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  },
+  {
+    "resumeId": "llm_rag_engineer_028",
+    "runId": "run-23fa123e-2830-4fc1-8737-404fe04b0b22",
+    "status": "SUCCEEDED",
+    "queueWaitMs": 22,
+    "runtimeMs": 122965,
+    "durationMs": 122987,
+    "metrics": {
+      "costCny": 0.0474,
+      "llmCalls": 8,
+      "llmBudget": {
+        "used": 8,
+        "limit": 17,
+        "remaining": 9,
+        "scopeLimits": {
+          "control": 0
+        },
+        "callsByScope": {
+          "terminal": 2,
+          "agent:RiskAgent": 2,
+          "agent:TechAgent": 2,
+          "agent:EvidenceAgent": 2
+        },
+        "reservations": {
+          "control": 0,
+          "terminal": 3
+        },
+        "agentAssignableRemaining": 9
+      },
+      "toolCalls": 10,
+      "agentsUsed": [
+        "TechAgent",
+        "RiskAgent",
+        "EvidenceAgent",
+        "ReportAgent"
+      ],
+      "jdCoverage": 1.0,
+      "promptTokens": 37417,
+      "toolFailures": 0,
+      "agentTimingsMs": {
+        "RiskAgent": 16818,
+        "TechAgent": 16830,
+        "ReportAgent": 88707,
+        "EvidenceAgent": 16451
+      },
+      "latencySeconds": 122.92,
+      "loopGuardTrips": {},
+      "degradedReasons": [],
+      "completionTokens": 9466,
+      "contextCompactions": 0,
+      "duplicateSignatures": 0,
+      "evidenceSupportRatio": 0.818,
+      "logicalAgentLlmTurns": 7,
+      "missingGoalArtifacts": [],
+      "promptCacheHitTokens": 9984
+    },
+    "notableEvents": [],
+    "eventsTruncated": false,
+    "errors": [
+      null,
+      null
+    ]
+  }
+]

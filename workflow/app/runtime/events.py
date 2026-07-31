@@ -61,6 +61,37 @@ class RuntimeEmitter:
         self.conversation_id = conversation_id
         self.trace_id = trace_id
         self._base = settings.java_backend_url.rstrip("/")
+        # A trace emits hundreds of events. Reusing one per-run connection
+        # pool avoids creating a fresh TCP client for every event while still
+        # keeping lifecycle and cancellation ownership explicit.
+        self._client: Optional[httpx.AsyncClient] = None
+        # Python 3.8 binds asyncio.Lock at construction time. Emitters are
+        # also instantiated by synchronous planners/tests, so create the lock
+        # lazily inside the loop that performs the first network operation.
+        self._client_lock: Optional[asyncio.Lock] = None
+
+    def _lock(self) -> asyncio.Lock:
+        if self._client_lock is None:
+            self._client_lock = asyncio.Lock()
+        return self._client_lock
+
+    async def _http_client(self) -> httpx.AsyncClient:
+        async with self._lock():
+            if self._client is None or self._client.is_closed:
+                self._client = httpx.AsyncClient(
+                    limits=httpx.Limits(
+                        max_connections=8,
+                        max_keepalive_connections=4,
+                        keepalive_expiry=30.0,
+                    ))
+            return self._client
+
+    async def aclose(self) -> None:
+        async with self._lock():
+            client = self._client
+            self._client = None
+        if client is not None and not client.is_closed:
+            await client.aclose()
 
     async def emit(self, event_type: str, *, agent_id: Optional[str] = None,
                    tool_name: Optional[str] = None,
@@ -94,8 +125,9 @@ class RuntimeEmitter:
         delay = 1.0
         for attempt in range(1, attempts + 1):
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(url, json=body, headers=_headers())
+                client = await self._http_client()
+                response = await client.post(
+                    url, json=body, headers=_headers(), timeout=timeout)
                 if response.status_code < 400:
                     return True
                 retryable = response.status_code == 429 or response.status_code >= 500
@@ -122,6 +154,7 @@ class NullEmitter(RuntimeEmitter):
         super().__init__(run_id, conversation_id, trace_id)
         self.events: list[Dict[str, Any]] = []
         self.result: Optional[Dict[str, Any]] = None
+        self.checkpoints: list[Dict[str, Any]] = []
 
     async def emit(self, event_type: str, *, agent_id: Optional[str] = None,
                    tool_name: Optional[str] = None,
@@ -135,4 +168,8 @@ class NullEmitter(RuntimeEmitter):
 
     async def emit_result(self, result: Dict[str, Any]) -> bool:
         self.result = result
+        return True
+
+    async def save_checkpoint(self, snapshot: Dict[str, Any]) -> bool:
+        self.checkpoints.append(snapshot)
         return True

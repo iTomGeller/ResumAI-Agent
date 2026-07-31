@@ -1,0 +1,396 @@
+{
+  "profile": [
+    {
+      "sequence": 1,
+      "phase": "warmup",
+      "targetQps": 0.02,
+      "scheduledOffsetS": 0.0
+    },
+    {
+      "sequence": 2,
+      "phase": "warmup",
+      "targetQps": 0.026666666666666665,
+      "scheduledOffsetS": 50.0
+    },
+    {
+      "sequence": 3,
+      "phase": "warmup",
+      "targetQps": 0.03333333333333333,
+      "scheduledOffsetS": 87.5
+    },
+    {
+      "sequence": 4,
+      "phase": "warmup",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 117.5
+    },
+    {
+      "sequence": 5,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 142.5
+    },
+    {
+      "sequence": 6,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 167.5
+    },
+    {
+      "sequence": 7,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 192.5
+    },
+    {
+      "sequence": 8,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 217.5
+    },
+    {
+      "sequence": 9,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 242.5
+    },
+    {
+      "sequence": 10,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 267.5
+    },
+    {
+      "sequence": 11,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 292.5
+    },
+    {
+      "sequence": 12,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 317.5
+    },
+    {
+      "sequence": 13,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 342.5
+    },
+    {
+      "sequence": 14,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 367.5
+    },
+    {
+      "sequence": 15,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 392.5
+    },
+    {
+      "sequence": 16,
+      "phase": "steady_004",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 417.5
+    },
+    {
+      "sequence": 17,
+      "phase": "overload_005",
+      "targetQps": 0.05,
+      "scheduledOffsetS": 442.5
+    },
+    {
+      "sequence": 18,
+      "phase": "overload_005",
+      "targetQps": 0.05,
+      "scheduledOffsetS": 462.5
+    },
+    {
+      "sequence": 19,
+      "phase": "overload_005",
+      "targetQps": 0.05,
+      "scheduledOffsetS": 482.5
+    },
+    {
+      "sequence": 20,
+      "phase": "overload_005",
+      "targetQps": 0.05,
+      "scheduledOffsetS": 502.5
+    },
+    {
+      "sequence": 21,
+      "phase": "overload_005",
+      "targetQps": 0.05,
+      "scheduledOffsetS": 522.5
+    },
+    {
+      "sequence": 22,
+      "phase": "overload_005",
+      "targetQps": 0.05,
+      "scheduledOffsetS": 542.5
+    },
+    {
+      "sequence": 23,
+      "phase": "overload_005",
+      "targetQps": 0.05,
+      "scheduledOffsetS": 562.5
+    },
+    {
+      "sequence": 24,
+      "phase": "overload_005",
+      "targetQps": 0.05,
+      "scheduledOffsetS": 582.5
+    },
+    {
+      "sequence": 25,
+      "phase": "cooldown",
+      "targetQps": 0.04,
+      "scheduledOffsetS": 602.5
+    },
+    {
+      "sequence": 26,
+      "phase": "cooldown",
+      "targetQps": 0.03333333333333333,
+      "scheduledOffsetS": 627.5
+    },
+    {
+      "sequence": 27,
+      "phase": "cooldown",
+      "targetQps": 0.02666666666666667,
+      "scheduledOffsetS": 657.5
+    },
+    {
+      "sequence": 28,
+      "phase": "cooldown",
+      "targetQps": 0.02,
+      "scheduledOffsetS": 695.0
+    }
+  ],
+  "offeredRequests": 28,
+  "successfulUploads": 28,
+  "uploadFailures": 0,
+  "achievedIngressQps": 0.0402,
+  "issueDurationS": 695.672,
+  "drainDurationS": 139.662,
+  "completionThroughputPerSecond": 0.0335,
+  "phaseMetrics": {
+    "warmup": {
+      "requests": 4,
+      "successfulUploads": 4,
+      "achievedQps": 0.0255,
+      "uploadP95Ms": 305.79999999999995
+    },
+    "steady_004": {
+      "requests": 12,
+      "successfulUploads": 12,
+      "achievedQps": 0.04,
+      "uploadP95Ms": 379.09999999999997
+    },
+    "overload_005": {
+      "requests": 8,
+      "successfulUploads": 8,
+      "achievedQps": 0.05,
+      "uploadP95Ms": 2261.5999999999995
+    },
+    "cooldown": {
+      "requests": 4,
+      "successfulUploads": 4,
+      "achievedQps": 0.0325,
+      "uploadP95Ms": 1388.5499999999997
+    }
+  },
+  "uploadLatencyMs": {
+    "p50": 304.0,
+    "p95": 1438.6999999999998,
+    "p99": 2439.1800000000003,
+    "max": 2781
+  },
+  "terminalStatus": {
+    "SUCCESS": 28
+  },
+  "endToEndLatencyMs": {
+    "p50": 316857.5,
+    "p95": 633726.45,
+    "p99": 683357.46,
+    "max": 696858
+  },
+  "agentRuntime": {
+    "runsCollected": 28,
+    "runMetricErrors": 0,
+    "routeSignatures": {
+      "TechAgent -> ProjectAgent -> RiskAgent -> EvidenceAgent -> ReportAgent": 25,
+      "TechAgent -> RiskAgent -> EvidenceAgent -> ReportAgent": 3
+    },
+    "agentUsage": {
+      "TechAgent": 28,
+      "ProjectAgent": 25,
+      "RiskAgent": 28,
+      "EvidenceAgent": 28,
+      "ReportAgent": 28
+    },
+    "agentLatencyMs": {
+      "RiskAgent": {
+        "p50": 30718.5,
+        "p95": 42651.59999999999,
+        "p99": 45911.880000000005,
+        "max": 46602.0
+      },
+      "ProjectAgent": {
+        "p50": 32032.0,
+        "p95": 43256.79999999999,
+        "p99": 45996.31999999999,
+        "max": 46610.0
+      },
+      "TechAgent": {
+        "p50": 30736.0,
+        "p95": 42667.99999999999,
+        "p99": 45928.340000000004,
+        "max": 46619.0
+      },
+      "EvidenceAgent": {
+        "p50": 17900.0,
+        "p95": 24354.449999999997,
+        "p99": 26393.940000000002,
+        "max": 26766.0
+      },
+      "ReportAgent": {
+        "p50": 24555.5,
+        "p95": 93024.3,
+        "p99": 103141.47,
+        "max": 106689.0
+      },
+      "MemoryService": {
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      }
+    },
+    "runLatencyMs": {
+      "queueWait": {
+        "p50": 18.0,
+        "p95": 20.65,
+        "p99": 21.73,
+        "max": 22.0
+      },
+      "runtime": {
+        "p50": 78813.5,
+        "p95": 136059.44999999998,
+        "p99": 145703.68,
+        "max": 148759.0
+      }
+    },
+    "llm": {
+      "calls": 284,
+      "failures": 2,
+      "latencyMs": {
+        "p50": 12707.0,
+        "p95": 24973.299999999996,
+        "p99": 70363.2200000001,
+        "max": 76593.0
+      },
+      "modelCalls": {
+        "deepseek-v4-flash": 256,
+        "deepseek-v4-pro": 28
+      },
+      "promptTokens": 1697817,
+      "completionTokens": 376910,
+      "cacheHitTokens": 472320,
+      "cacheHitRatio": 0.2782,
+      "costCny": 2.0266
+    },
+    "mcpEndpoints": {
+      "exa.web_fetch_exa": {
+        "success": 21,
+        "latencyMs": {
+          "p50": 3882.0,
+          "p95": 5944.0,
+          "p99": 10443.200000000004,
+          "max": 11568.0
+        }
+      },
+      "exa.web_search_exa": {
+        "success": 4,
+        "latencyMs": {
+          "p50": 3695.0,
+          "p95": 5625.7,
+          "p99": 5625.94,
+          "max": 5626.0
+        }
+      }
+    },
+    "skills": {
+      "retrieve-public-candidate-evidence": {
+        "catalog": 21,
+        "selected": 21,
+        "loaded": 21,
+        "applied": 21
+      },
+      "ground-project-claims": {
+        "catalog": 25,
+        "selected": 25,
+        "loaded": 25,
+        "applied": 25
+      },
+      "risk_pattern_detection": {
+        "catalog": 28,
+        "selected": 28,
+        "skipped": 21,
+        "loaded": 7,
+        "applied": 7
+      },
+      "assess-technical-evidence": {
+        "catalog": 28,
+        "selected": 28,
+        "loaded": 28,
+        "applied": 28
+      },
+      "calibrate-evidence-confidence": {
+        "catalog": 28,
+        "selected": 28,
+        "skipped": 16,
+        "loaded": 12,
+        "applied": 12
+      }
+    },
+    "memoryUsageByType": {
+      "EPISODIC": 137,
+      "PROCEDURAL": 274
+    },
+    "retrieval": {
+      "success": 110
+    },
+    "repairsAndFailures": {
+      "budget_reallocated": 8,
+      "parallel_report_retry": 1
+    },
+    "degradedReasons": {},
+    "evidenceSupportRatio": {
+      "p50": 0.656,
+      "p95": 0.8245499999999999,
+      "p99": 0.88029,
+      "max": 0.9
+    },
+    "jdCoverage": {
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0,
+      "max": 1.0
+    }
+  },
+  "queue": {
+    "samples": 152,
+    "sampleErrors": 0,
+    "maxTaskQueued": 1.0,
+    "maxTaskRunning": 8.0,
+    "maxPendingMessages": 1.0,
+    "maxActiveWorkers": 0.0,
+    "maxWorkerUtilization": 0.0,
+    "maxRunQueued": 0.0,
+    "maxRunActive": 6.0,
+    "maxOldestWaitSeconds": 0.0
+  }
+}
