@@ -72,7 +72,7 @@ def relevant(block: str, case: dict[str, Any]) -> bool:
     value = norm(block)
     if case["kind"] == "project":
         return any(marker in value for marker in (
-            "项目经历", "项目经验", "project experience"))
+            "项目经历", "项目经验", "project experience", "projects"))
     return any(norm(term) in value for term in case["terms"] if norm(term))
 
 
@@ -174,8 +174,12 @@ def main() -> None:
                 continue
             resume = path.read_text(encoding="utf-8")
         terms = list(record.get("expectedSkills") or [])[:6]
+        project_query = (
+            "Projects architecture implementation contribution metrics"
+            if re.search(r"\bProjects?\b", resume, re.IGNORECASE)
+            else "项目经历 项目复杂度 技术方案 个人贡献")
         cases = [
-            {"kind": "project", "query": "项目经历 项目复杂度 技术方案 个人贡献"},
+            {"kind": "project", "query": project_query},
             {"kind": "tech", "query": " ".join(terms) + " 项目实践 量化成果",
              "terms": terms},
         ]
@@ -188,7 +192,12 @@ def main() -> None:
                 returned = [str(item) for item in raw_returned]
                 results.append({
                     "id": record["id"], "strategy": strategy,
-                    "kind": case["kind"], "latencyMs": round(latency, 1),
+                    "kind": case["kind"],
+                    "latencyMs": round(float(
+                        body.get("latencyMs")
+                        if isinstance(body.get("latencyMs"), (int, float))
+                        else latency), 1),
+                    "clientLatencyMs": round(latency, 1),
                     "onlineTopScore": body.get("topScore"),
                     "fallbackUsed": body.get("fallbackUsed"),
                     **evaluate(resume, returned, case),

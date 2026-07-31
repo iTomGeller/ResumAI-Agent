@@ -279,6 +279,8 @@ public class ResumeRagService {
         }
         List<String> terms = tokenize(query);
         String queryLower = query == null ? "" : query.toLowerCase();
+        boolean projectIntent = queryLower.contains("项目")
+                || queryLower.contains("project");
         List<ScoredChunk> scored = new ArrayList<>();
         for (String block : splitResumeBlocks(resumeText)) {
             String lower = block.toLowerCase();
@@ -288,7 +290,8 @@ public class ResumeRagService {
                     score += 2.0;
                 }
             }
-            if (queryLower.contains("项目") && lower.contains("项目")) score += 4.0;
+            if (projectIntent && (lower.contains("项目")
+                    || lower.contains("project"))) score += 6.0;
             if ((queryLower.contains("技术") || queryLower.contains("技能"))
                     && (lower.contains("技能") || lower.contains("熟练")
                     || lower.contains("掌握") || lower.contains("技术栈"))) {

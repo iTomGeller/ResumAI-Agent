@@ -128,12 +128,19 @@ public class InternalWorkflowController {
                 .distinct()
                 .toList();
         List<Map.Entry<String, Double>> scored = new java.util.ArrayList<>();
+        String queryLower = query == null ? "" : query.toLowerCase();
+        boolean projectIntent = queryLower.contains("项目")
+                || queryLower.contains("project");
         for (String chunk : chunks) {
             String lower = chunk == null ? "" : chunk.toLowerCase();
             long matched = terms.stream().filter(lower::contains).count();
             double density = terms.isEmpty() ? 0.5 : (double) matched / Math.max(terms.size(), 1);
             double lengthSignal = Math.min((chunk == null ? 0 : chunk.length()) / 300.0, 1.0);
-            double score = Math.min(1.0, 0.75 * density + 0.25 * lengthSignal);
+            double sectionSignal = projectIntent && (
+                    lower.contains("项目") || lower.contains("project"))
+                    ? 0.35 : 0.0;
+            double score = Math.min(
+                    1.0, 0.65 * density + 0.20 * lengthSignal + sectionSignal);
             scored.add(Map.entry(chunk, score));
         }
         scored.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));

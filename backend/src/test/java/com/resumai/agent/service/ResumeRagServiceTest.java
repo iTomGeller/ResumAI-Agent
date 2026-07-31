@@ -50,4 +50,18 @@ class ResumeRagServiceTest {
         assertTrue(result.chunks().stream().allMatch(resume::contains));
         verifyNoInteractions(embeddingModel);
     }
+
+    @Test
+    void englishProjectIntentRanksProjectSectionBeforeGenericMetrics() {
+        String resume = "Summary\nSeven years backend experience\n\n"
+                + "Projects\nPayment platform with Kafka and Redis\n\n"
+                + "Highlights\nKey metrics improved steadily";
+
+        ResumeRagService.RagRetrieveResult result = service.retrieveDetailed(
+                "Projects architecture contribution metrics", 5,
+                resume, "", "hybrid");
+
+        assertTrue(result.chunks().get(0).contains("Projects"));
+        verifyNoInteractions(embeddingModel);
+    }
 }
