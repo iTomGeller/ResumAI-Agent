@@ -2434,8 +2434,10 @@ def test_parallel_report_schema_requires_grounded_items():
     assert specs["risk"]["properties"]["risks"]["minItems"] == 4
     assert specs["risk"]["properties"]["risks"]["maxItems"] == 6
     questions = specs["question"]["properties"]["interviewQuestions"]
-    assert questions["minItems"] == 8
+    assert questions["minItems"] == 1
     assert questions["maxItems"] == 8
+    assert "priority" in questions["items"]["required"]
+    assert "triggeredBy" in questions["items"]["required"]
 
 
 def test_parallel_report_uses_native_section_schema_and_avoids_fallback(

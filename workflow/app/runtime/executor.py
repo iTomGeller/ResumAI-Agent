@@ -142,7 +142,7 @@ REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；精简表达�
 禁止输出 overallScore（系统加权计算）。无证据维度 status=UNASSESSED score=null。
 评分标准：60=基本合格，70=良好匹配，80+=优秀匹配。有证据支撑合理给分，不要全部压低。
 risks 仅写候选人侧(category=CANDIDATE)；系统/数据问题放 systemWarnings。
-interviewProbes 数量≥6（丰富简历）或≥4（信息不足），必须覆盖：每个HIGH风险、TOP3 JD缺口、最重要项目的深挖。"""
+interviewProbes 按去重后的待核验主题动态生成，必须覆盖每个HIGH风险、关键JD缺口和最重要项目；最多8题，超过预算按风险优先级截断，禁止为凑数量重复问题。"""
 
 # Provider-side schema enforcement (JSON guarantee layer 1): the decision loop
 # forces this function; DeepSeek then guarantees arguments match the schema.
@@ -234,7 +234,8 @@ _CANDIDATE_RISK_SCHEMA = {
             "items": _SOURCE_REF_SCHEMA},
         "verificationPlan": {"type": "string"},
     },
-    "required": ["claim", "evidenceRefs"],
+    "required": [
+        "id", "severity", "claim", "evidenceRefs", "verificationPlan"],
 }
 _INTERVIEW_PROBE_SCHEMA = {
     "type": "object",
@@ -252,7 +253,9 @@ _INTERVIEW_PROBE_SCHEMA = {
         "followUps": {"type": "array", "items": {"type": "string"}},
         "scoreRubric": {"type": "string"},
     },
-    "required": ["question", "evidenceRefs"],
+    "required": [
+        "id", "priority", "question", "objective", "triggeredBy",
+        "evidenceRefs"],
 }
 _SYSTEM_WARNING_SCHEMA = {
     "type": "object",
@@ -357,7 +360,7 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
     question_properties = {
         "interviewQuestions": {
             "type": "array", "items": _INTERVIEW_PROBE_SCHEMA,
-            "minItems": 8, "maxItems": 8,
+            "minItems": 1, "maxItems": 8,
         },
     }
     return {
@@ -391,8 +394,10 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
             "properties": question_properties,
             "required": list(question_properties),
             "instruction": (
-                "只生成结构化面试追问：必须8题，覆盖每个HIGH风险、"
-                "TOP3 JD缺口和最重要项目；每题含目的、触发依据、好信号、"
+                "只生成结构化面试追问：先从HIGH风险、关键JD缺口和最重要项目"
+                "形成待核验主题，合并重复主题后每个主题生成一题；最多8题，"
+                "超过预算按风险优先级截断，禁止为凑数重复问题。每题含目的、"
+                "触发依据、好信号、"
                 "红旗、1个追问和证据引用；好信号/红旗各1-2条，避免重复。"
                 "不要生成评分和风险。只调用一次emit_report_section，"
                 "arguments闭合后禁止重复输出第二个JSON对象或解释。"),
@@ -2768,14 +2773,14 @@ class RunExecutor:
 
         minimums = (
             {"dimensions": 2, "strengths": 1, "risks": 2,
-             "questions": 4, "refs": 4}
+             "refs": 4}
             if is_sparse_resume else
             # Three evidence-bound core risks are more useful than forcing a
             # fourth filler item. Production traces showed the old 4/8 floor
             # discarded a complete 4-dimension/8-question report with three
             # risks and seven refs, then spent ~140s on a worse fallback.
             {"dimensions": 4, "strengths": 2, "risks": 3,
-             "questions": 8, "refs": 6}
+             "refs": 6}
         )
         sections: Dict[str, Dict[str, Any]] = {}
         call_count = 0
@@ -2836,17 +2841,33 @@ class RunExecutor:
                 "questions": len(groups["question"]),
                 "refs": refs,
             }
+            high_risk_topics = sum(
+                str(item.get("severity") or "").upper() == "HIGH"
+                for item in groups["risk"] if isinstance(item, dict))
+            high_priority_questions = sum(
+                str(item.get("priority") or "").upper() == "HIGH"
+                for item in groups["question"] if isinstance(item, dict))
+            observed["highRiskTopics"] = high_risk_topics
+            observed["highPriorityQuestions"] = high_priority_questions
+            observed["questionBudgetCap"] = 8
             weak = {
                 key: {"actual": observed[key], "minimum": minimum}
                 for key, minimum in minimums.items()
                 if observed[key] < minimum
             }
+            required_high_priority = min(high_risk_topics, 8)
+            if high_priority_questions < required_high_priority:
+                weak["highRiskQuestionCoverage"] = {
+                    "actual": high_priority_questions,
+                    "minimum": required_high_priority,
+                }
             retry = set()
             if "dimensions" in weak or "strengths" in weak:
                 retry.add("score")
             if "risks" in weak:
                 retry.add("risk")
-            if "questions" in weak:
+            if ("questions" in weak
+                    or "highRiskQuestionCoverage" in weak):
                 retry.add("question")
             if "refs" in weak:
                 per_section_floor = 1 if is_sparse_resume else 2
