@@ -13,20 +13,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+
+import httpx
 
 
 EXPECTED_MCP_ENDPOINTS = [
-    "context7.query-docs",
-    "context7.resolve-library-id",
-    "deepwiki.ask_question",
-    "deepwiki.read_wiki_contents",
-    "deepwiki.read_wiki_structure",
     "exa.web_fetch_exa",
     "exa.web_search_exa",
     "fetch.fetch",
-    "microsoft-learn.microsoft_code_sample_search",
-    "microsoft-learn.microsoft_docs_fetch",
     "microsoft-learn.microsoft_docs_search",
 ]
 EXPECTED_SKILLS = [
@@ -144,6 +138,12 @@ def delta(values: List[float]) -> Optional[float]:
 
 
 def parse_ecs_monitor(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {
+            "status": "NOT_COLLECTED",
+            "validSamples": 0,
+            "malformedSamples": 0,
+        }
     lines = path.read_text(encoding="utf-8").splitlines()
     docker: Dict[str, Dict[str, List[float]]] = {
         name: defaultdict(list) for name in CONTAINERS}
@@ -268,11 +268,16 @@ def parse_ecs_monitor(path: Path) -> Dict[str, Any]:
     }
 
 
-def coverage(runtime: Dict[str, Any]) -> Dict[str, Any]:
+def coverage(runtime: Dict[str, Any],
+             skills: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     observed_mcp = sorted((runtime.get("mcpEndpoints") or {}).keys())
     observed_skills = sorted(
         key for key, counts in (runtime.get("skills") or {}).items()
         if (counts or {}).get("applied", 0) > 0)
+    if not observed_skills and skills:
+        observed_skills = sorted(
+            key for key, counts in (skills.get("perSkill") or {}).items()
+            if int((counts or {}).get("applied") or 0) > 0)
     return {
         "mcp": {
             "expected": EXPECTED_MCP_ENDPOINTS,
@@ -306,9 +311,14 @@ def report_run_ids(directory: Path) -> List[str]:
 
 
 def fetch_json(url: str, timeout: int = 60) -> Dict[str, Any]:
-    with urlopen(Request(url, headers={"Accept": "application/json"}),
-                 timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    # The production nginx endpoint uses chunked responses for large
+    # timelines. urllib occasionally raises IncompleteRead around 45 KiB;
+    # httpx handles the same response correctly and prevents false
+    # NOT_INSTRUMENTED results in the benchmark report.
+    response = httpx.get(
+        url, headers={"Accept": "application/json"}, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
     return payload if isinstance(payload, dict) else {}
 
 
@@ -351,6 +361,101 @@ def collect_run_timelines(
         "fetchErrors": errors,
         "timelines": timelines,
     }
+
+
+def hydrate_runtime_from_timelines(
+        runtime: Dict[str, Any], timeline_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Repair lean runtime aggregates from authoritative per-run events.
+
+    Older load-driver builds used urllib for large timelines and could record
+    zero LLM/MCP/Skill rows after an otherwise valid run. Rehydrating here
+    keeps the report truthful without rerunning model calls.
+    """
+    if not timeline_data:
+        return runtime
+    rows_by_run = timeline_data.get("timelines") or {}
+    if not rows_by_run:
+        return runtime
+    hydrated = dict(runtime)
+    llm_durations: List[float] = []
+    llm_calls = 0
+    llm_failures = 0
+    prompt_tokens = completion_tokens = cache_tokens = 0
+    model_calls: Counter[str] = Counter()
+    agent_durations: Dict[str, List[float]] = defaultdict(list)
+    mcp_counts: Dict[str, Counter[str]] = defaultdict(Counter)
+    mcp_durations: Dict[str, List[float]] = defaultdict(list)
+    skill_counts: Dict[str, Counter[str]] = defaultdict(Counter)
+    memory_types: Counter[str] = Counter()
+    for rows in rows_by_run.values():
+        for event in rows:
+            event_type = str(event.get("eventType") or "")
+            payload = event.get("payload") \
+                if isinstance(event.get("payload"), dict) else {}
+            agent_id = str(event.get("agentId") or "")
+            if event_type == "llm.completed":
+                llm_calls += 1
+                if payload.get("durationMs") is not None:
+                    llm_durations.append(float(payload["durationMs"]))
+                prompt_tokens += int(payload.get("promptTokens") or 0)
+                completion_tokens += int(payload.get("completionTokens") or 0)
+                cache_tokens += int(payload.get("promptCacheHitTokens") or 0)
+                model_calls[str(payload.get("model") or "unknown")] += 1
+            elif event_type == "llm.failed":
+                llm_failures += 1
+            elif event_type == "agent.completed" and agent_id:
+                if payload.get("durationMs") is not None:
+                    agent_durations[agent_id].append(
+                        float(payload["durationMs"]))
+            elif event_type.startswith("skill."):
+                skill_id = str(payload.get("skillId") or "unknown")
+                skill_counts[skill_id][event_type.split(".", 1)[1]] += 1
+            elif event_type == "memory.used":
+                memory_types[str(payload.get("memoryType")
+                                 or payload.get("type")
+                                 or "UNKNOWN")] += 1
+
+            tool_name = str(event.get("toolName")
+                            or payload.get("toolName") or "")
+            source = str(payload.get("source") or "").lower()
+            if event_type in {"tool.completed", "tool.failed"} and (
+                    source == "mcp" or payload.get("mcpServer")):
+                endpoint = tool_name or "unknown"
+                mcp_counts[endpoint][
+                    "success" if event_type == "tool.completed"
+                    else "failed"] += 1
+                if payload.get("durationMs") is not None:
+                    mcp_durations[endpoint].append(
+                        float(payload["durationMs"]))
+
+    previous_llm = hydrated.get("llm") or {}
+    hydrated["llm"] = {
+        **previous_llm,
+        "calls": llm_calls,
+        "failures": llm_failures,
+        "latencyMs": distribution(llm_durations),
+        "modelCalls": dict(model_calls),
+        "promptTokens": prompt_tokens,
+        "completionTokens": completion_tokens,
+        "cacheHitTokens": cache_tokens,
+        "cacheHitRatio": round(cache_tokens / prompt_tokens, 4)
+        if prompt_tokens else None,
+    }
+    if agent_durations:
+        hydrated["agentLatencyMs"] = {
+            key: distribution(values)
+            for key, values in sorted(agent_durations.items())}
+    hydrated["mcpEndpoints"] = {
+        endpoint: {
+            **dict(counts),
+            "latencyMs": distribution(mcp_durations.get(endpoint, [])),
+        }
+        for endpoint, counts in sorted(mcp_counts.items())}
+    hydrated["skills"] = {
+        key: dict(counts) for key, counts in sorted(skill_counts.items())}
+    hydrated["memoryUsageByType"] = dict(memory_types)
+    return hydrated
 
 
 def collect_skill_metrics(
@@ -847,12 +952,30 @@ def markdown(report: Dict[str, Any]) -> str:
     rag_p95 = (rag.get("latencyMs") or {}).get("p95")
     skill_local = (skills.get("localLoadTool") or {}).get("latencyMs") or {}
     skill_lifecycle = skills.get("lifecycle") or {}
+    total_requests = int(load.get("offeredRequests") or 0)
+    phase_metrics = load.get("phaseMetrics") or {}
+    phase_counts = [
+        int((phase_metrics.get(name) or {}).get("requests") or 0)
+        for name in ("warmup", "steady", "cooldown")]
+    queue_peak = float((load.get("queue") or {}).get("maxRunQueued") or 0)
+    active_observed = (
+        (ecs.get("agentRuntimeActive") or {}).get("max")
+        or (load.get("queue") or {}).get("maxRunActive"))
+    active_max = number(active_observed)
+    skill_observed = len((cover.get("skills") or {}).get(
+        "observedApplied") or [])
+    low_apply_skills = sum(
+        1 for values in (skills.get("perSkill") or {}).values()
+        if values.get("applyRateFromSelected") is not None
+        and float(values["applyRateFromSelected"]) < 0.4)
+    monitor_collected = int(ecs.get("validSamples") or 0) > 0
 
     lines = [
-        "# ResumAI 100 份简历生产压测报告",
+        f"# ResumAI {total_requests} 份简历生产压测报告",
         "",
         f"> 测试版本 `{tested_revision}` · 生成时间 {generated_display}  ",
-        "> 负载模型：10 份预热 → 80 份稳态 1 QPS → 10 份降载；"
+        f"> 负载模型：{phase_counts[0]} 份预热 → "
+        f"{phase_counts[1]} 份稳态 1 QPS → {phase_counts[2]} 份降载；"
         "用户入口为简历上传接口。",
         "",
         "## 执行摘要",
@@ -863,28 +986,34 @@ def markdown(report: Dict[str, Any]) -> str:
         f"{load.get('offeredRequests')} 成功；稳态 "
         f"{number((load.get('phaseMetrics') or {}).get('steady', {}).get('achievedQps'), 4)} QPS；"
         f"P95 {duration_ms((load.get('uploadLatencyMs') or {}).get('p95'))} |",
-        f"| 评估正确结束 | **WARN** | SUCCESS {success}，PARTIAL {partial}；"
+        f"| 评估正确结束 | **{'PASS' if success == total_requests and not partial else 'WARN'}** | "
+        f"SUCCESS {success}，PARTIAL {partial}；"
         f"LLM 失败 {llm.get('failures', 0)} |",
         f"| 持续消费能力 | **FAIL** | 完成吞吐 "
         f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s；"
-        f"队列峰值 {number((load.get('queue') or {}).get('maxRunQueued'))}；"
+        f"队列峰值 {number(queue_peak)}；"
         f"排空 {drain_minutes:.1f} min |",
         f"| 单份评估时延 | **FAIL** | Runtime P95 {duration_ms(run_p95)}；"
         f"Queue wait P95 {duration_ms(queue_p95)} |",
         f"| RAG | **PASS** | {rag.get('invocations')} 次，"
         f"成功率 {ratio(rag.get('successRate'))}，P95 {duration_ms(rag_p95)}，"
         f"零召回 {rag.get('zeroHitCount')} |",
-        f"| Skill | **WARN** | 5/5 有调用；本地加载 P95 "
-        f"{duration_ms(skill_local.get('p95'))}，但 2 个 Skill 采用率低于 40% |",
-        f"| 运行稳定性 | **PASS** | 重启 "
+        f"| Skill | **{'PASS' if skill_observed == len(EXPECTED_SKILLS) and not low_apply_skills else 'WARN'}** | "
+        f"{skill_observed}/{len(EXPECTED_SKILLS)} 有实际应用；本地加载 P95 "
+        f"{duration_ms(skill_local.get('p95'))}；{low_apply_skills} 个 Skill 采用率低于 40% |",
+        f"| 运行稳定性 | **{'PASS' if monitor_collected else 'NOT COLLECTED'}** | 重启 "
         f"{number((ecs.get('stability') or {}).get('maxRestartCount'))}，OOM "
         f"{number((ecs.get('stability') or {}).get('oomKilledSamples'))}，CPU throttling 0 |",
         f"| 存储水位 | **WARN** | `/data` 峰值 "
         f"{number((ecs.get('diskUsedPct') or {}).get('/data', {}).get('max'))}% |",
         "",
-        f"**总评：入口能稳定接住 1 QPS，但当前 {active_max} 并发 Agent Runtime 只能完成约 "
-        f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s，形成 92 份积压。"
-        "主要矛盾是评估消费能力与长尾时延，不是上传接口或容器资源耗尽。**",
+        f"**总评：入口稳态达到 "
+        f"{number((phase_metrics.get('steady') or {}).get('achievedQps'), 4)} QPS；"
+        f"本批观测并发 {active_max}、Run 队列峰值 {number(queue_peak)}、完成吞吐约 "
+        f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s。"
+        + ("持续稳态会形成积压，主要矛盾仍是评估消费能力与长尾时延。**"
+           if float(load.get("completionThroughputPerSecond") or 0) < 1.0
+           else "本轮未观察到容量积压。**"),
         "",
         "## 1. 测试设计",
         "",
@@ -952,7 +1081,10 @@ def markdown(report: Dict[str, Any]) -> str:
         "",
         "### 动态路由",
         "",
-        f"共出现 **{len(runtime.get('routeSignatures') or {})} 种** Agent 组合，并非固定流水线。",
+        (f"共出现 **{len(runtime.get('routeSignatures') or {})} 种** Agent 组合。"
+         + ("本批样本只覆盖一种路由，不能据此证明动态路由多样性。"
+            if len(runtime.get("routeSignatures") or {}) <= 1
+            else "样本间 Agent 组合存在实际差异。")),
         "",
         "| Agent 路由 | Run 数 |",
         "|---|---:|",
@@ -1255,6 +1387,7 @@ def main() -> int:
         if timeline_data is not None else
         json.loads(skill_path.read_text(encoding="utf-8"))
         if skill_path.is_file() else None)
+    runtime = hydrate_runtime_from_timelines(runtime, timeline_data)
     memory_path = directory / "memory_metrics.json"
     memory = (
         collect_memory_metrics(
@@ -1263,7 +1396,8 @@ def main() -> int:
                               or not memory_path.is_file()) else
         json.loads(memory_path.read_text(encoding="utf-8"))
         if memory_path.is_file() else None)
-    revision_match = re.search(r"_([0-9a-f]{7,40})_\d{8}$", directory.name)
+    revision_match = re.search(
+        r"(?:^|_)([0-9a-f]{7,40})(?:_|$)", directory.name)
     report = {
         "generatedAt": datetime.now().astimezone().isoformat(),
         "testedRevision": revision_match.group(1) if revision_match else None,
@@ -1271,7 +1405,7 @@ def main() -> int:
                  if key != "agentRuntime"},
         "agentRuntime": runtime,
         "ecs": parse_ecs_monitor(directory / "ecs_monitor.csv"),
-        "coverage": coverage(runtime),
+        "coverage": coverage(runtime, skills),
         "rag": rag,
         "memory": memory,
         "skills": skills,

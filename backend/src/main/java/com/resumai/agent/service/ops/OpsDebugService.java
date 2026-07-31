@@ -1683,15 +1683,16 @@ public class OpsDebugService {
                     .filter(OpsDebugService::isFinite)
                     .toList();
             Double topScore = firstDoubleDeep(data,
-                    "topRelevanceScore", "topScore", "maxScore", "afterTopScore");
+                    "topRelevanceScore", "topScore", "maxScore", "afterTopScore", "top");
             if (topScore == null && !scoreSamples.isEmpty()) {
                 topScore = scoreSamples.stream().max(Double::compareTo).orElse(null);
             }
-            Double meanScore = firstDoubleDeep(data, "meanScore", "averageScore", "avgScore");
+            Double meanScore = firstDoubleDeep(data,
+                    "meanScore", "averageScore", "avgScore", "mean");
             if (meanScore == null) {
                 meanScore = average(scoreSamples);
             }
-            Double minScore = firstDoubleDeep(data, "minScore");
+            Double minScore = firstDoubleDeep(data, "minScore", "min");
             if (minScore == null && !scoreSamples.isEmpty()) {
                 minScore = scoreSamples.stream().min(Double::compareTo).orElse(null);
             }
@@ -1744,7 +1745,8 @@ public class OpsDebugService {
                         && !"vector".equalsIgnoreCase(fallbackStage);
             }
 
-            Integer scoreSampleSize = firstIntegerDeep(data, "scoreSampleSize");
+            Integer scoreSampleSize = firstIntegerDeep(
+                    data, "scoreSampleSize", "collectedCount");
             if (scoreSampleSize == null && !scoreSamples.isEmpty()) {
                 scoreSampleSize = scoreSamples.size();
             }

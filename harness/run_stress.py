@@ -32,6 +32,8 @@ from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import httpx
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -63,9 +65,9 @@ def http_json(url: str, timeout: int = 60) -> dict:
     headers = {"Accept": "application/json"}
     if AUTH_TOKEN:
         headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
-    req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    response = httpx.get(url, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
 
 
 def mime_for(file_type: str) -> str:

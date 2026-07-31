@@ -48,6 +48,13 @@ from app.runtime.tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
 
+# Section fan-out creates three simultaneous quality-model calls. Under a
+# multi-resume burst, allowing every ReportAgent to fan out multiplies provider
+# contention and worsens both per-run latency and total drain time. The first
+# report keeps the quality-preserving parallel path; concurrent reports fall
+# back to the already validated monolithic Pro synthesis.
+_ACTIVE_PARALLEL_REPORTS = 0
+
 _SOURCE_URL = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
 
@@ -1911,17 +1918,23 @@ class RunExecutor:
                 # only the remainder, preventing 3 + N + 3 call storms.
                 section_call_budget = min(
                     4, max(0, terminal_available - 3))
-                if section_call_budget >= 3:
-                    section_output, section_calls = (
-                        await self._run_parallel_report_sections(
-                            messages,
-                            round_id=round_id,
-                            memory_refs=memory_refs,
-                            skill_refs=skill_refs,
-                            observed_tool_call_ids=observed_tool_call_ids,
-                            is_sparse_resume=bool(
-                                signals.get("is_sparse_resume")),
-                            max_calls=section_call_budget))
+                parallel_slot = (
+                    section_call_budget >= 3
+                    and self._try_acquire_parallel_report_slot())
+                if parallel_slot:
+                    try:
+                        section_output, section_calls = (
+                            await self._run_parallel_report_sections(
+                                messages,
+                                round_id=round_id,
+                                memory_refs=memory_refs,
+                                skill_refs=skill_refs,
+                                observed_tool_call_ids=observed_tool_call_ids,
+                                is_sparse_resume=bool(
+                                    signals.get("is_sparse_resume")),
+                                max_calls=section_call_budget))
+                    finally:
+                        self._release_parallel_report_slot()
                     agent_llm_calls += section_calls
                     if section_output is not None:
                         decision_iterations += 1
@@ -2032,6 +2045,9 @@ class RunExecutor:
                             continue
 
                         tool = model_tool_aliases.get(proposed.name, "")
+                        if (not tool
+                                and proposed.name in pre_llm_succeeded_tools):
+                            tool = proposed.name
                         entry = next(
                             (item for item in catalog
                              if item.get("name") == tool), {})
@@ -2089,6 +2105,12 @@ class RunExecutor:
                                 source=source,
                                 mcp_server=entry.get("mcpServer"),
                                 trace_context=trace_context)
+                        elif (proposed.name not in turn_model_names
+                              and tool in pre_llm_succeeded_tools):
+                            result_payload = (
+                                await self._ack_duplicate_native_proposal(
+                                    agent_id, tool, proposed,
+                                    trace_context=trace_context))
                         elif proposed.name not in turn_model_names:
                             result_payload = await self._reject_native_proposal(
                                 agent_id, tool or proposed.name, proposed,
@@ -2474,6 +2496,24 @@ class RunExecutor:
                 self.llm, "supports_parallel_report_sections", False))
         )
 
+    @staticmethod
+    def _try_acquire_parallel_report_slot() -> bool:
+        global _ACTIVE_PARALLEL_REPORTS
+        try:
+            limit = max(0, int(_os.getenv(
+                "REPORT_PARALLEL_MAX_INFLIGHT", "1")))
+        except ValueError:
+            limit = 1
+        if _ACTIVE_PARALLEL_REPORTS >= limit:
+            return False
+        _ACTIVE_PARALLEL_REPORTS += 1
+        return True
+
+    @staticmethod
+    def _release_parallel_report_slot() -> None:
+        global _ACTIVE_PARALLEL_REPORTS
+        _ACTIVE_PARALLEL_REPORTS = max(0, _ACTIVE_PARALLEL_REPORTS - 1)
+
     def _should_parallel_report_sections(
             self, signals: Dict[str, Any]) -> bool:
         """Use section fan-out only where the live A/B showed a benefit.
@@ -2811,6 +2851,38 @@ class RunExecutor:
             "success": False,
             "status": "REJECTED",
             "error": reason,
+        }
+
+    async def _ack_duplicate_native_proposal(
+            self, agent_id: str, tool: str, proposed: LlmToolCall, *,
+            trace_context: Optional[Dict[str, Any]] = None
+            ) -> Dict[str, Any]:
+        """Acknowledge a deterministic pre-step the model asked to repeat.
+
+        The observation is already present in MODEL_INPUT, so executing again
+        adds latency while emitting tool.failed falsely lowers RAG success.
+        Keep a traceable suppression event and instruct the next turn to use
+        the attached result.
+        """
+        now = _utc_now()
+        await self.emitter.emit(
+            "tool.progress", agent_id=agent_id, tool_name=tool, payload={
+                **(trace_context or {}),
+                "toolCallId": proposed.tool_call_id,
+                "lifecycleStage": "DUPLICATE_SUPPRESSED",
+                "source": "builtin",
+                "toolName": tool,
+                "modelName": proposed.name,
+                "arguments": proposed.arguments,
+                "outcome": "SKIPPED_DUPLICATE",
+                "occurredAt": now,
+            })
+        return {
+            "success": True,
+            "status": "SKIPPED_DUPLICATE",
+            "result": (
+                "该检索已在本 Agent 的确定性预处理阶段成功执行；"
+                "请直接使用当前上下文中的既有工具观察生成结论。"),
         }
 
     async def _execute_skill_proposal(

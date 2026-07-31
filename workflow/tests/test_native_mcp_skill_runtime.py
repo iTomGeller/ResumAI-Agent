@@ -2153,6 +2153,39 @@ def test_report_section_fanout_is_dynamic_for_external_evidence(monkeypatch):
         {"has_external_urls": True}) is False
 
 
+def test_parallel_report_fanout_has_process_wide_load_shedder(monkeypatch):
+    monkeypatch.setenv("REPORT_PARALLEL_MAX_INFLIGHT", "1")
+    assert RunExecutor._try_acquire_parallel_report_slot() is True
+    try:
+        assert RunExecutor._try_acquire_parallel_report_slot() is False
+    finally:
+        RunExecutor._release_parallel_report_slot()
+    assert RunExecutor._try_acquire_parallel_report_slot() is True
+    RunExecutor._release_parallel_report_slot()
+
+
+def test_duplicate_prestep_proposal_is_suppressed_without_false_failure():
+    emitter = NullEmitter()
+    executor = RunExecutor(
+        AgentRunRequest(
+            runId="r-duplicate", conversationId="c-duplicate",
+            runType="full_evaluation", resumeText="Java RAG 项目"),
+        emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=_NativeMcpLlm())
+    result = run(executor._ack_duplicate_native_proposal(
+        "TechAgent", "knowledge_search",
+        LlmToolCall(
+            tool_call_id="call-duplicate", name="knowledge_search",
+            arguments={"query": "Java"},
+            raw_arguments='{"query":"Java"}')))
+    assert result["status"] == "SKIPPED_DUPLICATE"
+    assert not [event for event in emitter.events
+                if event["eventType"] == "tool.failed"]
+    event = next(event for event in emitter.events
+                 if event["eventType"] == "tool.progress")
+    assert event["payload"]["lifecycleStage"] == "DUPLICATE_SUPPRESSED"
+
+
 def test_tech_presteps_use_one_semantic_recall_and_leave_no_duplicate_catalog():
     request = AgentRunRequest(
         runId="r-tech-pre", conversationId="c-tech-pre",
