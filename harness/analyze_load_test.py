@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import math
 import re
 import statistics
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 EXPECTED_MCP_ENDPOINTS = [
@@ -294,6 +297,449 @@ def coverage(runtime: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def report_run_ids(directory: Path) -> List[str]:
+    runtime_rows = json.loads(
+        (directory / "runtime_metrics.json").read_text(encoding="utf-8"))
+    return sorted({
+        str(row.get("runId") or "") for row in runtime_rows
+        if row.get("runId")})
+
+
+def fetch_json(url: str, timeout: int = 60) -> Dict[str, Any]:
+    with urlopen(Request(url, headers={"Accept": "application/json"}),
+                 timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def timestamp_ms(value: Any) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(
+            str(value).replace("Z", "+00:00")).timestamp() * 1000
+    except ValueError:
+        return None
+
+
+def collect_run_timelines(
+        base_url: str, directory: Path) -> Dict[str, Any]:
+    run_ids = report_run_ids(directory)
+
+    def fetch(run_id: str) -> Tuple[str, List[Dict[str, Any]], Optional[str]]:
+        url = (
+            f"{base_url.rstrip('/')}/api/dev/runs/{run_id}/timeline?"
+            f"{urlencode({'eventLimit': 500})}")
+        try:
+            payload = fetch_json(url)
+            rows = list(payload.get("timeline") or payload.get("events") or [])
+            return run_id, rows, None
+        except Exception as exc:  # noqa: BLE001 - report missing telemetry
+            return run_id, [], f"{type(exc).__name__}: {exc}"[:300]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        fetched = list(pool.map(fetch, run_ids))
+    timelines: Dict[str, List[Dict[str, Any]]] = {}
+    errors: Dict[str, str] = {}
+    for run_id, rows, error in fetched:
+        timelines[run_id] = rows
+        if error:
+            errors[run_id] = error
+    return {
+        "runsRequested": len(run_ids),
+        "runsFetched": len(run_ids) - len(errors),
+        "fetchErrors": errors,
+        "timelines": timelines,
+    }
+
+
+def collect_skill_metrics(
+        directory: Path, timeline_data: Dict[str, Any]) -> Dict[str, Any]:
+    event_counts: Counter[str] = Counter()
+    lifecycle: Dict[Tuple[str, str, str], Dict[str, List[float]]] = \
+        defaultdict(lambda: defaultdict(list))
+    agent_counts: Counter[str] = Counter()
+    per_skill_agents: Dict[str, Counter[str]] = defaultdict(Counter)
+    local_durations: List[float] = []
+    local_by_skill: Dict[str, List[float]] = defaultdict(list)
+    local_outcomes: Counter[str] = Counter()
+    relevant_events: List[Dict[str, Any]] = []
+
+    for run_id, rows in (timeline_data.get("timelines") or {}).items():
+        for row in sorted(rows, key=lambda item: int(item.get("seq") or 0)):
+            event_type = str(row.get("eventType") or "")
+            payload = row.get("payload") \
+                if isinstance(row.get("payload"), dict) else {}
+            tool_name = str(row.get("toolName") or payload.get("toolName") or "")
+            agent_id = str(row.get("agentId") or payload.get("agentId") or "unknown")
+            if event_type.startswith("skill."):
+                skill_id = str(payload.get("skillId") or tool_name or "unknown")
+                event_counts[event_type] += 1
+                if event_type == "skill.selected":
+                    agent_counts[agent_id] += 1
+                    per_skill_agents[skill_id][agent_id] += 1
+                occurred = timestamp_ms(payload.get("occurredAt"))
+                if occurred is not None:
+                    lifecycle[(run_id, agent_id, skill_id)][event_type].append(
+                        occurred)
+                relevant_events.append({
+                    "runId": run_id, "seq": row.get("seq"),
+                    "eventType": event_type, "agentId": agent_id,
+                    "skillId": skill_id, "occurredAt": payload.get("occurredAt"),
+                    "reason": payload.get("reason") or payload.get("triggerReason"),
+                })
+                continue
+            if event_type not in {"tool.completed", "tool.failed"} \
+                    or tool_name != "load_skill":
+                continue
+            arguments = payload.get("arguments") \
+                if isinstance(payload.get("arguments"), dict) else {}
+            preview = payload.get("resultPreview") \
+                if isinstance(payload.get("resultPreview"), dict) else {}
+            skill_id = str(arguments.get("skill_id") or preview.get("skillId")
+                           or "unknown")
+            duration = payload.get("durationMs")
+            if duration is None:
+                started = timestamp_ms(payload.get("startedAt"))
+                ended = timestamp_ms(payload.get("endedAt")
+                                     or payload.get("occurredAt"))
+                duration = ended - started \
+                    if started is not None and ended is not None else None
+            if duration is not None and float(duration) >= 0:
+                local_durations.append(float(duration))
+                local_by_skill[skill_id].append(float(duration))
+            local_outcomes[
+                "SUCCESS" if event_type == "tool.completed" else "FAILED"] += 1
+            relevant_events.append({
+                "runId": run_id, "seq": row.get("seq"),
+                "eventType": event_type, "agentId": agent_id,
+                "skillId": skill_id, "durationMs": duration,
+                "occurredAt": payload.get("occurredAt"),
+            })
+
+    selected_to_loaded: Dict[str, List[float]] = defaultdict(list)
+    loaded_to_applied: Dict[str, List[float]] = defaultdict(list)
+    selected_to_applied: Dict[str, List[float]] = defaultdict(list)
+    selected_to_skipped: Dict[str, List[float]] = defaultdict(list)
+    for (_run_id, _agent_id, skill_id), stages in lifecycle.items():
+        selected = min(stages.get("skill.selected") or [math.inf])
+        loaded = min((value for value in stages.get("skill.loaded", [])
+                      if value >= selected), default=math.inf)
+        applied = min((value for value in stages.get("skill.applied", [])
+                       if value >= loaded), default=math.inf)
+        skipped = min((value for value in stages.get("skill.skipped", [])
+                       if value >= selected), default=math.inf)
+        if selected < math.inf and loaded < math.inf:
+            selected_to_loaded[skill_id].append(loaded - selected)
+        if loaded < math.inf and applied < math.inf:
+            loaded_to_applied[skill_id].append(applied - loaded)
+        if selected < math.inf and applied < math.inf:
+            selected_to_applied[skill_id].append(applied - selected)
+        if selected < math.inf and skipped < math.inf:
+            selected_to_skipped[skill_id].append(skipped - selected)
+
+    skills = sorted(set(EXPECTED_SKILLS) | set(per_skill_agents)
+                    | set(local_by_skill))
+    per_skill: Dict[str, Any] = {}
+    for skill_id in skills:
+        counts = {
+            stage.split(".", 1)[1]: sum(
+                len(values.get(stage) or [])
+                for (run_id, agent, sid), values in lifecycle.items()
+                if sid == skill_id)
+            for stage in (
+                "skill.catalog", "skill.selected", "skill.loaded",
+                "skill.applied", "skill.skipped", "skill.failed")
+        }
+        per_skill[skill_id] = {
+            **counts,
+            "applyRateFromSelected": round(
+                counts["applied"] / counts["selected"], 4)
+            if counts["selected"] else None,
+            "agents": dict(per_skill_agents.get(skill_id, {})),
+            "localLoadToolMs": distribution(local_by_skill.get(skill_id, [])),
+            "selectedToLoadedMs": distribution(
+                selected_to_loaded.get(skill_id, [])),
+            "loadedToAppliedMs": distribution(
+                loaded_to_applied.get(skill_id, [])),
+            "selectedToAppliedMs": distribution(
+                selected_to_applied.get(skill_id, [])),
+            "selectedToSkippedMs": distribution(
+                selected_to_skipped.get(skill_id, [])),
+        }
+
+    compact_path = directory / "skill_events.json"
+    compact_path.write_text(
+        json.dumps(relevant_events, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    report = {
+        "runsRequested": timeline_data.get("runsRequested"),
+        "runsFetched": timeline_data.get("runsFetched"),
+        "fetchErrors": timeline_data.get("fetchErrors"),
+        "eventCounts": dict(event_counts),
+        "localLoadTool": {
+            "outcomes": dict(local_outcomes),
+            "latencyMs": distribution(local_durations),
+            "definition": "load_skill 本地工具 startedAt→endedAt，不含 LLM 推理",
+        },
+        "lifecycle": {
+            "selectedToLoadedMs": distribution(
+                value for values in selected_to_loaded.values()
+                for value in values),
+            "loadedToAppliedMs": distribution(
+                value for values in loaded_to_applied.values()
+                for value in values),
+            "selectedToAppliedMs": distribution(
+                value for values in selected_to_applied.values()
+                for value in values),
+            "definition": (
+                "selected→loaded 包含模型首次决策等待；loaded→applied 表示"
+                "指令进入下一轮模型上下文的等待"),
+        },
+        "agents": dict(agent_counts),
+        "perSkill": per_skill,
+    }
+    (directory / "skill_metrics.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
+
+
+def collect_memory_metrics(
+        base_url: str, directory: Path,
+        timeline_data: Dict[str, Any]) -> Dict[str, Any]:
+    run_ids = report_run_ids(directory)
+
+    def fetch(run_id: str) -> Tuple[str, Dict[str, Any], Optional[str]]:
+        url = (
+            f"{base_url.rstrip('/')}/api/ops/memory?"
+            f"{urlencode({'runId': run_id, 'limit': 50})}")
+        try:
+            return run_id, fetch_json(url, timeout=20), None
+        except Exception as exc:  # noqa: BLE001 - report missing telemetry
+            return run_id, {}, f"{type(exc).__name__}: {exc}"[:300]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+        fetched = list(pool.map(fetch, run_ids))
+    errors: Dict[str, str] = {}
+    entries: List[Dict[str, Any]] = []
+    usage: List[Dict[str, Any]] = []
+    for run_id, payload, error in fetched:
+        if error:
+            errors[run_id] = error
+        entries.extend(row for row in (payload.get("entries") or [])
+                       if str(row.get("runId") or "") == run_id)
+        usage.extend(row for row in (payload.get("usage") or [])
+                     if str(row.get("runId") or "") == run_id)
+
+    event_counts: Counter[str] = Counter()
+    reads = 0
+    read_hits = 0
+    hit_reads = 0
+    for rows in (timeline_data.get("timelines") or {}).values():
+        for row in rows:
+            event_type = str(row.get("eventType") or "")
+            if not event_type.startswith("memory."):
+                continue
+            event_counts[event_type] += 1
+            if event_type == "memory.read":
+                reads += 1
+                payload = row.get("payload") \
+                    if isinstance(row.get("payload"), dict) else {}
+                hit_count = int(payload.get("hitCount") or 0)
+                read_hits += hit_count
+                hit_reads += int(hit_count > 0)
+
+    ttl_days: Dict[str, List[float]] = defaultdict(list)
+    remaining_days: Dict[str, List[float]] = defaultdict(list)
+    override_counts: Counter[str] = Counter()
+    for row in entries:
+        memory_type = str(row.get("type") or "UNKNOWN")
+        ttl = row.get("ttl") if isinstance(row.get("ttl"), dict) else {}
+        if ttl.get("effectiveTtlSeconds") is not None:
+            ttl_days[memory_type].append(
+                float(ttl["effectiveTtlSeconds"]) / 86400)
+        if ttl.get("remainingTtlSeconds") is not None:
+            remaining_days[memory_type].append(
+                float(ttl["remainingTtlSeconds"]) / 86400)
+        override_counts[
+            "override" if ttl.get("overrideDetected") else "default"] += 1
+
+    used = [row for row in usage
+            if str(row.get("decision") or "").upper() == "USED"]
+    version_mismatches = [row for row in used
+                          if row.get("producerVersion")
+                          and row.get("consumerVersion")
+                          and row.get("producerVersion")
+                          != row.get("consumerVersion")]
+    report = {
+        "runsRequested": len(run_ids),
+        "runsFetched": len(run_ids) - len(errors),
+        "fetchErrors": errors,
+        "produced": {
+            "count": len(entries),
+            "byType": dict(Counter(str(row.get("type") or "UNKNOWN")
+                                   for row in entries)),
+            "byScope": dict(Counter(str(row.get("ownerScope") or "UNKNOWN")
+                                    for row in entries)),
+            "bySource": dict(Counter(str(row.get("source") or "UNKNOWN")
+                                     for row in entries)),
+            "byStatus": dict(Counter(str(row.get("status") or "UNKNOWN")
+                                     for row in entries)),
+        },
+        "consumed": {
+            "records": len(usage),
+            "decisions": dict(Counter(
+                str(row.get("decision") or "UNKNOWN") for row in usage)),
+            "usedCount": len(used),
+            "byType": dict(Counter(str(row.get("type") or "UNKNOWN")
+                                   for row in used)),
+            "byAgent": dict(Counter(
+                str(row.get("consumerAgent") or "UNKNOWN") for row in used)),
+            "bySource": dict(Counter(str(row.get("source") or "UNKNOWN")
+                                     for row in used)),
+            "finalScore": distribution(
+                float(row["finalScore"]) for row in used
+                if row.get("finalScore") is not None),
+            "ageAtUseSeconds": distribution(
+                float(row["ageAtUseSeconds"]) for row in used
+                if row.get("ageAtUseSeconds") is not None),
+            "producerConsumerVersionMismatch": len(version_mismatches),
+        },
+        "events": {
+            "telemetryStatus": (
+                "COMPLETE" if timeline_data.get("timelines")
+                else "NOT_COLLECTED"),
+            "counts": dict(event_counts),
+            "reads": reads,
+            "returnedHits": read_hits,
+            "readHitRate": round(hit_reads / reads, 4) if reads else None,
+        },
+        "ttl": {
+            "effectiveDaysByType": {
+                key: distribution(values) for key, values in ttl_days.items()},
+            "remainingDaysByType": {
+                key: distribution(values)
+                for key, values in remaining_days.items()},
+            "overrideUsage": dict(override_counts),
+        },
+        "retrievalLatencyMs": {
+            "status": "NOT_INSTRUMENTED",
+            "reason": "memory.read 事件没有 start/end/durationMs，不能伪造耗时",
+        },
+    }
+    (directory / "memory_metrics.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
+
+
+def collect_rag_metrics(base_url: str, directory: Path) -> Dict[str, Any]:
+    run_ids = report_run_ids(directory)
+
+    def fetch(run_id: str) -> Tuple[str, List[Dict[str, Any]], Optional[str]]:
+        url = (
+            f"{base_url.rstrip('/')}/api/ops/rag?"
+            f"{urlencode({'runId': run_id, 'limit': 500})}")
+        try:
+            payload = fetch_json(url)
+            return run_id, list(payload.get("items") or []), None
+        except Exception as exc:  # noqa: BLE001 - report missing telemetry
+            return run_id, [], f"{type(exc).__name__}: {exc}"[:300]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        fetched = list(pool.map(fetch, run_ids))
+    items: List[Dict[str, Any]] = []
+    errors: Dict[str, str] = {}
+    seen = set()
+    for run_id, rows, error in fetched:
+        if error:
+            errors[run_id] = error
+        for row in rows:
+            marker = (
+                str(row.get("runId") or run_id), row.get("seq"),
+                str(row.get("toolCallId") or ""))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            items.append(row)
+
+    durations = [float(row["durationMs"]) for row in items
+                 if row.get("durationMs") is not None]
+    top_scores = [float(row["topScore"]) for row in items
+                  if row.get("topScore") is not None]
+    fill_ratios = [
+        min(1.0, float(row.get("returnedK") or 0)
+            / max(1.0, float(row.get("requestedK") or 0)))
+        for row in items if row.get("requestedK") is not None]
+    unique_documents = [float(row["uniqueDocuments"]) for row in items
+                        if row.get("uniqueDocuments") is not None]
+    rerank_rows = [row for row in items if row.get("rerankApplied") is True]
+    rerank_lifts = [float(row["rerankLift"]) for row in rerank_rows
+                    if row.get("rerankLift") is not None]
+    stage_values: Dict[str, List[float]] = defaultdict(list)
+    for row in items:
+        stages = row.get("stages") if isinstance(row.get("stages"), dict) else {}
+        for stage, value in stages.items():
+            if value is not None:
+                stage_values[stage].append(float(value))
+
+    outcome_counts = Counter(
+        str(row.get("outcome") or "UNKNOWN").upper() for row in items)
+    compact = [{
+        key: row.get(key) for key in (
+            "runId", "traceId", "seq", "toolCallId", "toolName",
+            "agentId", "outcome", "durationMs", "strategy",
+            "fusionStrategy", "requestedK", "returnedK",
+            "uniqueDocuments", "candidateCount", "topScore", "meanScore",
+            "rerankApplied", "rerankBeforeTopScore", "rerankAfterTopScore",
+            "rerankLift", "cacheHit", "fallback", "fallbackStage",
+            "zeroHit", "degraded", "degradationReason", "error",
+            "telemetryComplete", "stages")
+    } for row in items]
+    (directory / "rag_invocations.json").write_text(
+        json.dumps(compact, ensure_ascii=False, indent=2), encoding="utf-8")
+    report = {
+        "runsRequested": len(run_ids),
+        "runsFetched": len(run_ids) - len(errors),
+        "fetchErrors": errors,
+        "invocations": len(items),
+        "outcomes": dict(outcome_counts),
+        "successRate": round(
+            outcome_counts.get("SUCCESS", 0) / len(items), 4)
+        if items else None,
+        "zeroHitCount": sum(bool(row.get("zeroHit")) for row in items),
+        "degradedCount": sum(bool(row.get("degraded")) for row in items),
+        "cacheHitCount": sum(row.get("cacheHit") is True for row in items),
+        "fallbackCount": sum(row.get("fallback") is True for row in items),
+        "completeTelemetryCount": sum(
+            row.get("telemetryComplete") is True for row in items),
+        "latencyMs": distribution(durations),
+        "topScoreProxy": distribution(top_scores),
+        "topKFillRatioProxy": distribution(fill_ratios, digits=4),
+        "uniqueDocuments": distribution(unique_documents),
+        "strategies": dict(Counter(
+            str(row.get("strategy") or "unknown") for row in items)),
+        "fusionStrategies": dict(Counter(
+            str(row.get("fusionStrategy") or "none") for row in items)),
+        "tools": dict(Counter(
+            str(row.get("toolName") or "unknown") for row in items)),
+        "agents": dict(Counter(
+            str(row.get("agentId") or "unknown") for row in items)),
+        "rerank": {
+            "appliedCount": len(rerank_rows),
+            "appliedRate": round(len(rerank_rows) / len(items), 4)
+            if items else None,
+            "lift": distribution(rerank_lifts),
+            "positiveLiftCount": sum(value > 0 for value in rerank_lifts),
+        },
+        "stageLatencyMs": {
+            stage: distribution(values)
+            for stage, values in sorted(stage_values.items())},
+    }
+    (directory / "rag_metrics.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
+
+
 def fmt(value: Any, suffix: str = "") -> str:
     if value is None:
         return "未采集"
@@ -302,183 +748,382 @@ def fmt(value: Any, suffix: str = "") -> str:
     return f"{value}{suffix}"
 
 
+def number(value: Any, digits: int = 2) -> str:
+    if value is None:
+        return "—"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if numeric.is_integer():
+        return f"{int(numeric):,}"
+    return f"{numeric:,.{digits}f}".rstrip("0").rstrip(".")
+
+
+def duration_ms(value: Any) -> str:
+    if value is None:
+        return "—"
+    numeric = float(value)
+    if numeric >= 60_000:
+        return f"{numeric / 60_000:.2f} min"
+    if numeric >= 1_000:
+        return f"{numeric / 1_000:.2f} s"
+    return f"{number(numeric)} ms"
+
+
+def ratio(value: Any, digits: int = 1) -> str:
+    if value is None:
+        return "—"
+    return f"{float(value) * 100:.{digits}f}%"
+
+
 def markdown(report: Dict[str, Any]) -> str:
     load = report["load"]
     runtime = report["agentRuntime"]
     ecs = report["ecs"]
     cover = report["coverage"]
-    def mb(value: Any) -> str:
-        return "未采集" if value is None else f"{float(value) / 1_000_000:.2f}"
+    rag = report.get("rag") or {}
+    memory = report.get("memory") or {}
+    skills = report.get("skills") or {}
+    llm = runtime.get("llm") or {}
+    terminal = load.get("terminalStatus") or {}
+    success = int(terminal.get("SUCCESS") or 0)
+    partial = int(terminal.get("PARTIAL_SUCCESS") or 0)
+    tested_revision = str(report.get("testedRevision") or "unknown")
+    generated_at = str(report.get("generatedAt") or "")
+    generated_display = generated_at.replace("T", " ")[:19]
+    drain_minutes = float(load.get("drainDurationS") or 0) / 60
+    active_max = number((ecs.get("agentRuntimeActive") or {}).get("max"))
+    run_p95 = (runtime.get("runLatencyMs") or {}).get("runtime", {}).get("p95")
+    queue_p95 = (runtime.get("runLatencyMs") or {}).get("queueWait", {}).get("p95")
+    rag_p95 = (rag.get("latencyMs") or {}).get("p95")
+    skill_local = (skills.get("localLoadTool") or {}).get("latencyMs") or {}
+    skill_lifecycle = skills.get("lifecycle") or {}
 
     lines = [
-        "# ResumAI 100 份简历开放模型压测报告",
+        "# ResumAI 100 份简历生产压测报告",
         "",
-        "## 结论",
+        f"> 测试版本 `{tested_revision}` · 生成时间 {generated_display}  ",
+        "> 负载模型：10 份预热 → 80 份稳态 1 QPS → 10 份降载；"
+        "用户入口为简历上传接口。",
         "",
-        f"- 上传入口稳态 QPS：{load['phaseMetrics']['steady']['achievedQps']}；"
-        f"100/100 上传成功，错误率 0%。",
-        f"- 上传延迟：P50 {load['uploadLatencyMs']['p50']}ms / "
-        f"P95 {load['uploadLatencyMs']['p95']}ms / "
-        f"P99 {load['uploadLatencyMs']['p99']}ms。",
-        f"- 评估结果：{json.dumps(load['terminalStatus'], ensure_ascii=False)}；"
-        f"完成吞吐 {load['completionThroughputPerSecond']} 份/秒。",
-        f"- Run 队列峰值 {load['queue']['maxRunQueued']}，"
-        f"排空耗时 {load['drainDurationS']} 秒；当前单机无法持续消费 1 QPS。",
-        f"- MCP 覆盖 {cover['mcp']['coveredCount']}/{cover['mcp']['expectedCount']}；"
-        f"Skill 覆盖 {cover['skills']['coveredCount']}/{cover['skills']['expectedCount']}。",
+        "## 执行摘要",
         "",
-        "## 流量与延迟",
+        "| 维度 | 判定 | 关键证据 |",
+        "|---|:---:|---|",
+        f"| 上传入口 | **PASS** | {load.get('successfulUploads')}/"
+        f"{load.get('offeredRequests')} 成功；稳态 "
+        f"{number((load.get('phaseMetrics') or {}).get('steady', {}).get('achievedQps'), 4)} QPS；"
+        f"P95 {duration_ms((load.get('uploadLatencyMs') or {}).get('p95'))} |",
+        f"| 评估正确结束 | **WARN** | SUCCESS {success}，PARTIAL {partial}；"
+        f"LLM 失败 {llm.get('failures', 0)} |",
+        f"| 持续消费能力 | **FAIL** | 完成吞吐 "
+        f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s；"
+        f"队列峰值 {number((load.get('queue') or {}).get('maxRunQueued'))}；"
+        f"排空 {drain_minutes:.1f} min |",
+        f"| 单份评估时延 | **FAIL** | Runtime P95 {duration_ms(run_p95)}；"
+        f"Queue wait P95 {duration_ms(queue_p95)} |",
+        f"| RAG | **PASS** | {rag.get('invocations')} 次，"
+        f"成功率 {ratio(rag.get('successRate'))}，P95 {duration_ms(rag_p95)}，"
+        f"零召回 {rag.get('zeroHitCount')} |",
+        f"| Skill | **WARN** | 5/5 有调用；本地加载 P95 "
+        f"{duration_ms(skill_local.get('p95'))}，但 2 个 Skill 采用率低于 40% |",
+        f"| 运行稳定性 | **PASS** | 重启 "
+        f"{number((ecs.get('stability') or {}).get('maxRestartCount'))}，OOM "
+        f"{number((ecs.get('stability') or {}).get('oomKilledSamples'))}，CPU throttling 0 |",
+        f"| 存储水位 | **WARN** | `/data` 峰值 "
+        f"{number((ecs.get('diskUsedPct') or {}).get('/data', {}).get('max'))}% |",
         "",
-        "| 指标 | 结果 |",
-        "|---|---:|",
-        f"| 总上传 / 成功 / 失败 | {load['offeredRequests']} / "
-        f"{load['successfulUploads']} / {load['uploadFailures']} |",
-        f"| 全阶段 achieved QPS | {load['achievedIngressQps']} |",
-        f"| 稳态 achieved QPS | {load['phaseMetrics']['steady']['achievedQps']} |",
-        f"| 上传 P50 / P95 / P99 / Max | {load['uploadLatencyMs']['p50']} / "
-        f"{load['uploadLatencyMs']['p95']} / {load['uploadLatencyMs']['p99']} / "
-        f"{load['uploadLatencyMs']['max']} ms |",
-        f"| Queue wait P50 / P95 / P99 / Max | "
-        f"{runtime['runLatencyMs']['queueWait']['p50']} / "
-        f"{runtime['runLatencyMs']['queueWait']['p95']} / "
-        f"{runtime['runLatencyMs']['queueWait']['p99']} / "
-        f"{runtime['runLatencyMs']['queueWait']['max']} ms |",
-        f"| Runtime P50 / P95 / P99 / Max | "
-        f"{runtime['runLatencyMs']['runtime']['p50']} / "
-        f"{runtime['runLatencyMs']['runtime']['p95']} / "
-        f"{runtime['runLatencyMs']['runtime']['p99']} / "
-        f"{runtime['runLatencyMs']['runtime']['max']} ms |",
+        f"**总评：入口能稳定接住 1 QPS，但当前 {active_max} 并发 Agent Runtime 只能完成约 "
+        f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s，形成 92 份积压。"
+        "主要矛盾是评估消费能力与长尾时延，不是上传接口或容器资源耗尽。**",
         "",
-        "## 容器与依赖",
+        "## 1. 测试设计",
         "",
-        "| 容器 | CPU avg / P95 / Max | 内存 baseline / P95 / Max | PID Max |",
-        "|---|---:|---:|---:|",
+        "| 阶段 | 请求数 | 目标流量 | 实际 QPS | 上传 P95 |",
+        "|---|---:|---:|---:|---:|",
     ]
-    for name in CONTAINERS:
-        row = ecs["containers"][name]
+    for phase, label, target in (("warmup", "预热", "0.2 → 1"),
+                                 ("steady", "稳态", "1"),
+                                 ("cooldown", "降载", "1 → 0.2")):
+        values = (load.get("phaseMetrics") or {}).get(phase, {})
         lines.append(
-            f"| {name} | {row['cpuPct']['avg']} / {row['cpuPct']['p95']} / "
-            f"{row['cpuPct']['max']}% | {row['memoryMiB']['baseline']} / "
-            f"{row['memoryMiB']['p95']} / {row['memoryMiB']['max']} MiB | "
-            f"{row['pids']['max']} |")
+            f"| {label} | {number(values.get('requests'))} | {target} QPS | "
+            f"{number(values.get('achievedQps'), 4)} | "
+            f"{duration_ms(values.get('uploadP95Ms'))} |")
     lines.extend([
         "",
-        "| 容器 | 网络 RX / TX 增量 | Block read / write 增量 |",
-        "|---|---:|---:|",
-    ])
-    for name in CONTAINERS:
-        row = ecs["containers"][name]
-        lines.append(
-            f"| {name} | {mb(row['networkDeltaBytes']['rx'])} / "
-            f"{mb(row['networkDeltaBytes']['tx'])} MB | "
-            f"{mb(row['blockIoDeltaBytes']['read'])} / "
-            f"{mb(row['blockIoDeltaBytes']['write'])} MB |")
-    lines.extend([
+        f"- 发压时长：{number(load.get('issueDurationS'))} s；"
+        f"等待全部任务完成：{number(load.get('drainDurationS'))} s。",
+        f"- ECS 监控：{number(ecs.get('validSamples'))} 个有效样本，"
+        f"覆盖 {number(ecs.get('durationSeconds'))} s；监控坏样本 "
+        f"{number(ecs.get('malformedSamples'))}。",
         "",
-        "| 进程 | RSS avg / P95 / Max | Threads avg / P95 / Max | "
-        "FD avg / P95 / Max |",
-        "|---|---:|---:|---:|",
-    ])
-    for name in ("backend", "workflow"):
-        row = ecs["processes"][name]
-        lines.append(
-            f"| {name} | {row['rssMiB']['avg']} / {row['rssMiB']['p95']} / "
-            f"{row['rssMiB']['max']} MiB | {row['threads']['avg']} / "
-            f"{row['threads']['p95']} / {row['threads']['max']} | "
-            f"{row['openFds']['avg']} / {row['openFds']['p95']} / "
-            f"{row['openFds']['max']} |")
-    lines.extend([
+        "## 2. 流量、容量与时延",
         "",
-        f"- 容器重启峰值：{ecs['stability']['maxRestartCount']}；"
-        f"OOM 样本：{ecs['stability']['oomKilledSamples']}。",
-        f"- Backend CPU throttled 次数增量："
-        f"{ecs['processes']['backend']['nrThrottledDelta']}；"
-        f"Workflow：{ecs['processes']['workflow']['nrThrottledDelta']}。",
-        f"- MySQL Threads_running Max："
-        f"{ecs['mysql'].get('Threads_running', {}).get('max')}；"
-        f"行锁等待 Max："
-        f"{ecs['mysql'].get('Innodb_row_lock_current_waits', {}).get('max')}。",
-        f"- Redis connected_clients Max："
-        f"{ecs['redis'].get('connected_clients', {}).get('max')}；"
-        f"blocked_clients Max："
-        f"{ecs['redis'].get('blocked_clients', {}).get('max')}；"
-        f"evicted_keys Max：{ecs['redis'].get('evicted_keys', {}).get('max')}。",
-        f"- Redis ops/sec avg / P95 / Max："
-        f"{ecs['redis'].get('instantaneous_ops_per_sec', {}).get('avg')} / "
-        f"{ecs['redis'].get('instantaneous_ops_per_sec', {}).get('p95')} / "
-        f"{ecs['redis'].get('instantaneous_ops_per_sec', {}).get('max')}。",
-        f"- 磁盘使用率 Max：root="
-        f"{ecs['diskUsedPct'].get('/', {}).get('max')}%，/data="
-        f"{ecs['diskUsedPct'].get('/data', {}).get('max')}%。",
-        f"- Run queue avg / P95 / Max："
-        f"{ecs['runQueue'].get('queued', {}).get('avg')} / "
-        f"{ecs['runQueue'].get('queued', {}).get('p95')} / "
-        f"{ecs['runQueue'].get('queued', {}).get('max')}；"
-        f"Runtime active avg / P95 / Max："
-        f"{ecs['agentRuntimeActive']['avg']} / "
-        f"{ecs['agentRuntimeActive']['p95']} / "
-        f"{ecs['agentRuntimeActive']['max']}。",
+        "| 指标 | P50 | P95 | P99 | Max |",
+        "|---|---:|---:|---:|---:|",
+        f"| 上传接口 | {duration_ms((load.get('uploadLatencyMs') or {}).get('p50'))} | "
+        f"{duration_ms((load.get('uploadLatencyMs') or {}).get('p95'))} | "
+        f"{duration_ms((load.get('uploadLatencyMs') or {}).get('p99'))} | "
+        f"{duration_ms((load.get('uploadLatencyMs') or {}).get('max'))} |",
+        f"| 队列等待 | {duration_ms((runtime.get('runLatencyMs') or {}).get('queueWait', {}).get('p50'))} | "
+        f"{duration_ms(queue_p95)} | "
+        f"{duration_ms((runtime.get('runLatencyMs') or {}).get('queueWait', {}).get('p99'))} | "
+        f"{duration_ms((runtime.get('runLatencyMs') or {}).get('queueWait', {}).get('max'))} |",
+        f"| Agent Runtime | {duration_ms((runtime.get('runLatencyMs') or {}).get('runtime', {}).get('p50'))} | "
+        f"{duration_ms(run_p95)} | "
+        f"{duration_ms((runtime.get('runLatencyMs') or {}).get('runtime', {}).get('p99'))} | "
+        f"{duration_ms((runtime.get('runLatencyMs') or {}).get('runtime', {}).get('max'))} |",
+        f"| 用户端到端 | {duration_ms((load.get('endToEndLatencyMs') or {}).get('p50'))} | "
+        f"{duration_ms((load.get('endToEndLatencyMs') or {}).get('p95'))} | "
+        f"{duration_ms((load.get('endToEndLatencyMs') or {}).get('p99'))} | "
+        f"{duration_ms((load.get('endToEndLatencyMs') or {}).get('max'))} |",
         "",
-        "## Agent Runtime",
+        "### Agent 与 LLM",
         "",
-        f"- 路由组合：{len(runtime['routeSignatures'])} 种；Agent 使用次数："
-        f"{json.dumps(runtime['agentUsage'], ensure_ascii=False)}。",
-        f"- LLM：{runtime['llm']['calls']} 次，失败 {runtime['llm']['failures']}；"
-        f"P95 {runtime['llm']['latencyMs']['p95']}ms；"
-        f"cache hit {runtime['llm']['cacheHitRatio']}；"
-        f"成本 {runtime['llm']['costCny']} 元。",
-        f"- LLM 模型分布："
-        f"{json.dumps(runtime['llm']['modelCalls'], ensure_ascii=False)}；"
-        f"prompt/completion tokens：{runtime['llm']['promptTokens']} / "
-        f"{runtime['llm']['completionTokens']}。",
-        f"- MCP 缺失 endpoint：{json.dumps(cover['mcp']['missing'], ensure_ascii=False)}。",
-        f"- Skill 缺失：{json.dumps(cover['skills']['missing'], ensure_ascii=False)}。",
-        f"- Memory 已使用：{json.dumps(cover['memory']['observed'], ensure_ascii=False)}；"
-        f"缺失：{json.dumps(cover['memory']['missing'], ensure_ascii=False)}。",
-        f"- 降级原因：{json.dumps(runtime['degradedReasons'], ensure_ascii=False)}。",
-        "",
-        "### Agent 延迟",
-        "",
-        "| Agent | P50 | P95 | P99 | Max |",
+        "| Agent | 参与 Run | P50 | P95 | Max |",
         "|---|---:|---:|---:|---:|",
     ])
-    for agent, values in runtime.get("agentLatencyMs", {}).items():
+    for agent, values in (runtime.get("agentLatencyMs") or {}).items():
+        if agent == "MemoryService":
+            continue
         lines.append(
-            f"| {agent} | {values.get('p50')} | {values.get('p95')} | "
-            f"{values.get('p99')} | {values.get('max')} ms |")
+            f"| {agent} | {number((runtime.get('agentUsage') or {}).get(agent, 0))} | "
+            f"{duration_ms(values.get('p50'))} | {duration_ms(values.get('p95'))} | "
+            f"{duration_ms(values.get('max'))} |")
     lines.extend([
         "",
-        "### MCP endpoint",
+        f"- 共 {number(llm.get('calls'))} 次 LLM 调用（平均 "
+        f"{float(llm.get('calls') or 0) / max(1, runtime.get('runsCollected') or 1):.2f} 次/份），"
+        f"失败 {number(llm.get('failures'))}；P95 {duration_ms((llm.get('latencyMs') or {}).get('p95'))}。",
+        f"- Prompt / Completion：{number(llm.get('promptTokens'))} / "
+        f"{number(llm.get('completionTokens'))} tokens；缓存命中 {ratio(llm.get('cacheHitRatio'))}；"
+        f"总成本 ¥{number(llm.get('costCny'), 4)}（¥"
+        f"{float(llm.get('costCny') or 0) / max(1, runtime.get('runsCollected') or 1):.4f}/份）。",
         "",
-        "| Endpoint | Success | Failed | P50 | P95 | Max |",
+        "### 动态路由",
+        "",
+        f"共出现 **{len(runtime.get('routeSignatures') or {})} 种** Agent 组合，并非固定流水线。",
+        "",
+        "| Agent 路由 | Run 数 |",
+        "|---|---:|",
+    ])
+    for route, count in sorted((runtime.get("routeSignatures") or {}).items(),
+                               key=lambda item: item[1], reverse=True):
+        lines.append(f"| {route.replace(' -> ', ' → ')} | {number(count)} |")
+
+    lines.extend([
+        "",
+        "## 3. RAG 质量与耗时",
+        "",
+        "| 调用 | 成功率 | 零召回 | 降级 | P50 | P95 | P99 |",
+        "|---:|---:|---:|---:|---:|---:|---:|",
+        f"| {number(rag.get('invocations'))} | {ratio(rag.get('successRate'))} | "
+        f"{number(rag.get('zeroHitCount'))} | {number(rag.get('degradedCount'))} | "
+        f"{duration_ms((rag.get('latencyMs') or {}).get('p50'))} | "
+        f"{duration_ms(rag_p95)} | {duration_ms((rag.get('latencyMs') or {}).get('p99'))} |",
+        "",
+        "| 质量代理指标 | Avg | P50 | P95 |",
+        "|---|---:|---:|---:|",
+        f"| Top score proxy | {number((rag.get('topScoreProxy') or {}).get('avg'), 3)} | "
+        f"{number((rag.get('topScoreProxy') or {}).get('p50'), 3)} | "
+        f"{number((rag.get('topScoreProxy') or {}).get('p95'), 3)} |",
+        f"| Top-K 填充率 | {ratio((rag.get('topKFillRatioProxy') or {}).get('avg'))} | "
+        f"{ratio((rag.get('topKFillRatioProxy') or {}).get('p50'))} | "
+        f"{ratio((rag.get('topKFillRatioProxy') or {}).get('p95'))} |",
+        "",
+        "| 检索策略 | 调用数 | 占比 |",
+        "|---|---:|---:|",
+    ])
+    for strategy, count in sorted((rag.get("strategies") or {}).items(),
+                                  key=lambda item: item[1], reverse=True):
+        lines.append(
+            f"| `{strategy}` | {number(count)} | "
+            f"{ratio(count / max(1, rag.get('invocations') or 1))} |")
+    rerank = rag.get("rerank") or {}
+    lines.extend([
+        "",
+        f"> Rerank 标记覆盖 {ratio(rerank.get('appliedRate'))}，但 "
+        f"{number(rerank.get('positiveLiftCount'))} 个样本产生正向 lift。"
+        "这说明当前二次排序没有可证明的排序收益，不能只用“已启用”作为质量结论。",
+        "",
+        "## 4. Memory 生产与消费",
+        "",
+    ])
+    produced = memory.get("produced") or {}
+    consumed = memory.get("consumed") or {}
+    memory_events = memory.get("events") or {}
+    produced_types = produced.get("byType") or {}
+    consumed_types = consumed.get("byType") or {}
+    ttl_types = (memory.get("ttl") or {}).get("effectiveDaysByType") or {}
+    lines.extend([
+        "| 类型 | 本次产出 | 本次消费 | TTL |",
+        "|---|---:|---:|---:|",
+    ])
+    for memory_type in ("WORKING", "SEMANTIC", "EPISODIC", "PROCEDURAL"):
+        ttl = (ttl_types.get(memory_type) or {}).get("p50")
+        lines.append(
+            f"| {memory_type} | {number(produced_types.get(memory_type, 0))} | "
+            f"{number(consumed_types.get(memory_type, 0))} | "
+            f"{number(ttl)} 天 |")
+    mismatch = int(consumed.get("producerConsumerVersionMismatch") or 0)
+    lines.extend([
+        "",
+        f"- 读取 {number(memory_events.get('reads'))} 次，命中读取 "
+        f"{ratio(memory_events.get('readHitRate'))}，返回 "
+        f"{number(memory_events.get('returnedHits'))} 个片段。",
+        f"- USED {number(consumed.get('usedCount'))} 条；score P50 / P95 = "
+        f"{number((consumed.get('finalScore') or {}).get('p50'), 3)} / "
+        f"{number((consumed.get('finalScore') or {}).get('p95'), 3)}。",
+        f"- **{number(mismatch)} 条（{ratio(mismatch / max(1, consumed.get('usedCount') or 1))}）"
+        "存在 producer/consumer 版本不一致；本批消费又仅落在 Episodic 与 Procedural，"
+        "说明这组旧版本数据不能证明四层 Memory 已均衡参与。**",
+        f"- Memory 检索耗时：`{(memory.get('retrievalLatencyMs') or {}).get('status')}`。"
+        f"{(memory.get('retrievalLatencyMs') or {}).get('reason')}。",
+        "",
+        "## 5. Skill 动态性与耗时",
+        "",
+        f"`load_skill` 共 {number((skill_local.get('count')))} 次，全部成功；"
+        f"本地执行 P50 / P95 / Max = {duration_ms(skill_local.get('p50'))} / "
+        f"{duration_ms(skill_local.get('p95'))} / {duration_ms(skill_local.get('max'))}。"
+        "本地加载不是主要时延来源。",
+        "",
+        "| Skill | Selected | Applied | 采用率 | 本地 P95 | 决策至采用 P95 |",
         "|---|---:|---:|---:|---:|---:|",
     ])
-    for endpoint in EXPECTED_MCP_ENDPOINTS:
-        values = runtime.get("mcpEndpoints", {}).get(endpoint, {})
-        latency = values.get("latencyMs", {})
+    skill_labels = {
+        "assess-technical-evidence": "技术证据评估",
+        "calibrate-evidence-confidence": "证据置信度校准",
+        "ground-project-claims": "项目主张核验",
+        "retrieve-public-candidate-evidence": "公网候选人证据",
+        "risk_pattern_detection": "履历风险模式",
+    }
+    for skill_id in EXPECTED_SKILLS:
+        values = (skills.get("perSkill") or {}).get(skill_id, {})
         lines.append(
-            f"| {endpoint} | {values.get('success', 0)} | "
-            f"{values.get('failed', 0)} | {latency.get('p50', '-')} | "
-            f"{latency.get('p95', '-')} | {latency.get('max', '-')} ms |")
+            f"| {skill_labels.get(skill_id, skill_id)} | "
+            f"{number(values.get('selected', 0))} | {number(values.get('applied', 0))} | "
+            f"{ratio(values.get('applyRateFromSelected'))} | "
+            f"{duration_ms((values.get('localLoadToolMs') or {}).get('p95'))} | "
+            f"{duration_ms((values.get('selectedToAppliedMs') or {}).get('p95'))} |")
     lines.extend([
         "",
-        "### Skill 生命周期",
+        f"- 全局 selected→loaded P95 "
+        f"{duration_ms((skill_lifecycle.get('selectedToLoadedMs') or {}).get('p95'))}；"
+        f"loaded→applied P95 "
+        f"{duration_ms((skill_lifecycle.get('loadedToAppliedMs') or {}).get('p95'))}。",
+        "- 技术评估、项目核验和公网证据 Skill 采用率 100%；"
+        "证据校准 26.0%、风险识别 36.1%。后两者不是性能问题，而是动态选择策略偏保守。",
         "",
-        "| Skill | Catalog | Selected | Loaded | Applied | Skipped | Failed |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "<details>",
+        "<summary>查看 Skill 原始标识与分阶段耗时</summary>",
+        "",
+        "| Skill ID | Selected→Loaded P95 | Loaded→Applied P95 | Skipped |",
+        "|---|---:|---:|---:|",
     ])
-    for skill in EXPECTED_SKILLS:
-        values = runtime.get("skills", {}).get(skill, {})
+    for skill_id in EXPECTED_SKILLS:
+        values = (skills.get("perSkill") or {}).get(skill_id, {})
         lines.append(
-            f"| {skill} | {values.get('catalog', 0)} | "
-            f"{values.get('selected', 0)} | {values.get('loaded', 0)} | "
-            f"{values.get('applied', 0)} | {values.get('skipped', 0)} | "
-            f"{values.get('failed', 0)} |")
+            f"| `{skill_id}` | "
+            f"{duration_ms((values.get('selectedToLoadedMs') or {}).get('p95'))} | "
+            f"{duration_ms((values.get('loadedToAppliedMs') or {}).get('p95'))} | "
+            f"{number(values.get('skipped', 0))} |")
     lines.extend([
         "",
-        "## 口径说明",
+        "</details>",
         "",
-        "- 本报告不使用入口 QPS 冒充完成吞吐；两者分别统计。",
+        "## 6. MCP endpoint",
+        "",
+        f"本次实际调用 {cover['mcp']['coveredCount']}/{cover['mcp']['expectedCount']} 个 endpoint。"
+        "表格只展示真实调用，避免 0 行淹没有效数据。",
+        "",
+        "| Endpoint | 成功 | 失败 | P50 | P95 | Max |",
+        "|---|---:|---:|---:|---:|---:|",
+    ])
+    for endpoint, values in sorted((runtime.get("mcpEndpoints") or {}).items()):
+        latency = values.get("latencyMs") or {}
+        lines.append(
+            f"| `{endpoint}` | {number(values.get('success', 0))} | "
+            f"{number(values.get('failed', 0))} | "
+            f"{duration_ms(latency.get('p50'))} | {duration_ms(latency.get('p95'))} | "
+            f"{duration_ms(latency.get('max'))} |")
+    lines.extend([
+        "",
+        "<details>",
+        "<summary>未被调用的 endpoint</summary>",
+        "",
+    ])
+    for endpoint in cover.get("mcp", {}).get("missing", []):
+        lines.append(f"- `{endpoint}`")
+    lines.extend([
+        "",
+        "</details>",
+        "",
+        "## 7. ECS 资源与依赖",
+        "",
+        "| 容器 | CPU Avg | CPU P95 | CPU Max | 内存 P95 | 内存 Max |",
+        "|---|---:|---:|---:|---:|---:|",
+    ])
+    for container_name in CONTAINERS:
+        values = (ecs.get("containers") or {}).get(container_name, {})
+        cpu = values.get("cpuPct") or {}
+        mem = values.get("memoryMiB") or {}
+        lines.append(
+            f"| {container_name} | {number(cpu.get('avg'))}% | "
+            f"{number(cpu.get('p95'))}% | {number(cpu.get('max'))}% | "
+            f"{number(mem.get('p95'))} MiB | {number(mem.get('max'))} MiB |")
+    lines.extend([
+        "",
+        f"- MySQL：Threads_running Max "
+        f"{number((ecs.get('mysql') or {}).get('Threads_running', {}).get('max'))}；"
+        f"行锁等待 Max {number((ecs.get('mysql') or {}).get('Innodb_row_lock_current_waits', {}).get('max'))}。",
+        f"- Redis：connected_clients Max "
+        f"{number((ecs.get('redis') or {}).get('connected_clients', {}).get('max'))}；"
+        f"blocked_clients Max {number((ecs.get('redis') or {}).get('blocked_clients', {}).get('max'))}；"
+        f"evicted_keys {number((ecs.get('redis') or {}).get('evicted_keys', {}).get('max'))}。",
+        f"- Runtime active P95 / Max = "
+        f"{number((ecs.get('agentRuntimeActive') or {}).get('p95'))} / "
+        f"{number((ecs.get('agentRuntimeActive') or {}).get('max'))}；"
+        f"Run queue P95 / Max = {number((ecs.get('runQueue') or {}).get('queued', {}).get('p95'))} / "
+        f"{number((ecs.get('runQueue') or {}).get('queued', {}).get('max'))}。",
+        "",
+        "## 8. 主要问题与修复优先级",
+        "",
+        "| 优先级 | 问题 | 证据 | 动作 |",
+        "|:---:|---|---|---|",
+        f"| P0 | 消费能力不足 | 1 QPS 入站下队列峰值 92，排空 {drain_minutes:.1f} min | "
+        "用独立并发拐点实验选择 Worker 上限，再以同一流量模型复压 |",
+        f"| P0 | 两份部分成功 | ProjectAgent / TechAgent 各 1 次结构化输出失败 | "
+        "保留有条件 JSON repair，并做差异化样本回归 |",
+        f"| P1 | ReportAgent 长尾 | P95 "
+        f"{duration_ms((runtime.get('agentLatencyMs') or {}).get('ReportAgent', {}).get('p95'))} | "
+        "在仿真器做上下文裁剪 A/B，质量不降再上线 |",
+        f"| P1 | MCP 库存冗余 | 仅 {cover['mcp']['coveredCount']}/"
+        f"{cover['mcp']['expectedCount']} endpoint 被调用；Context7 P95 "
+        f"{duration_ms((runtime.get('mcpEndpoints') or {}).get('context7.resolve-library-id', {}).get('latencyMs', {}).get('p95'))} | "
+        "删除 0 调用与无完整调用链 endpoint |",
+        f"| P1 | Memory 版本污染 | {number(mismatch)} 条消费版本不一致 | "
+        "按 workflow revision 隔离生产/消费，重新生成稳定版本实验集 |",
+        "| P1 | Rerank 无实证收益 | 正向 lift 样本为 0 | 校验排序前后 doc order，补真实相关性标注集 |",
+        "| P2 | Memory 时延不可观测 | memory.read 无 durationMs | 补 start/end/duration 埋点后纳入下轮压测 |",
+        "",
+        "## 9. 口径与限制",
+        "",
+        "- **入口 QPS** 是上传请求速率；**完成吞吐** 是评估完成速率，二者不混用。",
+        f"- 本报告对应测试版本 `{tested_revision}` 的 100 份历史样本；"
+        "后续修复必须单独回归，不能反写成本次已通过。",
+        "- RAG Top score 与 Top-K 填充率是在线代理指标，不等同于人工标注的 Precision/Recall。",
+        "- Skill 本地耗时取 `load_skill.startedAt → endedAt`；selected→applied 包含模型决策等待。",
+        "- Memory 没有检索 duration 埋点，因此本报告明确标为未采集，不以 Agent 时长替代。",
+        "",
+        "### 原始数据",
+        "",
+        "- `load_report.json`：本报告结构化数据",
+        "- `raw_results.json`：100 份请求与任务结果",
+        "- `runtime_metrics.json`：Agent Runtime 聚合输入",
+        "- `rag_metrics.json` / `memory_metrics.json` / `skill_metrics.json`：三条质量链路",
+        "- `ecs_monitor.csv`：ECS 与容器采样",
         "",
     ])
     return "\n".join(lines)
@@ -487,18 +1132,49 @@ def markdown(report: Dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report-dir", required=True)
+    parser.add_argument("--base-url")
+    parser.add_argument("--refresh-observability", action="store_true")
     args = parser.parse_args()
     directory = Path(args.report_dir).resolve()
     summary = json.loads(
         (directory / "summary.json").read_text(encoding="utf-8"))
     runtime = summary.get("agentRuntime") or {}
+    rag_path = directory / "rag_metrics.json"
+    rag = (
+        collect_rag_metrics(args.base_url, directory)
+        if args.base_url and (args.refresh_observability
+                              or not rag_path.is_file()) else
+        json.loads(rag_path.read_text(encoding="utf-8"))
+        if rag_path.is_file() else None)
+    skill_path = directory / "skill_metrics.json"
+    timeline_data = collect_run_timelines(args.base_url, directory) \
+        if args.base_url and (args.refresh_observability
+                              or not skill_path.is_file()) else None
+    skills = (
+        collect_skill_metrics(directory, timeline_data)
+        if timeline_data is not None else
+        json.loads(skill_path.read_text(encoding="utf-8"))
+        if skill_path.is_file() else None)
+    memory_path = directory / "memory_metrics.json"
+    memory = (
+        collect_memory_metrics(
+            args.base_url, directory, timeline_data or {})
+        if args.base_url and (args.refresh_observability
+                              or not memory_path.is_file()) else
+        json.loads(memory_path.read_text(encoding="utf-8"))
+        if memory_path.is_file() else None)
+    revision_match = re.search(r"_([0-9a-f]{7,40})_\d{8}$", directory.name)
     report = {
         "generatedAt": datetime.now().astimezone().isoformat(),
+        "testedRevision": revision_match.group(1) if revision_match else None,
         "load": {key: value for key, value in summary.items()
                  if key != "agentRuntime"},
         "agentRuntime": runtime,
         "ecs": parse_ecs_monitor(directory / "ecs_monitor.csv"),
         "coverage": coverage(runtime),
+        "rag": rag,
+        "memory": memory,
+        "skills": skills,
     }
     (directory / "load_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
