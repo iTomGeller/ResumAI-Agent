@@ -8,11 +8,38 @@ set -euo pipefail
 SRC_DIR="${SRC_DIR:-/opt/resumai-src}"
 DEPLOY_ENV_SRC="${DEPLOY_ENV_SRC:-/opt/ai-resume-agent-platform/.env}"
 BACKUP_ROOT="${BACKUP_ROOT:-/root/resumai-backups}"
+BACKUP_KEEP="${BACKUP_KEEP:-7}"
 COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.ecs.yml"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="${BACKUP_ROOT}/${STAMP}"
 
 log() { echo "[ecs-deploy $(date +%H:%M:%S)] $*"; }
+
+prune_old_backups() {
+  local root_real backup parent
+  local -a backups=()
+  if [[ ! "$BACKUP_KEEP" =~ ^[1-9][0-9]*$ ]]; then
+    log "WARN: invalid BACKUP_KEEP=$BACKUP_KEEP; backup retention skipped"
+    return 0
+  fi
+  root_real="$(realpath -- "$BACKUP_ROOT")"
+  mapfile -t backups < <(
+    find "$root_real" -mindepth 1 -maxdepth 1 -type d \
+      -regextype posix-extended \
+      -regex '.*/[0-9]{8}-[0-9]{6}' -print | LC_ALL=C sort -r
+  )
+  for backup in "${backups[@]:$BACKUP_KEEP}"; do
+    backup="$(realpath -- "$backup")"
+    parent="$(dirname -- "$backup")"
+    if [[ "$parent" != "$root_real" \
+          || ! "$(basename -- "$backup")" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+      log "WARN: refusing unsafe backup path: $backup"
+      continue
+    fi
+    log "remove expired deploy backup: $backup"
+    rm -rf -- "$backup"
+  done
+}
 
 verify_fresh_archive_manifest() (
   local manifest=".deploy-source.sha256"
@@ -169,11 +196,16 @@ source .env
 set +a
 
 log "mysqldump backup (data safety)"
-docker exec resumai-mysql mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" \
+MYSQL_BACKUP="$BACKUP_DIR/mysql-${MYSQL_DATABASE}.sql"
+if docker exec resumai-mysql mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" \
   --single-transaction --routines --triggers "$MYSQL_DATABASE" \
-  > "$BACKUP_DIR/mysql-${MYSQL_DATABASE}.sql" || {
-    log "WARN: mysqldump failed; continuing only if volume intact"
-  }
+  > "$MYSQL_BACKUP"; then
+  log "compress mysql backup"
+  gzip -1 -- "$MYSQL_BACKUP"
+else
+  log "WARN: mysqldump failed; removing partial dump and continuing only if volume intact"
+  rm -f -- "$MYSQL_BACKUP"
+fi
 ls -lh "$BACKUP_DIR" || true
 
 # Count rows before deploy
@@ -497,4 +529,6 @@ curl -fsS -X POST http://127.0.0.1/api/rag/knowledge-base/reindex || \
 log "container status"
 $COMPOSE ps
 docker stats --no-stream
+log "apply deploy-backup retention (keep newest $BACKUP_KEEP)"
+prune_old_backups
 log "deploy complete"

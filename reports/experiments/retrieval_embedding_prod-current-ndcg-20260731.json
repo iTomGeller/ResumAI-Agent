@@ -1,0 +1,25 @@
+{
+  "experiment": "embedding",
+  "label": "prod-current-ndcg-20260731",
+  "generatedAt": "2026-07-31T09:07:52Z",
+  "results": {
+    "jd_match": {
+      "cases": 10,
+      "recall@5": 1.0,
+      "precision@5": 0.25,
+      "mrr": 1.0,
+      "nDCG@5": 1.0,
+      "avgLatencyMs": 4750.0,
+      "p95LatencyMs": 4953.0
+    },
+    "knowledge": {
+      "cases": 16,
+      "recall@5": 1.0,
+      "precision@5": 0.2,
+      "mrr": 0.9688,
+      "nDCG@5": 0.9769,
+      "avgLatencyMs": 4848.6,
+      "p95LatencyMs": 4953.0
+    }
+  }
+}

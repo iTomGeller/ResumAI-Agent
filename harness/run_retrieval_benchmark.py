@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import sys
 import time
@@ -55,7 +56,18 @@ def metrics_at_k(ranked_ids: List[str], gold: List[str], k: int = 5) -> Dict[str
         if item in gold_set:
             mrr = 1.0 / rank
             break
-    return {"recall": recall, "precision": precision, "mrr": mrr}
+    dcg = sum(hit / math.log2(rank + 1)
+              for rank, hit in enumerate(hits, start=1))
+    ideal_hits = min(len(gold_set), k)
+    ideal_dcg = sum(1.0 / math.log2(rank + 1)
+                    for rank in range(1, ideal_hits + 1))
+    ndcg = dcg / ideal_dcg if ideal_dcg else 0.0
+    return {
+        "recall": recall,
+        "precision": precision,
+        "mrr": mrr,
+        "ndcg": ndcg,
+    }
 
 
 def run_jd_case(base: str, case: Dict[str, Any],
@@ -95,6 +107,7 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "recall@5": round(sum(r["recall"] for r in rows) / len(rows), 4),
         "precision@5": round(sum(r["precision"] for r in rows) / len(rows), 4),
         "mrr": round(sum(r["mrr"] for r in rows) / len(rows), 4),
+        "nDCG@5": round(sum(r["ndcg"] for r in rows) / len(rows), 4),
         "avgLatencyMs": round(statistics.mean(latencies), 1),
         "p95LatencyMs": round(p95, 1),
     }
