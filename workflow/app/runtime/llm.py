@@ -73,6 +73,53 @@ class LlmError(RuntimeError):
         self.retryable = retryable
 
 
+def _parse_native_tool_arguments(
+        raw_arguments: Any, *, allow_exact_duplicate: bool = False,
+) -> tuple[Dict[str, Any], str, str]:
+    """Parse provider-native arguments without generic JSON repair.
+
+    DeepSeek occasionally repeats the *same* complete function arguments
+    object twice, which ``json.loads`` reports as ``Extra data``.  For report
+    sections only, accepting an exact semantic duplicate is lossless.  Any
+    distinct second object or arbitrary trailing text remains malformed.
+    """
+    if isinstance(raw_arguments, dict):
+        text = json.dumps(
+            raw_arguments, ensure_ascii=False, separators=(",", ":"))
+        return raw_arguments, text, ""
+
+    text = str(raw_arguments or "")
+    try:
+        candidate = json.loads(text or "{}")
+        if not isinstance(candidate, dict):
+            raise ValueError("tool arguments must be a JSON object")
+        return candidate, text, ""
+    except (json.JSONDecodeError, ValueError) as exc:
+        if (allow_exact_duplicate and isinstance(exc, json.JSONDecodeError)
+                and exc.msg == "Extra data"):
+            decoder = json.JSONDecoder()
+            try:
+                first, first_end = decoder.raw_decode(text)
+                trailing = text[first_end:].strip()
+                second, second_end = decoder.raw_decode(trailing)
+                remainder = trailing[second_end:].strip()
+                if (isinstance(first, dict) and first == second
+                        and not remainder):
+                    normalized = json.dumps(
+                        first, ensure_ascii=False, separators=(",", ":"))
+                    return first, normalized, ""
+                detail = (
+                    f"{exc}; exactDuplicate=false; "
+                    f"trailingChars={len(trailing)}; "
+                    f"trailingRemainderChars={len(remainder)}")
+                return {}, text, detail
+            except (json.JSONDecodeError, ValueError, TypeError) as tail_exc:
+                return {}, text, (
+                    f"{exc}; exactDuplicate=false; "
+                    f"trailingParse={type(tail_exc).__name__}")
+        return {}, text, str(exc)
+
+
 class CircuitBreaker:
     """Simple failure-rate breaker: N failures within a window opens the
     circuit for a cooldown; a half-open probe closes it again on success."""
@@ -487,23 +534,11 @@ class ResilientLlmClient:
                 if not isinstance(function, dict):
                     continue
                 name = str(function.get("name") or "").strip()
-                raw_arguments = function.get("arguments")
-                if isinstance(raw_arguments, dict):
-                    arguments = raw_arguments
-                    raw_arguments_text = json.dumps(
-                        raw_arguments, ensure_ascii=False, separators=(",", ":"))
-                    arguments_error = ""
-                else:
-                    raw_arguments_text = str(raw_arguments or "")
-                    try:
-                        candidate = json.loads(raw_arguments_text or "{}")
-                        if not isinstance(candidate, dict):
-                            raise ValueError("tool arguments must be a JSON object")
-                        arguments = candidate
-                        arguments_error = ""
-                    except (json.JSONDecodeError, ValueError) as exc:
-                        arguments = {}
-                        arguments_error = str(exc)
+                arguments, raw_arguments_text, arguments_error = (
+                    _parse_native_tool_arguments(
+                        function.get("arguments"),
+                        allow_exact_duplicate=(
+                            name == "emit_report_section")))
                 parsed_tool_calls.append(LlmToolCall(
                     tool_call_id=str(raw_call.get("id") or f"call-{index + 1}"),
                     name=name,

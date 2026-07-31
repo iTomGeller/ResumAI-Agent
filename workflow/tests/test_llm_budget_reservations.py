@@ -18,6 +18,7 @@ from app.runtime.llm import (
     LlmError,
     LlmTurn,
     ResilientLlmClient,
+    _parse_native_tool_arguments,
 )
 from app.runtime.models import BudgetExceeded, PolicyBundle, RunBudget
 
@@ -190,6 +191,31 @@ def test_provider_gate_bounds_concurrent_requests(monkeypatch):
     assert asyncio.run(exercise()) == ["ok"] * 4
     assert max_active == 2
     assert budget.llm_calls == 4
+
+
+def test_report_section_accepts_only_an_exact_duplicate_arguments_object():
+    raw = '{"summary":"grounded","dimensions":[1]}'
+    arguments, normalized, error = _parse_native_tool_arguments(
+        raw + raw, allow_exact_duplicate=True)
+
+    assert error == ""
+    assert arguments == {"summary": "grounded", "dimensions": [1]}
+    assert normalized == raw
+
+
+def test_report_section_rejects_distinct_or_arbitrary_extra_data():
+    first = '{"summary":"grounded"}'
+    distinct = '{"summary":"changed"}'
+
+    arguments, _, error = _parse_native_tool_arguments(
+        first + distinct, allow_exact_duplicate=True)
+    assert arguments == {}
+    assert "exactDuplicate=false" in error
+
+    arguments, _, error = _parse_native_tool_arguments(
+        first + " trailing prose", allow_exact_duplicate=True)
+    assert arguments == {}
+    assert "trailingParse=" in error
 
 
 def test_budget_snapshot_preserves_scope_accounting():

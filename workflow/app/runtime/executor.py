@@ -357,7 +357,8 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
                 "只生成评分总览小节：技术能力、项目深度、JD匹配、履历可信度"
                 "四个维度必须齐全且逐项引用证据；给出150-250字summary、"
                 "recommendation、dataQuality和至少2条strengths。"
-                "不要生成风险和面试题。"),
+                "不要生成风险和面试题。只调用一次emit_report_section，"
+                "arguments闭合后禁止重复输出第二个JSON对象或解释。"),
         },
         "risk": {
             "useQuality": False,
@@ -367,7 +368,9 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
             "instruction": (
                 "只生成候选人风险小节：输出4-6条不重复的具体风险，覆盖"
                 "履历可信度、项目真实性、JD缺口；每条给影响、核验方式和"
-                "证据引用；另列4-8条missingEvidence。不要生成评分和面试题。"),
+                "证据引用；另列4-8条missingEvidence。不要生成评分和面试题。"
+                "只调用一次emit_report_section，arguments闭合后禁止重复输出"
+                "第二个JSON对象或解释。"),
         },
         "question": {
             "useQuality": False,
@@ -378,7 +381,8 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
                 "只生成结构化面试追问：必须8题，覆盖每个HIGH风险、"
                 "TOP3 JD缺口和最重要项目；每题含目的、触发依据、好信号、"
                 "红旗、1个追问和证据引用；好信号/红旗各1-2条，避免重复。"
-                "不要生成评分和风险。"),
+                "不要生成评分和风险。只调用一次emit_report_section，"
+                "arguments闭合后禁止重复输出第二个JSON对象或解释。"),
         },
     }
 
