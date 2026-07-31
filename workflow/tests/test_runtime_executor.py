@@ -654,7 +654,7 @@ def test_parallel_report_retries_only_the_failed_section():
     run(scenario())
 
 
-def test_parallel_report_production_client_uses_json_mode_and_call_cap():
+def test_parallel_report_production_client_uses_native_schema_and_call_cap():
     ref = {
         "sourceType": "RESUME", "sourceId": "resume",
         "quote": "candidate evidence",
@@ -670,11 +670,11 @@ def test_parallel_report_production_client_uses_json_mode_and_call_cap():
             breaker=CircuitBreaker(threshold=5))
         calls = []
 
-        async def fake_chat(messages, *, purpose="", json_mode=True,
-                            tools=None, tool_choice=None, **kwargs):
+        async def fake_chat_turn(messages, *, purpose="", tools=None,
+                                 tool_choice=None, **kwargs):
             calls.append({
-                "purpose": purpose, "jsonMode": json_mode,
-                "tools": tools, "toolChoice": tool_choice,
+                "purpose": purpose, "tools": tools,
+                "toolChoice": tool_choice,
             })
             if purpose == "report_score":
                 payload = {
@@ -701,9 +701,14 @@ def test_parallel_report_production_client_uses_json_mode_and_call_cap():
                         {"question": f"question {i}",
                          "evidenceRefs": [ref]}
                         for i in range(8)]}
-            return json.dumps(payload, ensure_ascii=False)
+            return LlmTurn(
+                content="", finish_reason="tool_calls",
+                tool_calls=[LlmToolCall(
+                    tool_call_id=f"tc-{purpose}",
+                    name="emit_report_section", arguments=payload,
+                    raw_arguments=json.dumps(payload, ensure_ascii=False))])
 
-        client.chat = fake_chat
+        client.chat_turn = fake_chat_turn
         executor.llm = client
         executor.tools.llm = client
         output, call_count = await executor._run_parallel_report_sections(
@@ -715,8 +720,13 @@ def test_parallel_report_production_client_uses_json_mode_and_call_cap():
         assert output is not None
         assert call_count == 3
         assert len(calls) == 3
-        assert all(call["jsonMode"] is True for call in calls)
-        assert all(call["tools"] is None for call in calls)
+        assert all(call["tools"] for call in calls)
+        assert all(
+            call["tools"][0]["function"]["name"] == "emit_report_section"
+            for call in calls)
+        assert all(
+            call["toolChoice"]["function"]["name"] == "emit_report_section"
+            for call in calls)
 
     run(scenario())
 
