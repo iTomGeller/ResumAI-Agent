@@ -1,0 +1,2951 @@
+{
+  "generatedAt": "2026-07-31T21:07:29.589335+08:00",
+  "testedRevision": "f89ab83",
+  "load": {
+    "profile": [
+      {
+        "sequence": 1,
+        "phase": "warmup",
+        "targetQps": 0.04,
+        "scheduledOffsetS": 0.0
+      },
+      {
+        "sequence": 2,
+        "phase": "warmup",
+        "targetQps": 0.044444444444444446,
+        "scheduledOffsetS": 25.0
+      },
+      {
+        "sequence": 3,
+        "phase": "warmup",
+        "targetQps": 0.04888888888888889,
+        "scheduledOffsetS": 47.5
+      },
+      {
+        "sequence": 4,
+        "phase": "warmup",
+        "targetQps": 0.05333333333333333,
+        "scheduledOffsetS": 67.95454545454545
+      },
+      {
+        "sequence": 5,
+        "phase": "warmup",
+        "targetQps": 0.057777777777777775,
+        "scheduledOffsetS": 86.70454545454545
+      },
+      {
+        "sequence": 6,
+        "phase": "warmup",
+        "targetQps": 0.06222222222222222,
+        "scheduledOffsetS": 104.01223776223776
+      },
+      {
+        "sequence": 7,
+        "phase": "warmup",
+        "targetQps": 0.06666666666666667,
+        "scheduledOffsetS": 120.08366633366633
+      },
+      {
+        "sequence": 8,
+        "phase": "warmup",
+        "targetQps": 0.07111111111111111,
+        "scheduledOffsetS": 135.08366633366632
+      },
+      {
+        "sequence": 9,
+        "phase": "warmup",
+        "targetQps": 0.07555555555555556,
+        "scheduledOffsetS": 149.14616633366632
+      },
+      {
+        "sequence": 10,
+        "phase": "warmup",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 162.3814604513134
+      },
+      {
+        "sequence": 11,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 174.8814604513134
+      },
+      {
+        "sequence": 12,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 187.3814604513134
+      },
+      {
+        "sequence": 13,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 199.8814604513134
+      },
+      {
+        "sequence": 14,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 212.3814604513134
+      },
+      {
+        "sequence": 15,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 224.8814604513134
+      },
+      {
+        "sequence": 16,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 237.3814604513134
+      },
+      {
+        "sequence": 17,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 249.8814604513134
+      },
+      {
+        "sequence": 18,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 262.3814604513134
+      },
+      {
+        "sequence": 19,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 274.8814604513134
+      },
+      {
+        "sequence": 20,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 287.3814604513134
+      },
+      {
+        "sequence": 21,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 299.8814604513134
+      },
+      {
+        "sequence": 22,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 312.3814604513134
+      },
+      {
+        "sequence": 23,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 324.8814604513134
+      },
+      {
+        "sequence": 24,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 337.3814604513134
+      },
+      {
+        "sequence": 25,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 349.8814604513134
+      },
+      {
+        "sequence": 26,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 362.3814604513134
+      },
+      {
+        "sequence": 27,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 374.8814604513134
+      },
+      {
+        "sequence": 28,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 387.3814604513134
+      },
+      {
+        "sequence": 29,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 399.8814604513134
+      },
+      {
+        "sequence": 30,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 412.3814604513134
+      },
+      {
+        "sequence": 31,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 424.8814604513134
+      },
+      {
+        "sequence": 32,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 437.3814604513134
+      },
+      {
+        "sequence": 33,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 449.8814604513134
+      },
+      {
+        "sequence": 34,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 462.3814604513134
+      },
+      {
+        "sequence": 35,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 474.8814604513134
+      },
+      {
+        "sequence": 36,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 487.3814604513134
+      },
+      {
+        "sequence": 37,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 499.8814604513134
+      },
+      {
+        "sequence": 38,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 512.3814604513134
+      },
+      {
+        "sequence": 39,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 524.8814604513134
+      },
+      {
+        "sequence": 40,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 537.3814604513134
+      },
+      {
+        "sequence": 41,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 549.8814604513134
+      },
+      {
+        "sequence": 42,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 562.3814604513134
+      },
+      {
+        "sequence": 43,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 574.8814604513134
+      },
+      {
+        "sequence": 44,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 587.3814604513134
+      },
+      {
+        "sequence": 45,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 599.8814604513134
+      },
+      {
+        "sequence": 46,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 612.3814604513134
+      },
+      {
+        "sequence": 47,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 624.8814604513134
+      },
+      {
+        "sequence": 48,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 637.3814604513134
+      },
+      {
+        "sequence": 49,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 649.8814604513134
+      },
+      {
+        "sequence": 50,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 662.3814604513134
+      },
+      {
+        "sequence": 51,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 674.8814604513134
+      },
+      {
+        "sequence": 52,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 687.3814604513134
+      },
+      {
+        "sequence": 53,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 699.8814604513134
+      },
+      {
+        "sequence": 54,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 712.3814604513134
+      },
+      {
+        "sequence": 55,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 724.8814604513134
+      },
+      {
+        "sequence": 56,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 737.3814604513134
+      },
+      {
+        "sequence": 57,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 749.8814604513134
+      },
+      {
+        "sequence": 58,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 762.3814604513134
+      },
+      {
+        "sequence": 59,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 774.8814604513134
+      },
+      {
+        "sequence": 60,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 787.3814604513134
+      },
+      {
+        "sequence": 61,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 799.8814604513134
+      },
+      {
+        "sequence": 62,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 812.3814604513134
+      },
+      {
+        "sequence": 63,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 824.8814604513134
+      },
+      {
+        "sequence": 64,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 837.3814604513134
+      },
+      {
+        "sequence": 65,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 849.8814604513134
+      },
+      {
+        "sequence": 66,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 862.3814604513134
+      },
+      {
+        "sequence": 67,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 874.8814604513134
+      },
+      {
+        "sequence": 68,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 887.3814604513134
+      },
+      {
+        "sequence": 69,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 899.8814604513134
+      },
+      {
+        "sequence": 70,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 912.3814604513134
+      },
+      {
+        "sequence": 71,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 924.8814604513134
+      },
+      {
+        "sequence": 72,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 937.3814604513134
+      },
+      {
+        "sequence": 73,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 949.8814604513134
+      },
+      {
+        "sequence": 74,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 962.3814604513134
+      },
+      {
+        "sequence": 75,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 974.8814604513134
+      },
+      {
+        "sequence": 76,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 987.3814604513134
+      },
+      {
+        "sequence": 77,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 999.8814604513134
+      },
+      {
+        "sequence": 78,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 1012.3814604513134
+      },
+      {
+        "sequence": 79,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 1024.8814604513134
+      },
+      {
+        "sequence": 80,
+        "phase": "steady",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 1037.3814604513134
+      },
+      {
+        "sequence": 81,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1049.8814604513134
+      },
+      {
+        "sequence": 82,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1059.8814604513134
+      },
+      {
+        "sequence": 83,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1069.8814604513134
+      },
+      {
+        "sequence": 84,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1079.8814604513134
+      },
+      {
+        "sequence": 85,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1089.8814604513134
+      },
+      {
+        "sequence": 86,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1099.8814604513134
+      },
+      {
+        "sequence": 87,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1109.8814604513134
+      },
+      {
+        "sequence": 88,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1119.8814604513134
+      },
+      {
+        "sequence": 89,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1129.8814604513134
+      },
+      {
+        "sequence": 90,
+        "phase": "overload",
+        "targetQps": 0.1,
+        "scheduledOffsetS": 1139.8814604513134
+      },
+      {
+        "sequence": 91,
+        "phase": "cooldown",
+        "targetQps": 0.08,
+        "scheduledOffsetS": 1149.8814604513134
+      },
+      {
+        "sequence": 92,
+        "phase": "cooldown",
+        "targetQps": 0.07555555555555556,
+        "scheduledOffsetS": 1162.3814604513134
+      },
+      {
+        "sequence": 93,
+        "phase": "cooldown",
+        "targetQps": 0.07111111111111111,
+        "scheduledOffsetS": 1175.6167545689605
+      },
+      {
+        "sequence": 94,
+        "phase": "cooldown",
+        "targetQps": 0.06666666666666667,
+        "scheduledOffsetS": 1189.6792545689605
+      },
+      {
+        "sequence": 95,
+        "phase": "cooldown",
+        "targetQps": 0.06222222222222222,
+        "scheduledOffsetS": 1204.6792545689605
+      },
+      {
+        "sequence": 96,
+        "phase": "cooldown",
+        "targetQps": 0.057777777777777775,
+        "scheduledOffsetS": 1220.7506831403891
+      },
+      {
+        "sequence": 97,
+        "phase": "cooldown",
+        "targetQps": 0.05333333333333334,
+        "scheduledOffsetS": 1238.0583754480815
+      },
+      {
+        "sequence": 98,
+        "phase": "cooldown",
+        "targetQps": 0.048888888888888885,
+        "scheduledOffsetS": 1256.8083754480815
+      },
+      {
+        "sequence": 99,
+        "phase": "cooldown",
+        "targetQps": 0.044444444444444446,
+        "scheduledOffsetS": 1277.262920902627
+      },
+      {
+        "sequence": 100,
+        "phase": "cooldown",
+        "targetQps": 0.04,
+        "scheduledOffsetS": 1299.762920902627
+      }
+    ],
+    "offeredRequests": 100,
+    "successfulUploads": 100,
+    "uploadFailures": 0,
+    "achievedIngressQps": 0.0769,
+    "issueDurationS": 1300.313,
+    "drainDurationS": 58.992,
+    "completionThroughputPerSecond": 0.0736,
+    "phaseMetrics": {
+      "warmup": {
+        "requests": 10,
+        "successfulUploads": 10,
+        "achievedQps": 0.0555,
+        "uploadP95Ms": 2904.4999999999973
+      },
+      "steady": {
+        "requests": 70,
+        "successfulUploads": 70,
+        "achievedQps": 0.08,
+        "uploadP95Ms": 2736.0999999999995
+      },
+      "overload": {
+        "requests": 10,
+        "successfulUploads": 10,
+        "achievedQps": 0.1,
+        "uploadP95Ms": 1274.3999999999996
+      },
+      "cooldown": {
+        "requests": 10,
+        "successfulUploads": 10,
+        "achievedQps": 0.06,
+        "uploadP95Ms": 993.8999999999996
+      }
+    },
+    "uploadLatencyMs": {
+      "p50": 952.5,
+      "p95": 2635.0999999999995,
+      "p99": 4018.340000000001,
+      "max": 4250
+    },
+    "terminalStatus": {
+      "SUCCESS": 100
+    },
+    "endToEndLatencyMs": {
+      "p50": 81561.5,
+      "p95": 139394.05,
+      "p99": 160783.19,
+      "max": 170405.0
+    },
+    "queue": {
+      "samples": 222,
+      "sampleErrors": 1,
+      "maxTaskQueued": 1.0,
+      "maxTaskRunning": 12.0,
+      "maxPendingMessages": 1.0,
+      "maxActiveWorkers": 0.0,
+      "maxWorkerUtilization": 0.0,
+      "maxRunQueued": 2.0,
+      "maxRunActive": 8.0,
+      "maxOldestWaitSeconds": 0.0,
+      "finalRunQueued": 0.0,
+      "finalRunActive": 0.0
+    },
+    "completionTimestampSource": "server_queue_lifecycle",
+    "latePollingMetricsCorrected": 100
+  },
+  "agentRuntime": {
+    "runsCollected": 100,
+    "runMetricErrors": 0,
+    "routeSignatures": {
+      "TechAgent -> ProjectAgent -> RiskAgent -> EvidenceAgent -> ReportAgent": 83,
+      "TechAgent -> RiskAgent -> EvidenceAgent -> ReportAgent": 14,
+      "TechAgent -> EvidenceAgent -> ReportAgent": 2,
+      "TechAgent -> ProjectAgent -> EvidenceAgent -> ReportAgent": 1
+    },
+    "agentUsage": {
+      "TechAgent": 100,
+      "ProjectAgent": 84,
+      "RiskAgent": 97,
+      "EvidenceAgent": 100,
+      "ReportAgent": 100
+    },
+    "agentLatencyMs": {
+      "EvidenceAgent": {
+        "count": 100,
+        "min": 6126.0,
+        "avg": 16477.97,
+        "p50": 15389.5,
+        "p95": 26851.85,
+        "p99": 35192.59,
+        "max": 43864.0
+      },
+      "MemoryService": {
+        "count": 100,
+        "min": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "ProjectAgent": {
+        "count": 84,
+        "min": 18606.0,
+        "avg": 29399.071,
+        "p50": 27719.5,
+        "p95": 44641.4,
+        "p99": 49228.28,
+        "max": 53282.0
+      },
+      "ReportAgent": {
+        "count": 100,
+        "min": 13734.0,
+        "avg": 40492.58,
+        "p50": 24640.5,
+        "p95": 89192.8,
+        "p99": 96077.06,
+        "max": 99449.0
+      },
+      "RiskAgent": {
+        "count": 97,
+        "min": 16559.0,
+        "avg": 28251.216,
+        "p50": 27513.0,
+        "p95": 44220.6,
+        "p99": 48592.2,
+        "max": 53277.0
+      },
+      "TechAgent": {
+        "count": 100,
+        "min": 15737.0,
+        "avg": 27989.22,
+        "p50": 27428.5,
+        "p95": 44128.2,
+        "p99": 48448.85,
+        "max": 53285.0
+      }
+    },
+    "runLatencyMs": {
+      "queueWait": {
+        "p50": 19.0,
+        "p95": 13581.449999999999,
+        "p99": 17233.650000000045,
+        "max": 25713.0
+      },
+      "runtime": {
+        "p50": 77598.5,
+        "p95": 135204.8,
+        "p99": 144253.42,
+        "max": 147265.0
+      }
+    },
+    "llm": {
+      "calls": 1023,
+      "failures": 1,
+      "latencyMs": {
+        "count": 1023,
+        "min": 680.0,
+        "avg": 12066.647,
+        "p50": 11809.0,
+        "p95": 24222.0,
+        "p99": 70029.84,
+        "max": 95015.0
+      },
+      "modelCalls": {
+        "deepseek-v4-flash": 922,
+        "deepseek-v4-pro": 101
+      },
+      "promptTokens": 5894908,
+      "completionTokens": 1272534,
+      "cacheHitTokens": 1736448,
+      "cacheHitRatio": 0.2946,
+      "costCny": 6.8772
+    },
+    "mcpEndpoints": {
+      "exa.web_fetch_exa": {
+        "rateLimited": 59,
+        "failed": 66,
+        "otherFailed": 7,
+        "latencyMs": {
+          "count": 66,
+          "min": 1709.0,
+          "avg": 5990.106,
+          "p50": 5650.0,
+          "p95": 8533.0,
+          "p99": 11504.05,
+          "max": 11870.0
+        }
+      },
+      "exa.web_search_exa": {
+        "rateLimited": 6,
+        "failed": 6,
+        "success": 1,
+        "latencyMs": {
+          "count": 7,
+          "min": 4395.0,
+          "avg": 5555.286,
+          "p50": 5719.0,
+          "p95": 5911.4,
+          "p99": 5945.48,
+          "max": 5954.0
+        }
+      }
+    },
+    "skills": {
+      "assess-technical-evidence": {
+        "catalog": 100,
+        "selected": 100,
+        "loaded": 100,
+        "applied": 100
+      },
+      "calibrate-evidence-confidence": {
+        "catalog": 100,
+        "selected": 100,
+        "loaded": 35,
+        "applied": 35,
+        "skipped": 65
+      },
+      "ground-project-claims": {
+        "catalog": 84,
+        "selected": 84,
+        "loaded": 84,
+        "applied": 84
+      },
+      "retrieve-public-candidate-evidence": {
+        "catalog": 70,
+        "selected": 70,
+        "loaded": 70,
+        "applied": 70
+      },
+      "risk_pattern_detection": {
+        "catalog": 97,
+        "selected": 97,
+        "loaded": 35,
+        "applied": 35,
+        "skipped": 62
+      }
+    },
+    "memoryUsageByType": {
+      "PROCEDURAL": 785,
+      "EPISODIC": 344
+    },
+    "retrieval": {
+      "success": 385
+    },
+    "repairsAndFailures": {
+      "budget_reallocated": 42,
+      "parallel_report_retry": 10
+    },
+    "degradedReasons": {},
+    "evidenceSupportRatio": {
+      "p50": 0.6715,
+      "p95": 0.8659999999999999,
+      "p99": 0.9093200000000002,
+      "max": 0.941
+    },
+    "jdCoverage": {
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0,
+      "max": 1.0
+    },
+    "llmFailureDetail": {
+      "reasons": {
+        "JSON_TRUNCATED": 1
+      },
+      "rateLimited": 0
+    }
+  },
+  "ecs": {
+    "samples": 285,
+    "validSamples": 285,
+    "malformedSamples": 0,
+    "intervalSeconds": {
+      "count": 284,
+      "min": 4.0,
+      "avg": 5.007,
+      "p50": 5.0,
+      "p95": 5.0,
+      "p99": 5.17,
+      "max": 6.0
+    },
+    "durationSeconds": 1422.0,
+    "containers": {
+      "ai-resume-backend": {
+        "cpuPct": {
+          "count": 285,
+          "min": 1.36,
+          "avg": 11.195,
+          "p50": 3.38,
+          "p95": 46.338,
+          "p99": 89.39,
+          "max": 180.24
+        },
+        "memoryMiB": {
+          "count": 285,
+          "min": 554.0,
+          "avg": 685.041,
+          "p50": 693.6,
+          "p95": 697.48,
+          "p99": 697.816,
+          "max": 705.0,
+          "baseline": 554.0,
+          "end": 697.6,
+          "growth": 143.6
+        },
+        "pids": {
+          "count": 285,
+          "min": 106.0,
+          "avg": 125.758,
+          "p50": 126.0,
+          "p95": 130.0,
+          "p99": 131.0,
+          "max": 131.0
+        },
+        "networkDeltaBytes": {
+          "rx": 1189900000.0,
+          "tx": 189860000.0
+        },
+        "blockIoDeltaBytes": {
+          "read": 0.0,
+          "write": 5050000.0
+        }
+      },
+      "ai-resume-workflow": {
+        "cpuPct": {
+          "count": 285,
+          "min": 0.1,
+          "avg": 5.129,
+          "p50": 1.49,
+          "p95": 22.23,
+          "p99": 29.708,
+          "max": 35.75
+        },
+        "memoryMiB": {
+          "count": 285,
+          "min": 91.29,
+          "avg": 120.297,
+          "p50": 122.9,
+          "p95": 125.56,
+          "p99": 126.3,
+          "max": 126.5,
+          "baseline": 91.29,
+          "end": 123.5,
+          "growth": 32.21
+        },
+        "pids": {
+          "count": 285,
+          "min": 8.0,
+          "avg": 8.0,
+          "p50": 8.0,
+          "p95": 8.0,
+          "p99": 8.0,
+          "max": 8.0
+        },
+        "networkDeltaBytes": {
+          "rx": 27200000.0,
+          "tx": 104000000.0
+        },
+        "blockIoDeltaBytes": {
+          "read": 0.0,
+          "write": 0.0
+        }
+      },
+      "resumai-mysql": {
+        "cpuPct": {
+          "count": 285,
+          "min": 0.49,
+          "avg": 5.586,
+          "p50": 2.3,
+          "p95": 20.95,
+          "p99": 26.091,
+          "max": 33.5
+        },
+        "memoryMiB": {
+          "count": 285,
+          "min": 632.0,
+          "avg": 649.471,
+          "p50": 648.7,
+          "p95": 666.5,
+          "p99": 666.816,
+          "max": 666.9,
+          "baseline": 632.2,
+          "end": 666.4,
+          "growth": 34.2
+        },
+        "pids": {
+          "count": 285,
+          "min": 45.0,
+          "avg": 45.011,
+          "p50": 45.0,
+          "p95": 45.0,
+          "p99": 45.0,
+          "max": 47.0
+        },
+        "networkDeltaBytes": {
+          "rx": 126000000.0,
+          "tx": 1080000000.0
+        },
+        "blockIoDeltaBytes": {
+          "read": 10000000.0,
+          "write": 4900000000.0
+        }
+      },
+      "resumai-redis": {
+        "cpuPct": {
+          "count": 285,
+          "min": 0.17,
+          "avg": 0.881,
+          "p50": 0.28,
+          "p95": 3.2,
+          "p99": 3.818,
+          "max": 12.51
+        },
+        "memoryMiB": {
+          "count": 285,
+          "min": 43.91,
+          "avg": 45.578,
+          "p50": 45.58,
+          "p95": 46.666,
+          "p99": 46.906,
+          "max": 49.26,
+          "baseline": 44.29,
+          "end": 46.64,
+          "growth": 2.35
+        },
+        "pids": {
+          "count": 285,
+          "min": 7.0,
+          "avg": 7.032,
+          "p50": 7.0,
+          "p95": 7.0,
+          "p99": 7.16,
+          "max": 14.0
+        },
+        "networkDeltaBytes": {
+          "rx": 16000000.0,
+          "tx": 10000000.0
+        },
+        "blockIoDeltaBytes": {
+          "read": 4700000.0,
+          "write": 160000000.0
+        }
+      }
+    },
+    "processes": {
+      "backend": {
+        "vmHwmMiB": {
+          "count": 285,
+          "min": 573.535,
+          "avg": 713.105,
+          "p50": 723.789,
+          "p95": 723.789,
+          "p99": 723.789,
+          "max": 723.879
+        },
+        "rssMiB": {
+          "count": 285,
+          "min": 573.535,
+          "avg": 704.151,
+          "p50": 712.625,
+          "p95": 716.223,
+          "p99": 716.75,
+          "max": 723.879
+        },
+        "threads": {
+          "count": 285,
+          "min": 106.0,
+          "avg": 125.751,
+          "p50": 126.0,
+          "p95": 130.0,
+          "p99": 131.0,
+          "max": 131.0
+        },
+        "openFds": {
+          "count": 285,
+          "min": 162.0,
+          "avg": 191.27,
+          "p50": 192.0,
+          "p95": 205.0,
+          "p99": 208.0,
+          "max": 209.0
+        },
+        "nrThrottledDelta": 0.0,
+        "throttledUsecDelta": 0.0,
+        "oomDelta": 0.0,
+        "oomKillDelta": 0.0
+      },
+      "workflow": {
+        "vmHwmMiB": {
+          "count": 285,
+          "min": 61.25,
+          "avg": 90.267,
+          "p50": 92.055,
+          "p95": 95.488,
+          "p99": 95.488,
+          "max": 95.488
+        },
+        "rssMiB": {
+          "count": 285,
+          "min": 61.25,
+          "avg": 90.255,
+          "p50": 92.055,
+          "p95": 95.488,
+          "p99": 95.488,
+          "max": 95.488
+        },
+        "threads": {
+          "count": 285,
+          "min": 5.0,
+          "avg": 5.0,
+          "p50": 5.0,
+          "p95": 5.0,
+          "p99": 5.0,
+          "max": 5.0
+        },
+        "openFds": {
+          "count": 285,
+          "min": 16.0,
+          "avg": 45.305,
+          "p50": 48.0,
+          "p95": 56.0,
+          "p99": 58.0,
+          "max": 62.0
+        },
+        "nrThrottledDelta": 0.0,
+        "throttledUsecDelta": 0.0,
+        "oomDelta": 0.0,
+        "oomKillDelta": 0.0
+      }
+    },
+    "stability": {
+      "maxRestartCount": 0,
+      "oomKilledSamples": 0
+    },
+    "agentRuntimeActive": {
+      "count": 285,
+      "min": 0.0,
+      "avg": 6.025,
+      "p50": 7.0,
+      "p95": 8.0,
+      "p99": 8.0,
+      "max": 8.0
+    },
+    "taskQueue": {
+      "queued": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.004,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 1.0
+      },
+      "running": {
+        "count": 285,
+        "min": 2.0,
+        "avg": 8.161,
+        "p50": 9.0,
+        "p95": 11.0,
+        "p99": 12.0,
+        "max": 12.0
+      },
+      "retrying": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "failed": {
+        "count": 285,
+        "min": 20.0,
+        "avg": 20.0,
+        "p50": 20.0,
+        "p95": 20.0,
+        "p99": 20.0,
+        "max": 20.0
+      },
+      "stuck": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "pendingMessages": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.004,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 1.0
+      },
+      "oldestWaitSeconds": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "activeWorkers": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.004,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 1.0
+      },
+      "workerCapacity": {
+        "count": 285,
+        "min": 4.0,
+        "avg": 4.0,
+        "p50": 4.0,
+        "p95": 4.0,
+        "p99": 4.0,
+        "max": 4.0
+      },
+      "workerUtilization": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.001,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.25
+      }
+    },
+    "runQueue": {
+      "queued": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.151,
+        "p50": 0.0,
+        "p95": 1.0,
+        "p99": 2.0,
+        "max": 2.0
+      },
+      "active": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 6.011,
+        "p50": 7.0,
+        "p95": 8.0,
+        "p99": 8.0,
+        "max": 8.0
+      }
+    },
+    "mysql": {
+      "Innodb_row_lock_current_waits": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.007,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 1.0
+      },
+      "Innodb_row_lock_time": {
+        "count": 285,
+        "min": 47191.0,
+        "avg": 52622.698,
+        "p50": 52642.0,
+        "p95": 57410.0,
+        "p99": 57420.0,
+        "max": 57420.0
+      },
+      "Max_used_connections": {
+        "count": 285,
+        "min": 8.0,
+        "avg": 8.0,
+        "p50": 8.0,
+        "p95": 8.0,
+        "p99": 8.0,
+        "max": 8.0
+      },
+      "Slow_queries": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "Threads_connected": {
+        "count": 285,
+        "min": 4.0,
+        "avg": 6.814,
+        "p50": 7.0,
+        "p95": 7.0,
+        "p99": 7.0,
+        "max": 7.0
+      },
+      "Threads_running": {
+        "count": 285,
+        "min": 2.0,
+        "avg": 2.077,
+        "p50": 2.0,
+        "p95": 3.0,
+        "p99": 3.0,
+        "max": 6.0
+      }
+    },
+    "redis": {
+      "connected_clients": {
+        "count": 285,
+        "min": 26.0,
+        "avg": 26.996,
+        "p50": 27.0,
+        "p95": 27.0,
+        "p99": 27.0,
+        "max": 27.0
+      },
+      "blocked_clients": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.586,
+        "p50": 1.0,
+        "p95": 1.0,
+        "p99": 1.0,
+        "max": 1.0
+      },
+      "mem_fragmentation_ratio": {
+        "count": 285,
+        "min": 1.2,
+        "avg": 1.212,
+        "p50": 1.21,
+        "p95": 1.22,
+        "p99": 1.23,
+        "max": 1.23
+      },
+      "instantaneous_ops_per_sec": {
+        "count": 285,
+        "min": 2.0,
+        "avg": 44.537,
+        "p50": 30.0,
+        "p95": 137.0,
+        "p99": 188.36,
+        "max": 241.0
+      },
+      "evicted_keys": {
+        "count": 285,
+        "min": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      }
+    },
+    "diskUsedPct": {
+      "/": {
+        "count": 285,
+        "min": 77.0,
+        "avg": 77.368,
+        "p50": 77.0,
+        "p95": 78.0,
+        "p99": 78.0,
+        "max": 78.0
+      },
+      "/data": {
+        "count": 285,
+        "min": 43.0,
+        "avg": 43.0,
+        "p50": 43.0,
+        "p95": 43.0,
+        "p99": 43.0,
+        "max": 43.0
+      }
+    }
+  },
+  "coverage": {
+    "mcp": {
+      "expected": [
+        "exa.web_fetch_exa",
+        "exa.web_search_exa",
+        "fetch.fetch"
+      ],
+      "observed": [
+        "exa.web_fetch_exa",
+        "exa.web_search_exa"
+      ],
+      "coveredCount": 2,
+      "expectedCount": 3,
+      "missing": [
+        "fetch.fetch"
+      ]
+    },
+    "skills": {
+      "expected": [
+        "assess-technical-evidence",
+        "calibrate-evidence-confidence",
+        "ground-project-claims",
+        "retrieve-public-candidate-evidence",
+        "risk_pattern_detection"
+      ],
+      "observedApplied": [
+        "assess-technical-evidence",
+        "calibrate-evidence-confidence",
+        "ground-project-claims",
+        "retrieve-public-candidate-evidence",
+        "risk_pattern_detection"
+      ],
+      "coveredCount": 5,
+      "expectedCount": 5,
+      "missing": []
+    },
+    "memory": {
+      "observed": [
+        "EPISODIC",
+        "PROCEDURAL"
+      ],
+      "missing": [
+        "SEMANTIC",
+        "WORKING"
+      ]
+    }
+  },
+  "benchmarkManifest": {
+    "capturedAt": "2026-07-31T20:23:23+0800",
+    "mcpEndpoints": [
+      "exa.web_fetch_exa",
+      "exa.web_search_exa",
+      "fetch.fetch"
+    ],
+    "mcpServers": [
+      "exa",
+      "fetch"
+    ]
+  },
+  "rag": {
+    "runsRequested": 100,
+    "runsFetched": 100,
+    "fetchErrors": {},
+    "invocations": 485,
+    "outcomes": {
+      "SUCCESS": 485
+    },
+    "successRate": 1.0,
+    "zeroHitCount": 0,
+    "degradedCount": 1,
+    "cacheHitCount": 0,
+    "fallbackCount": 1,
+    "completeTelemetryCount": 485,
+    "latencyMs": {
+      "count": 485,
+      "min": 9.0,
+      "avg": 22.52,
+      "p50": 21.0,
+      "p95": 38.0,
+      "p99": 57.16,
+      "max": 100.0
+    },
+    "topScoreProxy": {
+      "count": 485,
+      "min": 0.016,
+      "avg": 0.509,
+      "p50": 0.539,
+      "p95": 1.0,
+      "p99": 1.0,
+      "max": 1.0
+    },
+    "scoreTelemetryCoverage": {
+      "measured": 485,
+      "total": 485,
+      "rate": 1.0
+    },
+    "topScoreBands": {
+      "high_ge_0_7": 127,
+      "medium_0_4_to_0_7": 170,
+      "low_lt_0_4": 188
+    },
+    "topScoreByTool": {
+      "knowledge_search": {
+        "count": 200,
+        "min": 0.498,
+        "avg": 0.705,
+        "p50": 0.662,
+        "p95": 0.807,
+        "p99": 0.912,
+        "max": 0.912
+      },
+      "resume_semantic_search": {
+        "count": 185,
+        "min": 0.068,
+        "avg": 0.559,
+        "p50": 0.412,
+        "p95": 1.0,
+        "p99": 1.0,
+        "max": 1.0
+      },
+      "jd_match_search": {
+        "count": 100,
+        "min": 0.016,
+        "avg": 0.024,
+        "p50": 0.016,
+        "p95": 0.016,
+        "p99": 0.024,
+        "max": 0.786
+      }
+    },
+    "topScoreByStrategy": {
+      "hybrid_bm25_embedding+feature_rerank": {
+        "count": 184,
+        "min": 0.662,
+        "avg": 0.723,
+        "p50": 0.662,
+        "p95": 0.883,
+        "p99": 0.912,
+        "max": 0.912
+      },
+      "section_bm25_rrf": {
+        "count": 184,
+        "min": 0.2,
+        "avg": 0.562,
+        "p50": 0.412,
+        "p95": 1.0,
+        "p99": 1.0,
+        "max": 1.0
+      },
+      "hybrid": {
+        "count": 100,
+        "min": 0.016,
+        "avg": 0.024,
+        "p50": 0.016,
+        "p95": 0.016,
+        "p99": 0.024,
+        "max": 0.786
+      },
+      "embedding_only+feature_rerank": {
+        "count": 16,
+        "min": 0.498,
+        "avg": 0.498,
+        "p50": 0.498,
+        "p95": 0.498,
+        "p99": 0.498,
+        "max": 0.498
+      },
+      "resume_text_fallback": {
+        "count": 1,
+        "min": 0.068,
+        "avg": 0.068,
+        "p50": 0.068,
+        "p95": 0.068,
+        "p99": 0.068,
+        "max": 0.068
+      }
+    },
+    "topKFillRatioProxy": {
+      "count": 485,
+      "min": 0.2,
+      "avg": 0.9395,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0,
+      "max": 1.0
+    },
+    "uniqueDocuments": {
+      "count": 485,
+      "min": 1.0,
+      "avg": 3.043,
+      "p50": 3.0,
+      "p95": 5.0,
+      "p99": 5.0,
+      "max": 5.0
+    },
+    "strategies": {
+      "hybrid_bm25_embedding+feature_rerank": 184,
+      "section_bm25_rrf": 184,
+      "hybrid": 100,
+      "embedding_only+feature_rerank": 16,
+      "resume_text_fallback": 1
+    },
+    "fusionStrategies": {
+      "rrf_k60": 184,
+      "rrf_structural_lexical": 184,
+      "rrf_weighted": 100,
+      "none": 17
+    },
+    "tools": {
+      "knowledge_search": 200,
+      "resume_semantic_search": 185,
+      "jd_match_search": 100
+    },
+    "agents": {
+      "ReportAgent": 100,
+      "TechAgent": 200,
+      "CoordinatorAgent": 100,
+      "ProjectAgent": 85
+    },
+    "scenarios": {
+      "jd_matching": {
+        "label": "岗位匹配检索",
+        "tools": {
+          "jd_match_search": 100
+        },
+        "invocations": 100,
+        "outcomes": {
+          "SUCCESS": 100
+        },
+        "successRate": 1.0,
+        "zeroHitCount": 0,
+        "degradedCount": 0,
+        "latencyMs": {
+          "count": 100,
+          "min": 18.0,
+          "avg": 26.47,
+          "p50": 24.0,
+          "p95": 40.2,
+          "p99": 57.03,
+          "max": 60.0
+        },
+        "topScoreProxy": {
+          "count": 100,
+          "min": 0.016,
+          "avg": 0.024,
+          "p50": 0.016,
+          "p95": 0.016,
+          "p99": 0.024,
+          "max": 0.786
+        },
+        "scoreTelemetryCoverage": {
+          "measured": 100,
+          "total": 100,
+          "rate": 1.0
+        },
+        "topKFillRatioProxy": {
+          "count": 100,
+          "min": 1.0,
+          "avg": 1.0,
+          "p50": 1.0,
+          "p95": 1.0,
+          "p99": 1.0,
+          "max": 1.0
+        },
+        "strategies": {
+          "hybrid": 100
+        },
+        "fusionStrategies": {
+          "rrf_weighted": 100
+        },
+        "stageLatencyMs": {
+          "retrievalMs": {
+            "count": 100,
+            "min": 18.4,
+            "avg": 26.78,
+            "p50": 24.05,
+            "p95": 40.615,
+            "p99": 57.234,
+            "max": 60.6
+          },
+          "totalMs": {
+            "count": 100,
+            "min": 18.4,
+            "avg": 26.78,
+            "p50": 24.05,
+            "p95": 40.615,
+            "p99": 57.234,
+            "max": 60.6
+          }
+        },
+        "rerankAppliedCount": 0,
+        "rerankOrderingChangedCount": 0,
+        "multiQueryCount": 0
+      },
+      "knowledge_base": {
+        "label": "岗位/评估知识库",
+        "tools": {
+          "knowledge_search": 200
+        },
+        "invocations": 200,
+        "outcomes": {
+          "SUCCESS": 200
+        },
+        "successRate": 1.0,
+        "zeroHitCount": 0,
+        "degradedCount": 0,
+        "latencyMs": {
+          "count": 200,
+          "min": 17.0,
+          "avg": 26.65,
+          "p50": 23.5,
+          "p95": 44.05,
+          "p99": 99.01,
+          "max": 100.0
+        },
+        "topScoreProxy": {
+          "count": 200,
+          "min": 0.498,
+          "avg": 0.705,
+          "p50": 0.662,
+          "p95": 0.807,
+          "p99": 0.912,
+          "max": 0.912
+        },
+        "scoreTelemetryCoverage": {
+          "measured": 200,
+          "total": 200,
+          "rate": 1.0
+        },
+        "topKFillRatioProxy": {
+          "count": 200,
+          "min": 1.0,
+          "avg": 1.0,
+          "p50": 1.0,
+          "p95": 1.0,
+          "p99": 1.0,
+          "max": 1.0
+        },
+        "strategies": {
+          "hybrid_bm25_embedding+feature_rerank": 184,
+          "embedding_only+feature_rerank": 16
+        },
+        "fusionStrategies": {
+          "rrf_k60": 184,
+          "none": 16
+        },
+        "stageLatencyMs": {
+          "fusionMs": {
+            "count": 200,
+            "min": 0.0,
+            "avg": 0.13,
+            "p50": 0.0,
+            "p95": 1.0,
+            "p99": 1.0,
+            "max": 2.0
+          },
+          "queryRewriteMs": {
+            "count": 200,
+            "min": 0.0,
+            "avg": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0
+          },
+          "rerankMs": {
+            "count": 200,
+            "min": 0.0,
+            "avg": 0.33,
+            "p50": 0.0,
+            "p95": 1.0,
+            "p99": 2.0,
+            "max": 2.0
+          },
+          "retrievalMs": {
+            "count": 200,
+            "min": 7.0,
+            "avg": 11.615,
+            "p50": 10.0,
+            "p95": 19.05,
+            "p99": 43.16,
+            "max": 62.0
+          },
+          "totalMs": {
+            "count": 200,
+            "min": 8.0,
+            "avg": 12.905,
+            "p50": 11.0,
+            "p95": 21.05,
+            "p99": 48.14,
+            "max": 69.0
+          }
+        },
+        "rerankAppliedCount": 200,
+        "rerankOrderingChangedCount": 72,
+        "multiQueryCount": 0
+      },
+      "resume_evidence": {
+        "label": "简历内证据检索",
+        "tools": {
+          "resume_semantic_search": 185
+        },
+        "invocations": 185,
+        "outcomes": {
+          "SUCCESS": 185
+        },
+        "successRate": 1.0,
+        "zeroHitCount": 0,
+        "degradedCount": 1,
+        "latencyMs": {
+          "count": 185,
+          "min": 9.0,
+          "avg": 15.919,
+          "p50": 14.0,
+          "p95": 25.8,
+          "p99": 34.32,
+          "max": 37.0
+        },
+        "topScoreProxy": {
+          "count": 185,
+          "min": 0.068,
+          "avg": 0.559,
+          "p50": 0.412,
+          "p95": 1.0,
+          "p99": 1.0,
+          "max": 1.0
+        },
+        "scoreTelemetryCoverage": {
+          "measured": 185,
+          "total": 185,
+          "rate": 1.0
+        },
+        "topKFillRatioProxy": {
+          "count": 185,
+          "min": 0.2,
+          "avg": 0.8414,
+          "p50": 1.0,
+          "p95": 1.0,
+          "p99": 1.0,
+          "max": 1.0
+        },
+        "strategies": {
+          "section_bm25_rrf": 184,
+          "resume_text_fallback": 1
+        },
+        "fusionStrategies": {
+          "rrf_structural_lexical": 184,
+          "none": 1
+        },
+        "stageLatencyMs": {
+          "queryRewriteMs": {
+            "count": 185,
+            "min": 0.0,
+            "avg": 0.0,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
+            "max": 0.0
+          },
+          "retrievalMs": {
+            "count": 185,
+            "min": 9.4,
+            "avg": 16.344,
+            "p50": 14.4,
+            "p95": 26.04,
+            "p99": 34.772,
+            "max": 37.3
+          },
+          "totalMs": {
+            "count": 185,
+            "min": 0.0,
+            "avg": 0.903,
+            "p50": 1.0,
+            "p95": 2.0,
+            "p99": 5.16,
+            "max": 6.0
+          }
+        },
+        "rerankAppliedCount": 185,
+        "rerankOrderingChangedCount": 0,
+        "multiQueryCount": 0
+      }
+    },
+    "queryPlanning": {
+      "mode": "provider_authored_query_with_deterministic_passthrough",
+      "independentRewriteCount": 0,
+      "multiQueryCount": 0,
+      "note": "Agent LLM authors the tool query; the runtime rewrite stage does not issue an independent rewrite call in this revision."
+    },
+    "rerank": {
+      "appliedCount": 385,
+      "appliedRate": 0.7938,
+      "lift": {
+        "count": 200,
+        "min": 0.0,
+        "avg": 0.01,
+        "p50": 0.0,
+        "p95": 0.032,
+        "p99": 0.032,
+        "max": 0.032
+      },
+      "positiveLiftCount": 60,
+      "orderingTelemetryCount": 200,
+      "orderingChangedCount": 72,
+      "topChangedCount": 60,
+      "movedDocuments": 342
+    },
+    "stageLatencyMs": {
+      "fusionMs": {
+        "count": 200,
+        "min": 0.0,
+        "avg": 0.13,
+        "p50": 0.0,
+        "p95": 1.0,
+        "p99": 1.0,
+        "max": 2.0
+      },
+      "queryRewriteMs": {
+        "count": 385,
+        "min": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "rerankMs": {
+        "count": 200,
+        "min": 0.0,
+        "avg": 0.33,
+        "p50": 0.0,
+        "p95": 1.0,
+        "p99": 2.0,
+        "max": 2.0
+      },
+      "retrievalMs": {
+        "count": 485,
+        "min": 7.0,
+        "avg": 16.546,
+        "p50": 13.2,
+        "p95": 31.64,
+        "p99": 50.032,
+        "max": 62.0
+      },
+      "totalMs": {
+        "count": 485,
+        "min": 0.0,
+        "avg": 11.188,
+        "p50": 9.0,
+        "p95": 31.22,
+        "p99": 50.032,
+        "max": 69.0
+      }
+    }
+  },
+  "memory": {
+    "runsRequested": 100,
+    "runsFetched": 100,
+    "fetchErrors": {},
+    "produced": {
+      "count": 1087,
+      "byType": {
+        "EPISODIC": 393,
+        "WORKING": 593,
+        "SEMANTIC": 100,
+        "PROCEDURAL": 1
+      },
+      "byScope": {
+        "USER": 101,
+        "RUN": 593,
+        "CONVERSATION": 393
+      },
+      "bySource": {
+        "cross_candidate_anchor": 200,
+        "evaluation_insight": 200,
+        "candidate_fact": 200,
+        "evaluation_result": 286,
+        "runtime_strategy": 101,
+        "run_input": 100
+      },
+      "byStatus": {
+        "CONFLICTED": 99,
+        "ARCHIVED": 593,
+        "ACTIVE": 395
+      }
+    },
+    "consumed": {
+      "records": 1129,
+      "decisions": {
+        "USED": 1129
+      },
+      "usedCount": 1129,
+      "byType": {
+        "PROCEDURAL": 785,
+        "EPISODIC": 344
+      },
+      "byAgent": {
+        "ReportAgent": 236,
+        "EvidenceAgent": 236,
+        "TechAgent": 236,
+        "RiskAgent": 227,
+        "ProjectAgent": 194
+      },
+      "bySource": {
+        "runtime_strategy": 785,
+        "cross_candidate_anchor": 344
+      },
+      "finalScore": {
+        "count": 1129,
+        "min": 0.292,
+        "avg": 0.488,
+        "p50": 0.541,
+        "p95": 0.57,
+        "p99": 0.57,
+        "max": 0.586
+      },
+      "ageAtUseSeconds": {
+        "count": 1129,
+        "min": 0.0,
+        "avg": 83582.113,
+        "p50": 17398.0,
+        "p95": 192984.2,
+        "p99": 193114.16,
+        "max": 193191.0
+      },
+      "producerConsumerVersionMismatch": 0
+    },
+    "events": {
+      "telemetryStatus": "COMPLETE",
+      "counts": {
+        "memory.read": 400,
+        "memory.selected": 236,
+        "memory.missed": 232,
+        "memory.used": 1129,
+        "memory.written": 1086
+      },
+      "reads": 400,
+      "returnedHits": 236,
+      "readHitRate": 0.42
+    },
+    "ttl": {
+      "effectiveDaysByType": {
+        "EPISODIC": {
+          "count": 393,
+          "min": 90.0,
+          "avg": 90.0,
+          "p50": 90.0,
+          "p95": 90.0,
+          "p99": 90.0,
+          "max": 90.0
+        },
+        "WORKING": {
+          "count": 593,
+          "min": 1.0,
+          "avg": 1.0,
+          "p50": 1.0,
+          "p95": 1.0,
+          "p99": 1.0,
+          "max": 1.0
+        },
+        "SEMANTIC": {
+          "count": 100,
+          "min": 90.0,
+          "avg": 90.0,
+          "p50": 90.0,
+          "p95": 90.0,
+          "p99": 90.0,
+          "max": 90.0
+        },
+        "PROCEDURAL": {
+          "count": 1,
+          "min": 365.0,
+          "avg": 365.0,
+          "p50": 365.0,
+          "p95": 365.0,
+          "p99": 365.0,
+          "max": 365.0
+        }
+      },
+      "remainingDaysByType": {
+        "EPISODIC": {
+          "count": 393,
+          "min": 89.984,
+          "avg": 89.992,
+          "p50": 89.992,
+          "p95": 89.998,
+          "p99": 89.999,
+          "max": 89.999
+        },
+        "WORKING": {
+          "count": 593,
+          "min": 0.984,
+          "avg": 0.992,
+          "p50": 0.992,
+          "p95": 0.998,
+          "p99": 0.999,
+          "max": 0.999
+        },
+        "SEMANTIC": {
+          "count": 100,
+          "min": 89.984,
+          "avg": 89.992,
+          "p50": 89.992,
+          "p95": 89.998,
+          "p99": 89.999,
+          "max": 89.999
+        },
+        "PROCEDURAL": {
+          "count": 1,
+          "min": 364.999,
+          "avg": 364.999,
+          "p50": 364.999,
+          "p95": 364.999,
+          "p99": 364.999,
+          "max": 364.999
+        }
+      },
+      "overrideUsage": {
+        "default": 1087
+      }
+    },
+    "retrievalLatencyMs": {
+      "status": "MEASURED",
+      "reason": "memory.read durationMs measured at the Java search boundary",
+      "count": 400,
+      "min": 13.0,
+      "avg": 36.395,
+      "p50": 37.0,
+      "p95": 56.0,
+      "p99": 69.53,
+      "max": 129.0
+    }
+  },
+  "skills": {
+    "runsRequested": 100,
+    "runsFetched": 100,
+    "fetchErrors": {},
+    "eventCounts": {
+      "skill.catalog": 451,
+      "skill.selected": 451,
+      "skill.loaded": 324,
+      "skill.applied": 324,
+      "skill.skipped": 127
+    },
+    "localLoadTool": {
+      "outcomes": {
+        "SUCCESS": 324
+      },
+      "latencyMs": {
+        "count": 324,
+        "min": 23.0,
+        "avg": 29.623,
+        "p50": 28.0,
+        "p95": 38.0,
+        "p99": 46.77,
+        "max": 55.0
+      },
+      "definition": "load_skill 本地工具 startedAt→endedAt，不含 LLM 推理"
+    },
+    "lifecycle": {
+      "selectedToLoadedMs": {
+        "count": 324,
+        "min": 800.0,
+        "avg": 1973.346,
+        "p50": 1268.5,
+        "p95": 7117.2,
+        "p99": 10632.69,
+        "max": 11916.0
+      },
+      "loadedToAppliedMs": {
+        "count": 324,
+        "min": 36.0,
+        "avg": 68.975,
+        "p50": 57.0,
+        "p95": 116.0,
+        "p99": 141.77,
+        "max": 150.0
+      },
+      "selectedToAppliedMs": {
+        "count": 324,
+        "min": 839.0,
+        "avg": 2042.321,
+        "p50": 1344.5,
+        "p95": 7258.25,
+        "p99": 10725.15,
+        "max": 11958.0
+      },
+      "definition": "selected→loaded 包含模型首次决策等待；loaded→applied 表示指令进入下一轮模型上下文的等待"
+    },
+    "agents": {
+      "RiskAgent": 97,
+      "TechAgent": 100,
+      "EvidenceAgent": 100,
+      "ProjectAgent": 154
+    },
+    "perSkill": {
+      "assess-technical-evidence": {
+        "catalog": 100,
+        "selected": 100,
+        "loaded": 100,
+        "applied": 100,
+        "skipped": 0,
+        "failed": 0,
+        "applyRateFromSelected": 1.0,
+        "agents": {
+          "TechAgent": 100
+        },
+        "localLoadToolMs": {
+          "count": 100,
+          "min": 24.0,
+          "avg": 29.68,
+          "p50": 29.0,
+          "p95": 38.0,
+          "p99": 44.02,
+          "max": 46.0
+        },
+        "selectedToLoadedMs": {
+          "count": 100,
+          "min": 800.0,
+          "avg": 1089.98,
+          "p50": 1031.5,
+          "p95": 1491.55,
+          "p99": 1915.38,
+          "max": 2448.0
+        },
+        "loadedToAppliedMs": {
+          "count": 100,
+          "min": 36.0,
+          "avg": 44.27,
+          "p50": 43.0,
+          "p95": 55.0,
+          "p99": 74.03,
+          "max": 77.0
+        },
+        "selectedToAppliedMs": {
+          "count": 100,
+          "min": 839.0,
+          "avg": 1134.25,
+          "p50": 1077.0,
+          "p95": 1531.65,
+          "p99": 1959.41,
+          "max": 2495.0
+        },
+        "selectedToSkippedMs": {
+          "count": null,
+          "min": null,
+          "avg": null,
+          "p50": null,
+          "p95": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "calibrate-evidence-confidence": {
+        "catalog": 100,
+        "selected": 100,
+        "loaded": 35,
+        "applied": 35,
+        "skipped": 65,
+        "failed": 0,
+        "applyRateFromSelected": 0.35,
+        "agents": {
+          "EvidenceAgent": 100
+        },
+        "localLoadToolMs": {
+          "count": 35,
+          "min": 26.0,
+          "avg": 31.171,
+          "p50": 29.0,
+          "p95": 45.2,
+          "p99": 48.66,
+          "max": 49.0
+        },
+        "selectedToLoadedMs": {
+          "count": 35,
+          "min": 1277.0,
+          "avg": 7674.486,
+          "p50": 7090.0,
+          "p95": 11150.4,
+          "p99": 11709.96,
+          "max": 11916.0
+        },
+        "loadedToAppliedMs": {
+          "count": 35,
+          "min": 41.0,
+          "avg": 94.571,
+          "p50": 93.0,
+          "p95": 144.1,
+          "p99": 149.66,
+          "max": 150.0
+        },
+        "selectedToAppliedMs": {
+          "count": 35,
+          "min": 1318.0,
+          "avg": 7769.057,
+          "p50": 7186.0,
+          "p95": 11263.7,
+          "p99": 11785.96,
+          "max": 11958.0
+        },
+        "selectedToSkippedMs": {
+          "count": 65,
+          "min": 6064.0,
+          "avg": 13215.877,
+          "p50": 11506.0,
+          "p95": 23098.8,
+          "p99": 24434.08,
+          "max": 24580.0
+        }
+      },
+      "ground-project-claims": {
+        "catalog": 84,
+        "selected": 84,
+        "loaded": 84,
+        "applied": 84,
+        "skipped": 0,
+        "failed": 0,
+        "applyRateFromSelected": 1.0,
+        "agents": {
+          "ProjectAgent": 84
+        },
+        "localLoadToolMs": {
+          "count": 84,
+          "min": 23.0,
+          "avg": 29.857,
+          "p50": 28.5,
+          "p95": 38.0,
+          "p99": 48.36,
+          "max": 55.0
+        },
+        "selectedToLoadedMs": {
+          "count": 84,
+          "min": 923.0,
+          "avg": 1292.095,
+          "p50": 1247.0,
+          "p95": 1656.3,
+          "p99": 2196.32,
+          "max": 3023.0
+        },
+        "loadedToAppliedMs": {
+          "count": 84,
+          "min": 37.0,
+          "avg": 89.631,
+          "p50": 96.0,
+          "p95": 126.85,
+          "p99": 140.36,
+          "max": 147.0
+        },
+        "selectedToAppliedMs": {
+          "count": 84,
+          "min": 968.0,
+          "avg": 1381.726,
+          "p50": 1340.0,
+          "p95": 1760.7,
+          "p99": 2288.23,
+          "max": 3134.0
+        },
+        "selectedToSkippedMs": {
+          "count": null,
+          "min": null,
+          "avg": null,
+          "p50": null,
+          "p95": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "retrieve-public-candidate-evidence": {
+        "catalog": 70,
+        "selected": 70,
+        "loaded": 70,
+        "applied": 70,
+        "skipped": 0,
+        "failed": 0,
+        "applyRateFromSelected": 1.0,
+        "agents": {
+          "ProjectAgent": 70
+        },
+        "localLoadToolMs": {
+          "count": 70,
+          "min": 23.0,
+          "avg": 29.086,
+          "p50": 28.0,
+          "p95": 37.0,
+          "p99": 39.86,
+          "max": 44.0
+        },
+        "selectedToLoadedMs": {
+          "count": 70,
+          "min": 1096.0,
+          "avg": 1404.729,
+          "p50": 1337.0,
+          "p95": 1724.75,
+          "p99": 2415.0,
+          "max": 3105.0
+        },
+        "loadedToAppliedMs": {
+          "count": 70,
+          "min": 47.0,
+          "avg": 59.586,
+          "p50": 54.0,
+          "p95": 94.2,
+          "p99": 114.1,
+          "max": 121.0
+        },
+        "selectedToAppliedMs": {
+          "count": 70,
+          "min": 1150.0,
+          "avg": 1464.314,
+          "p50": 1390.5,
+          "p95": 1806.9,
+          "p99": 2466.03,
+          "max": 3165.0
+        },
+        "selectedToSkippedMs": {
+          "count": null,
+          "min": null,
+          "avg": null,
+          "p50": null,
+          "p95": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "risk_pattern_detection": {
+        "catalog": 97,
+        "selected": 97,
+        "loaded": 35,
+        "applied": 35,
+        "skipped": 62,
+        "failed": 0,
+        "applyRateFromSelected": 0.3608,
+        "agents": {
+          "RiskAgent": 97
+        },
+        "localLoadToolMs": {
+          "count": 35,
+          "min": 25.0,
+          "avg": 28.429,
+          "p50": 27.0,
+          "p95": 35.0,
+          "p99": 36.32,
+          "max": 37.0
+        },
+        "selectedToLoadedMs": {
+          "count": 35,
+          "min": 1035.0,
+          "avg": 1568.343,
+          "p50": 1482.0,
+          "p95": 1876.8,
+          "p99": 3900.22,
+          "max": 4926.0
+        },
+        "loadedToAppliedMs": {
+          "count": 35,
+          "min": 39.0,
+          "avg": 83.171,
+          "p50": 82.0,
+          "p95": 103.6,
+          "p99": 107.64,
+          "max": 109.0
+        },
+        "selectedToAppliedMs": {
+          "count": 35,
+          "min": 1093.0,
+          "avg": 1651.514,
+          "p50": 1567.0,
+          "p95": 1957.5,
+          "p99": 3990.78,
+          "max": 5022.0
+        },
+        "selectedToSkippedMs": {
+          "count": 62,
+          "min": 8718.0,
+          "avg": 15481.887,
+          "p50": 14074.5,
+          "p95": 26553.3,
+          "p99": 29563.12,
+          "max": 29751.0
+        }
+      }
+    }
+  },
+  "reportQuality": {
+    "reports": 100,
+    "emptyReports": 0,
+    "fullReportCharacters": {
+      "count": 100,
+      "min": 2372.0,
+      "avg": 5537.2,
+      "p50": 5626.5,
+      "p95": 7275.1,
+      "p99": 7370.3,
+      "max": 7399.0
+    },
+    "risksPerReport": {
+      "count": 100,
+      "min": 3.0,
+      "avg": 5.51,
+      "p50": 6.0,
+      "p95": 6.0,
+      "p99": 6.0,
+      "max": 6.0
+    },
+    "questionsPerReport": {
+      "count": 100,
+      "min": 1.0,
+      "avg": 7.08,
+      "p50": 8.0,
+      "p95": 8.0,
+      "p99": 8.0,
+      "max": 8.0
+    },
+    "evidenceRefsPerReport": {
+      "count": 100,
+      "min": 8.0,
+      "avg": 38.48,
+      "p50": 41.0,
+      "p95": 55.0,
+      "p99": 56.04,
+      "max": 60.0
+    }
+  },
+  "labeledRag": {
+    "jdKnowledge": {
+      "source": "experiments/retrieval_embedding_prod-current-ndcg-20260731.json",
+      "data": {
+        "experiment": "embedding",
+        "label": "prod-current-ndcg-20260731",
+        "generatedAt": "2026-07-31T09:07:52Z",
+        "results": {
+          "jd_match": {
+            "cases": 10,
+            "recall@5": 1.0,
+            "precision@5": 0.25,
+            "mrr": 1.0,
+            "nDCG@5": 1.0,
+            "avgLatencyMs": 4750.0,
+            "p95LatencyMs": 4953.0
+          },
+          "knowledge": {
+            "cases": 16,
+            "recall@5": 1.0,
+            "precision@5": 0.2,
+            "mrr": 0.9688,
+            "nDCG@5": 0.9769,
+            "avgLatencyMs": 4848.6,
+            "p95LatencyMs": 4953.0
+          }
+        }
+      }
+    },
+    "resumeEvidence": {
+      "source": "resume_rag_ab_f709edd_hybrid_after.json",
+      "data": {
+        "samples": 12,
+        "queries": 24,
+        "summary": {
+          "hybrid": {
+            "precisionAtK": 0.7778,
+            "recallAtK": 0.6933,
+            "mrr": 0.9097,
+            "ndcgAtK": 0.9529,
+            "sourcePrecision": 1.0,
+            "returnedK": 2.6667,
+            "latencyMs": 1.4167,
+            "fallbackRate": 0.0
+          }
+        },
+        "rows": [
+          {
+            "id": "senior_backend_001",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 4751.6,
+            "onlineTopScore": 0.4853333333333333,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 1,
+            "truthCount": 1
+          },
+          {
+            "id": "senior_backend_001",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 4.0,
+            "clientLatencyMs": 5753.8,
+            "onlineTopScore": 0.4137777777777778,
+            "fallbackUsed": false,
+            "precisionAtK": 0.6666666666666666,
+            "recallAtK": 0.25,
+            "mrr": 1.0,
+            "ndcgAtK": 0.7039180890341347,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 8
+          },
+          {
+            "id": "senior_backend_010",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 2.0,
+            "clientLatencyMs": 4755.5,
+            "onlineTopScore": 0.5151666666666667,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 1,
+            "truthCount": 1
+          },
+          {
+            "id": "senior_backend_010",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 3.0,
+            "clientLatencyMs": 4707.0,
+            "onlineTopScore": 0.39177777777777784,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 0.6666666666666666,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 3
+          },
+          {
+            "id": "ai_agent_engineer_019",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 4750.1,
+            "onlineTopScore": 0.5151666666666667,
+            "fallbackUsed": false,
+            "precisionAtK": 0.3333333333333333,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 1
+          },
+          {
+            "id": "ai_agent_engineer_019",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 4.0,
+            "clientLatencyMs": 4651.2,
+            "onlineTopScore": 0.45958333333333334,
+            "fallbackUsed": false,
+            "precisionAtK": 0.6666666666666666,
+            "recallAtK": 0.2857142857142857,
+            "mrr": 1.0,
+            "ndcgAtK": 0.7039180890341347,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 7
+          },
+          {
+            "id": "llm_rag_engineer_028",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 4743.3,
+            "onlineTopScore": 0.542,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 2,
+            "truthCount": 2
+          },
+          {
+            "id": "llm_rag_engineer_028",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 4783.5,
+            "onlineTopScore": 0.391,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 0.25,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 12
+          },
+          {
+            "id": "junior_frontend_037",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 5009.9,
+            "onlineTopScore": 0.5151666666666667,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.3065735963827294,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 2
+          },
+          {
+            "id": "junior_frontend_037",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 2.0,
+            "clientLatencyMs": 4848.3,
+            "onlineTopScore": 0.44558333333333333,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 0.5,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 4
+          },
+          {
+            "id": "product_manager_046",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 5260.1,
+            "onlineTopScore": 0.388,
+            "fallbackUsed": false,
+            "precisionAtK": 0.3333333333333333,
+            "recallAtK": 0.5,
+            "mrr": 0.3333333333333333,
+            "ndcgAtK": 0.3065735963827292,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 2
+          },
+          {
+            "id": "product_manager_046",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 5480.5,
+            "onlineTopScore": 0.561939393939394,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 0.6666666666666666,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 3
+          },
+          {
+            "id": "data_platform_055",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 5030.8,
+            "onlineTopScore": 0.4853333333333333,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 1,
+            "truthCount": 1
+          },
+          {
+            "id": "data_platform_055",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 4690.6,
+            "onlineTopScore": 0.4184444444444445,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 0.2727272727272727,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 11
+          },
+          {
+            "id": "devops_sre_064",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 2.0,
+            "clientLatencyMs": 4638.3,
+            "onlineTopScore": 0.5151666666666667,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.3065735963827294,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 2
+          },
+          {
+            "id": "devops_sre_064",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 2.0,
+            "clientLatencyMs": 4756.7,
+            "onlineTopScore": 0.3984444444444445,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 0.2,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 5
+          },
+          {
+            "id": "qa_automation_073",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 4646.2,
+            "onlineTopScore": 0.5151666666666667,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.3065735963827294,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 2
+          },
+          {
+            "id": "qa_automation_073",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 5775.5,
+            "onlineTopScore": 0.4895151515151515,
+            "fallbackUsed": false,
+            "precisionAtK": 1.0,
+            "recallAtK": 0.5,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 4
+          },
+          {
+            "id": "security_backend_082",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 5069.0,
+            "onlineTopScore": 0.542,
+            "fallbackUsed": false,
+            "precisionAtK": 0.6666666666666666,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 2
+          },
+          {
+            "id": "security_backend_082",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 4654.7,
+            "onlineTopScore": 0.41466666666666663,
+            "fallbackUsed": false,
+            "precisionAtK": 0.6666666666666666,
+            "recallAtK": 0.21428571428571427,
+            "mrr": 0.5,
+            "ndcgAtK": 0.5307212739772434,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 14
+          },
+          {
+            "id": "new_grad_091",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 4651.8,
+            "onlineTopScore": 0.5151666666666667,
+            "fallbackUsed": false,
+            "precisionAtK": 0.3333333333333333,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 1
+          },
+          {
+            "id": "new_grad_091",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 1.0,
+            "clientLatencyMs": 4648.0,
+            "onlineTopScore": 0.5666060606060606,
+            "fallbackUsed": false,
+            "precisionAtK": 0.6666666666666666,
+            "recallAtK": 0.3333333333333333,
+            "mrr": 1.0,
+            "ndcgAtK": 0.7039180890341347,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 6
+          },
+          {
+            "id": "sparse_risk_100",
+            "strategy": "hybrid",
+            "kind": "project",
+            "latencyMs": 0.0,
+            "clientLatencyMs": 5046.6,
+            "onlineTopScore": 0.35866666666666663,
+            "fallbackUsed": false,
+            "precisionAtK": 0.0,
+            "recallAtK": 1.0,
+            "mrr": 0.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 2,
+            "truthCount": 0
+          },
+          {
+            "id": "sparse_risk_100",
+            "strategy": "hybrid",
+            "kind": "tech",
+            "latencyMs": 0.0,
+            "clientLatencyMs": 4664.9,
+            "onlineTopScore": 0.4046666666666667,
+            "fallbackUsed": false,
+            "precisionAtK": 0.3333333333333333,
+            "recallAtK": 1.0,
+            "mrr": 1.0,
+            "ndcgAtK": 1.0,
+            "sourcePrecision": 1.0,
+            "returnedK": 3,
+            "truthCount": 1
+          }
+        ]
+      }
+    }
+  },
+  "charts": {
+    "trafficQueue": "charts/01_traffic_queue.png",
+    "latencyPercentiles": "charts/02_latency_percentiles.png",
+    "ragScenarios": "charts/03_rag_scenarios.png",
+    "mcpOutcomes": "charts/04_mcp_outcomes.png",
+    "ecsResources": "charts/05_ecs_resources.png"
+  }
+}

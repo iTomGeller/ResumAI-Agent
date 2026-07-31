@@ -1,0 +1,178 @@
+{
+  "runsRequested": 100,
+  "runsFetched": 100,
+  "fetchErrors": {},
+  "produced": {
+    "count": 1087,
+    "byType": {
+      "EPISODIC": 393,
+      "WORKING": 593,
+      "SEMANTIC": 100,
+      "PROCEDURAL": 1
+    },
+    "byScope": {
+      "USER": 101,
+      "RUN": 593,
+      "CONVERSATION": 393
+    },
+    "bySource": {
+      "cross_candidate_anchor": 200,
+      "evaluation_insight": 200,
+      "candidate_fact": 200,
+      "evaluation_result": 286,
+      "runtime_strategy": 101,
+      "run_input": 100
+    },
+    "byStatus": {
+      "CONFLICTED": 99,
+      "ARCHIVED": 593,
+      "ACTIVE": 395
+    }
+  },
+  "consumed": {
+    "records": 1129,
+    "decisions": {
+      "USED": 1129
+    },
+    "usedCount": 1129,
+    "byType": {
+      "PROCEDURAL": 785,
+      "EPISODIC": 344
+    },
+    "byAgent": {
+      "ReportAgent": 236,
+      "EvidenceAgent": 236,
+      "TechAgent": 236,
+      "RiskAgent": 227,
+      "ProjectAgent": 194
+    },
+    "bySource": {
+      "runtime_strategy": 785,
+      "cross_candidate_anchor": 344
+    },
+    "finalScore": {
+      "count": 1129,
+      "min": 0.292,
+      "avg": 0.488,
+      "p50": 0.541,
+      "p95": 0.57,
+      "p99": 0.57,
+      "max": 0.586
+    },
+    "ageAtUseSeconds": {
+      "count": 1129,
+      "min": 0.0,
+      "avg": 83582.113,
+      "p50": 17398.0,
+      "p95": 192984.2,
+      "p99": 193114.16,
+      "max": 193191.0
+    },
+    "producerConsumerVersionMismatch": 0
+  },
+  "events": {
+    "telemetryStatus": "COMPLETE",
+    "counts": {
+      "memory.read": 400,
+      "memory.selected": 236,
+      "memory.missed": 232,
+      "memory.used": 1129,
+      "memory.written": 1086
+    },
+    "reads": 400,
+    "returnedHits": 236,
+    "readHitRate": 0.42
+  },
+  "ttl": {
+    "effectiveDaysByType": {
+      "EPISODIC": {
+        "count": 393,
+        "min": 90.0,
+        "avg": 90.0,
+        "p50": 90.0,
+        "p95": 90.0,
+        "p99": 90.0,
+        "max": 90.0
+      },
+      "WORKING": {
+        "count": 593,
+        "min": 1.0,
+        "avg": 1.0,
+        "p50": 1.0,
+        "p95": 1.0,
+        "p99": 1.0,
+        "max": 1.0
+      },
+      "SEMANTIC": {
+        "count": 100,
+        "min": 90.0,
+        "avg": 90.0,
+        "p50": 90.0,
+        "p95": 90.0,
+        "p99": 90.0,
+        "max": 90.0
+      },
+      "PROCEDURAL": {
+        "count": 1,
+        "min": 365.0,
+        "avg": 365.0,
+        "p50": 365.0,
+        "p95": 365.0,
+        "p99": 365.0,
+        "max": 365.0
+      }
+    },
+    "remainingDaysByType": {
+      "EPISODIC": {
+        "count": 393,
+        "min": 89.984,
+        "avg": 89.992,
+        "p50": 89.992,
+        "p95": 89.998,
+        "p99": 89.999,
+        "max": 89.999
+      },
+      "WORKING": {
+        "count": 593,
+        "min": 0.984,
+        "avg": 0.992,
+        "p50": 0.992,
+        "p95": 0.998,
+        "p99": 0.999,
+        "max": 0.999
+      },
+      "SEMANTIC": {
+        "count": 100,
+        "min": 89.984,
+        "avg": 89.992,
+        "p50": 89.992,
+        "p95": 89.998,
+        "p99": 89.999,
+        "max": 89.999
+      },
+      "PROCEDURAL": {
+        "count": 1,
+        "min": 364.999,
+        "avg": 364.999,
+        "p50": 364.999,
+        "p95": 364.999,
+        "p99": 364.999,
+        "max": 364.999
+      }
+    },
+    "overrideUsage": {
+      "default": 1087
+    }
+  },
+  "retrievalLatencyMs": {
+    "status": "MEASURED",
+    "reason": "memory.read durationMs measured at the Java search boundary",
+    "count": 400,
+    "min": 13.0,
+    "avg": 36.395,
+    "p50": 37.0,
+    "p95": 56.0,
+    "p99": 69.53,
+    "max": 129.0
+  }
+}

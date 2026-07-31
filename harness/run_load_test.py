@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -45,6 +46,31 @@ def percentile(values: Iterable[float], q: float) -> Optional[float]:
     if lo == hi:
         return ordered[lo]
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (position - lo)
+
+
+def server_queue_lifecycle_ms(detail: Dict[str, Any]) -> Optional[int]:
+    """Return enqueue-to-finish time from the task service when available.
+
+    The load driver intentionally issues all uploads before draining results.
+    Therefore the time at which the client first observes a terminal status is
+    not the task completion time.  The backend queue timestamps are the stable
+    source for end-to-end latency and work even when polling starts late.
+    """
+    queue = detail.get("queue")
+    if not isinstance(queue, dict):
+        return None
+    queued_at = queue.get("queuedAt")
+    finished_at = queue.get("finishedAt")
+    if not queued_at or not finished_at:
+        return None
+    try:
+        elapsed = (
+            datetime.fromisoformat(str(finished_at))
+            - datetime.fromisoformat(str(queued_at))
+        ).total_seconds() * 1000
+    except (TypeError, ValueError):
+        return None
+    return max(0, int(elapsed))
 
 
 def parse_phase(value: str) -> Tuple[str, int, float, float]:
@@ -186,8 +212,20 @@ def poll_results(base: str, arrivals: List[Dict[str, Any]], started: float,
                 continue
             row["status"] = status
             row["terminalObservedAt"] = time.time()
-            row["endToEndMs"] = int(
-                (row["terminalObservedAt"] - row["uploadStartedAt"]) * 1000)
+            server_elapsed_ms = server_queue_lifecycle_ms(detail or {})
+            if server_elapsed_ms is not None:
+                row["endToEndMs"] = int(row.get("uploadMs") or 0) \
+                    + server_elapsed_ms
+                row["terminalCompletedAt"] = (
+                    float(row["uploadStartedAt"])
+                    + row["endToEndMs"] / 1000.0)
+                row["completionTimestampSource"] = "server_queue_lifecycle"
+            else:
+                row["endToEndMs"] = int(
+                    (row["terminalObservedAt"]
+                     - row["uploadStartedAt"]) * 1000)
+                row["terminalCompletedAt"] = row["terminalObservedAt"]
+                row["completionTimestampSource"] = "client_observation"
             row["rawTask"] = detail
             completed[trace_id] = row
             pending.pop(trace_id, None)
@@ -490,8 +528,9 @@ def summarize(arrivals: List[Dict[str, Any]], results: List[Dict[str, Any]],
         float(row["uploadFinishedAt"]) for row in arrivals
         if row.get("uploadFinishedAt")]
     terminal_times = [
-        float(row["terminalObservedAt"]) for row in results
-        if row.get("terminalObservedAt")]
+        float(row.get("terminalCompletedAt") or row["terminalObservedAt"])
+        for row in results if row.get("terminalCompletedAt")
+        or row.get("terminalObservedAt")]
     first_upload = min(upload_start_times) if upload_start_times else None
     last_upload = max(upload_finish_times) if upload_finish_times else None
     last_terminal = max(terminal_times) if terminal_times else None

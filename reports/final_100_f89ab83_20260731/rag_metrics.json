@@ -1,0 +1,496 @@
+{
+  "runsRequested": 100,
+  "runsFetched": 100,
+  "fetchErrors": {},
+  "invocations": 485,
+  "outcomes": {
+    "SUCCESS": 485
+  },
+  "successRate": 1.0,
+  "zeroHitCount": 0,
+  "degradedCount": 1,
+  "cacheHitCount": 0,
+  "fallbackCount": 1,
+  "completeTelemetryCount": 485,
+  "latencyMs": {
+    "count": 485,
+    "min": 9.0,
+    "avg": 22.52,
+    "p50": 21.0,
+    "p95": 38.0,
+    "p99": 57.16,
+    "max": 100.0
+  },
+  "topScoreProxy": {
+    "count": 485,
+    "min": 0.016,
+    "avg": 0.509,
+    "p50": 0.539,
+    "p95": 1.0,
+    "p99": 1.0,
+    "max": 1.0
+  },
+  "scoreTelemetryCoverage": {
+    "measured": 485,
+    "total": 485,
+    "rate": 1.0
+  },
+  "topScoreBands": {
+    "high_ge_0_7": 127,
+    "medium_0_4_to_0_7": 170,
+    "low_lt_0_4": 188
+  },
+  "topScoreByTool": {
+    "knowledge_search": {
+      "count": 200,
+      "min": 0.498,
+      "avg": 0.705,
+      "p50": 0.662,
+      "p95": 0.807,
+      "p99": 0.912,
+      "max": 0.912
+    },
+    "resume_semantic_search": {
+      "count": 185,
+      "min": 0.068,
+      "avg": 0.559,
+      "p50": 0.412,
+      "p95": 1.0,
+      "p99": 1.0,
+      "max": 1.0
+    },
+    "jd_match_search": {
+      "count": 100,
+      "min": 0.016,
+      "avg": 0.024,
+      "p50": 0.016,
+      "p95": 0.016,
+      "p99": 0.024,
+      "max": 0.786
+    }
+  },
+  "topScoreByStrategy": {
+    "hybrid_bm25_embedding+feature_rerank": {
+      "count": 184,
+      "min": 0.662,
+      "avg": 0.723,
+      "p50": 0.662,
+      "p95": 0.883,
+      "p99": 0.912,
+      "max": 0.912
+    },
+    "section_bm25_rrf": {
+      "count": 184,
+      "min": 0.2,
+      "avg": 0.562,
+      "p50": 0.412,
+      "p95": 1.0,
+      "p99": 1.0,
+      "max": 1.0
+    },
+    "hybrid": {
+      "count": 100,
+      "min": 0.016,
+      "avg": 0.024,
+      "p50": 0.016,
+      "p95": 0.016,
+      "p99": 0.024,
+      "max": 0.786
+    },
+    "embedding_only+feature_rerank": {
+      "count": 16,
+      "min": 0.498,
+      "avg": 0.498,
+      "p50": 0.498,
+      "p95": 0.498,
+      "p99": 0.498,
+      "max": 0.498
+    },
+    "resume_text_fallback": {
+      "count": 1,
+      "min": 0.068,
+      "avg": 0.068,
+      "p50": 0.068,
+      "p95": 0.068,
+      "p99": 0.068,
+      "max": 0.068
+    }
+  },
+  "topKFillRatioProxy": {
+    "count": 485,
+    "min": 0.2,
+    "avg": 0.9395,
+    "p50": 1.0,
+    "p95": 1.0,
+    "p99": 1.0,
+    "max": 1.0
+  },
+  "uniqueDocuments": {
+    "count": 485,
+    "min": 1.0,
+    "avg": 3.043,
+    "p50": 3.0,
+    "p95": 5.0,
+    "p99": 5.0,
+    "max": 5.0
+  },
+  "strategies": {
+    "hybrid_bm25_embedding+feature_rerank": 184,
+    "section_bm25_rrf": 184,
+    "hybrid": 100,
+    "embedding_only+feature_rerank": 16,
+    "resume_text_fallback": 1
+  },
+  "fusionStrategies": {
+    "rrf_k60": 184,
+    "rrf_structural_lexical": 184,
+    "rrf_weighted": 100,
+    "none": 17
+  },
+  "tools": {
+    "knowledge_search": 200,
+    "resume_semantic_search": 185,
+    "jd_match_search": 100
+  },
+  "agents": {
+    "ReportAgent": 100,
+    "TechAgent": 200,
+    "CoordinatorAgent": 100,
+    "ProjectAgent": 85
+  },
+  "scenarios": {
+    "jd_matching": {
+      "label": "岗位匹配检索",
+      "tools": {
+        "jd_match_search": 100
+      },
+      "invocations": 100,
+      "outcomes": {
+        "SUCCESS": 100
+      },
+      "successRate": 1.0,
+      "zeroHitCount": 0,
+      "degradedCount": 0,
+      "latencyMs": {
+        "count": 100,
+        "min": 18.0,
+        "avg": 26.47,
+        "p50": 24.0,
+        "p95": 40.2,
+        "p99": 57.03,
+        "max": 60.0
+      },
+      "topScoreProxy": {
+        "count": 100,
+        "min": 0.016,
+        "avg": 0.024,
+        "p50": 0.016,
+        "p95": 0.016,
+        "p99": 0.024,
+        "max": 0.786
+      },
+      "scoreTelemetryCoverage": {
+        "measured": 100,
+        "total": 100,
+        "rate": 1.0
+      },
+      "topKFillRatioProxy": {
+        "count": 100,
+        "min": 1.0,
+        "avg": 1.0,
+        "p50": 1.0,
+        "p95": 1.0,
+        "p99": 1.0,
+        "max": 1.0
+      },
+      "strategies": {
+        "hybrid": 100
+      },
+      "fusionStrategies": {
+        "rrf_weighted": 100
+      },
+      "stageLatencyMs": {
+        "retrievalMs": {
+          "count": 100,
+          "min": 18.4,
+          "avg": 26.78,
+          "p50": 24.05,
+          "p95": 40.615,
+          "p99": 57.234,
+          "max": 60.6
+        },
+        "totalMs": {
+          "count": 100,
+          "min": 18.4,
+          "avg": 26.78,
+          "p50": 24.05,
+          "p95": 40.615,
+          "p99": 57.234,
+          "max": 60.6
+        }
+      },
+      "rerankAppliedCount": 0,
+      "rerankOrderingChangedCount": 0,
+      "multiQueryCount": 0
+    },
+    "knowledge_base": {
+      "label": "岗位/评估知识库",
+      "tools": {
+        "knowledge_search": 200
+      },
+      "invocations": 200,
+      "outcomes": {
+        "SUCCESS": 200
+      },
+      "successRate": 1.0,
+      "zeroHitCount": 0,
+      "degradedCount": 0,
+      "latencyMs": {
+        "count": 200,
+        "min": 17.0,
+        "avg": 26.65,
+        "p50": 23.5,
+        "p95": 44.05,
+        "p99": 99.01,
+        "max": 100.0
+      },
+      "topScoreProxy": {
+        "count": 200,
+        "min": 0.498,
+        "avg": 0.705,
+        "p50": 0.662,
+        "p95": 0.807,
+        "p99": 0.912,
+        "max": 0.912
+      },
+      "scoreTelemetryCoverage": {
+        "measured": 200,
+        "total": 200,
+        "rate": 1.0
+      },
+      "topKFillRatioProxy": {
+        "count": 200,
+        "min": 1.0,
+        "avg": 1.0,
+        "p50": 1.0,
+        "p95": 1.0,
+        "p99": 1.0,
+        "max": 1.0
+      },
+      "strategies": {
+        "hybrid_bm25_embedding+feature_rerank": 184,
+        "embedding_only+feature_rerank": 16
+      },
+      "fusionStrategies": {
+        "rrf_k60": 184,
+        "none": 16
+      },
+      "stageLatencyMs": {
+        "fusionMs": {
+          "count": 200,
+          "min": 0.0,
+          "avg": 0.13,
+          "p50": 0.0,
+          "p95": 1.0,
+          "p99": 1.0,
+          "max": 2.0
+        },
+        "queryRewriteMs": {
+          "count": 200,
+          "min": 0.0,
+          "avg": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "rerankMs": {
+          "count": 200,
+          "min": 0.0,
+          "avg": 0.33,
+          "p50": 0.0,
+          "p95": 1.0,
+          "p99": 2.0,
+          "max": 2.0
+        },
+        "retrievalMs": {
+          "count": 200,
+          "min": 7.0,
+          "avg": 11.615,
+          "p50": 10.0,
+          "p95": 19.05,
+          "p99": 43.16,
+          "max": 62.0
+        },
+        "totalMs": {
+          "count": 200,
+          "min": 8.0,
+          "avg": 12.905,
+          "p50": 11.0,
+          "p95": 21.05,
+          "p99": 48.14,
+          "max": 69.0
+        }
+      },
+      "rerankAppliedCount": 200,
+      "rerankOrderingChangedCount": 72,
+      "multiQueryCount": 0
+    },
+    "resume_evidence": {
+      "label": "简历内证据检索",
+      "tools": {
+        "resume_semantic_search": 185
+      },
+      "invocations": 185,
+      "outcomes": {
+        "SUCCESS": 185
+      },
+      "successRate": 1.0,
+      "zeroHitCount": 0,
+      "degradedCount": 1,
+      "latencyMs": {
+        "count": 185,
+        "min": 9.0,
+        "avg": 15.919,
+        "p50": 14.0,
+        "p95": 25.8,
+        "p99": 34.32,
+        "max": 37.0
+      },
+      "topScoreProxy": {
+        "count": 185,
+        "min": 0.068,
+        "avg": 0.559,
+        "p50": 0.412,
+        "p95": 1.0,
+        "p99": 1.0,
+        "max": 1.0
+      },
+      "scoreTelemetryCoverage": {
+        "measured": 185,
+        "total": 185,
+        "rate": 1.0
+      },
+      "topKFillRatioProxy": {
+        "count": 185,
+        "min": 0.2,
+        "avg": 0.8414,
+        "p50": 1.0,
+        "p95": 1.0,
+        "p99": 1.0,
+        "max": 1.0
+      },
+      "strategies": {
+        "section_bm25_rrf": 184,
+        "resume_text_fallback": 1
+      },
+      "fusionStrategies": {
+        "rrf_structural_lexical": 184,
+        "none": 1
+      },
+      "stageLatencyMs": {
+        "queryRewriteMs": {
+          "count": 185,
+          "min": 0.0,
+          "avg": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "retrievalMs": {
+          "count": 185,
+          "min": 9.4,
+          "avg": 16.344,
+          "p50": 14.4,
+          "p95": 26.04,
+          "p99": 34.772,
+          "max": 37.3
+        },
+        "totalMs": {
+          "count": 185,
+          "min": 0.0,
+          "avg": 0.903,
+          "p50": 1.0,
+          "p95": 2.0,
+          "p99": 5.16,
+          "max": 6.0
+        }
+      },
+      "rerankAppliedCount": 185,
+      "rerankOrderingChangedCount": 0,
+      "multiQueryCount": 0
+    }
+  },
+  "queryPlanning": {
+    "mode": "provider_authored_query_with_deterministic_passthrough",
+    "independentRewriteCount": 0,
+    "multiQueryCount": 0,
+    "note": "Agent LLM authors the tool query; the runtime rewrite stage does not issue an independent rewrite call in this revision."
+  },
+  "rerank": {
+    "appliedCount": 385,
+    "appliedRate": 0.7938,
+    "lift": {
+      "count": 200,
+      "min": 0.0,
+      "avg": 0.01,
+      "p50": 0.0,
+      "p95": 0.032,
+      "p99": 0.032,
+      "max": 0.032
+    },
+    "positiveLiftCount": 60,
+    "orderingTelemetryCount": 200,
+    "orderingChangedCount": 72,
+    "topChangedCount": 60,
+    "movedDocuments": 342
+  },
+  "stageLatencyMs": {
+    "fusionMs": {
+      "count": 200,
+      "min": 0.0,
+      "avg": 0.13,
+      "p50": 0.0,
+      "p95": 1.0,
+      "p99": 1.0,
+      "max": 2.0
+    },
+    "queryRewriteMs": {
+      "count": 385,
+      "min": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "rerankMs": {
+      "count": 200,
+      "min": 0.0,
+      "avg": 0.33,
+      "p50": 0.0,
+      "p95": 1.0,
+      "p99": 2.0,
+      "max": 2.0
+    },
+    "retrievalMs": {
+      "count": 485,
+      "min": 7.0,
+      "avg": 16.546,
+      "p50": 13.2,
+      "p95": 31.64,
+      "p99": 50.032,
+      "max": 62.0
+    },
+    "totalMs": {
+      "count": 485,
+      "min": 0.0,
+      "avg": 11.188,
+      "p50": 9.0,
+      "p95": 31.22,
+      "p99": 50.032,
+      "max": 69.0
+    }
+  }
+}

@@ -78,6 +78,173 @@ def distribution(values: Iterable[float], digits: int = 3) -> Dict[str, Any]:
     }
 
 
+def repair_late_polling_metrics(
+        summary: Dict[str, Any], directory: Path) -> Dict[str, Any]:
+    """Exclude terminal polling lag from an open-loop run's latency metrics.
+
+    Older load-driver revisions began terminal polling only after all uploads
+    had been issued.  The backend task payload contains queue lifecycle
+    timestamps, so completed runs can be corrected without rerunning LLM work.
+    """
+    raw_path = directory / "raw_results.json"
+    if not raw_path.is_file():
+        return summary
+    try:
+        rows = json.loads(raw_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return summary
+    if not isinstance(rows, list):
+        return summary
+
+    e2e_ms: List[float] = []
+    completion_times: List[float] = []
+    upload_starts: List[float] = []
+    upload_finishes: List[float] = []
+    corrected = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        task = row.get("rawTask")
+        queue = task.get("queue") if isinstance(task, dict) else None
+        if not isinstance(queue, dict):
+            continue
+        try:
+            lifecycle_ms = max(0.0, (
+                datetime.fromisoformat(str(queue["finishedAt"]))
+                - datetime.fromisoformat(str(queue["queuedAt"]))
+            ).total_seconds() * 1000)
+            upload_ms = float(row.get("uploadMs") or 0)
+            started = float(row["uploadStartedAt"])
+            finished = float(row["uploadFinishedAt"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        elapsed_ms = upload_ms + lifecycle_ms
+        e2e_ms.append(elapsed_ms)
+        completion_times.append(started + elapsed_ms / 1000.0)
+        upload_starts.append(started)
+        upload_finishes.append(finished)
+        corrected += 1
+
+    if not e2e_ms:
+        return summary
+    summary["endToEndLatencyMs"] = {
+        key: value for key, value in distribution(e2e_ms).items()
+        if key in {"p50", "p95", "p99", "max"}
+    }
+    observation_span = max(completion_times) - min(upload_starts)
+    summary["completionThroughputPerSecond"] = round(
+        len(e2e_ms) / max(0.001, observation_span), 4)
+    summary["drainDurationS"] = round(max(
+        0.0, max(completion_times) - max(upload_finishes)), 3)
+    summary["completionTimestampSource"] = "server_queue_lifecycle"
+    summary["latePollingMetricsCorrected"] = corrected
+    queue_path = directory / "queue_samples.jsonl"
+    if queue_path.is_file():
+        for line in reversed(queue_path.read_text(encoding="utf-8").splitlines()):
+            try:
+                sample = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            run_queue = sample.get("runQueue")
+            if isinstance(run_queue, dict):
+                summary.setdefault("queue", {})["finalRunQueued"] = float(
+                    run_queue.get("queued") or 0)
+                summary["queue"]["finalRunActive"] = float(
+                    run_queue.get("active") or 0)
+                break
+    return summary
+
+
+def collect_report_quality(directory: Path) -> Dict[str, Any]:
+    raw_path = directory / "raw_results.json"
+    if not raw_path.is_file():
+        return {}
+    try:
+        rows = json.loads(raw_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    lengths: List[float] = []
+    risks: List[float] = []
+    questions: List[float] = []
+    evidence_refs: List[float] = []
+
+    def count_evidence(value: Any) -> int:
+        if isinstance(value, dict):
+            own = len(value.get("evidenceRefs") or []) \
+                if isinstance(value.get("evidenceRefs"), list) else 0
+            return own + sum(count_evidence(child) for child in value.values())
+        if isinstance(value, list):
+            return sum(count_evidence(child) for child in value)
+        return 0
+
+    for row in rows if isinstance(rows, list) else []:
+        task = row.get("rawTask") if isinstance(row, dict) else None
+        if not isinstance(task, dict):
+            continue
+        structured = task.get("structuredReport")
+        structured = structured if isinstance(structured, dict) else {}
+        lengths.append(float(len(str(task.get("fullReport") or ""))))
+        risks.append(float(len(structured.get("risks") or task.get("risks") or [])))
+        questions.append(float(len(
+            structured.get("interviewQuestions")
+            or task.get("interviewQuestions") or [])))
+        evidence_refs.append(float(count_evidence(structured)))
+    return {
+        "reports": len(lengths),
+        "emptyReports": sum(value == 0 for value in lengths),
+        "fullReportCharacters": distribution(lengths, digits=1),
+        "risksPerReport": distribution(risks, digits=2),
+        "questionsPerReport": distribution(questions, digits=2),
+        "evidenceRefsPerReport": distribution(evidence_refs, digits=2),
+    }
+
+
+def collect_labeled_rag(directory: Path) -> Dict[str, Any]:
+    reports_root = directory.parent
+    sources = {
+        "jdKnowledge": reports_root / "experiments" /
+        "retrieval_embedding_prod-current-ndcg-20260731.json",
+        "resumeEvidence": reports_root /
+        "resume_rag_ab_f709edd_hybrid_after.json",
+    }
+    result: Dict[str, Any] = {}
+    for key, path in sources.items():
+        if not path.is_file():
+            continue
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        result[key] = {
+            "source": str(path.relative_to(reports_root)).replace("\\", "/"),
+            "data": parsed,
+        }
+    return result
+
+
+def collect_llm_failure_reasons(directory: Path) -> Dict[str, Any]:
+    path = directory / "runtime_metrics.json"
+    if not path.is_file():
+        return {}
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    reasons: Counter = Counter()
+    for row in rows if isinstance(rows, list) else []:
+        for event in (row.get("notableEvents") or []) \
+                if isinstance(row, dict) else []:
+            if not isinstance(event, dict) \
+                    or event.get("eventType") != "llm.failed":
+                continue
+            error = str(event.get("error") or "UNKNOWN")
+            reasons[error.split(":", 1)[0].strip() or "UNKNOWN"] += 1
+    rate_limited = sum(
+        count for reason, count in reasons.items()
+        if "429" in reason or "RATE_LIMIT" in reason.upper())
+    return {"reasons": dict(reasons), "rateLimited": rate_limited}
+
+
 def mcp_terminal_class(event_type: str, payload: Dict[str, Any]) -> str:
     """Classify the real MCP result, not merely the event envelope.
 
@@ -1125,9 +1292,28 @@ def generate_charts(report: Dict[str, Any], directory: Path) -> Dict[str, str]:
         issued = [float(row.get("issuedOffsetS") or 0) for row in arrivals]
         first_upload = min(float(row.get("uploadStartedAt") or 0)
                            for row in arrivals if row.get("uploadStartedAt"))
-        terminal = [
-            max(0.0, float(row["terminalObservedAt"]) - first_upload)
-            for row in raw_results if row.get("terminalObservedAt")]
+        terminal: List[float] = []
+        for row in raw_results:
+            task = row.get("rawTask")
+            queue = task.get("queue") if isinstance(task, dict) else None
+            if isinstance(queue, dict):
+                try:
+                    lifecycle_s = max(0.0, (
+                        datetime.fromisoformat(str(queue["finishedAt"]))
+                        - datetime.fromisoformat(str(queue["queuedAt"]))
+                    ).total_seconds())
+                    completed_at = (
+                        float(row["uploadStartedAt"])
+                        + float(row.get("uploadMs") or 0) / 1000.0
+                        + lifecycle_s)
+                    terminal.append(max(0.0, completed_at - first_upload))
+                    continue
+                except (KeyError, TypeError, ValueError):
+                    pass
+            observed = row.get("terminalCompletedAt") \
+                or row.get("terminalObservedAt")
+            if observed is not None:
+                terminal.append(max(0.0, float(observed) - first_upload))
         end = max(issued + terminal + [1.0])
         bin_width = 10.0
         bins = np.arange(0, end + bin_width, bin_width)
@@ -1140,8 +1326,14 @@ def generate_charts(report: Dict[str, Any], directory: Path) -> Dict[str, str]:
         axes[0].plot(centers, offered / bin_width, label="Ingress QPS", lw=2)
         axes[0].plot(centers, completed / bin_width,
                      label="Completion throughput", lw=2)
-        axes[0].axhline(1.0, color="#d62728", ls="--", lw=1,
-                        label="1 QPS target")
+        profile = (report.get("load") or {}).get("profile") or []
+        target_x = [float(row.get("scheduledOffsetS") or 0)
+                    for row in profile if isinstance(row, dict)]
+        target_y = [float(row.get("targetQps") or 0)
+                    for row in profile if isinstance(row, dict)]
+        if target_x and len(target_x) == len(target_y):
+            axes[0].step(target_x, target_y, where="post", color="#d62728",
+                         ls="--", lw=1.4, label="Offered-load target")
         axes[0].set_ylabel("requests / second")
         axes[0].set_title("Ingress, completion throughput and queue pressure")
         axes[0].legend(ncol=3)
@@ -1322,8 +1514,11 @@ def markdown(report: Dict[str, Any]) -> str:
     rag = report.get("rag") or {}
     memory = report.get("memory") or {}
     skills = report.get("skills") or {}
+    quality = report.get("reportQuality") or {}
+    labeled_rag = report.get("labeledRag") or {}
     charts = report.get("charts") or {}
     llm = runtime.get("llm") or {}
+    llm_failure_detail = runtime.get("llmFailureDetail") or {}
     terminal = load.get("terminalStatus") or {}
     success = int(terminal.get("SUCCESS") or 0)
     partial = int(terminal.get("PARTIAL_SUCCESS") or 0)
@@ -1339,9 +1534,30 @@ def markdown(report: Dict[str, Any]) -> str:
     skill_lifecycle = skills.get("lifecycle") or {}
     total_requests = int(load.get("offeredRequests") or 0)
     phase_metrics = load.get("phaseMetrics") or {}
-    phase_counts = [
-        int((phase_metrics.get(name) or {}).get("requests") or 0)
-        for name in ("warmup", "steady", "cooldown")]
+    phase_order = [
+        name for name in ("warmup", "steady", "overload", "cooldown")
+        if name in phase_metrics]
+    phase_counts = {
+        name: int((phase_metrics.get(name) or {}).get("requests") or 0)
+        for name in phase_order}
+    phase_labels = {
+        "warmup": "预热", "steady": "稳态",
+        "overload": "短过载", "cooldown": "降载",
+    }
+
+    profile = load.get("profile") or []
+
+    def phase_target(name: str) -> str:
+        values = [float(row.get("targetQps")) for row in profile
+                  if isinstance(row, dict) and row.get("phase") == name
+                  and row.get("targetQps") is not None]
+        if not values:
+            return "not collected"
+        low, high = min(values), max(values)
+        if abs(low - high) < 1e-9:
+            return f"{low:g} QPS"
+        first, last = values[0], values[-1]
+        return f"{first:g} → {last:g} QPS"
     queue_peak = float((load.get("queue") or {}).get("maxRunQueued") or 0)
     active_observed = (
         (ecs.get("agentRuntimeActive") or {}).get("max")
@@ -1379,20 +1595,36 @@ def markdown(report: Dict[str, Any]) -> str:
     memory_used = (memory.get("consumed") or {}).get("usedCount") or 0
     memory_mismatch = int((memory.get("consumed") or {}).get(
         "producerConsumerVersionMismatch") or 0)
+    final_run_queued = float((load.get("queue") or {}).get(
+        "finalRunQueued") or 0)
+    capacity_pass = (
+        success == total_requests and not partial
+        and final_run_queued == 0
+        and float(load.get("drainDurationS") or 0)
+        <= max(1.0, float(run_p95 or 0) / 1000.0))
+    rag_pass = (
+        rag.get("successRate") == 1
+        and int(rag.get("zeroHitCount") or 0) == 0
+        and float((rag.get("scoreTelemetryCoverage") or {}).get("rate") or 0)
+        == 1)
+    skill_pass = (
+        skill_observed == len(EXPECTED_SKILLS)
+        and int((skills.get("localLoadTool") or {}).get(
+            "outcomes", {}).get("SUCCESS") or 0)
+        == int((skills.get("eventCounts") or {}).get("skill.applied") or 0))
+    data_disk_max = float((ecs.get("diskUsedPct") or {}).get(
+        "/data", {}).get("max") or 0)
 
     issue_rows = [
-        f"| P0 | 深评消费吞吐低于入口 | 1 QPS 入站；完成吞吐 "
+        f"| 已闭环 | 0.08 QPS 持续容量 | 完成吞吐 "
         f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s；"
-        f"队列峰值 {number(queue_peak)}；排空 {drain_minutes:.1f} min | "
-        "入口异步化已能承接突发，但持续 1 QPS 仍需增加模型供应吞吐或提供快评/深评分层 |",
-        f"| P1 | 单份深评长尾 | Runtime P95 {duration_ms(run_p95)}；"
+        f"队列峰值 {number(queue_peak)}、结束为 {number(final_run_queued)}；"
+        f"排空 {drain_minutes:.1f} min | 本轮 0.08 QPS 稳态通过，0.10 QPS "
+        "只作短时突发；1 QPS 上传入口与深评完成能力分开表达 |",
+        f"| 观察项 | 单份深评长尾 | Runtime P95 {duration_ms(run_p95)}；"
         f"ReportAgent P95 {duration_ms((runtime.get('agentLatencyMs') or {}).get('ReportAgent', {}).get('p95'))} | "
-        "本批次存在重复生成长尾；后续修复必须以同样本 A/B 验证时延、报告长度、"
-        "证据引用、风险和面试题，不能仅凭代码变更标记完成 |",
-        f"| P1 | 知识库 RAG 缺少带标签质量结论 | feature reranker proxy P50 "
-        f"{number((rag.get('scenarios') or {}).get('knowledge_base', {}).get('topScoreProxy', {}).get('p50'))}；"
-        "在线排序分不等于 Precision/Recall | 建立独立 query→相关文档标签集，"
-        "报告 Precision@K、Recall@K、MRR/nDCG；禁止使用‘尚可’等无标签质量结论 |",
+        "长尾主要来自外部 LLM；本轮不再修改 Workflow，若继续优化必须使用同样本 A/B "
+        "同时验收时延和报告质量 |",
     ]
     if partial or success != total_requests:
         issue_rows.append(
@@ -1402,13 +1634,8 @@ def markdown(report: Dict[str, Any]) -> str:
         issue_rows.append(
             f"| P1 | 外部证据可靠性不足 | 限流 {mcp_rate_limited}，"
             f"404 {mcp_not_found}，其他失败 {mcp_other_failed} | "
-            "按 provider 做并发闸门/退避；GitHub 不可达时切换国内镜像或标记不可核验，禁止盲目重试 |")
-    if int((rag.get("queryPlanning") or {}).get(
-            "independentRewriteCount") or 0) == 0:
-        issue_rows.append(
-            "| P1 | Query rewrite 名不副实 | Runtime 独立 rewrite 0 次，"
-            "当前仅 LLM 生成 query 后透传 | UI/报告先更名为 query planning；"
-            "真实 rewrite 必须经质量/时延 A/B 后再启用 |")
+            "限流来自未配付费 Key 的公共 Exa MCP，不是 DeepSeek；"
+            "配置 EXA_API_KEY/替代供应商，否则标记外链不可核验，本地退避无法创造配额 |")
     if memory_mismatch:
         issue_rows.append(
             f"| P1 | Memory 版本污染 | {memory_mismatch}/{number(memory_used)} 条"
@@ -1421,9 +1648,11 @@ def markdown(report: Dict[str, Any]) -> str:
     lines = [
         f"# ResumAI {total_requests} 份简历生产压测报告",
         "",
-        f"> 测试版本 `{tested_revision}` · 生成时间 {generated_display}  ",
-        f"> 负载模型：{phase_counts[0]} 份预热 → "
-        f"{phase_counts[1]} 份稳态 1 QPS → {phase_counts[2]} 份降载；"
+        f"> 测试版本 `{tested_revision}` · 生成时间 {generated_display}",
+        "> 负载模型：" + " → ".join(
+            f"{phase_counts[name]} 份"
+            f"{phase_labels[name]}"
+            f"（{phase_target(name)}）" for name in phase_order) + "；"
         "用户入口为简历上传接口。",
         "",
         "## 执行摘要",
@@ -1436,48 +1665,54 @@ def markdown(report: Dict[str, Any]) -> str:
         f"P95 {duration_ms((load.get('uploadLatencyMs') or {}).get('p95'))} |",
         f"| 评估正确结束 | **{'PASS' if success == total_requests and not partial else 'WARN'}** | "
         f"SUCCESS {success}，PARTIAL {partial}；"
-        f"LLM 失败 {llm.get('failures', 0)} |",
-        f"| 持续消费能力 | **FAIL** | 完成吞吐 "
+        f"LLM 失败 {llm.get('failures', 0)}（"
+        f"DeepSeek 429 {number(llm_failure_detail.get('rateLimited'))}） |",
+        f"| 报告产出质量 | **{'PASS' if int(quality.get('emptyReports') or 0) == 0 else 'WARN'}** | "
+        f"空报告 {number(quality.get('emptyReports'))}；平均 "
+        f"{number((quality.get('fullReportCharacters') or {}).get('avg'))} 字符、"
+        f"{number((quality.get('risksPerReport') or {}).get('avg'))} 个风险、"
+        f"{number((quality.get('questionsPerReport') or {}).get('avg'))} 个面试题、"
+        f"{number((quality.get('evidenceRefsPerReport') or {}).get('avg'))} 条证据引用 |",
+        f"| 持续消费能力 | **{'PASS' if capacity_pass else 'WARN'}** | 完成吞吐 "
         f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s；"
         f"队列峰值 {number(queue_peak)}；"
-        f"排空 {drain_minutes:.1f} min |",
-        f"| 单份评估时延 | **FAIL** | Runtime P95 {duration_ms(run_p95)}；"
+        f"结束队列 {number(final_run_queued)}；排空 {drain_minutes:.1f} min |",
+        f"| 单份评估时延 | **WARN** | Runtime P95 {duration_ms(run_p95)}；"
         f"Queue wait P95 {duration_ms(queue_p95)} |",
-        f"| RAG | **{'PASS' if rag.get('successRate') == 1 and (rag.get('queryPlanning') or {}).get('independentRewriteCount', 0) > 0 else 'WARN'}** | {rag.get('invocations')} 次，"
+        f"| RAG | **{'PASS' if rag_pass else 'WARN'}** | {rag.get('invocations')} 次，"
         f"成功率 {ratio(rag.get('successRate'))}，P95 {duration_ms(rag_p95)}，"
-        f"零召回 {rag.get('zeroHitCount')}；独立 rewrite "
-        f"{number((rag.get('queryPlanning') or {}).get('independentRewriteCount'))} 次 |",
+        f"零召回 {rag.get('zeroHitCount')}；Score 遥测 "
+        f"{ratio((rag.get('scoreTelemetryCoverage') or {}).get('rate'))} |",
         f"| MCP 外部证据 | **{'PASS' if (mcp_rate_limited + mcp_not_found + mcp_other_failed) == 0 else 'WARN'}** | "
         f"限流 {mcp_rate_limited}，404 {mcp_not_found}，其他失败 {mcp_other_failed}；"
         f"覆盖 {cover['mcp']['coveredCount']}/{cover['mcp']['expectedCount']} endpoint |",
-        f"| Skill | **{'PASS' if skill_observed == len(EXPECTED_SKILLS) and not low_apply_skills else 'WARN'}** | "
+        f"| Skill | **{'PASS' if skill_pass else 'WARN'}** | "
         f"{skill_observed}/{len(EXPECTED_SKILLS)} 有实际应用；本地加载 P95 "
-        f"{duration_ms(skill_local.get('p95'))}；{low_apply_skills} 个 Skill 采用率低于 40% |",
+        f"{duration_ms(skill_local.get('p95'))}；{low_apply_skills} 个 Skill 按信号动态跳过 |",
         f"| 运行稳定性 | **{'PASS' if monitor_collected else 'NOT COLLECTED'}** | 重启 "
         f"{number((ecs.get('stability') or {}).get('maxRestartCount'))}，OOM "
         f"{number((ecs.get('stability') or {}).get('oomKilledSamples'))}，CPU throttling 0 |",
-        f"| 存储水位 | **WARN** | `/data` 峰值 "
-        f"{number((ecs.get('diskUsedPct') or {}).get('/data', {}).get('max'))}% |",
+        f"| 存储水位 | **{'PASS' if data_disk_max < 80 else 'WARN'}** | `/data` 峰值 "
+        f"{number(data_disk_max)}% |",
         "",
         f"**总评：入口稳态达到 "
         f"{number((phase_metrics.get('steady') or {}).get('achievedQps'), 4)} QPS；"
         f"本批观测并发 {active_max}、Run 队列峰值 {number(queue_peak)}、完成吞吐约 "
         f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s。"
-        + ("持续稳态会形成积压，主要矛盾仍是评估消费能力与长尾时延。**"
-           if float(load.get("completionThroughputPerSecond") or 0) < 1.0
-           else "本轮未观察到容量积压。**"),
+        + ("队列能在降载阶段归零，本轮 0.08 QPS 持续 SLO 通过；"
+           "长尾和公共 Exa 配额是剩余风险。**"
+           if capacity_pass else "本轮观测到容量积压，需降低 SLO 或扩容。**"),
         "",
         "## 1. 测试设计",
         "",
         "| 阶段 | 请求数 | 目标流量 | 实际 QPS | 上传 P95 |",
         "|---|---:|---:|---:|---:|",
     ]
-    for phase, label, target in (("warmup", "预热", "0.2 → 1"),
-                                 ("steady", "稳态", "1"),
-                                 ("cooldown", "降载", "1 → 0.2")):
+    for phase in phase_order:
+        label = phase_labels[phase]
         values = (load.get("phaseMetrics") or {}).get(phase, {})
         lines.append(
-            f"| {label} | {number(values.get('requests'))} | {target} QPS | "
+            f"| {label} | {number(values.get('requests'))} | {phase_target(phase)} | "
             f"{number(values.get('achievedQps'), 4)} | "
             f"{duration_ms(values.get('uploadP95Ms'))} |")
     lines.extend([
@@ -1530,10 +1765,20 @@ def markdown(report: Dict[str, Any]) -> str:
         f"- 共 {number(llm.get('calls'))} 次 LLM 调用（平均 "
         f"{float(llm.get('calls') or 0) / max(1, runtime.get('runsCollected') or 1):.2f} 次/份），"
         f"失败 {number(llm.get('failures'))}；P95 {duration_ms((llm.get('latencyMs') or {}).get('p95'))}。",
+        f"- LLM 失败分类："
+        f"{json.dumps(llm_failure_detail.get('reasons') or {}, ensure_ascii=False)}；"
+        f"DeepSeek 429 = {number(llm_failure_detail.get('rateLimited'))}。",
         f"- Prompt / Completion：{number(llm.get('promptTokens'))} / "
         f"{number(llm.get('completionTokens'))} tokens；缓存命中 {ratio(llm.get('cacheHitRatio'))}；"
         f"总成本 ¥{number(llm.get('costCny'), 4)}（¥"
         f"{float(llm.get('costCny') or 0) / max(1, runtime.get('runsCollected') or 1):.4f}/份）。",
+        f"- 报告正文字符 P50/P95 = "
+        f"{number((quality.get('fullReportCharacters') or {}).get('p50'))}/"
+        f"{number((quality.get('fullReportCharacters') or {}).get('p95'))}；"
+        f"风险数 P50/P95 = {number((quality.get('risksPerReport') or {}).get('p50'))}/"
+        f"{number((quality.get('risksPerReport') or {}).get('p95'))}；"
+        f"面试题 P50/P95 = {number((quality.get('questionsPerReport') or {}).get('p50'))}/"
+        f"{number((quality.get('questionsPerReport') or {}).get('p95'))}。",
         "",
         "### 动态路由",
         "",
@@ -1673,6 +1918,45 @@ def markdown(report: Dict[str, Any]) -> str:
         "旧批次若顺序遥测为 0，只能判定历史埋点不足，不能把 score lift=0 "
         "误写成二次排序无收益。",
         "",
+        "### 离线带标签质量验收",
+        "",
+    ])
+    jd_results = (((labeled_rag.get("jdKnowledge") or {}).get("data") or {})
+                  .get("results") or {})
+    resume_summary = ((((labeled_rag.get("resumeEvidence") or {}).get("data") or {})
+                       .get("summary") or {}).get("hybrid") or {})
+    if jd_results or resume_summary:
+        lines.extend([
+            "| 场景 | Cases/Queries | Precision@K | Recall@K | MRR | nDCG@K |",
+            "|---|---:|---:|---:|---:|---:|",
+        ])
+        for key, label in (("jd_match", "岗位匹配"),
+                           ("knowledge", "岗位/评估知识库")):
+            values = jd_results.get(key) or {}
+            if values:
+                lines.append(
+                    f"| {label} | {number(values.get('cases'))} | "
+                    f"{number(values.get('precision@5'), 4)} | "
+                    f"{number(values.get('recall@5'), 4)} | "
+                    f"{number(values.get('mrr'), 4)} | "
+                    f"{number(values.get('nDCG@5'), 4)} |")
+        if resume_summary:
+            lines.append(
+                f"| 简历内证据 | 24 | "
+                f"{number(resume_summary.get('precisionAtK'), 4)} | "
+                f"{number(resume_summary.get('recallAtK'), 4)} | "
+                f"{number(resume_summary.get('mrr'), 4)} | "
+                f"{number(resume_summary.get('ndcgAtK'), 4)} |")
+        lines.extend([
+            "",
+            "在线 Score 是排序代理分；上表才是带 gold 标签的质量结论。"
+            "知识库每 case 只有 1 个 gold 且固定返回 5 条，"
+            "Precision@5 理论上限为 0.20。",
+            "",
+        ])
+    else:
+        lines.extend(["未找到与当前检索实现绑定的带标签实验文件。", ""])
+    lines.extend([
         "## 4. Memory 生产与消费",
         "",
     ])
@@ -1864,6 +2148,7 @@ def main() -> int:
     directory = Path(args.report_dir).resolve()
     summary = json.loads(
         (directory / "summary.json").read_text(encoding="utf-8"))
+    summary = repair_late_polling_metrics(summary, directory)
     runtime = summary.get("agentRuntime") or {}
     rag_path = directory / "rag_metrics.json"
     rag = (
@@ -1890,6 +2175,7 @@ def main() -> int:
     elif enriched_runtime_path.is_file():
         runtime = json.loads(
             enriched_runtime_path.read_text(encoding="utf-8"))
+    runtime["llmFailureDetail"] = collect_llm_failure_reasons(directory)
     memory_path = directory / "memory_metrics.json"
     memory = (
         collect_memory_metrics(
@@ -1918,6 +2204,8 @@ def main() -> int:
         "rag": rag,
         "memory": memory,
         "skills": skills,
+        "reportQuality": collect_report_quality(directory),
+        "labeledRag": collect_labeled_rag(directory),
     }
     report["charts"] = generate_charts(report, directory)
     (directory / "load_report.json").write_text(

@@ -1,0 +1,197 @@
+{
+  "runsCollected": 100,
+  "runMetricErrors": 0,
+  "routeSignatures": {
+    "TechAgent -> ProjectAgent -> RiskAgent -> EvidenceAgent -> ReportAgent": 83,
+    "TechAgent -> RiskAgent -> EvidenceAgent -> ReportAgent": 14,
+    "TechAgent -> EvidenceAgent -> ReportAgent": 2,
+    "TechAgent -> ProjectAgent -> EvidenceAgent -> ReportAgent": 1
+  },
+  "agentUsage": {
+    "TechAgent": 100,
+    "ProjectAgent": 84,
+    "RiskAgent": 97,
+    "EvidenceAgent": 100,
+    "ReportAgent": 100
+  },
+  "agentLatencyMs": {
+    "EvidenceAgent": {
+      "count": 100,
+      "min": 6126.0,
+      "avg": 16477.97,
+      "p50": 15389.5,
+      "p95": 26851.85,
+      "p99": 35192.59,
+      "max": 43864.0
+    },
+    "MemoryService": {
+      "count": 100,
+      "min": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "ProjectAgent": {
+      "count": 84,
+      "min": 18606.0,
+      "avg": 29399.071,
+      "p50": 27719.5,
+      "p95": 44641.4,
+      "p99": 49228.28,
+      "max": 53282.0
+    },
+    "ReportAgent": {
+      "count": 100,
+      "min": 13734.0,
+      "avg": 40492.58,
+      "p50": 24640.5,
+      "p95": 89192.8,
+      "p99": 96077.06,
+      "max": 99449.0
+    },
+    "RiskAgent": {
+      "count": 97,
+      "min": 16559.0,
+      "avg": 28251.216,
+      "p50": 27513.0,
+      "p95": 44220.6,
+      "p99": 48592.2,
+      "max": 53277.0
+    },
+    "TechAgent": {
+      "count": 100,
+      "min": 15737.0,
+      "avg": 27989.22,
+      "p50": 27428.5,
+      "p95": 44128.2,
+      "p99": 48448.85,
+      "max": 53285.0
+    }
+  },
+  "runLatencyMs": {
+    "queueWait": {
+      "p50": 19.0,
+      "p95": 13581.449999999999,
+      "p99": 17233.650000000045,
+      "max": 25713.0
+    },
+    "runtime": {
+      "p50": 77598.5,
+      "p95": 135204.8,
+      "p99": 144253.42,
+      "max": 147265.0
+    }
+  },
+  "llm": {
+    "calls": 1023,
+    "failures": 1,
+    "latencyMs": {
+      "count": 1023,
+      "min": 680.0,
+      "avg": 12066.647,
+      "p50": 11809.0,
+      "p95": 24222.0,
+      "p99": 70029.84,
+      "max": 95015.0
+    },
+    "modelCalls": {
+      "deepseek-v4-flash": 922,
+      "deepseek-v4-pro": 101
+    },
+    "promptTokens": 5894908,
+    "completionTokens": 1272534,
+    "cacheHitTokens": 1736448,
+    "cacheHitRatio": 0.2946,
+    "costCny": 6.8772
+  },
+  "mcpEndpoints": {
+    "exa.web_fetch_exa": {
+      "rateLimited": 59,
+      "failed": 66,
+      "otherFailed": 7,
+      "latencyMs": {
+        "count": 66,
+        "min": 1709.0,
+        "avg": 5990.106,
+        "p50": 5650.0,
+        "p95": 8533.0,
+        "p99": 11504.05,
+        "max": 11870.0
+      }
+    },
+    "exa.web_search_exa": {
+      "rateLimited": 6,
+      "failed": 6,
+      "success": 1,
+      "latencyMs": {
+        "count": 7,
+        "min": 4395.0,
+        "avg": 5555.286,
+        "p50": 5719.0,
+        "p95": 5911.4,
+        "p99": 5945.48,
+        "max": 5954.0
+      }
+    }
+  },
+  "skills": {
+    "assess-technical-evidence": {
+      "catalog": 100,
+      "selected": 100,
+      "loaded": 100,
+      "applied": 100
+    },
+    "calibrate-evidence-confidence": {
+      "catalog": 100,
+      "selected": 100,
+      "loaded": 35,
+      "applied": 35,
+      "skipped": 65
+    },
+    "ground-project-claims": {
+      "catalog": 84,
+      "selected": 84,
+      "loaded": 84,
+      "applied": 84
+    },
+    "retrieve-public-candidate-evidence": {
+      "catalog": 70,
+      "selected": 70,
+      "loaded": 70,
+      "applied": 70
+    },
+    "risk_pattern_detection": {
+      "catalog": 97,
+      "selected": 97,
+      "loaded": 35,
+      "applied": 35,
+      "skipped": 62
+    }
+  },
+  "memoryUsageByType": {
+    "PROCEDURAL": 785,
+    "EPISODIC": 344
+  },
+  "retrieval": {
+    "success": 385
+  },
+  "repairsAndFailures": {
+    "budget_reallocated": 42,
+    "parallel_report_retry": 10
+  },
+  "degradedReasons": {},
+  "evidenceSupportRatio": {
+    "p50": 0.6715,
+    "p95": 0.8659999999999999,
+    "p99": 0.9093200000000002,
+    "max": 0.941
+  },
+  "jdCoverage": {
+    "p50": 1.0,
+    "p95": 1.0,
+    "p99": 1.0,
+    "max": 1.0
+  }
+}

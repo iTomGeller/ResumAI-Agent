@@ -1,0 +1,350 @@
+{
+  "runsRequested": 100,
+  "runsFetched": 100,
+  "fetchErrors": {},
+  "eventCounts": {
+    "skill.catalog": 451,
+    "skill.selected": 451,
+    "skill.loaded": 324,
+    "skill.applied": 324,
+    "skill.skipped": 127
+  },
+  "localLoadTool": {
+    "outcomes": {
+      "SUCCESS": 324
+    },
+    "latencyMs": {
+      "count": 324,
+      "min": 23.0,
+      "avg": 29.623,
+      "p50": 28.0,
+      "p95": 38.0,
+      "p99": 46.77,
+      "max": 55.0
+    },
+    "definition": "load_skill 本地工具 startedAt→endedAt，不含 LLM 推理"
+  },
+  "lifecycle": {
+    "selectedToLoadedMs": {
+      "count": 324,
+      "min": 800.0,
+      "avg": 1973.346,
+      "p50": 1268.5,
+      "p95": 7117.2,
+      "p99": 10632.69,
+      "max": 11916.0
+    },
+    "loadedToAppliedMs": {
+      "count": 324,
+      "min": 36.0,
+      "avg": 68.975,
+      "p50": 57.0,
+      "p95": 116.0,
+      "p99": 141.77,
+      "max": 150.0
+    },
+    "selectedToAppliedMs": {
+      "count": 324,
+      "min": 839.0,
+      "avg": 2042.321,
+      "p50": 1344.5,
+      "p95": 7258.25,
+      "p99": 10725.15,
+      "max": 11958.0
+    },
+    "definition": "selected→loaded 包含模型首次决策等待；loaded→applied 表示指令进入下一轮模型上下文的等待"
+  },
+  "agents": {
+    "RiskAgent": 97,
+    "TechAgent": 100,
+    "EvidenceAgent": 100,
+    "ProjectAgent": 154
+  },
+  "perSkill": {
+    "assess-technical-evidence": {
+      "catalog": 100,
+      "selected": 100,
+      "loaded": 100,
+      "applied": 100,
+      "skipped": 0,
+      "failed": 0,
+      "applyRateFromSelected": 1.0,
+      "agents": {
+        "TechAgent": 100
+      },
+      "localLoadToolMs": {
+        "count": 100,
+        "min": 24.0,
+        "avg": 29.68,
+        "p50": 29.0,
+        "p95": 38.0,
+        "p99": 44.02,
+        "max": 46.0
+      },
+      "selectedToLoadedMs": {
+        "count": 100,
+        "min": 800.0,
+        "avg": 1089.98,
+        "p50": 1031.5,
+        "p95": 1491.55,
+        "p99": 1915.38,
+        "max": 2448.0
+      },
+      "loadedToAppliedMs": {
+        "count": 100,
+        "min": 36.0,
+        "avg": 44.27,
+        "p50": 43.0,
+        "p95": 55.0,
+        "p99": 74.03,
+        "max": 77.0
+      },
+      "selectedToAppliedMs": {
+        "count": 100,
+        "min": 839.0,
+        "avg": 1134.25,
+        "p50": 1077.0,
+        "p95": 1531.65,
+        "p99": 1959.41,
+        "max": 2495.0
+      },
+      "selectedToSkippedMs": {
+        "count": null,
+        "min": null,
+        "avg": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      }
+    },
+    "calibrate-evidence-confidence": {
+      "catalog": 100,
+      "selected": 100,
+      "loaded": 35,
+      "applied": 35,
+      "skipped": 65,
+      "failed": 0,
+      "applyRateFromSelected": 0.35,
+      "agents": {
+        "EvidenceAgent": 100
+      },
+      "localLoadToolMs": {
+        "count": 35,
+        "min": 26.0,
+        "avg": 31.171,
+        "p50": 29.0,
+        "p95": 45.2,
+        "p99": 48.66,
+        "max": 49.0
+      },
+      "selectedToLoadedMs": {
+        "count": 35,
+        "min": 1277.0,
+        "avg": 7674.486,
+        "p50": 7090.0,
+        "p95": 11150.4,
+        "p99": 11709.96,
+        "max": 11916.0
+      },
+      "loadedToAppliedMs": {
+        "count": 35,
+        "min": 41.0,
+        "avg": 94.571,
+        "p50": 93.0,
+        "p95": 144.1,
+        "p99": 149.66,
+        "max": 150.0
+      },
+      "selectedToAppliedMs": {
+        "count": 35,
+        "min": 1318.0,
+        "avg": 7769.057,
+        "p50": 7186.0,
+        "p95": 11263.7,
+        "p99": 11785.96,
+        "max": 11958.0
+      },
+      "selectedToSkippedMs": {
+        "count": 65,
+        "min": 6064.0,
+        "avg": 13215.877,
+        "p50": 11506.0,
+        "p95": 23098.8,
+        "p99": 24434.08,
+        "max": 24580.0
+      }
+    },
+    "ground-project-claims": {
+      "catalog": 84,
+      "selected": 84,
+      "loaded": 84,
+      "applied": 84,
+      "skipped": 0,
+      "failed": 0,
+      "applyRateFromSelected": 1.0,
+      "agents": {
+        "ProjectAgent": 84
+      },
+      "localLoadToolMs": {
+        "count": 84,
+        "min": 23.0,
+        "avg": 29.857,
+        "p50": 28.5,
+        "p95": 38.0,
+        "p99": 48.36,
+        "max": 55.0
+      },
+      "selectedToLoadedMs": {
+        "count": 84,
+        "min": 923.0,
+        "avg": 1292.095,
+        "p50": 1247.0,
+        "p95": 1656.3,
+        "p99": 2196.32,
+        "max": 3023.0
+      },
+      "loadedToAppliedMs": {
+        "count": 84,
+        "min": 37.0,
+        "avg": 89.631,
+        "p50": 96.0,
+        "p95": 126.85,
+        "p99": 140.36,
+        "max": 147.0
+      },
+      "selectedToAppliedMs": {
+        "count": 84,
+        "min": 968.0,
+        "avg": 1381.726,
+        "p50": 1340.0,
+        "p95": 1760.7,
+        "p99": 2288.23,
+        "max": 3134.0
+      },
+      "selectedToSkippedMs": {
+        "count": null,
+        "min": null,
+        "avg": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      }
+    },
+    "retrieve-public-candidate-evidence": {
+      "catalog": 70,
+      "selected": 70,
+      "loaded": 70,
+      "applied": 70,
+      "skipped": 0,
+      "failed": 0,
+      "applyRateFromSelected": 1.0,
+      "agents": {
+        "ProjectAgent": 70
+      },
+      "localLoadToolMs": {
+        "count": 70,
+        "min": 23.0,
+        "avg": 29.086,
+        "p50": 28.0,
+        "p95": 37.0,
+        "p99": 39.86,
+        "max": 44.0
+      },
+      "selectedToLoadedMs": {
+        "count": 70,
+        "min": 1096.0,
+        "avg": 1404.729,
+        "p50": 1337.0,
+        "p95": 1724.75,
+        "p99": 2415.0,
+        "max": 3105.0
+      },
+      "loadedToAppliedMs": {
+        "count": 70,
+        "min": 47.0,
+        "avg": 59.586,
+        "p50": 54.0,
+        "p95": 94.2,
+        "p99": 114.1,
+        "max": 121.0
+      },
+      "selectedToAppliedMs": {
+        "count": 70,
+        "min": 1150.0,
+        "avg": 1464.314,
+        "p50": 1390.5,
+        "p95": 1806.9,
+        "p99": 2466.03,
+        "max": 3165.0
+      },
+      "selectedToSkippedMs": {
+        "count": null,
+        "min": null,
+        "avg": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      }
+    },
+    "risk_pattern_detection": {
+      "catalog": 97,
+      "selected": 97,
+      "loaded": 35,
+      "applied": 35,
+      "skipped": 62,
+      "failed": 0,
+      "applyRateFromSelected": 0.3608,
+      "agents": {
+        "RiskAgent": 97
+      },
+      "localLoadToolMs": {
+        "count": 35,
+        "min": 25.0,
+        "avg": 28.429,
+        "p50": 27.0,
+        "p95": 35.0,
+        "p99": 36.32,
+        "max": 37.0
+      },
+      "selectedToLoadedMs": {
+        "count": 35,
+        "min": 1035.0,
+        "avg": 1568.343,
+        "p50": 1482.0,
+        "p95": 1876.8,
+        "p99": 3900.22,
+        "max": 4926.0
+      },
+      "loadedToAppliedMs": {
+        "count": 35,
+        "min": 39.0,
+        "avg": 83.171,
+        "p50": 82.0,
+        "p95": 103.6,
+        "p99": 107.64,
+        "max": 109.0
+      },
+      "selectedToAppliedMs": {
+        "count": 35,
+        "min": 1093.0,
+        "avg": 1651.514,
+        "p50": 1567.0,
+        "p95": 1957.5,
+        "p99": 3990.78,
+        "max": 5022.0
+      },
+      "selectedToSkippedMs": {
+        "count": 62,
+        "min": 8718.0,
+        "avg": 15481.887,
+        "p50": 14074.5,
+        "p95": 26553.3,
+        "p99": 29563.12,
+        "max": 29751.0
+      }
+    }
+  }
+}

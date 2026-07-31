@@ -1,0 +1,12 @@
+{
+  "capturedAt": "2026-07-31T20:23:23+0800",
+  "mcpEndpoints": [
+    "exa.web_fetch_exa",
+    "exa.web_search_exa",
+    "fetch.fetch"
+  ],
+  "mcpServers": [
+    "exa",
+    "fetch"
+  ]
+}
