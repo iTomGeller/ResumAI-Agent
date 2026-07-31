@@ -2428,6 +2428,14 @@ def test_parallel_report_schema_requires_grounded_items():
     for schema in (dimension, risk, question):
         assert "evidenceRefs" in schema["required"]
         assert schema["properties"]["evidenceRefs"]["minItems"] == 1
+    assert specs["score"]["properties"]["dimensions"]["minItems"] == 4
+    assert specs["score"]["properties"]["dimensions"]["maxItems"] == 4
+    assert specs["score"]["properties"]["strengths"]["minItems"] == 2
+    assert specs["risk"]["properties"]["risks"]["minItems"] == 4
+    assert specs["risk"]["properties"]["risks"]["maxItems"] == 6
+    questions = specs["question"]["properties"]["interviewQuestions"]
+    assert questions["minItems"] == 8
+    assert questions["maxItems"] == 8
 
 
 def test_parallel_report_uses_native_section_schema_and_avoids_fallback(

@@ -335,17 +335,30 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
             "type": "string",
             "enum": ["SUFFICIENT", "PARTIAL", "INSUFFICIENT"],
         },
-        "dimensions": {"type": "array", "items": _REPORT_DIM},
-        "strengths": {"type": "array", "items": {"type": "string"}},
+        "dimensions": {
+            "type": "array", "items": _REPORT_DIM,
+            "minItems": 4, "maxItems": 4,
+        },
+        "strengths": {
+            "type": "array", "items": {"type": "string"},
+            "minItems": 2, "maxItems": 5,
+        },
     }
     risk_properties = {
-        "risks": {"type": "array", "items": _CANDIDATE_RISK_SCHEMA},
+        "risks": {
+            "type": "array", "items": _CANDIDATE_RISK_SCHEMA,
+            "minItems": 4, "maxItems": 6,
+        },
         "missingEvidence": {
-            "type": "array", "items": {"type": "string"}},
+            "type": "array", "items": {"type": "string"},
+            "minItems": 4, "maxItems": 8,
+        },
     }
     question_properties = {
         "interviewQuestions": {
-            "type": "array", "items": _INTERVIEW_PROBE_SCHEMA},
+            "type": "array", "items": _INTERVIEW_PROBE_SCHEMA,
+            "minItems": 8, "maxItems": 8,
+        },
     }
     return {
         "score": {
