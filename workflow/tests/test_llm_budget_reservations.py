@@ -153,6 +153,47 @@ def test_each_retry_is_an_accounted_provider_call(monkeypatch):
     assert budget.llm_calls_by_scope["agent:TechAgent"] == 2
 
 
+def test_monolithic_quality_report_fails_over_after_first_provider_error(
+        monkeypatch):
+    budget = RunBudget()
+    budget.configure_llm_budget(
+        4, {"terminal": 2, "control": 0},
+        scope_limits={"control": 0})
+    client = ResilientLlmClient(
+        NullEmitter(), budget, max_llm_calls=4, llm_timeout_seconds=5,
+        breaker=CircuitBreaker(threshold=5))
+    client.api_key = "test-only"
+    client.quality_model = "quality-pro"
+    client.model = "fast-flash"
+    client.fallback_model = "fast-flash"
+    models = []
+
+    async def fake_invoke(messages, model, *args, **kwargs):
+        models.append(model)
+        if len(models) == 1:
+            raise LlmError("TRANSPORT", "provider stalled", True)
+        return (
+            LlmTurn(content="ok", finish_reason="stop"),
+            {"prompt_tokens": 1, "completion_tokens": 1},
+            "stop",
+        )
+
+    async def no_sleep(_seconds):
+        return None
+
+    client._invoke = fake_invoke
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    answer = asyncio.run(client.chat(
+        [{"role": "user", "content": "generate report"}],
+        agent_id="ReportAgent", purpose="report",
+        json_mode=False, use_quality=True))
+
+    assert answer == "ok"
+    assert models == ["quality-pro", "fast-flash"]
+    assert budget.llm_calls == 2
+
+
 def test_provider_gate_bounds_concurrent_requests(monkeypatch):
     monkeypatch.setenv("LLM_MAX_CONCURRENT", "2")
     budget = RunBudget()

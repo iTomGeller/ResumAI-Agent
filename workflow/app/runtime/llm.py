@@ -278,7 +278,16 @@ class ResilientLlmClient:
         # --- END AUDIT ---
 
         attempts = 0
-        max_retries = 2
+        # A monolithic quality report can consume the entire tail budget when
+        # the provider stalls for two consecutive 60-second attempts.  Keep
+        # the first Pro attempt, then fail over to Flash immediately after a
+        # retryable transport/provider error.  Other agent calls retain the
+        # regular two-retry policy.
+        is_terminal_quality_report = (
+            agent_id == "ReportAgent"
+            and str(purpose or "").strip().lower() == "report"
+            and use_quality)
+        max_retries = 1 if is_terminal_quality_report else 2
         delay = 1.5
         last_error: Optional[Exception] = None
         effective_max_tokens = max_tokens
