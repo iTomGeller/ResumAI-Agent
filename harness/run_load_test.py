@@ -106,17 +106,25 @@ def upload_one(rec: Dict[str, Any], slot: Dict[str, Any], started: float,
         "uploadStatus": "FAILED",
         "uploadMs": None,
         "uploadError": None,
+        "uploadAttempts": 0,
     }
     upload_started = time.monotonic()
-    try:
-        path = (ROOT / rec["path"]).resolve()
-        response = stress.upload_resume(path, rec.get("fileType", "txt"))
-        row["traceId"] = response.get("traceId")
-        if not row["traceId"]:
-            raise RuntimeError("upload response has no traceId")
-        row["uploadStatus"] = "SUCCESS"
-    except Exception as exc:  # noqa: BLE001 - load result, not process crash
-        row["uploadError"] = str(exc)[:500]
+    path = (ROOT / rec["path"]).resolve()
+    for attempt in range(1, 3):
+        row["uploadAttempts"] = attempt
+        try:
+            response = stress.upload_resume(
+                path, rec.get("fileType", "txt"))
+            row["traceId"] = response.get("traceId")
+            if not row["traceId"]:
+                raise RuntimeError("upload response has no traceId")
+            row["uploadStatus"] = "SUCCESS"
+            row["uploadError"] = None
+            break
+        except Exception as exc:  # noqa: BLE001 - load result
+            row["uploadError"] = str(exc)[:500]
+            if attempt < 2:
+                time.sleep(0.2)
     row["uploadMs"] = int((time.monotonic() - upload_started) * 1000)
     row["uploadFinishedAt"] = time.time()
     append_jsonl(arrivals_path, row, write_lock)

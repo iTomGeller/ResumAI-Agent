@@ -494,6 +494,7 @@ def test_no_url_project_receives_live_mcp_and_skill_catalog_but_may_finish():
     assert output.summary == "finished without unnecessary external lookup"
     assert llm.tool_choice == "auto"
     assert "load_skill" in llm.tool_names
+    assert "read_skill_resource" not in llm.tool_names
     assert "emit_decision" in llm.tool_names
     assert any(
         name not in {"load_skill", "read_skill_resource", "emit_decision",

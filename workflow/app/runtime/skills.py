@@ -185,6 +185,20 @@ def _load_skill_dir(skill_dir: Path) -> Optional[SkillDefinition]:
         or skill_id in DEPRECATED_SKILLS or skill_id in ADMIN_ONLY_SKILLS \
         or meta.get("status", "").lower() == "deprecated"
     status = "DEPRECATED" if deprecated else "ACTIVE"
+    # Resource path discovery is metadata-only: list filenames without
+    # reading their contents. This lets the runtime hide the generic resource
+    # tool for Skills that have no on-demand references at all.
+    resources: List[str] = []
+    for folder_name in ("references", "scripts", "assets"):
+        folder = skill_dir / folder_name
+        if not folder.is_dir():
+            continue
+        try:
+            resources.extend(
+                child.relative_to(skill_dir).as_posix()
+                for child in sorted(folder.iterdir()) if child.is_file())
+        except OSError:
+            continue
     return SkillDefinition(
         skill_id=skill_id,
         name=skill_id,
@@ -198,6 +212,7 @@ def _load_skill_dir(skill_dir: Path) -> Optional[SkillDefinition]:
         source_path=str(skill_md),
         deprecated=deprecated,
         loaded=False,
+        resource_paths=tuple(resources),
     )
 
 

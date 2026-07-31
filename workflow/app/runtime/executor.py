@@ -1544,7 +1544,12 @@ class RunExecutor:
                 if tool not in {"knowledge_search", "resume_semantic_search"}
             ]
         if skills:
-            requested_tools.extend(["load_skill", "read_skill_resource"])
+            requested_tools.append("load_skill")
+            # Metadata already advertises the exact optional resource paths.
+            # Hiding the generic reader when none exist prevents models from
+            # inventing SKILL.md/hash paths after the body was already loaded.
+            if any(skill.resource_paths for skill in skills):
+                requested_tools.append("read_skill_resource")
 
         tool_results_block = ""
         pre_llm_tool_call_ids: List[str] = []
@@ -2501,7 +2506,7 @@ class RunExecutor:
         global _ACTIVE_PARALLEL_REPORTS
         try:
             limit = max(0, int(_os.getenv(
-                "REPORT_PARALLEL_MAX_INFLIGHT", "1")))
+                "REPORT_PARALLEL_MAX_INFLIGHT", "12")))
         except ValueError:
             limit = 1
         if _ACTIVE_PARALLEL_REPORTS >= limit:
