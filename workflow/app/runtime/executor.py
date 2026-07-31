@@ -214,9 +214,11 @@ _REPORT_DIM = {
         },
         "evidenceCoverage": {"type": "number", "minimum": 0, "maximum": 1},
         "rationale": {"type": "string"},
-        "evidenceRefs": {"type": "array", "items": _SOURCE_REF_SCHEMA},
+        "evidenceRefs": {
+            "type": "array", "minItems": 1,
+            "items": _SOURCE_REF_SCHEMA},
     },
-    "required": ["name", "status", "rationale"],
+    "required": ["name", "status", "rationale", "evidenceRefs"],
 }
 _CANDIDATE_RISK_SCHEMA = {
     "type": "object",
@@ -227,10 +229,12 @@ _CANDIDATE_RISK_SCHEMA = {
         "confidence": {"type": "number"},
         "claim": {"type": "string"},
         "impact": {"type": "string"},
-        "evidenceRefs": {"type": "array", "items": _SOURCE_REF_SCHEMA},
+        "evidenceRefs": {
+            "type": "array", "minItems": 1,
+            "items": _SOURCE_REF_SCHEMA},
         "verificationPlan": {"type": "string"},
     },
-    "required": ["claim"],
+    "required": ["claim", "evidenceRefs"],
 }
 _INTERVIEW_PROBE_SCHEMA = {
     "type": "object",
@@ -240,13 +244,15 @@ _INTERVIEW_PROBE_SCHEMA = {
         "question": {"type": "string"},
         "objective": {"type": "string"},
         "triggeredBy": {"type": "string"},
-        "evidenceRefs": {"type": "array", "items": _SOURCE_REF_SCHEMA},
+        "evidenceRefs": {
+            "type": "array", "minItems": 1,
+            "items": _SOURCE_REF_SCHEMA},
         "goodSignals": {"type": "array", "items": {"type": "string"}},
         "redFlags": {"type": "array", "items": {"type": "string"}},
         "followUps": {"type": "array", "items": {"type": "string"}},
         "scoreRubric": {"type": "string"},
     },
-    "required": ["question"],
+    "required": ["question", "evidenceRefs"],
 }
 _SYSTEM_WARNING_SCHEMA = {
     "type": "object",

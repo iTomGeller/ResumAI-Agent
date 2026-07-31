@@ -2165,6 +2165,19 @@ def test_parallel_report_fanout_has_process_wide_load_shedder(monkeypatch):
     RunExecutor._release_parallel_report_slot()
 
 
+def test_parallel_report_schema_requires_grounded_items():
+    from app.runtime.executor import _parallel_report_section_specs
+
+    specs = _parallel_report_section_specs()
+    dimension = specs["score"]["properties"]["dimensions"]["items"]
+    risk = specs["risk"]["properties"]["risks"]["items"]
+    question = specs["question"]["properties"][
+        "interviewQuestions"]["items"]
+    for schema in (dimension, risk, question):
+        assert "evidenceRefs" in schema["required"]
+        assert schema["properties"]["evidenceRefs"]["minItems"] == 1
+
+
 def test_duplicate_prestep_proposal_is_suppressed_without_false_failure():
     emitter = NullEmitter()
     executor = RunExecutor(
