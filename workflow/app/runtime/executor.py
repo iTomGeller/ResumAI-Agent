@@ -1603,7 +1603,8 @@ class RunExecutor:
                 pre_llm_succeeded_tools.add(tool)
                 await self._record_tool_success(
                     agent_id, tool, args, call.result,
-                    tool_call_id=call.tool_call_id)
+                    tool_call_id=call.tool_call_id,
+                    duration_ms=call.duration_ms)
 
         # Performance fast-path: high-quality deterministic parse → skip LLM.
         if definition.agent_id == "ResumeParserAgent":
@@ -2215,7 +2216,8 @@ class RunExecutor:
                                 if call.status == "SUCCEEDED":
                                     await self._record_tool_success(
                                         agent_id, tool, args, call.result,
-                                        tool_call_id=call.tool_call_id)
+                                        tool_call_id=call.tool_call_id,
+                                        duration_ms=call.duration_ms)
                                 result_payload = {
                                     "success": call.status == "SUCCEEDED",
                                     "status": call.status,
@@ -3092,7 +3094,8 @@ class RunExecutor:
 
     async def _record_tool_success(self, agent_id: str, tool: str,
                                    args: Dict[str, Any], result: Any, *,
-                                   tool_call_id: str) -> None:
+                                   tool_call_id: str,
+                                   duration_ms: Optional[int] = None) -> None:
         """Persist only successful tool material; failures never become evidence."""
         if isinstance(result, dict) and result.get("success") is False:
             return
@@ -3108,14 +3111,18 @@ class RunExecutor:
             if facts:
                 self.state.put_artifact("resumeFacts", facts)
         elif tool in ("knowledge_search", "resume_semantic_search"):
+            metric_result = self._with_measured_retrieval_latency(
+                result, duration_ms)
             await self._emit_rag_metrics(
-                agent_id, result, str(args.get("query") or ""),
+                agent_id, metric_result, str(args.get("query") or ""),
                 tool_name=tool, tool_call_id=tool_call_id,
                 requested_k=int(args.get("topK") or 5))
         elif tool == "jd_match_search":
             self._store_jd_match_artifacts(result)
+            metric_result = self._with_measured_retrieval_latency(
+                result, duration_ms)
             await self._emit_rag_metrics(
-                agent_id, result, "resume_to_jd_catalog",
+                agent_id, metric_result, "resume_to_jd_catalog",
                 tool_name=tool, tool_call_id=tool_call_id,
                 requested_k=int(args.get("topK") or 3))
 
@@ -3201,6 +3208,18 @@ class RunExecutor:
             })
             self.state.apply_artifacts({"mcpEvidence": [base_entry]},
                                        by_agent=agent_id)
+
+    @staticmethod
+    def _with_measured_retrieval_latency(
+            result: Any, duration_ms: Optional[int]) -> Any:
+        """Fill only missing RAG timing from the measured tool boundary."""
+        if not isinstance(result, dict) or duration_ms is None:
+            return result
+        latency = result.get("_latency")
+        latency = dict(latency) if isinstance(latency, dict) else {}
+        latency.setdefault("retrieval_ms", float(duration_ms))
+        latency.setdefault("total_ms", float(duration_ms))
+        return {**result, "_latency": latency}
 
     @staticmethod
     def _parse_decision(raw: str) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -4298,10 +4317,17 @@ class RunExecutor:
             self.state.apply_artifacts({"effectiveJd": jd})
 
         if resume and not arts.get("jdMatches"):
+            args = {"resumeText": resume}
             call = await self.tools.execute(
-                "CoordinatorAgent", "jd_match_search", {"resumeText": resume})
+                "CoordinatorAgent", "jd_match_search", args)
             if call.status == "SUCCEEDED":
-                self._store_jd_match_artifacts(call.result)
+                # Coordinator preflight is the normal producer of JD matches.
+                # Record it through the same path as Agent-owned calls so Ops
+                # receives retrieval.completed with rank and stage telemetry.
+                await self._record_tool_success(
+                    "CoordinatorAgent", "jd_match_search", args,
+                    call.result, tool_call_id=call.tool_call_id,
+                    duration_ms=call.duration_ms)
 
         # Refresh presence after JD match may have landed.
         arts = self.state.artifacts()

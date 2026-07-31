@@ -35,7 +35,7 @@ from app.runtime.mcp_registry import (
 from app.runtime.memory import NullMemoryClient
 from app.runtime.models import AgentRunRequest, PolicyBundle, RunBudget
 from app.runtime.skills import SkillManager
-from app.runtime.tools import ToolExecutor
+from app.runtime.tools import ToolCallResult, ToolExecutor
 
 
 def run(coro):
@@ -2333,6 +2333,52 @@ def test_jd_match_search_emits_rank_and_latency_telemetry():
     assert payload["fusionStrategy"] == "rrf_weighted"
     assert payload["stages"]["retrievalMs"] == 31.0
     assert payload["source"] == "internal_jd_catalog"
+
+
+def test_coordinator_preflight_emits_jd_match_retrieval_telemetry(monkeypatch):
+    emitter = NullEmitter("r-preflight-jd", "c-preflight-jd", "t-preflight-jd")
+    request = AgentRunRequest(
+        runId="r-preflight-jd", conversationId="c-preflight-jd",
+        traceId="t-preflight-jd", runType="full_evaluation",
+        resumeText="Java Spring RAG 项目")
+    executor = RunExecutor(
+        request, emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=object())
+    executor.state.apply_artifacts({
+        "parsedResume": {"skills": ["Java"]},
+        "resumeFacts": {"skills": ["Java"]},
+    })
+
+    async def execute(agent_id, tool, args, **_kwargs):
+        assert agent_id == "CoordinatorAgent"
+        assert tool == "jd_match_search"
+        return ToolCallResult(
+            "tc-preflight-jd", tool, "SUCCEEDED", {
+                "items": [{
+                    "jdId": "jd-java", "title": "Java Agent",
+                    "retrievalScore": 0.0164, "rrfScore": 0.0164,
+                }],
+                "strategy": "hybrid",
+                "fusion": "rrf_weighted",
+                "source": "internal_jd_catalog",
+                "indexName": "jd_catalog",
+                "candidateCount": 1,
+                "rerankApplied": False,
+            }, duration_ms=37)
+
+    monkeypatch.setattr(executor.tools, "execute", execute)
+    run(executor._prepare_context())
+
+    event = next(row for row in emitter.events
+                 if row["eventType"] == "retrieval.completed"
+                 and row["payload"]["toolName"] == "jd_match_search")
+    payload = event["payload"]
+    assert payload["toolCallId"] == "tc-preflight-jd"
+    assert payload["returnedK"] == 1
+    assert payload["scores"]["top"] == 0.0164
+    assert payload["fusionStrategy"] == "rrf_weighted"
+    assert payload["stages"]["retrievalMs"] == 37.0
+    assert payload["stages"]["totalMs"] == 37.0
 
 
 def test_report_section_fanout_is_dynamic_for_external_evidence(monkeypatch):
