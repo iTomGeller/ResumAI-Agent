@@ -2626,7 +2626,12 @@ class RunExecutor:
                     },
                 },
             }
-            uses_json_mode = isinstance(self.llm, ResilientLlmClient)
+            # Native terminal functions enforce the section JSON schema at
+            # the provider boundary.  The previous ResilientLlmClient branch
+            # used unconstrained json_mode, repeatedly produced too few
+            # evidenceRefs, retried two sections and finally regenerated the
+            # whole report (198s in the production trace).
+            uses_json_mode = False
             section_messages = list(messages) + [{
                 "role": "user",
                 "content": (
@@ -2674,6 +2679,7 @@ class RunExecutor:
                         "type": "function",
                         "function": {"name": "emit_report_section"},
                     },
+                    "sectionSchemaMode": "native_tool",
                     "occurredAt": _utc_now(),
                 })
             if uses_json_mode:

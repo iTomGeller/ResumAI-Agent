@@ -2430,6 +2430,82 @@ def test_parallel_report_schema_requires_grounded_items():
         assert schema["properties"]["evidenceRefs"]["minItems"] == 1
 
 
+def test_parallel_report_uses_native_section_schema_and_avoids_fallback(
+        monkeypatch):
+    request = AgentRunRequest(
+        runId="r-section-native", conversationId="c-section-native",
+        traceId="t-section-native", runType="full_evaluation",
+        resumeText="Java 支付项目")
+    emitter = NullEmitter(
+        "r-section-native", "c-section-native", "t-section-native")
+    executor = RunExecutor(
+        request, emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=_NativeMcpLlm())
+    ref = {"sourceType": "RESUME", "sourceId": "resume",
+           "quote": "Java 支付项目"}
+    seen = []
+
+    async def native_turn(messages, **kwargs):
+        purpose = kwargs["purpose"]
+        seen.append((purpose, kwargs.get("tools"), kwargs.get("tool_choice")))
+        if purpose == "report_score":
+            payload = {
+                "summary": "候选人具备 Java 项目证据，建议面试进一步核验。",
+                "recommendation": "INTERVIEW_RECOMMEND",
+                "dataQuality": "SUFFICIENT",
+                "strengths": ["Java 项目经验", "支付场景经验"],
+                "dimensions": [{
+                    "name": name, "score": 70, "status": "ASSESSED",
+                    "rationale": "存在简历证据", "evidenceRefs": [ref],
+                } for name in ("技术能力", "项目深度", "JD匹配", "履历可信度")],
+            }
+        elif purpose == "report_risk":
+            payload = {
+                "risks": [{
+                    "id": f"r{i}", "severity": "MEDIUM",
+                    "claim": f"风险{i}", "impact": "需核验",
+                    "verificationPlan": "面试追问", "evidenceRefs": [ref],
+                } for i in range(3)],
+                "missingEvidence": ["容量基线", "个人贡献", "故障复盘", "指标口径"],
+            }
+        else:
+            payload = {
+                "interviewQuestions": [{
+                    "id": f"q{i}", "question": f"请说明项目细节{i}",
+                    "objective": "核验证据", "triggeredBy": "简历项目",
+                    "goodSignals": ["给出基线"], "redFlags": ["无法说明"],
+                    "followUps": ["如何取舍"], "evidenceRefs": [ref],
+                } for i in range(8)],
+            }
+        return LlmTurn(
+            content="", finish_reason="tool_calls",
+            tool_calls=[LlmToolCall(
+                tool_call_id=f"tc-{purpose}", name="emit_report_section",
+                arguments=payload, raw_arguments=json.dumps(
+                    payload, ensure_ascii=False))])
+
+    monkeypatch.setattr(executor, "_chat_native_turn", native_turn)
+    output, calls = run(executor._run_parallel_report_sections(
+        [{"role": "system", "content": "report"}],
+        round_id="round-1", memory_refs=[], skill_refs=[],
+        observed_tool_call_ids=[], is_sparse_resume=False, max_calls=3))
+
+    assert calls == 3
+    assert output is not None
+    assert len(output["report"]["dimensions"]) == 4
+    assert len(output["report"]["interviewQuestions"]) == 8
+    assert {purpose for purpose, _, _ in seen} == {
+        "report_score", "report_risk", "report_question"}
+    assert all(tools and tools[0]["function"]["name"] == "emit_report_section"
+               for _, tools, _ in seen)
+    assert any(event["eventType"] == "run.progress"
+               and event["payload"].get("stage") == "parallel_report_merged"
+               for event in emitter.events)
+    assert not any(event["eventType"] == "run.progress"
+                   and event["payload"].get("stage") == "parallel_report_fallback"
+                   for event in emitter.events)
+
+
 def test_duplicate_prestep_proposal_is_suppressed_without_false_failure():
     emitter = NullEmitter()
     executor = RunExecutor(
