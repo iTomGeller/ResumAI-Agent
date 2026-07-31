@@ -19,12 +19,9 @@ def test_default_mcp_servers_are_real_and_enabled() -> None:
     config = _config()
     servers = config["mcpServers"]
 
-    assert set(servers) == {
-        "exa", "context7", "deepwiki", "microsoft-learn", "fetch"}
+    assert set(servers) == {"exa", "microsoft-learn", "fetch"}
     assert all(server["enabled"] for server in servers.values())
     assert servers["exa"]["url"].startswith("https://mcp.exa.ai/mcp")
-    assert servers["context7"]["url"] == "https://mcp.context7.com/mcp"
-    assert servers["deepwiki"]["url"] == "https://mcp.deepwiki.com/mcp"
     assert (
         servers["microsoft-learn"]["url"]
         == "https://learn.microsoft.com/api/mcp"
@@ -55,8 +52,12 @@ def test_routes_never_reference_removed_synthetic_cn_web_tools() -> None:
     assert not any(tool.startswith("cn-web.") for tool in routed)
     assert "mcp_fetch_url" not in routed
     assert "exa.web_search_exa" in routed
-    assert "deepwiki.ask_question" in routed
     assert "microsoft-learn.microsoft_docs_search" in routed
+    assert not any(tool.startswith(("context7.", "deepwiki."))
+                   for tool in routed)
+    assert not any(tool.endswith(("microsoft_docs_fetch",
+                                  "microsoft_code_sample_search"))
+                   for tool in routed)
     assert not any(tool.startswith(prefix) for tool in routed for prefix in (
         "tavily.", "firecrawl.", "github.", "brave-search."))
 

@@ -1722,6 +1722,12 @@ public class OpsDebugService {
             if (rerankLift == null && beforeTop != null && afterTop != null) {
                 rerankLift = afterTop - beforeTop;
             }
+            String beforeTopChunkId = firstTextDeep(data,
+                    "rerankBeforeTopChunkId", "beforeTopChunkId");
+            String afterTopChunkId = firstTextDeep(data,
+                    "rerankAfterTopChunkId", "afterTopChunkId");
+            Integer rerankMovedCount = firstIntegerDeep(data,
+                    "rerankMovedCount", "movedCount");
 
             Boolean fallback = firstBooleanDeep(data,
                     "fallback", "fallbackUsed", "usedFallback");
@@ -1777,6 +1783,7 @@ public class OpsDebugService {
                     firstIntegerDeep(data, "deduplicatedCount", "dedupCount"),
                     zeroHit, topScore, meanScore, minScore, spread, scoreSampleSize,
                     rerankApplied, beforeTop, afterTop, rerankLift,
+                    beforeTopChunkId, afterTopChunkId, rerankMovedCount,
                     cacheHit, fallback, fallbackStage, fallbackChain,
                     degraded, degradationReason, error, stages, chunks, quality,
                     telemetryComplete);

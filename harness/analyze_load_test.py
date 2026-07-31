@@ -535,6 +535,7 @@ def collect_memory_metrics(
     reads = 0
     read_hits = 0
     hit_reads = 0
+    read_durations: List[float] = []
     for rows in (timeline_data.get("timelines") or {}).values():
         for row in rows:
             event_type = str(row.get("eventType") or "")
@@ -548,6 +549,8 @@ def collect_memory_metrics(
                 hit_count = int(payload.get("hitCount") or 0)
                 read_hits += hit_count
                 hit_reads += int(hit_count > 0)
+                if payload.get("durationMs") is not None:
+                    read_durations.append(float(payload["durationMs"]))
 
     ttl_days: Dict[str, List[float]] = defaultdict(list)
     remaining_days: Dict[str, List[float]] = defaultdict(list)
@@ -623,8 +626,12 @@ def collect_memory_metrics(
             "overrideUsage": dict(override_counts),
         },
         "retrievalLatencyMs": {
-            "status": "NOT_INSTRUMENTED",
-            "reason": "memory.read 事件没有 start/end/durationMs，不能伪造耗时",
+            "status": "MEASURED" if read_durations else "NOT_INSTRUMENTED",
+            "reason": (
+                "memory.read durationMs measured at the Java search boundary"
+                if read_durations else
+                "memory.read 事件没有 start/end/durationMs，不能伪造耗时"),
+            **distribution(read_durations),
         },
     }
     (directory / "memory_metrics.json").write_text(
@@ -666,6 +673,14 @@ def collect_rag_metrics(base_url: str, directory: Path) -> Dict[str, Any]:
                  if row.get("durationMs") is not None]
     top_scores = [float(row["topScore"]) for row in items
                   if row.get("topScore") is not None]
+    scores_by_tool: Dict[str, List[float]] = defaultdict(list)
+    scores_by_strategy: Dict[str, List[float]] = defaultdict(list)
+    for row in items:
+        if row.get("topScore") is None:
+            continue
+        score = float(row["topScore"])
+        scores_by_tool[str(row.get("toolName") or "unknown")].append(score)
+        scores_by_strategy[str(row.get("strategy") or "unknown")].append(score)
     fill_ratios = [
         min(1.0, float(row.get("returnedK") or 0)
             / max(1.0, float(row.get("requestedK") or 0)))
@@ -675,6 +690,9 @@ def collect_rag_metrics(base_url: str, directory: Path) -> Dict[str, Any]:
     rerank_rows = [row for row in items if row.get("rerankApplied") is True]
     rerank_lifts = [float(row["rerankLift"]) for row in rerank_rows
                     if row.get("rerankLift") is not None]
+    rerank_order_rows = [
+        row for row in rerank_rows
+        if row.get("rerankMovedCount") is not None]
     stage_values: Dict[str, List[float]] = defaultdict(list)
     for row in items:
         stages = row.get("stages") if isinstance(row.get("stages"), dict) else {}
@@ -691,7 +709,9 @@ def collect_rag_metrics(base_url: str, directory: Path) -> Dict[str, Any]:
             "fusionStrategy", "requestedK", "returnedK",
             "uniqueDocuments", "candidateCount", "topScore", "meanScore",
             "rerankApplied", "rerankBeforeTopScore", "rerankAfterTopScore",
-            "rerankLift", "cacheHit", "fallback", "fallbackStage",
+            "rerankLift", "rerankBeforeTopChunkId",
+            "rerankAfterTopChunkId", "rerankMovedCount",
+            "cacheHit", "fallback", "fallbackStage",
             "zeroHit", "degraded", "degradationReason", "error",
             "telemetryComplete", "stages")
     } for row in items]
@@ -714,6 +734,22 @@ def collect_rag_metrics(base_url: str, directory: Path) -> Dict[str, Any]:
             row.get("telemetryComplete") is True for row in items),
         "latencyMs": distribution(durations),
         "topScoreProxy": distribution(top_scores),
+        "scoreTelemetryCoverage": {
+            "measured": len(top_scores),
+            "total": len(items),
+            "rate": round(len(top_scores) / len(items), 4) if items else None,
+        },
+        "topScoreBands": {
+            "high_ge_0_7": sum(value >= 0.7 for value in top_scores),
+            "medium_0_4_to_0_7": sum(
+                0.4 <= value < 0.7 for value in top_scores),
+            "low_lt_0_4": sum(value < 0.4 for value in top_scores),
+        },
+        "topScoreByTool": {
+            key: distribution(values) for key, values in scores_by_tool.items()},
+        "topScoreByStrategy": {
+            key: distribution(values)
+            for key, values in scores_by_strategy.items()},
         "topKFillRatioProxy": distribution(fill_ratios, digits=4),
         "uniqueDocuments": distribution(unique_documents),
         "strategies": dict(Counter(
@@ -730,6 +766,18 @@ def collect_rag_metrics(base_url: str, directory: Path) -> Dict[str, Any]:
             if items else None,
             "lift": distribution(rerank_lifts),
             "positiveLiftCount": sum(value > 0 for value in rerank_lifts),
+            "orderingTelemetryCount": len(rerank_order_rows),
+            "orderingChangedCount": sum(
+                int(row.get("rerankMovedCount") or 0) > 0
+                for row in rerank_order_rows),
+            "topChangedCount": sum(
+                bool(row.get("rerankBeforeTopChunkId"))
+                and row.get("rerankBeforeTopChunkId")
+                != row.get("rerankAfterTopChunkId")
+                for row in rerank_order_rows),
+            "movedDocuments": sum(
+                int(row.get("rerankMovedCount") or 0)
+                for row in rerank_order_rows),
         },
         "stageLatencyMs": {
             stage: distribution(values)
@@ -924,14 +972,61 @@ def markdown(report: Dict[str, Any]) -> str:
         f"{duration_ms((rag.get('latencyMs') or {}).get('p50'))} | "
         f"{duration_ms(rag_p95)} | {duration_ms((rag.get('latencyMs') or {}).get('p99'))} |",
         "",
-        "| 质量代理指标 | Avg | P50 | P95 |",
-        "|---|---:|---:|---:|",
-        f"| Top score proxy | {number((rag.get('topScoreProxy') or {}).get('avg'), 3)} | "
+        "### Score 分布",
+        "",
+        f"Score 遥测覆盖 {number((rag.get('scoreTelemetryCoverage') or {}).get('measured'))}/"
+        f"{number((rag.get('scoreTelemetryCoverage') or {}).get('total'))} 次调用（"
+        f"{ratio((rag.get('scoreTelemetryCoverage') or {}).get('rate'))}）。"
+        "无 score 的调用不计为 0，避免把遥测缺失伪装成低相关度。",
+        "",
+        "| 指标 | Min | Avg | P50 | P95 | P99 | Max |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+        f"| Top score proxy | {number((rag.get('topScoreProxy') or {}).get('min'), 3)} | "
+        f"{number((rag.get('topScoreProxy') or {}).get('avg'), 3)} | "
         f"{number((rag.get('topScoreProxy') or {}).get('p50'), 3)} | "
-        f"{number((rag.get('topScoreProxy') or {}).get('p95'), 3)} |",
-        f"| Top-K 填充率 | {ratio((rag.get('topKFillRatioProxy') or {}).get('avg'))} | "
-        f"{ratio((rag.get('topKFillRatioProxy') or {}).get('p50'))} | "
-        f"{ratio((rag.get('topKFillRatioProxy') or {}).get('p95'))} |",
+        f"{number((rag.get('topScoreProxy') or {}).get('p95'), 3)} | "
+        f"{number((rag.get('topScoreProxy') or {}).get('p99'), 3)} | "
+        f"{number((rag.get('topScoreProxy') or {}).get('max'), 3)} |",
+        "",
+        "| Score 档位 | 样本数 | 占已采集 score |",
+        "|---|---:|---:|",
+    ])
+    score_bands = rag.get("topScoreBands") or {}
+    measured_scores = int((rag.get("scoreTelemetryCoverage") or {}).get(
+        "measured") or 0)
+    for label, key in (("高（≥ 0.7）", "high_ge_0_7"),
+                       ("中（0.4–0.7）", "medium_0_4_to_0_7"),
+                       ("低（< 0.4）", "low_lt_0_4")):
+        count = int(score_bands.get(key) or 0)
+        lines.append(
+            f"| {label} | {number(count)} | "
+            f"{ratio(count / max(1, measured_scores))} |")
+    lines.extend([
+        "",
+        f"Top-K 填充率 Avg / P50 / P95 = "
+        f"{ratio((rag.get('topKFillRatioProxy') or {}).get('avg'))} / "
+        f"{ratio((rag.get('topKFillRatioProxy') or {}).get('p50'))} / "
+        f"{ratio((rag.get('topKFillRatioProxy') or {}).get('p95'))}。",
+        "",
+        "<details>",
+        "<summary>按 Tool / Strategy 查看 Top score</summary>",
+        "",
+        "| 维度 | 样本 | Avg | P50 | P95 | Min |",
+        "|---|---:|---:|---:|---:|---:|",
+    ])
+    for key, values in sorted((rag.get("topScoreByTool") or {}).items()):
+        lines.append(
+            f"| Tool `{key}` | {number(values.get('count'))} | "
+            f"{number(values.get('avg'), 3)} | {number(values.get('p50'), 3)} | "
+            f"{number(values.get('p95'), 3)} | {number(values.get('min'), 3)} |")
+    for key, values in sorted((rag.get("topScoreByStrategy") or {}).items()):
+        lines.append(
+            f"| Strategy `{key}` | {number(values.get('count'))} | "
+            f"{number(values.get('avg'), 3)} | {number(values.get('p50'), 3)} | "
+            f"{number(values.get('p95'), 3)} | {number(values.get('min'), 3)} |")
+    lines.extend([
+        "",
+        "</details>",
         "",
         "| 检索策略 | 调用数 | 占比 |",
         "|---|---:|---:|",
@@ -944,9 +1039,12 @@ def markdown(report: Dict[str, Any]) -> str:
     rerank = rag.get("rerank") or {}
     lines.extend([
         "",
-        f"> Rerank 标记覆盖 {ratio(rerank.get('appliedRate'))}，但 "
-        f"{number(rerank.get('positiveLiftCount'))} 个样本产生正向 lift。"
-        "这说明当前二次排序没有可证明的排序收益，不能只用“已启用”作为质量结论。",
+        f"> Rerank 标记覆盖 {ratio(rerank.get('appliedRate'))}；"
+        f"顺序遥测覆盖 {number(rerank.get('orderingTelemetryCount'))} 次，"
+        f"其中 {number(rerank.get('orderingChangedCount'))} 次改变排序、"
+        f"{number(rerank.get('topChangedCount'))} 次替换 Top-1。"
+        "旧批次若顺序遥测为 0，只能判定历史埋点不足，不能把 score lift=0 "
+        "误写成二次排序无收益。",
         "",
         "## 4. Memory 生产与消费",
         "",
@@ -957,6 +1055,7 @@ def markdown(report: Dict[str, Any]) -> str:
     produced_types = produced.get("byType") or {}
     consumed_types = consumed.get("byType") or {}
     ttl_types = (memory.get("ttl") or {}).get("effectiveDaysByType") or {}
+    memory_latency = memory.get("retrievalLatencyMs") or {}
     lines.extend([
         "| 类型 | 本次产出 | 本次消费 | TTL |",
         "|---|---:|---:|---:|",
@@ -979,8 +1078,9 @@ def markdown(report: Dict[str, Any]) -> str:
         f"- **{number(mismatch)} 条（{ratio(mismatch / max(1, consumed.get('usedCount') or 1))}）"
         "存在 producer/consumer 版本不一致；本批消费又仅落在 Episodic 与 Procedural，"
         "说明这组旧版本数据不能证明四层 Memory 已均衡参与。**",
-        f"- Memory 检索耗时：`{(memory.get('retrievalLatencyMs') or {}).get('status')}`。"
-        f"{(memory.get('retrievalLatencyMs') or {}).get('reason')}。",
+        f"- Memory 检索耗时：`{memory_latency.get('status')}`；P50 / P95 = "
+        f"{duration_ms(memory_latency.get('p50'))} / "
+        f"{duration_ms(memory_latency.get('p95'))}。{memory_latency.get('reason')}。",
         "",
         "## 5. Skill 动态性与耗时",
         "",

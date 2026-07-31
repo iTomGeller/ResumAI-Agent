@@ -101,7 +101,10 @@ resumai:
     internal-token: ${WORKFLOW_INTERNAL_TOKEN:change-me}
   agent-run:
     enabled: ${AGENT_RUN_ENABLED:true}
-    max-global-concurrent: ${RUN_MAX_GLOBAL_CONCURRENT:4}
+    # 8/10/12-concurrency ECS knee-point experiment: 12 kept zero failures,
+    # improved 12-run makespan by ~25% vs 8, and stayed below the 25% max-run
+    # inflation guard with no OOM/restart/DB lock contention.
+    max-global-concurrent: ${RUN_MAX_GLOBAL_CONCURRENT:12}
     run-timeout-seconds: ${RUN_TIMEOUT_SECONDS:900}
     dispatch-interval-ms: ${RUN_DISPATCH_INTERVAL_MS:500}
     watchdog-interval-ms: ${RUN_WATCHDOG_INTERVAL_MS:15000}

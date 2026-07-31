@@ -386,13 +386,15 @@ public class MemoryService {
                                 /** Agent that will consume hits (drives type/scope whitelist). */
                                 String consumerAgent,
                                 /** When true, include exp*_benchmark sources (lab only). */
-                                Boolean includeBenchmarkSources) {
+                                Boolean includeBenchmarkSources,
+                                /** Workflow revision consuming this memory. */
+                                String consumerVersion) {
 
         public SearchRequest(String query, List<String> types, String userId,
                              String conversationId, String runId, Integer topK,
                              Double minConfidence, Boolean includeSensitive) {
             this(query, types, userId, conversationId, runId, topK,
-                    minConfidence, includeSensitive, null, null, null);
+                    minConfidence, includeSensitive, null, null, null, null);
         }
 
         public SearchRequest(String query, List<String> types, String userId,
@@ -400,7 +402,7 @@ public class MemoryService {
                              Double minConfidence, Boolean includeSensitive,
                              String channel) {
             this(query, types, userId, conversationId, runId, topK,
-                    minConfidence, includeSensitive, channel, null, null);
+                    minConfidence, includeSensitive, channel, null, null, null);
         }
     }
 
@@ -508,6 +510,9 @@ public class MemoryService {
             if ("PROCEDURAL".equals(taxonomy) && !isApprovedProcedure(row)) {
                 continue;
             }
+            if (!producerCompatible(row, request.consumerVersion())) {
+                continue;
+            }
             double lexical = overlap(queryTerms, terms(row.getContent()));
             double ageDays = Math.max(0,
                     Duration.between(row.getUpdateTime(), now).toHours() / 24.0);
@@ -553,6 +558,7 @@ public class MemoryService {
             view.put("structuredContent", readJson(row.getStructuredContent()));
             view.put("source", row.getSource());
             view.put("sourceId", row.getSourceId());
+            view.put("producerVersion", row.getProducerVersion());
             view.put("confidence", row.getConfidence());
             view.put("score", Math.round(entry.getValue() * 1000.0) / 1000.0);
             view.put("relevance", Map.of(
@@ -1021,6 +1027,26 @@ public class MemoryService {
         }
         String normalized = rawType.trim().toUpperCase(Locale.ROOT);
         return LEGACY_TYPE_REMAP.getOrDefault(normalized, normalized);
+    }
+
+    /**
+     * Runtime-derived memories are revision-scoped. A new workflow build may
+     * change prompts, routing or evidence contracts, so it must not consume
+     * rows produced by an older build (or legacy rows with no revision).
+     * Reviewed system procedures are content-managed and remain compatible.
+     */
+    static boolean producerCompatible(
+            MemoryEntryRow row, String consumerVersion) {
+        if (!StringUtils.hasText(consumerVersion) || row == null) {
+            return true;
+        }
+        String source = row.getSource() == null
+                ? "" : row.getSource().trim().toLowerCase(Locale.ROOT);
+        if (TRUSTED_PROCEDURAL_SOURCES.contains(source)) {
+            return true;
+        }
+        return StringUtils.hasText(row.getProducerVersion())
+                && consumerVersion.trim().equals(row.getProducerVersion().trim());
     }
 
     private static boolean requestsLegacyFailure(List<String> requested) {

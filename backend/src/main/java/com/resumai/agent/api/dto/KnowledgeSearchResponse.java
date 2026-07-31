@@ -26,6 +26,9 @@ public record KnowledgeSearchResponse(
         Integer candidateCount,
         String rerankProvider,
         Double rerankBeforeTopScore,
-        Double rerankAfterTopScore
+        Double rerankAfterTopScore,
+        String rerankBeforeTopChunkId,
+        String rerankAfterTopChunkId,
+        Integer rerankMovedCount
 ) {
 }

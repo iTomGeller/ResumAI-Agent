@@ -245,7 +245,10 @@ public class RagController {
                 result.candidateCount(),
                 result.rerankProvider(),
                 result.rerankBeforeTopScore(),
-                result.rerankAfterTopScore());
+                result.rerankAfterTopScore(),
+                result.rerankBeforeTopChunkId(),
+                result.rerankAfterTopChunkId(),
+                result.rerankMovedCount());
     }
 
     @PostMapping("/knowledge-base/reindex")

@@ -55,8 +55,8 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         ("jd_analysis",),
         skills=(),
         tools=("jd_match_search", "knowledge_search",
-               "context7.resolve-library-id", "context7.query-docs"),
-        mcp_servers=("context7", "microsoft-learn", "exa"),
+               "microsoft-learn.microsoft_docs_search"),
+        mcp_servers=("microsoft-learn",),
         max_iterations=2, max_tool_calls=4, timeout_seconds=150,
         output_type="jd_requirements",
         requires_artifacts=("resume_facts",),
@@ -67,8 +67,8 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         ("tech_evaluation",),
         skills=("assess-technical-evidence",),
         tools=("calculate_jd_coverage", "resume_semantic_search", "knowledge_search",
-               "context7.resolve-library-id", "context7.query-docs"),
-        mcp_servers=("context7", "microsoft-learn", "exa"),
+               "microsoft-learn.microsoft_docs_search"),
+        mcp_servers=("microsoft-learn",),
         # Four deterministic pre-steps may precede Skill + documentation MCP
         # calls; five made valid provider actions fail as budget exhausted.
         max_iterations=2, max_tool_calls=10, timeout_seconds=240,
@@ -81,7 +81,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         ("project_analysis",),
         skills=("ground-project-claims", "retrieve-public-candidate-evidence"),
         tools=("locate_evidence", "resume_semantic_search"),
-        mcp_servers=("exa", "deepwiki", "fetch"),
+        mcp_servers=("exa", "fetch"),
         # External evidence may require preflight + two Skills + several live
         # provider calls in one model-authored action batch.
         max_iterations=2, max_tool_calls=10, timeout_seconds=240,
@@ -105,7 +105,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         ("evidence_verification",),
         skills=("calibrate-evidence-confidence",),
         tools=("verify_report_evidence", "locate_evidence"),
-        mcp_servers=("exa", "deepwiki", "fetch"),
+        mcp_servers=("exa", "fetch"),
         max_iterations=2, max_tool_calls=6, timeout_seconds=210,
         output_type="evidence",
         # Soft deps via AGENT_DEPENDENCIES: only wait for specialists that are
@@ -145,8 +145,8 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         "InterviewQuestionAgent", "面试追问", "针对风险与缺口生成追问",
         ("interview_questions",),
         skills=(),
-        tools=("context7.resolve-library-id", "context7.query-docs"),
-        mcp_servers=("context7", "microsoft-learn"),
+        tools=("microsoft-learn.microsoft_docs_search",),
+        mcp_servers=("microsoft-learn",),
         max_iterations=2, max_tool_calls=2, timeout_seconds=150,
         output_type="questions",
         requires_artifacts=("risks",),

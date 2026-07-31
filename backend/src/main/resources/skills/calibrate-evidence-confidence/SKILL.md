@@ -52,7 +52,7 @@ description: 对简历原文、RAG、JD、用户补充和真实外部工具结�
   }],
   "conflicts": [],
   "unknowns": [],
-  "toolHealth": {"exa": "not_called", "deepwiki": "not_called", "fetch": "not_called"},
+  "toolHealth": {"exa": "not_called", "fetch": "not_called"},
   "sourceRefs": ["resume:p2:l8"]
 }
 ```

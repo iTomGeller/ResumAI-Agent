@@ -1903,7 +1903,7 @@ class RunExecutor:
                 "contextRole": "MODEL_INPUT",
             }
             if (is_report and single_pass_evaluation
-                    and self._parallel_report_sections_enabled()):
+                    and self._should_parallel_report_sections(signals)):
                 terminal_available = self.budget.available_llm_calls_for_scope(
                     self.policy.maxLlmCalls, "terminal")
                 # Keep three calls for the monolithic quality-model fallback
@@ -2467,12 +2467,31 @@ class RunExecutor:
 
     def _parallel_report_sections_enabled(self) -> bool:
         configured = _os.getenv(
-            "REPORT_PARALLEL_SECTIONS", "1").strip().lower()
+            "REPORT_PARALLEL_SECTIONS", "auto").strip().lower()
         return (
             configured not in {"0", "false", "no", "off"}
             and bool(getattr(
                 self.llm, "supports_parallel_report_sections", False))
         )
+
+    def _should_parallel_report_sections(
+            self, signals: Dict[str, Any]) -> bool:
+        """Use section fan-out only where the live A/B showed a benefit.
+
+        On a strong non-external resume, a single Pro synthesis was 31% faster
+        with equivalent structure. For sparse resumes section fan-out was 22%
+        faster, and on the external resume it was 10% faster. Keep an explicit
+        ``always`` escape hatch for controlled experiments.
+        """
+        if not self._parallel_report_sections_enabled():
+            return False
+        mode = _os.getenv(
+            "REPORT_PARALLEL_SECTIONS", "auto").strip().lower()
+        if mode in {"always", "force"}:
+            return True
+        return bool(
+            signals.get("has_external_urls")
+            or signals.get("is_sparse_resume"))
 
     async def _run_parallel_report_sections(
             self, messages: List[Dict[str, Any]], *, round_id: str,
@@ -3242,6 +3261,47 @@ class RunExecutor:
                         "sourceId": chunk.get("sourceId"),
                     },
                 })
+            elif isinstance(chunk, str) and chunk.strip():
+                # ResumeRagService returns text chunks plus topScore /
+                # rerankScores at the response root. Preserve the snippets so
+                # Ops does not show hitCount>0 together with an empty result.
+                normalized_chunks.append({
+                    "chunkId": None,
+                    "docId": "current_resume",
+                    "title": "当前简历片段",
+                    "source": "resume_text",
+                    "uri": None,
+                    "finalScore": None,
+                    "retrievalScore": None,
+                    "rerankScore": None,
+                    "rrfScore": None,
+                    "content": chunk[:800],
+                    "provenance": {
+                        "indexName": "current_resume",
+                        "sourceId": self.request.runId,
+                    },
+                })
+                doc_ids.add("current_resume")
+        score_metric = "chunk_final_score"
+        if not score_values:
+            rerank_scores = result.get("rerankScores")
+            if isinstance(rerank_scores, list):
+                score_values.extend(
+                    float(value) for value in rerank_scores
+                    if isinstance(value, (int, float)))
+                if score_values:
+                    score_metric = "resume_rerank_usefulness"
+            if not score_values:
+                root_score = (
+                    result.get("usefulnessScore")
+                    if isinstance(result.get("usefulnessScore"), (int, float))
+                    else result.get("topScore"))
+                if isinstance(root_score, (int, float)):
+                    score_values.append(float(root_score))
+                    score_metric = (
+                        "resume_rerank_usefulness"
+                        if result.get("usefulnessScore") is not None
+                        else "retrieval_top_score")
         latency = result.get("_latency") or {}
         counters = result.get("counters") if isinstance(
             result.get("counters"), dict) else {}
@@ -3250,6 +3310,8 @@ class RunExecutor:
             if isinstance(result.get("candidateCount"), int)
             else counters.get("candidateCount")
             if isinstance(counters.get("candidateCount"), int)
+            else result.get("hitCount")
+            if isinstance(result.get("hitCount"), int)
             else None)
         ended_at = str(result.get("retrievedAt") or _utc_now())
         rerank_applied = (
@@ -3285,13 +3347,14 @@ class RunExecutor:
                 "mean": round(sum(score_values) / len(score_values), 4)
                 if score_values else None,
                 "collectedCount": len(score_values),
+                "metric": score_metric if score_values else None,
             },
             "uniqueDocuments": len(doc_ids),
             "docIds": list(doc_ids)[:5],
             "strategy": result.get("strategy"),
             "fusionStrategy": result.get("fusion"),
             "indexName": result.get("indexName"),
-            "source": result.get("source"),
+            "source": result.get("source") or result.get("backend"),
             "chunks": normalized_chunks,
             "stages": {
                 "queryRewriteMs": latency.get("rewrite_ms"),
@@ -3311,6 +3374,11 @@ class RunExecutor:
             "rerankBeforeTopScore": result.get("rerankBeforeTopScore"),
             "rerankAfterTopScore": result.get("rerankAfterTopScore"),
             "rerankLift": result.get("rerankLift"),
+            "rerankBeforeTopChunkId": result.get(
+                "rerankBeforeTopChunkId"),
+            "rerankAfterTopChunkId": result.get(
+                "rerankAfterTopChunkId"),
+            "rerankMovedCount": result.get("rerankMovedCount"),
             "cacheHit": result.get("cacheHit")
             if isinstance(result.get("cacheHit"), bool) else None,
             "fallback": result.get("fallback")

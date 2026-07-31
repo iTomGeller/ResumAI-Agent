@@ -11,7 +11,7 @@ public class AgentRunProperties {
     private boolean enabled = true;
 
     /** Global maximum number of concurrently RUNNING agent runs. */
-    private int maxGlobalConcurrent = 4;
+    private int maxGlobalConcurrent = 12;
 
     /** Default wall-clock budget for one run (seconds). */
     private int runTimeoutSeconds = 900;

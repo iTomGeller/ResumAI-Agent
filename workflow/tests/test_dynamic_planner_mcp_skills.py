@@ -23,8 +23,6 @@ def test_mcp_config_resolves_shared_file():
     assert path is not None, "config/mcp-servers.json should resolve"
     cfg = load_mcp_config()
     assert "exa" in (cfg.get("mcpServers") or {})
-    assert "context7" in (cfg.get("mcpServers") or {})
-    assert "deepwiki" in (cfg.get("mcpServers") or {})
     assert "microsoft-learn" in (cfg.get("mcpServers") or {})
     assert "fetch" in (cfg.get("mcpServers") or {})
     assert (cfg.get("optionalMcpServers") or {}) == {}
@@ -144,10 +142,8 @@ def _catalog_for(resume_text: str, job_description: str, agent_id: str):
     routed = {
         "ProjectAgent": [
             "exa.web_search_exa", "exa.web_fetch_exa", "fetch.fetch",
-            "deepwiki.ask_question",
         ],
         "TechAgent": [
-            "context7.resolve-library-id", "context7.query-docs",
             "microsoft-learn.microsoft_docs_search",
         ],
     }
@@ -177,27 +173,20 @@ def test_mcp_catalog_is_signal_gated_not_coverage_rotated():
     assert _catalog_for(
         "项目 https://github.com/acme/demo", "Java 后端", "ProjectAgent") == {
             "exa.web_search_exa", "exa.web_fetch_exa", "fetch.fetch",
-            "deepwiki.ask_question",
         }
     assert _catalog_for(
-        "Java Spring Boot Redis", "Java 后端", "TechAgent") == {
-            "context7.resolve-library-id", "context7.query-docs",
-        }
+        "Java Spring Boot Redis", "Java 后端", "TechAgent") == set()
     assert _catalog_for(
         "C# ASP.NET Core Azure", ".NET 后端", "TechAgent") == {
             "microsoft-learn.microsoft_docs_search",
         }
 
 
-def test_technical_skill_advertises_both_documentation_families():
+def test_technical_skill_advertises_measured_documentation_endpoint_only():
     manager = SkillManager(resolve_skills_root())
     skill = manager.get("assess-technical-evidence")
     assert set(skill.required_tools) == {
-        "context7.resolve-library-id",
-        "context7.query-docs",
         "microsoft-learn.microsoft_docs_search",
-        "microsoft-learn.microsoft_docs_fetch",
-        "microsoft-learn.microsoft_code_sample_search",
     }
 
 

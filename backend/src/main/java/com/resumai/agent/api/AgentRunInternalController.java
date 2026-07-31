@@ -177,19 +177,25 @@ public class AgentRunInternalController {
     public record MemorySearchRequest(String query, List<String> types, String userId,
                                       String conversationId, String runId, Integer topK,
                                       Double minConfidence, String channel,
-                                      String consumerAgent, Boolean includeBenchmarkSources) {
+                                      String consumerAgent, String consumerVersion,
+                                      Boolean includeBenchmarkSources) {
     }
 
     @PostMapping("/memory/search")
     public Map<String, Object> memorySearch(@RequestHeader("X-Internal-Token") String token,
                                             @RequestBody MemorySearchRequest request) {
         authorize(token);
+        long searchStartedNanos = System.nanoTime();
+        Instant searchStartedAt = Instant.now();
         List<Map<String, Object>> hits = memoryService.search(new MemoryService.SearchRequest(
                 request.query(), request.types(), request.userId(), request.conversationId(),
                 request.runId(), request.topK(), request.minConfidence(), false,
                 request.channel(), request.consumerAgent(),
-                request.includeBenchmarkSources()));
-        String occurredAt = Instant.now().toString();
+                request.includeBenchmarkSources(), request.consumerVersion()));
+        Instant searchEndedAt = Instant.now();
+        long searchDurationMs = Math.max(
+                0L, (System.nanoTime() - searchStartedNanos) / 1_000_000L);
+        String occurredAt = searchEndedAt.toString();
         Map<String, Object> readAudit = new LinkedHashMap<>();
         readAudit.put("memoryId", "");
         readAudit.put("type", "MULTI");
@@ -200,6 +206,10 @@ public class AgentRunInternalController {
         readAudit.put("runId", request.runId());
         readAudit.put("reason", "agent_memory_retrieval");
         readAudit.put("hitCount", hits.size());
+        readAudit.put("consumerVersion", request.consumerVersion());
+        readAudit.put("startedAt", searchStartedAt.toString());
+        readAudit.put("endedAt", searchEndedAt.toString());
+        readAudit.put("durationMs", searchDurationMs);
         readAudit.put("occurredAt", occurredAt);
         if (hasText(request.runId())) {
             lifecycleService.applyRuntimeEvent(request.runId(), "memory.read",

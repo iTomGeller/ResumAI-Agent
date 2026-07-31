@@ -279,6 +279,9 @@ public class KnowledgeBaseDocumentService {
         boolean rerankApplied = false;
         long rerankMs = 0L;
         Double beforeTopScore = topFinalScore(fused);
+        List<String> beforeRerankOrder = fused.stream()
+                .map(row -> stringValue(row.get("chunkId"), ""))
+                .toList();
         if (rerank && fused.size() > 1) {
             String preRerankTopId = stringValue(
                     fused.get(0).get("chunkId"), "");
@@ -301,6 +304,21 @@ public class KnowledgeBaseDocumentService {
             }
         }
         Double afterTopScore = topFinalScore(fused);
+        List<String> afterRerankOrder = fused.stream()
+                .map(row -> stringValue(row.get("chunkId"), ""))
+                .toList();
+        String beforeTopChunkId = beforeRerankOrder.isEmpty()
+                ? null : beforeRerankOrder.get(0);
+        String afterTopChunkId = afterRerankOrder.isEmpty()
+                ? null : afterRerankOrder.get(0);
+        int comparableRanks = Math.min(
+                beforeRerankOrder.size(), afterRerankOrder.size());
+        int movedCount = 0;
+        for (int i = 0; i < comparableRanks; i++) {
+            if (!beforeRerankOrder.get(i).equals(afterRerankOrder.get(i))) {
+                movedCount++;
+            }
+        }
 
         final String resolvedStrategy = strategy;
         final String resolvedStage = fallbackStage;
@@ -339,7 +357,9 @@ public class KnowledgeBaseDocumentService {
                 rerankApplied, resolvedStage, FALLBACK_CHAIN, queryId, retrievedAt, latencyMs,
                 retrievalMs, fusionMs, rerankMs, fused.size(),
                 rerankApplied ? "feature_rerank_v1" : null,
-                beforeTopScore, afterTopScore);
+                beforeTopScore, afterTopScore,
+                beforeTopChunkId, afterTopChunkId,
+                rerankApplied ? movedCount : null);
     }
 
     /**
@@ -1317,14 +1337,18 @@ public class KnowledgeBaseDocumentService {
                                Long retrievalMs, Long fusionMs, Long rerankMs,
                                Integer candidateCount, String rerankProvider,
                                Double rerankBeforeTopScore,
-                               Double rerankAfterTopScore) {
+                               Double rerankAfterTopScore,
+                               String rerankBeforeTopChunkId,
+                               String rerankAfterTopChunkId,
+                               Integer rerankMovedCount) {
         public SearchResult(List<Map<String, Object>> chunks, String strategy,
                             int lexicalHits, int vectorHits, String fusion,
                             boolean rerankApplied, String fallbackStage,
                             List<String> fallbackChain) {
             this(chunks, strategy, lexicalHits, vectorHits, fusion, rerankApplied,
                     fallbackStage, fallbackChain, null, null, null,
-                    null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null,
+                    null, null, null);
         }
     }
 }

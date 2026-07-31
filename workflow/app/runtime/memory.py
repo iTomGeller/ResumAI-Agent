@@ -381,6 +381,7 @@ class MemoryClient:
             "topK": top_k,
             "minConfidence": min_confidence,
             "consumerAgent": consumer_agent,
+            "consumerVersion": settings.workflow_build_version,
             "includeBenchmarkSources": include_benchmark_sources,
         }
         try:

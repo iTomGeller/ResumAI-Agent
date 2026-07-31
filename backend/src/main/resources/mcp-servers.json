@@ -22,43 +22,13 @@
         "requiresSourceUrl": true
       }
     },
-    "context7": {
-      "enabled": true,
-      "default": true,
-      "transport": "streamable-http",
-      "url": "https://mcp.context7.com/mcp",
-      "description": "Official Context7 remote MCP for current framework and library documentation",
-      "allowedTools": ["resolve-library-id", "query-docs"],
-      "toolPrefix": "context7",
-      "evidence": {
-        "provider": "context7",
-        "kind": "framework-docs",
-        "subjectBinding": "not-candidate-evidence",
-        "requiresSourceUrl": false
-      }
-    },
-    "deepwiki": {
-      "enabled": true,
-      "default": true,
-      "transport": "streamable-http",
-      "url": "https://mcp.deepwiki.com/mcp",
-      "description": "Official Cognition DeepWiki public MCP for documentation of candidate-declared public repositories",
-      "allowedTools": ["read_wiki_structure", "read_wiki_contents", "ask_question"],
-      "toolPrefix": "deepwiki",
-      "evidence": {
-        "provider": "deepwiki",
-        "kind": "repository-docs",
-        "subjectBinding": "candidate-declared-repository-only",
-        "requiresSourceUrl": true
-      }
-    },
     "microsoft-learn": {
       "enabled": true,
       "default": true,
       "transport": "streamable-http",
       "url": "https://learn.microsoft.com/api/mcp",
-      "description": "Official public Microsoft Learn MCP; unauthenticated current documentation and code samples",
-      "allowedTools": ["microsoft_docs_search", "microsoft_docs_fetch", "microsoft_code_sample_search"],
+      "description": "Official public Microsoft Learn MCP; current documentation search",
+      "allowedTools": ["microsoft_docs_search"],
       "toolPrefix": "microsoft-learn",
       "evidence": {
         "provider": "microsoft-learn",
@@ -87,38 +57,26 @@
   },
   "optionalMcpServers": {},
   "agentToolRouting": {
-    "JDAnalysisAgent": [],
+    "JDAnalysisAgent": [
+      "microsoft-learn.microsoft_docs_search"
+    ],
     "TechAgent": [
-      "context7.resolve-library-id",
-      "context7.query-docs",
-      "microsoft-learn.microsoft_docs_search",
-      "microsoft-learn.microsoft_docs_fetch",
-      "microsoft-learn.microsoft_code_sample_search"
+      "microsoft-learn.microsoft_docs_search"
     ],
     "ProjectAgent": [
       "exa.web_search_exa",
       "exa.web_fetch_exa",
-      "deepwiki.read_wiki_structure",
-      "deepwiki.read_wiki_contents",
-      "deepwiki.ask_question",
       "fetch.fetch"
     ],
     "EvidenceAgent": [
       "exa.web_search_exa",
       "exa.web_fetch_exa",
-      "deepwiki.read_wiki_structure",
-      "deepwiki.read_wiki_contents",
-      "deepwiki.ask_question",
       "fetch.fetch"
     ],
     "RiskAgent": [],
     "ReportAgent": [],
     "InterviewQuestionAgent": [
-      "context7.resolve-library-id",
-      "context7.query-docs",
-      "microsoft-learn.microsoft_docs_search",
-      "microsoft-learn.microsoft_docs_fetch",
-      "microsoft-learn.microsoft_code_sample_search"
+      "microsoft-learn.microsoft_docs_search"
     ]
   }
 }

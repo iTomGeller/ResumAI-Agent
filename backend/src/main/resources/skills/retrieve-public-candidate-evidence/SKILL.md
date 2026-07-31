@@ -1,7 +1,7 @@
 ---
 name: retrieve-public-candidate-evidence
-description: 集中定义免密 Exa、DeepWiki 和 fetch 对候选人声明 URL 的绑定、超时/限流与 not_checked 契约。仅在简历含显式外链、用户要求公网核验，或项目证据核验需要外部来源时使用。
-allowed-tools: exa.web_search_exa exa.web_fetch_exa deepwiki.read_wiki_structure deepwiki.read_wiki_contents deepwiki.ask_question fetch.fetch
+description: 集中定义免密 Exa 和 fetch 对候选人声明 URL 的绑定、超时/限流与 not_checked 契约。仅在简历含显式外链、用户要求公网核验，或项目证据核验需要外部来源时使用。
+allowed-tools: exa.web_search_exa exa.web_fetch_exa fetch.fetch
 ---
 
 # Retrieve Public Candidate Evidence
@@ -19,15 +19,14 @@ allowed-tools: exa.web_search_exa exa.web_fetch_exa deepwiki.read_wiki_structure
 ## 工具优先级
 
 1. **Exa**（`exa.web_search_exa` / `exa.web_fetch_exa`）：发现与抓取候选人声明页面。
-2. **DeepWiki**（`deepwiki.*`）：仅查询候选人已声明的公开仓库；用仓库结构/内容辅助定位，不把 AI 生成的仓库说明当成独立候选人事实。
-3. **stdio fetch**（`fetch.fetch`）：远程 MCP 熔断或限流时的白名单兜底，不承担搜索。其描述和参数 schema 必须来自实时 `tools/list`，不使用本地别名。
+2. **stdio fetch**（`fetch.fetch`）：远程 MCP 熔断或限流时的白名单兜底，不承担搜索。其描述和参数 schema 必须来自实时 `tools/list`，不使用本地别名。
 
-生产 MCP 清单只允许免 OAuth、免 API Key 的服务；公开 GitHub 页通过 Exa、DeepWiki 或白名单 fetch 核验。
+生产 MCP 清单只允许免 OAuth、免 API Key 的服务；公开 GitHub 页通过 Exa 或白名单 fetch 核验。
 
 ### 中国大陆 ECS 路由
 
 - GitHub 连通性按**运行时探测结果**处理，不能因机房地域直接假定可用或不可用。
-- GitHub 直连失败时，优先换到托管在境外的 Exa 抓取；候选人明确声明了仓库时可用 DeepWiki 定位结构。仍失败则记 `not_checked`，不得反推为“仓库不存在”或履历风险。
+- GitHub 直连失败时，优先换到托管在境外的 Exa 抓取；仍失败则记 `not_checked`，不得反推为“仓库不存在”或履历风险。
 - Gitee / GitCode / CSDN / 掘金 / 知乎 / 博客园等候选人显式声明的国内链接，优先用白名单 fetch 直连；来源 URL 必须原样保留。
 - 不得把同名 Gitee 镜像自动当成 GitHub 原仓库；只有简历显式声明或页面提供可验证的 canonical / mirror 关系时才允许绑定。
 
@@ -64,12 +63,12 @@ allowed-tools: exa.web_search_exa exa.web_fetch_exa deepwiki.read_wiki_structure
     "identityLinkage": "explicit_resume_link"
   }],
   "notChecked": [],
-  "toolHealth": {"exa": "success", "deepwiki": "not_called", "fetch": "not_called"}
+  "toolHealth": {"exa": "success", "fetch": "not_called"}
 }
 ```
 
 ## 边界
 
 - 所有公网结果必须带 `sourceUrl`；无 URL 的片段不得进入候选人证据台账。
-- Context7 / Microsoft Learn 框架文档不是候选人证据，不得经本 Skill 写入。
+- Microsoft Learn 框架文档不是候选人证据，不得经本 Skill 写入。
 - ReportAgent 不得直接调用公网 MCP；只消费 Evidence 校准后的 ledger。

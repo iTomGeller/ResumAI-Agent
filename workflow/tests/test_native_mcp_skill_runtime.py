@@ -2092,6 +2092,67 @@ def test_knowledge_search_uses_single_in_request_rerank_with_real_timings():
     assert result["_latency"]["rerank_ms"] == 2
 
 
+def test_resume_rag_emits_root_scores_and_text_chunks():
+    emitter = NullEmitter("r-score", "c-score", "t-score")
+    request = AgentRunRequest(
+        runId="r-score", conversationId="c-score", traceId="t-score",
+        runType="full_evaluation", resumeText="Java RAG 项目")
+    executor = RunExecutor(
+        request, emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=object())
+
+    run(executor._emit_rag_metrics(
+        "TechAgent", {
+            "chunks": ["Java RAG 项目证据一", "Spring 项目证据二"],
+            "hitCount": 2,
+            "topScore": 0.88,
+            "usefulnessScore": 0.72,
+            "rerankScores": [0.72, 0.51],
+            "rerankStrategy": "hybrid_rrf_rerank_reflect",
+            "backend": "resume_rag",
+            "strategy": "hybrid_embedding_bm25",
+            "_latency": {"total_ms": 12.0, "retrieval_ms": 10.0},
+        }, query="Java RAG", tool_name="resume_semantic_search",
+        tool_call_id="tc-score", requested_k=5))
+
+    event = next(row for row in emitter.events
+                 if row["eventType"] == "retrieval.completed")
+    payload = event["payload"]
+    assert payload["scores"]["top"] == 0.72
+    assert payload["scores"]["mean"] == 0.615
+    assert payload["scores"]["metric"] == "resume_rerank_usefulness"
+    assert payload["candidateCount"] == 2
+    assert payload["uniqueDocuments"] == 1
+    assert payload["chunks"][0]["docId"] == "current_resume"
+    assert payload["chunks"][0]["content"] == "Java RAG 项目证据一"
+    assert payload["source"] == "resume_rag"
+
+
+def test_report_section_fanout_is_dynamic_for_external_evidence(monkeypatch):
+    request = AgentRunRequest(
+        runId="r-report-mode", conversationId="c-report-mode",
+        runType="full_evaluation", resumeText="Java 项目")
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=_NativeMcpLlm())
+    executor.llm.supports_parallel_report_sections = True
+
+    monkeypatch.delenv("REPORT_PARALLEL_SECTIONS", raising=False)
+    assert executor._should_parallel_report_sections(
+        {"has_external_urls": False, "is_sparse_resume": False}) is False
+    assert executor._should_parallel_report_sections(
+        {"has_external_urls": True}) is True
+    assert executor._should_parallel_report_sections(
+        {"has_external_urls": False, "is_sparse_resume": True}) is True
+
+    monkeypatch.setenv("REPORT_PARALLEL_SECTIONS", "always")
+    assert executor._should_parallel_report_sections(
+        {"has_external_urls": False}) is True
+    monkeypatch.setenv("REPORT_PARALLEL_SECTIONS", "0")
+    assert executor._should_parallel_report_sections(
+        {"has_external_urls": True}) is False
+
+
 def test_tech_presteps_use_one_semantic_recall_and_leave_no_duplicate_catalog():
     request = AgentRunRequest(
         runId="r-tech-pre", conversationId="c-tech-pre",

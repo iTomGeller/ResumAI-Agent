@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import com.resumai.agent.domain.entity.MemoryEntryRow;
 import org.junit.jupiter.api.Test;
 
 class MemoryTaxonomyTest {
@@ -48,5 +49,22 @@ class MemoryTaxonomyTest {
         assertEquals("PROCEDURAL", rules.preferredTypes().getFirst());
         assertEquals(facts.allowedTypes(), history.allowedTypes());
         assertEquals(history.allowedTypes(), rules.allowedTypes());
+    }
+
+    @Test
+    void runtimeMemoryRequiresMatchingProducerRevision() {
+        MemoryEntryRow current = new MemoryEntryRow();
+        current.setSource("runtime_strategy");
+        current.setProducerVersion("build-2");
+        assertTrue(MemoryService.producerCompatible(current, "build-2"));
+        assertFalse(MemoryService.producerCompatible(current, "build-1"));
+
+        MemoryEntryRow legacy = new MemoryEntryRow();
+        legacy.setSource("runtime_strategy");
+        assertFalse(MemoryService.producerCompatible(legacy, "build-2"));
+
+        MemoryEntryRow reviewed = new MemoryEntryRow();
+        reviewed.setSource("approved_skill");
+        assertTrue(MemoryService.producerCompatible(reviewed, "build-2"));
     }
 }
