@@ -2005,16 +2005,20 @@ class RunExecutor:
             except LlmError as exc:
                 if (was_json_repair_turn
                         and agent_id == "RiskAgent"
-                        and exc.code == "JSON_TRUNCATED"):
+                        and exc.code in {"JSON_TRUNCATED", "MALFORMED_OUTPUT"}):
                     note = (
-                        "RiskAgent JSON repair exceeded 2400 tokens; "
+                        "RiskAgent JSON repair did not produce a bounded "
+                        "schema-valid result; "
                         "kept deterministic timeline checks and delegated "
                         "grounded risk synthesis to ReportAgent")
                     self.failure_notes.append(note)
                     await self.emitter.emit(
                         "run.progress", agent_id=agent_id, payload={
                             "stage": "specialist_repair_compacted",
-                            "reason": "risk_json_repair_truncated",
+                            "reason": (
+                                "risk_json_repair_truncated"
+                                if exc.code == "JSON_TRUNCATED" else
+                                "risk_json_repair_malformed"),
                             "error": str(exc)[:240],
                             "occurredAt": _utc_now(),
                         })
@@ -2335,6 +2339,22 @@ class RunExecutor:
                     native_history.append({
                         "role": "user", "content": repair_message})
                     continue
+                if was_json_repair_turn and agent_id == "RiskAgent":
+                    note = (
+                        "RiskAgent JSON repair remained schema-invalid; "
+                        "kept deterministic timeline checks and delegated "
+                        "grounded risk synthesis to ReportAgent")
+                    self.failure_notes.append(note)
+                    await self.emitter.emit(
+                        "run.progress", agent_id=agent_id, payload={
+                            "stage": "specialist_repair_compacted",
+                            "reason": "risk_json_repair_malformed",
+                            "schemaError": schema_error[:240],
+                            "occurredAt": _utc_now(),
+                        })
+                    output = self._build_output(
+                        definition, None, tool_results_block)
+                    break
                 raise LlmError(
                     "MALFORMED_OUTPUT",
                     f"agent output failed schema validation within budget: "
@@ -3094,6 +3114,10 @@ class RunExecutor:
                 requested_k=int(args.get("topK") or 5))
         elif tool == "jd_match_search":
             self._store_jd_match_artifacts(result)
+            await self._emit_rag_metrics(
+                agent_id, result, "resume_to_jd_catalog",
+                tool_name=tool, tool_call_id=tool_call_id,
+                requested_k=int(args.get("topK") or 3))
 
         defn = self.tools.definitions.get(tool)
         if defn is not None and defn.kind == "mcp":
@@ -3125,7 +3149,7 @@ class RunExecutor:
             # Documentation MCPs inform reasoning but are never candidate
             # facts. DeepWiki additionally requires the locally injected,
             # candidate-declared repository binding from ToolExecutor.
-            if server in {"deepwiki", "context7", "microsoft-learn"}:
+            if server in {"deepwiki", "context7"}:
                 if server == "deepwiki":
                     policy = (
                         result.get("evidencePolicy")
@@ -3351,12 +3375,14 @@ class RunExecutor:
                 score = float(raw_score) if raw_score is not None else None
                 if score is not None:
                     score_values.append(score)
-                doc_id = chunk.get("docId") or chunk.get("documentId") or chunk.get("id") or ""
+                doc_id = (chunk.get("docId") or chunk.get("documentId")
+                          or chunk.get("jdId") or chunk.get("id") or "")
                 if doc_id:
                     doc_ids.add(doc_id)
                 content = chunk.get("content") or chunk.get("text") or chunk.get("pageContent") or ""
                 normalized_chunks.append({
-                    "chunkId": chunk.get("chunkId") or chunk.get("id"),
+                    "chunkId": (chunk.get("chunkId") or chunk.get("jdId")
+                                or chunk.get("id")),
                     "docId": doc_id or None,
                     "title": chunk.get("title"),
                     "source": chunk.get("source") or chunk.get("sourceType"),

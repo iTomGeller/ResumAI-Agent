@@ -65,14 +65,11 @@ class BuiltinMcpServerTest {
             assertNotNull(input);
             JsonNode root = new ObjectMapper().readTree(input);
             assertFalse(root.path("evidencePolicy").path("allowSyntheticFallback").asBoolean(true));
-            assertEquals(3, root.path("mcpServers").size());
+            assertEquals(2, root.path("mcpServers").size());
             assertTrue(root.path("mcpServers").has("exa"));
-            assertTrue(root.path("mcpServers").has("microsoft-learn"));
             assertTrue(root.path("mcpServers").has("fetch"));
             assertEquals("https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
                     root.path("mcpServers").path("exa").path("url").asText());
-            assertEquals("https://learn.microsoft.com/api/mcp",
-                    root.path("mcpServers").path("microsoft-learn").path("url").asText());
             assertEquals(0, root.path("optionalMcpServers").size());
             String serialized = root.toString().toLowerCase();
             assertFalse(serialized.contains("oauth"));

@@ -1345,7 +1345,7 @@ public class OpsDebugService {
                 .toList();
 
         List<RagStageAggregateView> stageBreakdown = List.of(
-                stageAggregate("query_rewrite", items,
+                stageAggregate("query_planning_passthrough", items,
                         item -> item.stages() != null ? item.stages().queryRewriteMs() : null),
                 stageAggregate("embedding", items,
                         item -> item.stages() != null ? item.stages().embeddingMs() : null),
@@ -1397,6 +1397,8 @@ public class OpsDebugService {
                 "reported only when a named judge completed successfully");
         semantics.put("missingValues",
                 "null means the runtime did not collect that field; zero is never substituted");
+        semantics.put("queryPlanning",
+                "the Agent LLM authors the retrieval query; queryRewriteMs in this revision measures only deterministic passthrough and is not an independent rewrite model call");
 
         List<String> warnings = new ArrayList<>();
         if (items.isEmpty()) {

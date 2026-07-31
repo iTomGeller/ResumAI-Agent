@@ -156,6 +156,20 @@ const maxStageMs = computed(() => Math.max(
   ...(summary.value?.stageBreakdown || []).map((stage) => stage.averageMs || 0),
 ));
 
+const STAGE_LABELS: Record<string, string> = {
+  query_planning_passthrough: '检索规划 / 原样透传',
+  embedding: '向量化',
+  retrieval: '召回',
+  'embedding+retrieval': '向量化 + 召回',
+  fusion: '融合',
+  rerank: '二次排序',
+};
+
+function stageLabel(stage?: string | null): string {
+  if (!stage) return '未采集';
+  return STAGE_LABELS[stage] || stage;
+}
+
 function numberOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
@@ -366,7 +380,7 @@ onMounted(loadRagEvents);
       <div class="metric-card">
         <span class="metric-label">最慢阶段</span>
         <strong class="metric-value compact-value">
-          {{ summary.bottleneckStage || '未采集' }}
+          {{ stageLabel(summary.bottleneckStage) }}
         </strong>
         <span class="metric-note">{{ formatMs(summary.bottleneckAverageMs) }} avg</span>
       </div>
@@ -379,7 +393,7 @@ onMounted(loadRagEvents);
       </div>
       <div class="stage-list">
         <div v-for="stage in summary.stageBreakdown" :key="stage.stage" class="stage-row">
-          <span class="stage-name">{{ stage.stage }}</span>
+          <span class="stage-name">{{ stageLabel(stage.stage) }}</span>
           <div class="stage-track">
             <span
               class="stage-fill"

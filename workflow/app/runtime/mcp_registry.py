@@ -266,7 +266,10 @@ class StreamableHttpMcpClient:
                 self._record_failure()
                 raise McpError(f"AUTH_REQUIRED status={response.status_code}")
             if response.status_code == 429:
-                self._record_failure()
+                # Provider quota pressure is not a transport-health failure.
+                # Counting 429 toward the circuit breaker made three bursty
+                # calls remove an otherwise healthy server from every
+                # concurrent run for a full cooldown window.
                 raise McpError(f"RATE_LIMITED status=429 body={response.text[:200]}")
             if response.status_code >= 400:
                 self._record_failure()
@@ -419,6 +422,9 @@ class McpRegistry:
         self._last_probe_iso: str = ""
         self._probe_lock: Optional[asyncio.Lock] = None
         self._probe_lock_loop: Any = None
+        self._call_gate_loop: Any = None
+        self._call_semaphores: Dict[str, asyncio.Semaphore] = {}
+        self._last_call_started: Dict[str, float] = {}
 
     def _current_probe_lock(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
@@ -426,6 +432,26 @@ class McpRegistry:
             self._probe_lock = asyncio.Lock()
             self._probe_lock_loop = loop
         return self._probe_lock
+
+    def _server_config(self, server: str) -> Dict[str, Any]:
+        value = (
+            (self.config.get("mcpServers") or {}).get(server)
+            or (self.config.get("optionalMcpServers") or {}).get(server)
+            or {})
+        return value if isinstance(value, dict) else {}
+
+    def _current_call_semaphore(
+            self, server: str, max_concurrent: int) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if self._call_gate_loop is not loop:
+            self._call_gate_loop = loop
+            self._call_semaphores = {}
+            self._last_call_started = {}
+        semaphore = self._call_semaphores.get(server)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(max(1, max_concurrent))
+            self._call_semaphores[server] = semaphore
+        return semaphore
 
     def needs_probe(self, *, now: Optional[float] = None) -> bool:
         """Return whether an initial or degraded-server probe is due.
@@ -776,12 +802,20 @@ class McpRegistry:
                 logger.warning("MCP tool %s omitted: no live tools/call client",
                                catalog_name)
                 continue
+            server_cfg = self._server_config(info.server)
+            routing_guidance = str(
+                server_cfg.get("routingGuidance") or "").strip()
+            description = info.description
+            if routing_guidance:
+                description = (
+                    f"{description.rstrip()} Runtime routing guidance: "
+                    f"{routing_guidance}")
             tool_executor.definitions[catalog_name] = ToolDefinition(
                 name=catalog_name,
                 # Keep the exact tools/list description that taught the model
                 # when and how to call this function. Server provenance travels
                 # in the separate mcp_server field and trace payload.
-                description=info.description,
+                description=description,
                 input_schema=info.input_schema or {"type": "object"},
                 # MCP tools/list describes the server-native result, while the
                 # runtime deliberately normalizes every CallToolResult into a
@@ -895,39 +929,80 @@ class McpRegistry:
                 return {"success": False, "status": "unavailable",
                         "text": f"域名不在白名单: {url}"}
 
+        cfg = self._server_config(info.server)
+        required_env = [str(e) for e in (cfg.get("requiredEnv") or [])]
         try:
-            if info.server in self._http_clients:
-                result = await self._http_clients[info.server].call_tool(
-                    info.name, arguments)
-            elif info.server in self._stdio_clients:
-                result = await self._stdio_clients[info.server].call_tool(
-                    info.name, arguments)
-            else:
-                return {"success": False, "status": "DOWN",
-                        "text": f"no live client for {info.server}"}
-            result.setdefault("mcpServer", info.server)
-            result.setdefault("protocolVersion", info.protocol_version)
-            result.setdefault("tool", catalog_name)
-            if not result.get("success"):
-                result.setdefault("status", "UNAVAILABLE")
-            return result
-        except McpError as exc:
-            cfg = (
-                (self.config.get("mcpServers") or {}).get(info.server)
-                or (self.config.get("optionalMcpServers") or {}).get(info.server)
-                or {}
-            )
-            required_env = [
-                str(e) for e in (cfg.get("requiredEnv") or [])
-            ] if isinstance(cfg, dict) else []
-            msg = _redact_env_values(str(exc), required_env)
-            status = "RATE_LIMITED" if "RATE_LIMITED" in msg or "429" in msg \
-                else "AUTH_REQUIRED" if "AUTH_REQUIRED" in msg \
-                else "DOWN"
-            if info.server in self.health:
-                self.health[info.server].status = status
-                self.health[info.server].error = msg[:300]
-            return {"success": False, "status": status, "text": msg[:500]}
+            max_concurrent = max(1, int(cfg.get("maxConcurrentCalls") or 4))
+            min_interval_s = max(
+                0.0, float(cfg.get("minIntervalMs") or 0) / 1000.0)
+            rate_limit_retries = max(
+                0, min(3, int(cfg.get("rateLimitRetries") or 0)))
+            backoff_s = max(
+                0.1, float(cfg.get("rateLimitBackoffMs") or 1000) / 1000.0)
+        except (TypeError, ValueError):
+            max_concurrent, min_interval_s = 4, 0.0
+            rate_limit_retries, backoff_s = 0, 1.0
+
+        semaphore = self._current_call_semaphore(
+            info.server, max_concurrent)
+        async with semaphore:
+            for attempt in range(rate_limit_retries + 1):
+                elapsed = time.monotonic() - self._last_call_started.get(
+                    info.server, 0.0)
+                if min_interval_s and elapsed < min_interval_s:
+                    await asyncio.sleep(min_interval_s - elapsed)
+                self._last_call_started[info.server] = time.monotonic()
+                try:
+                    if info.server in self._http_clients:
+                        result = await self._http_clients[info.server].call_tool(
+                            info.name, arguments)
+                    elif info.server in self._stdio_clients:
+                        result = await self._stdio_clients[info.server].call_tool(
+                            info.name, arguments)
+                    else:
+                        return {"success": False, "status": "DOWN",
+                                "text": f"no live client for {info.server}"}
+                    result.setdefault("mcpServer", info.server)
+                    result.setdefault("protocolVersion", info.protocol_version)
+                    result.setdefault("tool", catalog_name)
+                    blob = " ".join(str(result.get(key) or "") for key in (
+                        "status", "text", "error")).lower()
+                    rate_limited = (
+                        not result.get("success")
+                        and any(token in blob for token in (
+                            "rate_limit", "rate limited", "too many requests",
+                            "429")))
+                    if rate_limited and attempt < rate_limit_retries:
+                        await asyncio.sleep(backoff_s * (2 ** attempt))
+                        continue
+                    if not result.get("success"):
+                        result.setdefault(
+                            "status",
+                            "RATE_LIMITED" if rate_limited else "UNAVAILABLE")
+                    return result
+                except McpError as exc:
+                    msg = _redact_env_values(str(exc), required_env)
+                    rate_limited = "RATE_LIMITED" in msg or "429" in msg
+                    if rate_limited and attempt < rate_limit_retries:
+                        await asyncio.sleep(backoff_s * (2 ** attempt))
+                        continue
+                    status = (
+                        "RATE_LIMITED" if rate_limited
+                        else "AUTH_REQUIRED" if "AUTH_REQUIRED" in msg
+                        else "DOWN")
+                    if info.server in self.health:
+                        # A call-level 429 is transient quota pressure. Keep
+                        # the live catalog available; otherwise one burst makes
+                        # every sibling run fail fast until a full re-probe.
+                        if not rate_limited:
+                            self.health[info.server].status = status
+                        self.health[info.server].error = msg[:300]
+                    return {
+                        "success": False, "status": status,
+                        "text": msg[:500], "rateLimitRetries": attempt}
+
+        return {"success": False, "status": "UNAVAILABLE",
+                "text": f"MCP call exhausted for {catalog_name}"}
 
 
 _registry: Optional[McpRegistry] = None

@@ -1084,6 +1084,65 @@ def test_single_pass_allows_second_conditional_json_repair():
     assert reallocations[0]["payload"]["borrowedRepairTurns"] == 1
 
 
+class _AlwaysMalformedRiskRepairLlm:
+    def __init__(self):
+        self.turn = 0
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.turn += 1
+        if self.turn == 1:
+            return LlmTurn(
+                content="", tool_calls=[LlmToolCall(
+                    tool_call_id="risk-malformed-final",
+                    name="emit_decision", arguments={},
+                    raw_arguments="<malformed>",
+                    arguments_error="Expecting value")],
+                finish_reason="tool_calls")
+        return LlmTurn(
+            content="risk repair still has no json object",
+            finish_reason="json_repair")
+
+
+def test_risk_agent_exhausted_malformed_repair_delegates_to_report():
+    request = AgentRunRequest(
+        runId="r-risk-malformed-fallback",
+        conversationId="c-risk-malformed-fallback",
+        traceId="t-risk-malformed-fallback",
+        runType="full_evaluation",
+        resumeText=(
+            "算法工程师\n2021.07 - 2023.06 示例公司\n"
+            "负责推荐排序与模型服务。"),
+        jobDescription="Java AI Agent 平台工程师")
+    llm = _AlwaysMalformedRiskRepairLlm()
+    emitter = NullEmitter(
+        request.runId, request.conversationId, request.traceId)
+    executor = RunExecutor(
+        request, emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    executor.budget_plan["RiskAgent"] = {
+        "llmQuota": 2, "actionTurnQuota": 0, "toolQuota": 1}
+    executor.state.apply_artifacts({
+        "resumeFacts": {"experiences": [{"company": "示例公司"}]}})
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("RiskAgent")))
+
+    assert output.agentId == "RiskAgent"
+    assert output.summary == ""
+    assert llm.turn == 3
+    compacted = [
+        event for event in emitter.events
+        if event["eventType"] == "run.progress"
+        and event["payload"].get("stage") == "specialist_repair_compacted"]
+    assert len(compacted) == 1
+    assert compacted[0]["payload"]["reason"] == "risk_json_repair_malformed"
+    assert any(
+        "delegated grounded risk synthesis" in note
+        for note in executor.failure_notes)
+
+
 class _ReportFinalizationLlm:
     def __init__(self):
         self.turn = 0
@@ -2043,6 +2102,106 @@ def test_runtime_transport_failure_transitions_to_down_for_ttl_reprobe():
         now=100.0 + DEGRADED_REPROBE_TTL_S + 1.0) is True
 
 
+def test_runtime_rate_limit_retries_without_evicting_live_catalog():
+    class RateLimitedOnceClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def call_tool(self, name, arguments):
+            self.calls += 1
+            if self.calls == 1:
+                raise McpError("RATE_LIMITED status=429")
+            return {"success": True, "text": "ok"}
+
+    client = RateLimitedOnceClient()
+    registry = McpRegistry(config={
+        "mcpServers": {"demo": {
+            "enabled": True,
+            "maxConcurrentCalls": 1,
+            "minIntervalMs": 0,
+            "rateLimitRetries": 1,
+            "rateLimitBackoffMs": 1,
+        }},
+        "optionalMcpServers": {},
+        "agentToolRouting": {"ProjectAgent": ["demo.search"]},
+    })
+    registry._probed = True
+    registry.health["demo"] = McpServerHealth(
+        name="demo", status="AVAILABLE", transport="streamable-http")
+    registry.tools["demo.search"] = McpToolInfo(
+        server="demo", name="search", catalog_name="demo.search",
+        description="search", input_schema={"type": "object"})
+    registry._http_clients["demo"] = client
+
+    result = run(registry.call("demo.search", {}))
+
+    assert result["success"] is True
+    assert client.calls == 2
+    assert registry.health["demo"].status == "AVAILABLE"
+
+
+def test_mcp_routing_guidance_is_exposed_without_forcing_a_call():
+    registry = McpRegistry(config={
+        "mcpServers": {"demo": {
+            "enabled": True,
+            "routingGuidance": "Prefer the hosted provider for GitHub.",
+        }},
+        "optionalMcpServers": {},
+        "agentToolRouting": {"ProjectAgent": ["demo.search"]},
+    })
+    registry.health["demo"] = McpServerHealth(
+        name="demo", status="AVAILABLE", transport="streamable-http")
+    registry.tools["demo.search"] = McpToolInfo(
+        server="demo", name="search", catalog_name="demo.search",
+        description="Search public sources.",
+        input_schema={"type": "object"})
+    registry._http_clients["demo"] = object()
+    tools = ToolExecutor(
+        NullEmitter(), RunBudget(), BuiltinToolRegistry(),
+        max_tool_calls_run=5, tool_timeout_seconds=10,
+        run_context={}, llm=object())
+
+    assert registry.register_into(tools) == 1
+    exposed = tools.catalog_for_agent("ProjectAgent", ["demo.search"])
+
+    assert len(exposed) == 1
+    assert "Prefer the hosted provider for GitHub" in exposed[0]["description"]
+
+
+def test_http_429_does_not_trip_transport_circuit(monkeypatch):
+    from app.runtime import mcp_registry as mcp_runtime
+
+    class Response:
+        status_code = 429
+        headers = {}
+        text = "too many requests"
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(mcp_runtime.httpx, "AsyncClient", Client)
+    client = StreamableHttpMcpClient(
+        "demo", "https://example.test/mcp")
+
+    with pytest.raises(McpError, match="RATE_LIMITED"):
+        run(client._post({
+            "jsonrpc": "2.0", "id": 1,
+            "method": "tools/call", "params": {}}))
+
+    assert client._fail_count == 0
+    assert client._circuit_blocked() is False
+
+
 def test_knowledge_search_uses_single_in_request_rerank_with_real_timings():
     from app.runtime import gateway
 
@@ -2127,6 +2286,53 @@ def test_resume_rag_emits_root_scores_and_text_chunks():
     assert payload["chunks"][0]["docId"] == "current_resume"
     assert payload["chunks"][0]["content"] == "Java RAG 项目证据一"
     assert payload["source"] == "resume_rag"
+
+
+def test_jd_match_search_emits_rank_and_latency_telemetry():
+    emitter = NullEmitter("r-jd-rag", "c-jd-rag", "t-jd-rag")
+    request = AgentRunRequest(
+        runId="r-jd-rag", conversationId="c-jd-rag",
+        traceId="t-jd-rag", runType="full_evaluation",
+        resumeText="Java Spring RAG 项目")
+    executor = RunExecutor(
+        request, emitter, memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=object())
+    result = {
+        "items": [
+            {"jdId": "jd-java", "title": "Java Agent",
+             "retrievalScore": 0.0164, "vectorScore": 0.82,
+             "bm25Score": 0.91},
+            {"jdId": "jd-data", "title": "Data",
+             "retrievalScore": 0.0151, "vectorScore": 0.71,
+             "bm25Score": 0.22},
+        ],
+        "hitCount": 2,
+        "topScore": 0.76,
+        "strategy": "hybrid",
+        "fusion": "rrf_weighted",
+        "source": "internal_jd_catalog",
+        "indexName": "jd_catalog",
+        "candidateCount": 2,
+        "rerankApplied": False,
+        "_latency": {"retrieval_ms": 31.0, "total_ms": 31.0},
+    }
+
+    run(executor._record_tool_success(
+        "JDAnalysisAgent", "jd_match_search",
+        {"resumeText": request.resumeText, "topK": 3}, result,
+        tool_call_id="tc-jd-rag"))
+
+    event = next(row for row in emitter.events
+                 if row["eventType"] == "retrieval.completed")
+    payload = event["payload"]
+    assert payload["toolName"] == "jd_match_search"
+    assert payload["returnedK"] == 2
+    assert payload["scores"]["top"] == 0.0164
+    assert payload["uniqueDocuments"] == 2
+    assert set(payload["docIds"]) == {"jd-data", "jd-java"}
+    assert payload["fusionStrategy"] == "rrf_weighted"
+    assert payload["stages"]["retrievalMs"] == 31.0
+    assert payload["source"] == "internal_jd_catalog"
 
 
 def test_report_section_fanout_is_dynamic_for_external_evidence(monkeypatch):

@@ -7,6 +7,7 @@ public HTTP requests.
 from __future__ import annotations
 
 import json
+import time
 from typing import Dict
 
 import httpx
@@ -37,10 +38,18 @@ async def java_resume_search(query: str, top_k: int = 5, resume_text: str = "",
 async def java_jd_search(resume_text: str, top_k: int = 3) -> str:
     url = f"{settings.java_backend_url}/api/internal/tools/jd-search"
     payload = {"resumeText": resume_text, "topK": top_k}
+    started = time.perf_counter()
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(url, json=payload, headers=_headers())
         resp.raise_for_status()
-        return json.dumps(resp.json(), ensure_ascii=False)
+        data = resp.json()
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+    if isinstance(data, dict):
+        data["_latency"] = {
+            "retrieval_ms": elapsed_ms,
+            "total_ms": elapsed_ms,
+        }
+    return json.dumps(data, ensure_ascii=False)
 
 
 async def java_knowledge_search(query: str, top_k: int = 5,

@@ -13,6 +13,11 @@
       "transport": "streamable-http",
       "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
       "description": "Official Exa hosted MCP; real keyless web search and page fetch with rate limits",
+      "routingGuidance": "Prefer this provider for candidate-declared GitHub or other overseas public URLs that the CN ECS cannot fetch directly. Search may include exact-identity domestic mirrors on gitee.com, gitcode.com, juejin.cn or blog.csdn.net; a name match alone never proves candidate ownership.",
+      "maxConcurrentCalls": 1,
+      "minIntervalMs": 900,
+      "rateLimitRetries": 2,
+      "rateLimitBackoffMs": 1200,
       "allowedTools": ["web_search_exa", "web_fetch_exa"],
       "toolPrefix": "exa",
       "evidence": {
@@ -22,21 +27,6 @@
         "requiresSourceUrl": true
       }
     },
-    "microsoft-learn": {
-      "enabled": true,
-      "default": true,
-      "transport": "streamable-http",
-      "url": "https://learn.microsoft.com/api/mcp",
-      "description": "Official public Microsoft Learn MCP; current documentation search",
-      "allowedTools": ["microsoft_docs_search"],
-      "toolPrefix": "microsoft-learn",
-      "evidence": {
-        "provider": "microsoft-learn",
-        "kind": "framework-docs",
-        "subjectBinding": "not-candidate-evidence",
-        "requiresSourceUrl": false
-      }
-    },
     "fetch": {
       "enabled": true,
       "default": true,
@@ -44,6 +34,7 @@
       "command": "python",
       "args": ["-m", "mcp_server_fetch"],
       "description": "Official MCP reference fetch server; candidate-declared public URLs only",
+      "routingGuidance": "Use direct fetch for candidate-declared URLs reachable from the CN ECS, especially gitee.com, gitcode.com, juejin.cn and blog.csdn.net. Do not choose direct fetch as the first option for github.com; prefer the hosted Exa provider.",
       "allowedTools": ["fetch"],
       "toolPrefix": "fetch",
       "whitelistOnly": true,
@@ -57,12 +48,8 @@
   },
   "optionalMcpServers": {},
   "agentToolRouting": {
-    "JDAnalysisAgent": [
-      "microsoft-learn.microsoft_docs_search"
-    ],
-    "TechAgent": [
-      "microsoft-learn.microsoft_docs_search"
-    ],
+    "JDAnalysisAgent": [],
+    "TechAgent": [],
     "ProjectAgent": [
       "exa.web_search_exa",
       "exa.web_fetch_exa",
@@ -75,8 +62,6 @@
     ],
     "RiskAgent": [],
     "ReportAgent": [],
-    "InterviewQuestionAgent": [
-      "microsoft-learn.microsoft_docs_search"
-    ]
+    "InterviewQuestionAgent": []
   }
 }

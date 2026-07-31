@@ -23,7 +23,6 @@ def test_mcp_config_resolves_shared_file():
     assert path is not None, "config/mcp-servers.json should resolve"
     cfg = load_mcp_config()
     assert "exa" in (cfg.get("mcpServers") or {})
-    assert "microsoft-learn" in (cfg.get("mcpServers") or {})
     assert "fetch" in (cfg.get("mcpServers") or {})
     assert (cfg.get("optionalMcpServers") or {}) == {}
 
@@ -143,9 +142,7 @@ def _catalog_for(resume_text: str, job_description: str, agent_id: str):
         "ProjectAgent": [
             "exa.web_search_exa", "exa.web_fetch_exa", "fetch.fetch",
         ],
-        "TechAgent": [
-            "microsoft-learn.microsoft_docs_search",
-        ],
+        "TechAgent": [],
     }
     for name in {item for values in routed.values() for item in values}:
         server = name.split(".", 1)[0]
@@ -177,17 +174,13 @@ def test_mcp_catalog_is_signal_gated_not_coverage_rotated():
     assert _catalog_for(
         "Java Spring Boot Redis", "Java 后端", "TechAgent") == set()
     assert _catalog_for(
-        "C# ASP.NET Core Azure", ".NET 后端", "TechAgent") == {
-            "microsoft-learn.microsoft_docs_search",
-        }
+        "C# ASP.NET Core Azure", ".NET 后端", "TechAgent") == set()
 
 
-def test_technical_skill_advertises_measured_documentation_endpoint_only():
+def test_technical_skill_has_no_zero_call_documentation_dependency():
     manager = SkillManager(resolve_skills_root())
     skill = manager.get("assess-technical-evidence")
-    assert set(skill.required_tools) == {
-        "microsoft-learn.microsoft_docs_search",
-    }
+    assert set(skill.required_tools) == set()
 
 
 def test_artifact_planner_is_primary_not_task_pipelines():

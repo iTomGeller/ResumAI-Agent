@@ -569,6 +569,26 @@ def main() -> int:
             f"manifest has {len(manifest)} rows, requested {args.count}")
     stress.BASE = args.base_url.rstrip("/")
     stress.AUTH_TOKEN = os.getenv("RESUMAI_AUTH_TOKEN", "")
+    benchmark_manifest: Dict[str, Any] = {
+        "capturedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "mcpEndpoints": [],
+    }
+    try:
+        mcp_snapshot = stress.http_json(
+            f"{stress.BASE}/api/ops/mcp?probe=false&recentLimit=1",
+            timeout=30)
+        benchmark_manifest["mcpEndpoints"] = sorted(
+            str(name) for name in (mcp_snapshot.get("availableTools") or []))
+        benchmark_manifest["mcpServers"] = sorted(
+            str(server.get("name"))
+            for server in (mcp_snapshot.get("servers") or [])
+            if isinstance(server, dict) and server.get("name"))
+    except Exception as exc:  # noqa: BLE001 - benchmark may still proceed
+        benchmark_manifest["mcpInventoryError"] = (
+            f"{type(exc).__name__}: {exc}")[:300]
+    (outdir / "benchmark_manifest.json").write_text(
+        json.dumps(benchmark_manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8")
     write_lock = threading.Lock()
     arrivals_path = outdir / "arrivals.jsonl"
     queue_path = outdir / "queue_samples.jsonl"

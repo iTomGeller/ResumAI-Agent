@@ -382,12 +382,6 @@ class ToolExecutor:
             if (name in {"fetch.fetch", "exa.web_fetch_exa", "exa.web_search_exa"}
                     and not context_signals["has_external_url"]):
                 continue
-            # Documentation providers are selected by the actual stack, not
-            # rotated for coverage. Microsoft Learn owns Microsoft stacks;
-            # Context7 covers other recognized frameworks/libraries.
-            if (defn.mcp_server == "microsoft-learn"
-                    and not context_signals["microsoft_stack"]):
-                continue
             if (defn.mcp_server == "context7"
                     and not context_signals["framework_stack"]):
                 continue

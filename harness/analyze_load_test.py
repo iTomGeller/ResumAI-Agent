@@ -21,7 +21,6 @@ EXPECTED_MCP_ENDPOINTS = [
     "exa.web_fetch_exa",
     "exa.web_search_exa",
     "fetch.fetch",
-    "microsoft-learn.microsoft_docs_search",
 ]
 EXPECTED_SKILLS = [
     "assess-technical-evidence",
@@ -37,6 +36,18 @@ CONTAINERS = (
 DOCKER_RE = re.compile(
     r"(ai-resume-backend|ai-resume-workflow|resumai-mysql|resumai-redis),"
     r"([0-9.]+)%,([^,]+),([^,]+),([^,]+),(\d+)")
+
+RAG_SCENARIOS = {
+    "jd_match_search": "jd_matching",
+    "knowledge_search": "knowledge_base",
+    "resume_semantic_search": "resume_evidence",
+}
+RAG_SCENARIO_LABELS = {
+    "jd_matching": "岗位匹配检索",
+    "knowledge_base": "岗位/评估知识库",
+    "resume_evidence": "简历内证据检索",
+    "unknown": "其他检索",
+}
 
 
 def percentile(values: Iterable[float], q: float) -> Optional[float]:
@@ -65,6 +76,57 @@ def distribution(values: Iterable[float], digits: int = 3) -> Dict[str, Any]:
         "p99": round(percentile(rows, 0.99), digits),
         "max": round(max(rows), digits),
     }
+
+
+def mcp_terminal_class(event_type: str, payload: Dict[str, Any]) -> str:
+    """Classify the real MCP result, not merely the event envelope.
+
+    A provider can return ``tool.completed`` with ``success=false`` and a
+    domain status such as RATE_LIMITED/UNAVAILABLE. Counting the envelope as a
+    success made the old benchmark materially overstate MCP reliability.
+    """
+    preview = payload.get("resultPreview")
+    parsed_preview: Dict[str, Any] = {}
+    if isinstance(preview, dict):
+        parsed_preview = preview
+    elif isinstance(preview, str):
+        try:
+            candidate = json.loads(preview)
+            if isinstance(candidate, dict):
+                parsed_preview = candidate
+        except json.JSONDecodeError:
+            pass
+    status_tokens = " ".join(str(value or "") for value in (
+        payload.get("outcome"), payload.get("status"), payload.get("error"),
+        preview, parsed_preview.get("status"), parsed_preview.get("error"),
+        parsed_preview.get("message"),
+    )).lower()
+    failed = (
+        event_type.endswith("failed")
+        or payload.get("success") is False
+        or parsed_preview.get("success") is False
+        or any(token in status_tokens for token in (
+            "failed", "rejected", "unavailable", "rate_limited",
+            "auth_required", "circuit_open"))
+    )
+    if not failed:
+        return "success"
+    if any(token in status_tokens for token in (
+            "rate_limit", "rate limited", "too many requests", "status=429",
+            "status code 429", "\"status\":429")):
+        return "rateLimited"
+    if any(token in status_tokens for token in (
+            "timeout", "timed out", "deadline exceeded")):
+        return "timeout"
+    if any(token in status_tokens for token in (
+            "status code 404", "status=404", "not found")):
+        return "notFound"
+    if any(token in status_tokens for token in (
+            "status code 403", "status=403", "forbidden")):
+        return "forbidden"
+    if "rejected" in status_tokens:
+        return "rejected"
+    return "otherFailed"
 
 
 def to_bytes(value: str) -> float:
@@ -269,7 +331,9 @@ def parse_ecs_monitor(path: Path) -> Dict[str, Any]:
 
 
 def coverage(runtime: Dict[str, Any],
-             skills: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+             skills: Optional[Dict[str, Any]] = None,
+             expected_mcp: Optional[List[str]] = None) -> Dict[str, Any]:
+    expected_mcp = list(expected_mcp or EXPECTED_MCP_ENDPOINTS)
     observed_mcp = sorted((runtime.get("mcpEndpoints") or {}).keys())
     observed_skills = sorted(
         key for key, counts in (runtime.get("skills") or {}).items()
@@ -280,11 +344,11 @@ def coverage(runtime: Dict[str, Any],
             if int((counts or {}).get("applied") or 0) > 0)
     return {
         "mcp": {
-            "expected": EXPECTED_MCP_ENDPOINTS,
+            "expected": expected_mcp,
             "observed": observed_mcp,
-            "coveredCount": len(set(observed_mcp) & set(EXPECTED_MCP_ENDPOINTS)),
-            "expectedCount": len(EXPECTED_MCP_ENDPOINTS),
-            "missing": sorted(set(EXPECTED_MCP_ENDPOINTS) - set(observed_mcp)),
+            "coveredCount": len(set(observed_mcp) & set(expected_mcp)),
+            "expectedCount": len(expected_mcp),
+            "missing": sorted(set(expected_mcp) - set(observed_mcp)),
         },
         "skills": {
             "expected": EXPECTED_SKILLS,
@@ -422,9 +486,10 @@ def hydrate_runtime_from_timelines(
             if event_type in {"tool.completed", "tool.failed"} and (
                     source == "mcp" or payload.get("mcpServer")):
                 endpoint = tool_name or "unknown"
-                mcp_counts[endpoint][
-                    "success" if event_type == "tool.completed"
-                    else "failed"] += 1
+                terminal_class = mcp_terminal_class(event_type, payload)
+                mcp_counts[endpoint][terminal_class] += 1
+                if terminal_class != "success":
+                    mcp_counts[endpoint]["failed"] += 1
                 if payload.get("durationMs") is not None:
                     mcp_durations[endpoint].append(
                         float(payload["durationMs"]))
@@ -805,13 +870,78 @@ def collect_rag_metrics(base_url: str, directory: Path) -> Dict[str, Any]:
             if value is not None:
                 stage_values[stage].append(float(value))
 
+    scenario_rows: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in items:
+        scenario_rows[RAG_SCENARIOS.get(
+            str(row.get("toolName") or ""), "unknown")].append(row)
+
+    scenario_metrics: Dict[str, Any] = {}
+    for scenario, rows in sorted(scenario_rows.items()):
+        scenario_durations = [float(row["durationMs"]) for row in rows
+                              if row.get("durationMs") is not None]
+        scenario_scores = [float(row["topScore"]) for row in rows
+                           if row.get("topScore") is not None]
+        scenario_fill = [
+            min(1.0, float(row.get("returnedK") or 0)
+                / max(1.0, float(row.get("requestedK") or 0)))
+            for row in rows if row.get("requestedK") is not None]
+        scenario_stages: Dict[str, List[float]] = defaultdict(list)
+        for row in rows:
+            stages = row.get("stages") \
+                if isinstance(row.get("stages"), dict) else {}
+            for stage, value in stages.items():
+                if value is not None:
+                    scenario_stages[stage].append(float(value))
+        scenario_outcomes = Counter(
+            str(row.get("outcome") or "UNKNOWN").upper() for row in rows)
+        scenario_rerank = [row for row in rows
+                           if row.get("rerankApplied") is True]
+        multi_query = sum(
+            isinstance(row.get("queriesUsed"), list)
+            and len(row.get("queriesUsed") or []) > 1
+            for row in rows)
+        scenario_metrics[scenario] = {
+            "label": RAG_SCENARIO_LABELS.get(scenario, scenario),
+            "tools": dict(Counter(
+                str(row.get("toolName") or "unknown") for row in rows)),
+            "invocations": len(rows),
+            "outcomes": dict(scenario_outcomes),
+            "successRate": round(
+                scenario_outcomes.get("SUCCESS", 0) / len(rows), 4)
+            if rows else None,
+            "zeroHitCount": sum(bool(row.get("zeroHit")) for row in rows),
+            "degradedCount": sum(bool(row.get("degraded")) for row in rows),
+            "latencyMs": distribution(scenario_durations),
+            "topScoreProxy": distribution(scenario_scores),
+            "scoreTelemetryCoverage": {
+                "measured": len(scenario_scores),
+                "total": len(rows),
+                "rate": round(len(scenario_scores) / len(rows), 4)
+                if rows else None,
+            },
+            "topKFillRatioProxy": distribution(scenario_fill, digits=4),
+            "strategies": dict(Counter(
+                str(row.get("strategy") or "unknown") for row in rows)),
+            "fusionStrategies": dict(Counter(
+                str(row.get("fusionStrategy") or "none") for row in rows)),
+            "stageLatencyMs": {
+                stage: distribution(values)
+                for stage, values in sorted(scenario_stages.items())},
+            "rerankAppliedCount": len(scenario_rerank),
+            "rerankOrderingChangedCount": sum(
+                int(row.get("rerankMovedCount") or 0) > 0
+                for row in scenario_rerank
+                if row.get("rerankMovedCount") is not None),
+            "multiQueryCount": multi_query,
+        }
+
     outcome_counts = Counter(
         str(row.get("outcome") or "UNKNOWN").upper() for row in items)
     compact = [{
         key: row.get(key) for key in (
             "runId", "traceId", "seq", "toolCallId", "toolName",
             "agentId", "outcome", "durationMs", "strategy",
-            "fusionStrategy", "requestedK", "returnedK",
+            "fusionStrategy", "queriesUsed", "requestedK", "returnedK",
             "uniqueDocuments", "candidateCount", "topScore", "meanScore",
             "rerankApplied", "rerankBeforeTopScore", "rerankAfterTopScore",
             "rerankLift", "rerankBeforeTopChunkId",
@@ -865,6 +995,17 @@ def collect_rag_metrics(base_url: str, directory: Path) -> Dict[str, Any]:
             str(row.get("toolName") or "unknown") for row in items)),
         "agents": dict(Counter(
             str(row.get("agentId") or "unknown") for row in items)),
+        "scenarios": scenario_metrics,
+        "queryPlanning": {
+            "mode": "provider_authored_query_with_deterministic_passthrough",
+            "independentRewriteCount": 0,
+            "multiQueryCount": sum(
+                values.get("multiQueryCount", 0)
+                for values in scenario_metrics.values()),
+            "note": (
+                "Agent LLM authors the tool query; the runtime rewrite stage "
+                "does not issue an independent rewrite call in this revision."),
+        },
         "rerank": {
             "appliedCount": len(rerank_rows),
             "appliedRate": round(len(rerank_rows) / len(items), 4)
@@ -930,6 +1071,249 @@ def ratio(value: Any, digits: int = 1) -> str:
     return f"{float(value) * 100:.{digits}f}%"
 
 
+def _json_lines(path: Path) -> List[Dict[str, Any]]:
+    if not path.is_file():
+        return []
+    rows: List[Dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows
+
+
+def generate_charts(report: Dict[str, Any], directory: Path) -> Dict[str, str]:
+    """Render report-native PNGs from raw benchmark evidence."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except Exception as exc:  # noqa: BLE001 - charts are additive evidence
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+    plt.rcParams.update({
+        "font.sans-serif": ["Microsoft YaHei", "SimHei", "DejaVu Sans"],
+        "axes.unicode_minus": False,
+        "figure.dpi": 145,
+        "axes.grid": True,
+        "grid.alpha": 0.22,
+    })
+    chart_dir = directory / "charts"
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    generated: Dict[str, str] = {}
+
+    def save(fig: Any, name: str, key: str) -> None:
+        fig.tight_layout()
+        target = chart_dir / name
+        fig.savefig(target, bbox_inches="tight")
+        plt.close(fig)
+        generated[key] = f"charts/{name}"
+
+    arrivals = _json_lines(directory / "arrivals.jsonl")
+    queue_rows = _json_lines(directory / "queue_samples.jsonl")
+    raw_results: List[Dict[str, Any]] = []
+    raw_path = directory / "raw_results.json"
+    if raw_path.is_file():
+        value = json.loads(raw_path.read_text(encoding="utf-8"))
+        if isinstance(value, list):
+            raw_results = [row for row in value if isinstance(row, dict)]
+    if arrivals:
+        issued = [float(row.get("issuedOffsetS") or 0) for row in arrivals]
+        first_upload = min(float(row.get("uploadStartedAt") or 0)
+                           for row in arrivals if row.get("uploadStartedAt"))
+        terminal = [
+            max(0.0, float(row["terminalObservedAt"]) - first_upload)
+            for row in raw_results if row.get("terminalObservedAt")]
+        end = max(issued + terminal + [1.0])
+        bin_width = 10.0
+        bins = np.arange(0, end + bin_width, bin_width)
+        if len(bins) < 2:
+            bins = np.array([0.0, bin_width])
+        offered, _ = np.histogram(issued, bins=bins)
+        completed, _ = np.histogram(terminal, bins=bins)
+        centers = (bins[:-1] + bins[1:]) / 2
+        fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+        axes[0].plot(centers, offered / bin_width, label="Ingress QPS", lw=2)
+        axes[0].plot(centers, completed / bin_width,
+                     label="Completion throughput", lw=2)
+        axes[0].axhline(1.0, color="#d62728", ls="--", lw=1,
+                        label="1 QPS target")
+        axes[0].set_ylabel("requests / second")
+        axes[0].set_title("Ingress, completion throughput and queue pressure")
+        axes[0].legend(ncol=3)
+        offsets = [float(row.get("offsetS") or 0) for row in queue_rows]
+        queued = [float((row.get("runQueue") or {}).get("queued") or 0)
+                  for row in queue_rows]
+        active = [float((row.get("runQueue") or {}).get("active") or 0)
+                  for row in queue_rows]
+        if offsets:
+            axes[1].fill_between(offsets, queued, alpha=0.32,
+                                 color="#ff7f0e", label="Queued runs")
+            axes[1].plot(offsets, active, color="#1f77b4", lw=2,
+                         label="Active runs")
+        axes[1].set_ylabel("runs")
+        axes[1].set_xlabel("seconds since test start")
+        axes[1].legend(ncol=2)
+        save(fig, "01_traffic_queue.png", "trafficQueue")
+
+    load = report.get("load") or {}
+    runtime = report.get("agentRuntime") or {}
+    latency_series = {
+        "Upload": load.get("uploadLatencyMs") or {},
+        "Queue wait": (runtime.get("runLatencyMs") or {}).get("queueWait") or {},
+        "Agent runtime": (runtime.get("runLatencyMs") or {}).get("runtime") or {},
+        "End-to-end": load.get("endToEndLatencyMs") or {},
+    }
+    labels = list(latency_series)
+    if any((values or {}).get("p50") is not None
+           for values in latency_series.values()):
+        fig, ax = plt.subplots(figsize=(11, 5.5))
+        x = np.arange(len(labels))
+        width = 0.23
+        for index, percentile_name in enumerate(("p50", "p95", "p99")):
+            values = [max(0.001, float(latency_series[label].get(
+                percentile_name) or 0) / 1000) for label in labels]
+            ax.bar(x + (index - 1) * width, values, width,
+                   label=percentile_name.upper())
+        ax.set_xticks(x, labels)
+        ax.set_yscale("log")
+        ax.set_ylabel("seconds (log scale)")
+        ax.set_title("Latency percentiles: API, queue, runtime and user E2E")
+        ax.legend(ncol=3)
+        save(fig, "02_latency_percentiles.png", "latencyPercentiles")
+
+    rag = report.get("rag") or {}
+    scenarios = rag.get("scenarios") or {}
+    if scenarios:
+        scenario_keys = list(scenarios)
+        scenario_labels = [str(scenarios[key].get("label") or key)
+                           for key in scenario_keys]
+        stage_names = ("queryRewriteMs", "embeddingMs", "retrievalMs",
+                       "embeddingRetrievalMs", "fusionMs", "rerankMs")
+        stage_labels = ("planning/pass", "embedding", "retrieval",
+                        "embed+retrieve", "fusion", "rerank")
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+        x = np.arange(len(scenario_keys))
+        bottom = np.zeros(len(scenario_keys))
+        for stage, label in zip(stage_names, stage_labels):
+            values = np.array([
+                float(((scenarios[key].get("stageLatencyMs") or {})
+                       .get(stage) or {}).get("p95") or 0)
+                for key in scenario_keys])
+            if np.any(values):
+                axes[0].bar(x, values, bottom=bottom, label=label)
+                bottom += values
+        unbroken_total = np.array([
+            float(((scenarios[key].get("stageLatencyMs") or {})
+                   .get("totalMs") or {}).get("p95") or 0)
+            if bottom[index] == 0 else 0
+            for index, key in enumerate(scenario_keys)])
+        if np.any(unbroken_total):
+            axes[0].bar(
+                x, unbroken_total, bottom=bottom, color="#7f7f7f",
+                label="pipeline total (stage split not collected)")
+            bottom += unbroken_total
+        axes[0].set_xticks(x, scenario_labels, rotation=12, ha="right")
+        axes[0].set_ylabel("P95 milliseconds (stacked known stages)")
+        axes[0].set_title("RAG stage latency by business scenario")
+        axes[0].legend(fontsize=8)
+        score_p50 = [
+            float((scenarios[key].get("topScoreProxy") or {}).get("p50"))
+            if (scenarios[key].get("topScoreProxy") or {}).get("p50")
+            is not None else math.nan
+            for key in scenario_keys]
+        score_p95 = [
+            float((scenarios[key].get("topScoreProxy") or {}).get("p95"))
+            if (scenarios[key].get("topScoreProxy") or {}).get("p95")
+            is not None else math.nan
+            for key in scenario_keys]
+        width = 0.34
+        axes[1].bar(x - width / 2, score_p50, width, label="Score P50")
+        axes[1].bar(x + width / 2, score_p95, width, label="Score P95")
+        axes[1].set_xticks(x, scenario_labels, rotation=12, ha="right")
+        finite_scores = [value for value in score_p95 if math.isfinite(value)]
+        axes[1].set_ylim(0, max(1.0, max(finite_scores + [0]) * 1.1))
+        for index, value in enumerate(score_p50):
+            if not math.isfinite(value):
+                axes[1].text(
+                    x[index], 0.04, "not collected", ha="center",
+                    va="bottom", color="#b22222", fontsize=9,
+                    rotation=90)
+        axes[1].set_ylabel("ranking score proxy")
+        axes[1].set_title("RAG ranking score by business scenario")
+        axes[1].legend()
+        save(fig, "03_rag_scenarios.png", "ragScenarios")
+
+    mcp = runtime.get("mcpEndpoints") or {}
+    if mcp:
+        endpoints = list(sorted(mcp))
+        categories = (
+            ("success", "Success", "#2ca02c"),
+            ("rateLimited", "Rate limited", "#ff7f0e"),
+            ("timeout", "Timeout", "#9467bd"),
+            ("notFound", "404 / not found", "#7f7f7f"),
+            ("otherFailed", "Other failure", "#d62728"),
+        )
+        fig, ax = plt.subplots(figsize=(12, 5.5))
+        bottom = np.zeros(len(endpoints))
+        x = np.arange(len(endpoints))
+        for key, label, color in categories:
+            values = np.array([float((mcp[endpoint] or {}).get(key) or 0)
+                               for endpoint in endpoints])
+            if np.any(values):
+                ax.bar(x, values, bottom=bottom, label=label, color=color)
+                bottom += values
+        ax.set_xticks(x, endpoints, rotation=18, ha="right")
+        ax.set_ylabel("terminal invocations")
+        ax.set_title("MCP outcomes for this benchmark only")
+        ax.legend(ncol=3)
+        save(fig, "04_mcp_outcomes.png", "mcpOutcomes")
+
+    monitor = directory / "ecs_monitor.csv"
+    if monitor.is_file():
+        times: List[datetime] = []
+        series: Dict[str, Dict[str, List[float]]] = {
+            name: {"cpu": [], "memory": []} for name in CONTAINERS}
+        for line in monitor.read_text(encoding="utf-8").splitlines()[1:]:
+            columns = line.split("|")
+            if len(columns) != 11:
+                continue
+            try:
+                times.append(datetime.fromisoformat(columns[0]))
+            except ValueError:
+                continue
+            found = {name: (float(cpu), to_bytes(memory.split("/")[0].strip())
+                            / 1024 ** 2)
+                     for name, cpu, memory, _network, _block, _pids
+                     in DOCKER_RE.findall(columns[1])}
+            for name in CONTAINERS:
+                cpu, memory_mib = found.get(name, (math.nan, math.nan))
+                series[name]["cpu"].append(cpu)
+                series[name]["memory"].append(memory_mib)
+        if times:
+            base = times[0]
+            seconds = [(value - base).total_seconds() for value in times]
+            fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+            for name in CONTAINERS:
+                axes[0].plot(seconds[:len(series[name]["cpu"])],
+                             series[name]["cpu"], label=name)
+                axes[1].plot(seconds[:len(series[name]["memory"])],
+                             series[name]["memory"], label=name)
+            axes[0].set_ylabel("CPU %")
+            axes[0].set_title("ECS container resource timeline")
+            axes[0].legend(ncol=2, fontsize=8)
+            axes[1].set_ylabel("memory MiB")
+            axes[1].set_xlabel("seconds since monitor start")
+            axes[1].legend(ncol=2, fontsize=8)
+            save(fig, "05_ecs_resources.png", "ecsResources")
+
+    return generated
+
+
 def markdown(report: Dict[str, Any]) -> str:
     load = report["load"]
     runtime = report["agentRuntime"]
@@ -938,6 +1322,7 @@ def markdown(report: Dict[str, Any]) -> str:
     rag = report.get("rag") or {}
     memory = report.get("memory") or {}
     skills = report.get("skills") or {}
+    charts = report.get("charts") or {}
     llm = runtime.get("llm") or {}
     terminal = load.get("terminalStatus") or {}
     success = int(terminal.get("SUCCESS") or 0)
@@ -969,6 +1354,64 @@ def markdown(report: Dict[str, Any]) -> str:
         if values.get("applyRateFromSelected") is not None
         and float(values["applyRateFromSelected"]) < 0.4)
     monitor_collected = int(ecs.get("validSamples") or 0) > 0
+    mcp_values = runtime.get("mcpEndpoints") or {}
+    mcp_rate_limited = sum(int(values.get("rateLimited") or 0)
+                           for values in mcp_values.values())
+    mcp_not_found = sum(int(values.get("notFound") or 0)
+                        for values in mcp_values.values())
+    mcp_other_failed = 0
+    for values in mcp_values.values():
+        known = (
+            int(values.get("rateLimited") or 0)
+            + int(values.get("notFound") or 0)
+            + int(values.get("timeout") or 0)
+            + int(values.get("forbidden") or 0)
+            + int(values.get("rejected") or 0)
+            + int(values.get("otherFailed") or 0))
+        raw_failed = int(values.get("failed") or 0)
+        mcp_other_failed += (
+            int(values.get("timeout") or 0)
+            + int(values.get("forbidden") or 0)
+            + int(values.get("rejected") or 0)
+            + int(values.get("otherFailed") or 0)
+            + max(0, raw_failed - known))
+    rerank = rag.get("rerank") or {}
+    memory_used = (memory.get("consumed") or {}).get("usedCount") or 0
+    memory_mismatch = int((memory.get("consumed") or {}).get(
+        "producerConsumerVersionMismatch") or 0)
+
+    issue_rows = [
+        f"| P0 | 深评消费吞吐低于入口 | 1 QPS 入站；完成吞吐 "
+        f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s；"
+        f"队列峰值 {number(queue_peak)}；排空 {drain_minutes:.1f} min | "
+        "入口异步化已能承接突发，但持续 1 QPS 仍需增加模型供应吞吐或提供快评/深评分层 |",
+        f"| P1 | 单份深评长尾 | Runtime P95 {duration_ms(run_p95)}；"
+        f"ReportAgent P95 {duration_ms((runtime.get('agentLatencyMs') or {}).get('ReportAgent', {}).get('p95'))} | "
+        "已消除无界 JSON repair 与整份报告 fallback；剩余长尾按 Agent/模型拆分继续优化 |",
+    ]
+    if partial or success != total_requests:
+        issue_rows.append(
+            f"| P0 | 非完整终态 | SUCCESS {success}/{total_requests}，"
+            f"PARTIAL {partial} | 按失败 Agent 与错误码回归，不把部分成功计通过 |")
+    if mcp_rate_limited or mcp_not_found or mcp_other_failed:
+        issue_rows.append(
+            f"| P1 | 外部证据可靠性不足 | 限流 {mcp_rate_limited}，"
+            f"404 {mcp_not_found}，其他失败 {mcp_other_failed} | "
+            "按 provider 做并发闸门/退避；GitHub 不可达时切换国内镜像或标记不可核验，禁止盲目重试 |")
+    if int((rag.get("queryPlanning") or {}).get(
+            "independentRewriteCount") or 0) == 0:
+        issue_rows.append(
+            "| P1 | Query rewrite 名不副实 | Runtime 独立 rewrite 0 次，"
+            "当前仅 LLM 生成 query 后透传 | UI/报告先更名为 query planning；"
+            "真实 rewrite 必须经质量/时延 A/B 后再启用 |")
+    if memory_mismatch:
+        issue_rows.append(
+            f"| P1 | Memory 版本污染 | {memory_mismatch}/{number(memory_used)} 条"
+            "消费版本不一致 | 按 workflow revision 隔离生产/消费并重建稳定样本 |")
+    if int(rerank.get("orderingTelemetryCount") or 0) == 0:
+        issue_rows.append(
+            "| P1 | Rerank 缺少排序实证 | 排序前后 doc order 样本为 0 | "
+            "补排序前后 ID 与人工相关性标注，不能只看 score lift |")
 
     lines = [
         f"# ResumAI {total_requests} 份简历生产压测报告",
@@ -995,9 +1438,13 @@ def markdown(report: Dict[str, Any]) -> str:
         f"排空 {drain_minutes:.1f} min |",
         f"| 单份评估时延 | **FAIL** | Runtime P95 {duration_ms(run_p95)}；"
         f"Queue wait P95 {duration_ms(queue_p95)} |",
-        f"| RAG | **PASS** | {rag.get('invocations')} 次，"
+        f"| RAG | **{'PASS' if rag.get('successRate') == 1 and (rag.get('queryPlanning') or {}).get('independentRewriteCount', 0) > 0 else 'WARN'}** | {rag.get('invocations')} 次，"
         f"成功率 {ratio(rag.get('successRate'))}，P95 {duration_ms(rag_p95)}，"
-        f"零召回 {rag.get('zeroHitCount')} |",
+        f"零召回 {rag.get('zeroHitCount')}；独立 rewrite "
+        f"{number((rag.get('queryPlanning') or {}).get('independentRewriteCount'))} 次 |",
+        f"| MCP 外部证据 | **{'PASS' if (mcp_rate_limited + mcp_not_found + mcp_other_failed) == 0 else 'WARN'}** | "
+        f"限流 {mcp_rate_limited}，404 {mcp_not_found}，其他失败 {mcp_other_failed}；"
+        f"覆盖 {cover['mcp']['coveredCount']}/{cover['mcp']['expectedCount']} endpoint |",
         f"| Skill | **{'PASS' if skill_observed == len(EXPECTED_SKILLS) and not low_apply_skills else 'WARN'}** | "
         f"{skill_observed}/{len(EXPECTED_SKILLS)} 有实际应用；本地加载 P95 "
         f"{duration_ms(skill_local.get('p95'))}；{low_apply_skills} 个 Skill 采用率低于 40% |",
@@ -1038,6 +1485,10 @@ def markdown(report: Dict[str, Any]) -> str:
         "",
         "## 2. 流量、容量与时延",
         "",
+        *([f"![入口、完成吞吐与队列曲线]({charts['trafficQueue']})", ""]
+          if charts.get("trafficQueue") else []),
+        *([f"![端到端及各阶段时延分位]({charts['latencyPercentiles']})", ""]
+          if charts.get("latencyPercentiles") else []),
         "| 指标 | P50 | P95 | P99 | Max |",
         "|---|---:|---:|---:|---:|",
         f"| 上传接口 | {duration_ms((load.get('uploadLatencyMs') or {}).get('p50'))} | "
@@ -1097,12 +1548,51 @@ def markdown(report: Dict[str, Any]) -> str:
         "",
         "## 3. RAG 质量与耗时",
         "",
+        *([f"![分业务场景的 RAG 阶段耗时与 Score]({charts['ragScenarios']})", ""]
+          if charts.get("ragScenarios") else []),
         "| 调用 | 成功率 | 零召回 | 降级 | P50 | P95 | P99 |",
         "|---:|---:|---:|---:|---:|---:|---:|",
         f"| {number(rag.get('invocations'))} | {ratio(rag.get('successRate'))} | "
         f"{number(rag.get('zeroHitCount'))} | {number(rag.get('degradedCount'))} | "
         f"{duration_ms((rag.get('latencyMs') or {}).get('p50'))} | "
         f"{duration_ms(rag_p95)} | {duration_ms((rag.get('latencyMs') or {}).get('p99'))} |",
+        "",
+        "### 按业务场景拆分",
+        "",
+        "| 场景 | Tool | 调用 | 成功率 | P95 | Score 覆盖 | Score P50 | Top-K P50 | Rerank |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        *[
+            f"| {values.get('label') or RAG_SCENARIO_LABELS.get(key, key)} | "
+            f"{', '.join(f'`{name}`' for name in (values.get('tools') or {}))} | "
+            f"{number(values.get('invocations'))} | {ratio(values.get('successRate'))} | "
+            f"{duration_ms((values.get('latencyMs') or {}).get('p95'))} | "
+            f"{ratio((values.get('scoreTelemetryCoverage') or {}).get('rate'))} | "
+            f"{number((values.get('topScoreProxy') or {}).get('p50'), 3)} | "
+            f"{ratio((values.get('topKFillRatioProxy') or {}).get('p50'))} | "
+            f"{number(values.get('rerankAppliedCount'))} |"
+            for key, values in (rag.get("scenarios") or {}).items()
+        ],
+        "",
+        "岗位匹配、岗位/评估知识库、简历内证据是三条不同检索链路，"
+        "因此 Score 和时延不能混成一个平均数。外部公开证据来自 MCP，"
+        "在第 6 节单列，不把网页搜索冒充内部 RAG。",
+        "",
+        *([
+            f"> 岗位匹配并非未执行：本轮 `jd_match_search` 调用 "
+            f"{number(((rag.get('scenarios') or {}).get('jd_matching') or {}).get('invocations'))} 次，"
+            f"P95 {duration_ms((((rag.get('scenarios') or {}).get('jd_matching') or {}).get('latencyMs') or {}).get('p95'))}。"
+            "测试版本只采集了 pipeline 总耗时，未采集 RRF/Top-K 明细；图中灰柱表示真实总耗时，"
+            "`not collected` 表示遥测缺口，不代表没有 RAG 或 score=0。",
+            "",
+        ] if (((rag.get("scenarios") or {}).get("jd_matching") or {})
+              .get("scoreTelemetryCoverage") or {}).get("measured") == 0
+        and ((rag.get("scenarios") or {}).get("jd_matching") or {})
+              .get("invocations") else []),
+        f"> Query planning 口径：`{(rag.get('queryPlanning') or {}).get('mode', 'unknown')}`。"
+        f"本版本独立 rewrite 次数 {number((rag.get('queryPlanning') or {}).get('independentRewriteCount'))}，"
+        f"多 query 次数 {number((rag.get('queryPlanning') or {}).get('multiQueryCount'))}。"
+        "Agent 的 LLM 会生成工具 query，但 Runtime 当前仅原样透传；"
+        "阶段图中的 0ms 不能宣称为独立 query rewrite。",
         "",
         "### Score 分布",
         "",
@@ -1208,8 +1698,8 @@ def markdown(report: Dict[str, Any]) -> str:
         f"{number((consumed.get('finalScore') or {}).get('p50'), 3)} / "
         f"{number((consumed.get('finalScore') or {}).get('p95'), 3)}。",
         f"- **{number(mismatch)} 条（{ratio(mismatch / max(1, consumed.get('usedCount') or 1))}）"
-        "存在 producer/consumer 版本不一致；本批消费又仅落在 Episodic 与 Procedural，"
-        "说明这组旧版本数据不能证明四层 Memory 已均衡参与。**",
+        "存在 producer/consumer 版本不一致。各 Memory 类型是否均衡参与以本节类型表为准，"
+        "不从历史累计反推本轮。**",
         f"- Memory 检索耗时：`{memory_latency.get('status')}`；P50 / P95 = "
         f"{duration_ms(memory_latency.get('p50'))} / "
         f"{duration_ms(memory_latency.get('p95'))}。{memory_latency.get('reason')}。",
@@ -1245,8 +1735,8 @@ def markdown(report: Dict[str, Any]) -> str:
         f"{duration_ms((skill_lifecycle.get('selectedToLoadedMs') or {}).get('p95'))}；"
         f"loaded→applied P95 "
         f"{duration_ms((skill_lifecycle.get('loadedToAppliedMs') or {}).get('p95'))}。",
-        "- 技术评估、项目核验和公网证据 Skill 采用率 100%；"
-        "证据校准 26.0%、风险识别 36.1%。后两者不是性能问题，而是动态选择策略偏保守。",
+        "- Skill 是否动态不以“注册过”判断，而以本轮不同简历的 selected/applied/skipped "
+        "及 Agent 分布判断；采用率低可能是路由策略，也可能是样本信号不足，报告不预设结论。",
         "",
         "<details>",
         "<summary>查看 Skill 原始标识与分阶段耗时</summary>",
@@ -1267,19 +1757,28 @@ def markdown(report: Dict[str, Any]) -> str:
         "",
         "## 6. MCP endpoint",
         "",
+        *([f"![本轮 MCP endpoint 结果分布]({charts['mcpOutcomes']})", ""]
+          if charts.get("mcpOutcomes") else []),
         f"本次实际调用 {cover['mcp']['coveredCount']}/{cover['mcp']['expectedCount']} 个 endpoint。"
-        "表格只展示真实调用，避免 0 行淹没有效数据。",
+        "以下数据只统计本轮 100 个 runId；Ops 页的历史累计不混入本轮成功率。"
+        "`tool.completed` 但回执 `success=false` 仍计失败。",
         "",
-        "| Endpoint | 成功 | 失败 | P50 | P95 | Max |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Endpoint | 总调用 | 成功 | 限流 | 超时 | 404 | 其他失败 | P95 |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ])
     for endpoint, values in sorted((runtime.get("mcpEndpoints") or {}).items()):
         latency = values.get("latencyMs") or {}
+        total = sum(int(values.get(key) or 0) for key in (
+            "success", "rateLimited", "timeout", "notFound", "forbidden",
+            "rejected", "otherFailed"))
         lines.append(
-            f"| `{endpoint}` | {number(values.get('success', 0))} | "
-            f"{number(values.get('failed', 0))} | "
-            f"{duration_ms(latency.get('p50'))} | {duration_ms(latency.get('p95'))} | "
-            f"{duration_ms(latency.get('max'))} |")
+            f"| `{endpoint}` | {number(total)} | "
+            f"{number(values.get('success', 0))} | "
+            f"{number(values.get('rateLimited', 0))} | "
+            f"{number(values.get('timeout', 0))} | "
+            f"{number(values.get('notFound', 0))} | "
+            f"{number(int(values.get('forbidden') or 0) + int(values.get('rejected') or 0) + int(values.get('otherFailed') or 0))} | "
+            f"{duration_ms(latency.get('p95'))} |")
     lines.extend([
         "",
         "<details>",
@@ -1294,6 +1793,8 @@ def markdown(report: Dict[str, Any]) -> str:
         "",
         "## 7. ECS 资源与依赖",
         "",
+        *([f"![ECS 容器 CPU 与内存曲线]({charts['ecsResources']})", ""]
+          if charts.get("ecsResources") else []),
         "| 容器 | CPU Avg | CPU P95 | CPU Max | 内存 P95 | 内存 Max |",
         "|---|---:|---:|---:|---:|---:|",
     ])
@@ -1324,30 +1825,17 @@ def markdown(report: Dict[str, Any]) -> str:
         "",
         "| 优先级 | 问题 | 证据 | 动作 |",
         "|:---:|---|---|---|",
-        f"| P0 | 消费能力不足 | 1 QPS 入站下队列峰值 92，排空 {drain_minutes:.1f} min | "
-        "用独立并发拐点实验选择 Worker 上限，再以同一流量模型复压 |",
-        f"| P0 | 两份部分成功 | ProjectAgent / TechAgent 各 1 次结构化输出失败 | "
-        "保留有条件 JSON repair，并做差异化样本回归 |",
-        f"| P1 | ReportAgent 长尾 | P95 "
-        f"{duration_ms((runtime.get('agentLatencyMs') or {}).get('ReportAgent', {}).get('p95'))} | "
-        "在仿真器做上下文裁剪 A/B，质量不降再上线 |",
-        f"| P1 | MCP 库存冗余 | 仅 {cover['mcp']['coveredCount']}/"
-        f"{cover['mcp']['expectedCount']} endpoint 被调用；Context7 P95 "
-        f"{duration_ms((runtime.get('mcpEndpoints') or {}).get('context7.resolve-library-id', {}).get('latencyMs', {}).get('p95'))} | "
-        "删除 0 调用与无完整调用链 endpoint |",
-        f"| P1 | Memory 版本污染 | {number(mismatch)} 条消费版本不一致 | "
-        "按 workflow revision 隔离生产/消费，重新生成稳定版本实验集 |",
-        "| P1 | Rerank 无实证收益 | 正向 lift 样本为 0 | 校验排序前后 doc order，补真实相关性标注集 |",
-        "| P2 | Memory 时延不可观测 | memory.read 无 durationMs | 补 start/end/duration 埋点后纳入下轮压测 |",
+        *issue_rows,
         "",
         "## 9. 口径与限制",
         "",
         "- **入口 QPS** 是上传请求速率；**完成吞吐** 是评估完成速率，二者不混用。",
-        f"- 本报告对应测试版本 `{tested_revision}` 的 100 份历史样本；"
+        f"- 本报告对应测试版本 `{tested_revision}` 的 {total_requests} 份本轮样本；"
         "后续修复必须单独回归，不能反写成本次已通过。",
         "- RAG Top score 与 Top-K 填充率是在线代理指标，不等同于人工标注的 Precision/Recall。",
         "- Skill 本地耗时取 `load_skill.startedAt → endedAt`；selected→applied 包含模型决策等待。",
-        "- Memory 没有检索 duration 埋点，因此本报告明确标为未采集，不以 Agent 时长替代。",
+        f"- Memory 检索耗时状态：`{((memory.get('retrievalLatencyMs') or {}).get('status') or 'UNKNOWN')}`；"
+        "未采集时不以 Agent 时长替代。",
         "",
         "### 原始数据",
         "",
@@ -1356,6 +1844,7 @@ def markdown(report: Dict[str, Any]) -> str:
         "- `runtime_metrics.json`：Agent Runtime 聚合输入",
         "- `rag_metrics.json` / `memory_metrics.json` / `skill_metrics.json`：三条质量链路",
         "- `ecs_monitor.csv`：ECS 与容器采样",
+        "- `charts/*.png`：由上述原始数据生成的报告图表",
         "",
     ])
     return "\n".join(lines)
@@ -1387,7 +1876,15 @@ def main() -> int:
         if timeline_data is not None else
         json.loads(skill_path.read_text(encoding="utf-8"))
         if skill_path.is_file() else None)
-    runtime = hydrate_runtime_from_timelines(runtime, timeline_data)
+    enriched_runtime_path = directory / "runtime_observability.json"
+    if timeline_data is not None:
+        runtime = hydrate_runtime_from_timelines(runtime, timeline_data)
+        enriched_runtime_path.write_text(
+            json.dumps(runtime, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+    elif enriched_runtime_path.is_file():
+        runtime = json.loads(
+            enriched_runtime_path.read_text(encoding="utf-8"))
     memory_path = directory / "memory_metrics.json"
     memory = (
         collect_memory_metrics(
@@ -1398,6 +1895,12 @@ def main() -> int:
         if memory_path.is_file() else None)
     revision_match = re.search(
         r"(?:^|_)([0-9a-f]{7,40})(?:_|$)", directory.name)
+    manifest_path = directory / "benchmark_manifest.json"
+    benchmark_manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest_path.is_file() else {})
+    expected_mcp = benchmark_manifest.get("mcpEndpoints") \
+        if isinstance(benchmark_manifest.get("mcpEndpoints"), list) else None
     report = {
         "generatedAt": datetime.now().astimezone().isoformat(),
         "testedRevision": revision_match.group(1) if revision_match else None,
@@ -1405,11 +1908,13 @@ def main() -> int:
                  if key != "agentRuntime"},
         "agentRuntime": runtime,
         "ecs": parse_ecs_monitor(directory / "ecs_monitor.csv"),
-        "coverage": coverage(runtime, skills),
+        "coverage": coverage(runtime, skills, expected_mcp),
+        "benchmarkManifest": benchmark_manifest,
         "rag": rag,
         "memory": memory,
         "skills": skills,
     }
+    report["charts"] = generate_charts(report, directory)
     (directory / "load_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (directory / "load_report.md").write_text(

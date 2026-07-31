@@ -177,6 +177,11 @@ public class InternalWorkflowController {
         body.put("fallbackUsed", items.isEmpty());
         body.put("fallbackReason", items.isEmpty() ? "no_jd_match" : null);
         body.put("strategy", "hybrid");
+        body.put("fusion", "rrf_weighted");
+        body.put("rerankApplied", false);
+        body.put("indexName", "jd_catalog");
+        body.put("source", "internal_jd_catalog");
+        body.put("candidateCount", items.size());
         return body;
     }
 
