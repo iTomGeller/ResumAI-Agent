@@ -2850,24 +2850,22 @@ class RunExecutor:
             observed["highRiskTopics"] = high_risk_topics
             observed["highPriorityQuestions"] = high_priority_questions
             observed["questionBudgetCap"] = 8
+            # Priority labels are an observability proxy, not semantic proof
+            # that every risk topic is covered.  Do not discard an otherwise
+            # grounded report or trigger a full fallback from this count.
+            observed["highRiskPriorityProxySatisfied"] = int(
+                high_priority_questions >= min(high_risk_topics, 8))
             weak = {
                 key: {"actual": observed[key], "minimum": minimum}
                 for key, minimum in minimums.items()
                 if observed[key] < minimum
             }
-            required_high_priority = min(high_risk_topics, 8)
-            if high_priority_questions < required_high_priority:
-                weak["highRiskQuestionCoverage"] = {
-                    "actual": high_priority_questions,
-                    "minimum": required_high_priority,
-                }
             retry = set()
             if "dimensions" in weak or "strengths" in weak:
                 retry.add("score")
             if "risks" in weak:
                 retry.add("risk")
-            if ("questions" in weak
-                    or "highRiskQuestionCoverage" in weak):
+            if "questions" in weak:
                 retry.add("question")
             if "refs" in weak:
                 per_section_floor = 1 if is_sparse_resume else 2

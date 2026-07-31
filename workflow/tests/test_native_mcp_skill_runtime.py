@@ -2472,7 +2472,8 @@ def test_parallel_report_uses_native_section_schema_and_avoids_fallback(
         elif purpose == "report_risk":
             payload = {
                 "risks": [{
-                    "id": f"r{i}", "severity": "MEDIUM",
+                    "id": f"r{i}",
+                    "severity": "HIGH" if i < 2 else "MEDIUM",
                     "claim": f"风险{i}", "impact": "需核验",
                     "verificationPlan": "面试追问", "evidenceRefs": [ref],
                 } for i in range(3)],
@@ -2481,7 +2482,8 @@ def test_parallel_report_uses_native_section_schema_and_avoids_fallback(
         else:
             payload = {
                 "interviewQuestions": [{
-                    "id": f"q{i}", "question": f"请说明项目细节{i}",
+                    "id": f"q{i}", "priority": "MEDIUM",
+                    "question": f"请说明项目细节{i}",
                     "objective": "核验证据", "triggeredBy": "简历项目",
                     "goodSignals": ["给出基线"], "redFlags": ["无法说明"],
                     "followUps": ["如何取舍"], "evidenceRefs": [ref],
@@ -2511,6 +2513,14 @@ def test_parallel_report_uses_native_section_schema_and_avoids_fallback(
     assert any(event["eventType"] == "run.progress"
                and event["payload"].get("stage") == "parallel_report_merged"
                for event in emitter.events)
+    merged = next(
+        event for event in emitter.events
+        if event["eventType"] == "run.progress"
+        and event["payload"].get("stage") == "parallel_report_merged")
+    assert merged["payload"]["quality"]["highRiskTopics"] == 2
+    assert merged["payload"]["quality"]["highPriorityQuestions"] == 0
+    assert merged["payload"]["quality"][
+        "highRiskPriorityProxySatisfied"] == 0
     assert not any(event["eventType"] == "run.progress"
                    and event["payload"].get("stage") == "parallel_report_fallback"
                    for event in emitter.events)
