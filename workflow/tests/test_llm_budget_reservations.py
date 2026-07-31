@@ -152,6 +152,46 @@ def test_each_retry_is_an_accounted_provider_call(monkeypatch):
     assert budget.llm_calls_by_scope["agent:TechAgent"] == 2
 
 
+def test_provider_gate_bounds_concurrent_requests(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_CONCURRENT", "2")
+    budget = RunBudget()
+    client = ResilientLlmClient(
+        NullEmitter(), budget, max_llm_calls=8, llm_timeout_seconds=5,
+        breaker=CircuitBreaker(threshold=20))
+    client.api_key = "test-only"
+    active = 0
+    max_active = 0
+
+    async def fake_invoke(*args, **kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            await asyncio.sleep(0.02)
+            return (
+                LlmTurn(content="ok", finish_reason="stop"),
+                {"prompt_tokens": 1, "completion_tokens": 1},
+                "stop",
+            )
+        finally:
+            active -= 1
+
+    client._invoke = fake_invoke
+
+    async def exercise():
+        return await asyncio.gather(*[
+            client.chat(
+                [{"role": "user", "content": f"request {idx}"}],
+                agent_id="TechAgent", purpose="technical_findings",
+                json_mode=False)
+            for idx in range(4)
+        ])
+
+    assert asyncio.run(exercise()) == ["ok"] * 4
+    assert max_active == 2
+    assert budget.llm_calls == 4
+
+
 def test_budget_snapshot_preserves_scope_accounting():
     budget = RunBudget()
     budget.configure_llm_budget(

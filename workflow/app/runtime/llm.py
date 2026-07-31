@@ -19,6 +19,29 @@ logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
+# One workflow process serves multiple runs, and every run may fan out to
+# several agents.  Bound provider requests across runs so a short burst does
+# not turn into 60-second transport retries.  The gate is recreated per event
+# loop because the Windows test suite uses multiple asyncio.run() loops.
+_provider_gate: Optional[asyncio.Semaphore] = None
+_provider_gate_loop: Optional[asyncio.AbstractEventLoop] = None
+_provider_gate_limit = 0
+
+
+def _provider_concurrency_gate() -> tuple[asyncio.Semaphore, int]:
+    global _provider_gate, _provider_gate_loop, _provider_gate_limit
+    try:
+        limit = max(1, int(os.getenv("LLM_MAX_CONCURRENT", "8")))
+    except ValueError:
+        limit = 8
+    loop = asyncio.get_running_loop()
+    if (_provider_gate is None or _provider_gate_loop is not loop
+            or _provider_gate_limit != limit):
+        _provider_gate = asyncio.Semaphore(limit)
+        _provider_gate_loop = loop
+        _provider_gate_limit = limit
+    return _provider_gate, limit
+
 
 @dataclass(frozen=True)
 class LlmToolCall:
@@ -234,6 +257,24 @@ class ResilientLlmClient:
             _audit["call#"] = call_index
             _audit["providerAttempt"] = attempts
             print(f"LLM_CONTEXT_AUDIT | {_audit}", flush=True)
+            gate, concurrency_limit = _provider_concurrency_gate()
+            queue_started = time.monotonic()
+            was_queued = gate.locked()
+            if was_queued:
+                await self.emitter.emit(
+                    "llm.queued", agent_id=agent_id, payload={
+                        **trace_payload,
+                        "model": model,
+                        "purpose": purpose,
+                        "callIndex": call_index,
+                        "providerAttempt": attempts,
+                        "budgetScope": scope,
+                        "concurrencyLimit": concurrency_limit,
+                    })
+            await gate.acquire()
+            queue_wait_ms = int(
+                (time.monotonic() - queue_started) * 1000)
+            started = time.monotonic()
             await self.emitter.emit("llm.started", agent_id=agent_id, payload={
                 **trace_payload,
                 "model": model,
@@ -242,13 +283,18 @@ class ResilientLlmClient:
                 "providerAttempt": attempts,
                 "budgetScope": scope,
                 "budget": self.budget.llm_audit(self.max_llm_calls),
-                "useQuality": use_quality})
-            started = time.monotonic()
+                "useQuality": use_quality,
+                "queueWaitMs": queue_wait_ms,
+                "concurrencyLimit": concurrency_limit,
+            })
             try:
-                turn, usage, finish_reason = await self._invoke(
-                    messages, model, effective_max_tokens, temperature,
-                    json_mode and not tools, tools=tools,
-                    tool_choice=tool_choice)
+                try:
+                    turn, usage, finish_reason = await self._invoke(
+                        messages, model, effective_max_tokens, temperature,
+                        json_mode and not tools, tools=tools,
+                        tool_choice=tool_choice)
+                finally:
+                    gate.release()
                 content = turn.content
                 if json_mode and not tools and not content.strip():
                     raise LlmError("EMPTY_JSON_CONTENT",
@@ -300,6 +346,8 @@ class ResilientLlmClient:
                     "callIndex": call_index,
                     "budgetScope": scope,
                     "durationMs": int((time.monotonic() - started) * 1000),
+                    "queueWaitMs": queue_wait_ms,
+                    "concurrencyLimit": concurrency_limit,
                     "promptTokens": prompt_tokens,
                     "completionTokens": completion_tokens,
                     "promptCacheHitTokens": cache_hit_tokens,

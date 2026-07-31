@@ -1387,7 +1387,12 @@ def markdown(report: Dict[str, Any]) -> str:
         "入口异步化已能承接突发，但持续 1 QPS 仍需增加模型供应吞吐或提供快评/深评分层 |",
         f"| P1 | 单份深评长尾 | Runtime P95 {duration_ms(run_p95)}；"
         f"ReportAgent P95 {duration_ms((runtime.get('agentLatencyMs') or {}).get('ReportAgent', {}).get('p95'))} | "
-        "已消除无界 JSON repair 与整份报告 fallback；剩余长尾按 Agent/模型拆分继续优化 |",
+        "本批次存在重复生成长尾；后续修复必须以同样本 A/B 验证时延、报告长度、"
+        "证据引用、风险和面试题，不能仅凭代码变更标记完成 |",
+        f"| P1 | 知识库 RAG 缺少带标签质量结论 | feature reranker proxy P50 "
+        f"{number((rag.get('scenarios') or {}).get('knowledge_base', {}).get('topScoreProxy', {}).get('p50'))}；"
+        "在线排序分不等于 Precision/Recall | 建立独立 query→相关文档标签集，"
+        "报告 Precision@K、Recall@K、MRR/nDCG；禁止使用‘尚可’等无标签质量结论 |",
     ]
     if partial or success != total_requests:
         issue_rows.append(
