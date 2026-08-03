@@ -13,11 +13,13 @@
       "transport": "streamable-http",
       "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
       "description": "Official Exa hosted MCP; real keyless web search and page fetch with rate limits",
-      "routingGuidance": "Prefer this provider for candidate-declared GitHub or other overseas public URLs that the CN ECS cannot fetch directly. Search may include exact-identity domestic mirrors on gitee.com, gitcode.com, juejin.cn or blog.csdn.net; a name match alone never proves candidate ownership.",
+      "routingGuidance": "Fallback only after direct fetch reports network unreachability, or when the user explicitly asks to discover alternative public sources. Do not use Exa after an exact declared URL returns 404. Stop immediately on free-tier rate limiting.",
+      "timeoutSeconds": 20,
       "maxConcurrentCalls": 1,
       "minIntervalMs": 900,
-      "rateLimitRetries": 2,
+      "rateLimitRetries": 0,
       "rateLimitBackoffMs": 1200,
+      "rateLimitCooldownSeconds": 180,
       "allowedTools": ["web_search_exa", "web_fetch_exa"],
       "toolPrefix": "exa",
       "evidence": {
@@ -34,7 +36,8 @@
       "command": "python",
       "args": ["-m", "mcp_server_fetch"],
       "description": "Official MCP reference fetch server; candidate-declared public URLs only",
-      "routingGuidance": "Use direct fetch for candidate-declared URLs reachable from the CN ECS, especially gitee.com, gitcode.com, juejin.cn and blog.csdn.net. Do not choose direct fetch as the first option for github.com; prefer the hosted Exa provider.",
+      "routingGuidance": "First choice for every candidate-declared exact URL, including github.com, because the CN ECS runtime probe is currently reachable. A 404 means the exact declared page is unavailable; do not follow it with a same-name web search.",
+      "timeoutSeconds": 8,
       "allowedTools": ["fetch"],
       "toolPrefix": "fetch",
       "whitelistOnly": true,
@@ -51,9 +54,9 @@
     "JDAnalysisAgent": [],
     "TechAgent": [],
     "ProjectAgent": [
-      "exa.web_search_exa",
+      "fetch.fetch",
       "exa.web_fetch_exa",
-      "fetch.fetch"
+      "exa.web_search_exa"
     ],
     "EvidenceAgent": [
       "exa.web_search_exa",

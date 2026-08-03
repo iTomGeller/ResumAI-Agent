@@ -37,13 +37,16 @@ def load_local_env() -> None:
         path = ".deploy.local.env"
         if not os.path.exists(path):
             return
+    file_values = {}
     with open(path, "r", encoding="utf-8") as env_file:
         for raw_line in env_file:
             line = raw_line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip())
+            file_values[key.strip()] = value.strip()
+    for key, value in file_values.items():
+        os.environ.setdefault(key, value)
 
 
 def connect() -> paramiko.SSHClient:

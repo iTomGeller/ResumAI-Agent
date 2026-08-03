@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -16,7 +17,12 @@ from app.runtime.agents import default_agent_registry
 from app.runtime.builtin_tools import BuiltinToolRegistry
 from app.runtime.coordinator import Coordinator
 from app.runtime.events import NullEmitter
-from app.runtime.executor import RunExecutor
+from app.runtime.executor import (
+    RunExecutor,
+    _backfill_interview_questions_from_risks,
+    _report_section_timeout_seconds,
+    _salvage_first_complete_report_section,
+)
 from app.runtime.llm import (
     CircuitBreaker,
     LlmToolCall,
@@ -318,11 +324,13 @@ class _NativeMcpLlm:
         self.turn = 0
         self.seen_tools = []
         self.tool_choice = None
+        self.messages = []
 
     async def chat_turn(self, messages, *, agent_id, purpose="",
                         max_tokens=2048, tools=None, tool_choice=None,
                         use_quality=False):
         self.turn += 1
+        self.messages.append(copy.deepcopy(messages))
         self.seen_tools = list(tools or [])
         self.tool_choice = tool_choice
         if self.turn == 1:
@@ -399,6 +407,13 @@ def test_native_model_proposes_mcp_arguments_and_trace_chain():
     assert len(execute_flags) == 3 and all(
         flag is False for flag in execute_flags), (
         "native model-authored MCP parameters must execute verbatim")
+    assert llm.messages[0][:2] == llm.messages[1][:2], (
+        "native tool results must be appended as history without rewriting "
+        "the original exact-prefix messages")
+    assert any(
+        message.get("role") == "tool"
+        and message.get("tool_call_id") == "provider-native-7"
+        for message in llm.messages[1][2:])
 
     chain = [
         event for event in emitter.events
@@ -1614,6 +1629,120 @@ def test_progressive_skill_action_turns_are_reserved(monkeypatch, tmp_path):
         for event in executor.emitter.events)
 
 
+class _EagerSkillLlm:
+    def __init__(self):
+        self.turn = 0
+        self.saw_instructions_on_first_turn = False
+        self.tool_names = []
+
+    async def chat_turn(self, messages, *, agent_id, purpose="",
+                        max_tokens=2048, tools=None, tool_choice=None,
+                        use_quality=False):
+        self.turn += 1
+        content = "\n".join(
+            str(message.get("content") or "") for message in messages)
+        if self.turn == 1:
+            self.saw_instructions_on_first_turn = "BODY_SENTINEL" in content
+            self.tool_names = [
+                str(tool.get("function", {}).get("name") or "")
+                for tool in (tools or [])
+            ]
+        decision = {
+            "thought": "used signal-selected eager Skill instructions",
+            "output": {
+                "summary": "eager skill completed",
+                "claims": [],
+                "evidence": [],
+                "confidence": 0.8,
+            },
+            "done": True,
+        }
+        return LlmTurn(
+            content="",
+            tool_calls=[LlmToolCall(
+                tool_call_id="skill-eager-final-1",
+                name="emit_decision",
+                arguments=decision,
+                raw_arguments=json.dumps(decision))],
+            finish_reason="tool_calls")
+
+
+def test_configured_eager_skill_injects_first_turn_without_load_call(
+        monkeypatch, tmp_path):
+    from app.runtime import executor as executor_module
+
+    package = tmp_path / "skills" / "ground-project-claims"
+    package.mkdir(parents=True)
+    (package / "SKILL.md").write_text(
+        "---\n"
+        "name: ground-project-claims\n"
+        "description: Unified candidate evidence skill metadata.\n"
+        "version: v-test\n"
+        "---\n\n"
+        "BODY_SENTINEL: apply project evidence rules.\n",
+        encoding="utf-8")
+    monkeypatch.setattr(
+        executor_module, "default_skill_manager",
+        SkillManager(tmp_path / "skills"))
+    monkeypatch.setenv("SKILL_EAGER_IDS", "ground-project-claims")
+
+    request = AgentRunRequest(
+        runId="r-skill-eager", conversationId="c-skill-eager",
+        traceId="t-skill-eager", runType="project_analysis",
+        resumeText="项目经历\n支付平台，负责缓存与消息队列",
+        jobDescription="Java backend")
+    llm = _EagerSkillLlm()
+    executor = RunExecutor(
+        request, NullEmitter(), memory=NullMemoryClient(),
+        builtin_tools=BuiltinToolRegistry(), llm=llm)
+    executor.state.apply_artifacts({
+        "resumeFacts": {"projects": [{"name": "支付平台"}]},
+    })
+
+    output = run(executor._run_agent(
+        default_agent_registry.get("ProjectAgent")))
+
+    assert output.summary == "eager skill completed"
+    assert llm.turn == 1
+    assert llm.saw_instructions_on_first_turn is True
+    assert "load_skill" not in llm.tool_names
+    counters = executor.agent_counters["ProjectAgent"]
+    assert counters["llmCalls"] == 1
+    selected = executor.skill_selections["ProjectAgent"]
+    eager = selected[0]
+    loaded_events_before = sum(
+        event["eventType"] == "skill.loaded"
+        for event in executor.emitter.events)
+    duplicate = LlmToolCall(
+        tool_call_id="skill-eager-duplicate-ref",
+        name="load_skill",
+        arguments={
+            "skill_id": f"{eager.skill_id}@{eager.version}#{eager.hash}"},
+        raw_arguments="{}")
+    duplicate_result = run(executor._execute_skill_proposal(
+        agent_id="ProjectAgent", tool="load_skill", proposed=duplicate,
+        selected_skills=selected,
+        loaded_skills={eager.skill_id: eager},
+        loaded_skill_call_ids={eager.skill_id: "skill-eager-original"}))
+    assert duplicate_result["success"] is True
+    assert duplicate_result["skillId"] == eager.skill_id
+    assert duplicate_result["alreadyLoaded"] is True
+    assert sum(
+        event["eventType"] == "skill.loaded"
+        for event in executor.emitter.events) == loaded_events_before
+    assert not any(
+        event["eventType"] == "skill.failed"
+        for event in executor.emitter.events)
+    assert counters["actionTurns"] == 0
+    assert any(
+        event["eventType"] == "skill.loaded"
+        and event["payload"]["reason"] == "configured_eager_experiment"
+        for event in executor.emitter.events)
+    assert any(
+        event["eventType"] == "skill.applied"
+        for event in executor.emitter.events)
+
+
 def test_coordinator_order_helper_and_revision_reuse_contract():
     coordinator = Coordinator(
         default_agent_registry, PolicyBundle.from_config("balanced", {}), None)
@@ -2140,11 +2269,61 @@ def test_runtime_rate_limit_retries_without_evicting_live_catalog():
     assert registry.health["demo"].status == "AVAILABLE"
 
 
+def test_exhausted_rate_limit_hides_catalog_and_fails_siblings_fast():
+    class ExhaustedClient:
+        def __init__(self):
+            self.calls = 0
+            self.session_id = None
+            self._fail_count = 0
+            self.protocol_version = PROTOCOL_VERSION
+
+        def _circuit_blocked(self):
+            return False
+
+        async def call_tool(self, name, arguments):
+            self.calls += 1
+            raise McpError("RATE_LIMITED status=429 free quota exhausted")
+
+    client = ExhaustedClient()
+    registry = McpRegistry(config={
+        "mcpServers": {"demo": {
+            "enabled": True,
+            "rateLimitRetries": 0,
+            "rateLimitCooldownSeconds": 120,
+        }},
+        "optionalMcpServers": {},
+        "agentToolRouting": {"ProjectAgent": ["demo.search"]},
+    })
+    registry._probed = True
+    registry.health["demo"] = McpServerHealth(
+        name="demo", status="AVAILABLE", transport="streamable-http")
+    registry.tools["demo.search"] = McpToolInfo(
+        server="demo", name="search", catalog_name="demo.search",
+        description="search", input_schema={"type": "object"})
+    registry._http_clients["demo"] = client
+
+    first = run(registry.call("demo.search", {}))
+    second = run(registry.call("demo.search", {}))
+
+    assert first["status"] == "RATE_LIMITED"
+    assert second["status"] == "RATE_LIMITED"
+    assert client.calls == 1
+    assert registry.health["demo"].status == "RATE_LIMITED"
+    assert registry.tools_for_agent("ProjectAgent") == []
+    marked_at = registry._last_probe_at
+    assert marked_at is not None
+    assert registry.needs_probe(now=marked_at + 60) is False
+    assert registry.needs_probe(now=marked_at + 121) is True
+    snapshot = registry.status_snapshot()["servers"]["demo"]
+    assert snapshot["rateLimitCooldownRemainingSeconds"] > 0
+
+
 def test_mcp_routing_guidance_is_exposed_without_forcing_a_call():
     registry = McpRegistry(config={
         "mcpServers": {"demo": {
             "enabled": True,
             "routingGuidance": "Prefer the hosted provider for GitHub.",
+            "timeoutSeconds": 7.5,
         }},
         "optionalMcpServers": {},
         "agentToolRouting": {"ProjectAgent": ["demo.search"]},
@@ -2166,6 +2345,34 @@ def test_mcp_routing_guidance_is_exposed_without_forcing_a_call():
 
     assert len(exposed) == 1
     assert "Prefer the hosted provider for GitHub" in exposed[0]["description"]
+    assert tools.definitions["demo.search"].timeout_seconds == 7.5
+
+
+def test_agent_mcp_catalog_preserves_configured_route_order():
+    registry = McpRegistry(config={
+        "mcpServers": {"demo": {"enabled": True}},
+        "optionalMcpServers": {},
+        "agentToolRouting": {
+            "ProjectAgent": ["demo.fetch", "demo.search"]},
+    })
+    registry.health["demo"] = McpServerHealth(
+        name="demo", status="AVAILABLE", transport="streamable-http")
+    for name in ("fetch", "search"):
+        catalog_name = f"demo.{name}"
+        registry.tools[catalog_name] = McpToolInfo(
+            server="demo", name=name, catalog_name=catalog_name,
+            description=name, input_schema={"type": "object"})
+    registry._http_clients["demo"] = object()
+    tools = ToolExecutor(
+        NullEmitter(), RunBudget(), BuiltinToolRegistry(),
+        max_tool_calls_run=5, tool_timeout_seconds=10,
+        run_context={})
+    assert registry.register_into(tools) == 2
+
+    exposed = tools.catalog_for_agent("ProjectAgent", [])
+
+    assert [item["name"] for item in exposed] == [
+        "demo.fetch", "demo.search"]
 
 
 def test_http_429_does_not_trip_transport_circuit(monkeypatch):
@@ -2381,7 +2588,7 @@ def test_coordinator_preflight_emits_jd_match_retrieval_telemetry(monkeypatch):
     assert payload["stages"]["totalMs"] == 37.0
 
 
-def test_report_section_fanout_is_dynamic_for_external_evidence(monkeypatch):
+def test_report_section_fanout_defaults_on_with_explicit_rollback(monkeypatch):
     request = AgentRunRequest(
         runId="r-report-mode", conversationId="c-report-mode",
         runType="full_evaluation", resumeText="Java 项目")
@@ -2392,7 +2599,7 @@ def test_report_section_fanout_is_dynamic_for_external_evidence(monkeypatch):
 
     monkeypatch.delenv("REPORT_PARALLEL_SECTIONS", raising=False)
     assert executor._should_parallel_report_sections(
-        {"has_external_urls": False, "is_sparse_resume": False}) is False
+        {"has_external_urls": False, "is_sparse_resume": False}) is True
     assert executor._should_parallel_report_sections(
         {"has_external_urls": True}) is True
     assert executor._should_parallel_report_sections(
@@ -2434,10 +2641,87 @@ def test_parallel_report_schema_requires_grounded_items():
     assert specs["risk"]["properties"]["risks"]["minItems"] == 4
     assert specs["risk"]["properties"]["risks"]["maxItems"] == 6
     questions = specs["question"]["properties"]["interviewQuestions"]
-    assert questions["minItems"] == 1
+    assert questions["minItems"] == 4
     assert questions["maxItems"] == 8
     assert "priority" in questions["items"]["required"]
     assert "triggeredBy" in questions["items"]["required"]
+
+
+def test_parallel_report_section_timeout_is_configurable(monkeypatch):
+    monkeypatch.delenv("REPORT_SECTION_TIMEOUT_SECONDS", raising=False)
+    assert _report_section_timeout_seconds() == 75.0
+    monkeypatch.setenv("REPORT_SECTION_TIMEOUT_SECONDS", "1.5")
+    assert _report_section_timeout_seconds() == 1.5
+    monkeypatch.setenv("REPORT_SECTION_TIMEOUT_SECONDS", "invalid")
+    assert _report_section_timeout_seconds() == 75.0
+
+
+def test_parallel_report_backfills_short_questions_from_grounded_risks():
+    ref = {
+        "sourceType": "RESUME", "sourceId": "resume",
+        "quote": "Java 支付项目",
+    }
+    report = {
+        "interviewQuestions": [{
+            "id": "q1", "priority": "HIGH",
+            "question": "请说明支付项目容量基线",
+            "objective": "核验容量", "triggeredBy": "容量风险",
+            "evidenceRefs": [ref],
+        }],
+        "risks": [{
+            "id": f"r{index}",
+            "severity": "HIGH" if index == 1 else "MEDIUM",
+            "claim": f"风险结论{index}",
+            "verificationPlan": f"说明验证方案{index}",
+            "evidenceRefs": [ref],
+        } for index in range(1, 5)],
+    }
+
+    added = _backfill_interview_questions_from_risks(report, minimum=4)
+
+    assert added == 3
+    assert len(report["interviewQuestions"]) == 4
+    assert report["interviewQuestions"][0]["id"] == "q1"
+    assert all(item["evidenceRefs"] for item in report["interviewQuestions"])
+    assert report["interviewProbes"] == report["interviewQuestions"]
+
+
+def test_parallel_report_does_not_backfill_an_empty_question_section():
+    report = {"interviewQuestions": [], "risks": [{
+        "id": "r1", "severity": "HIGH", "claim": "风险",
+        "verificationPlan": "核验", "evidenceRefs": [{
+            "sourceType": "RESUME", "sourceId": "resume", "quote": "证据",
+        }],
+    }]}
+
+    assert _backfill_interview_questions_from_risks(report, minimum=4) == 0
+    assert report["interviewQuestions"] == []
+
+
+def test_parallel_report_recovers_empty_questions_after_retry_is_exhausted():
+    ref = {"sourceType": "RESUME", "sourceId": "resume", "quote": "证据"}
+    report = {"interviewQuestions": [], "risks": [{
+        "id": f"r{index}", "severity": "HIGH", "claim": f"风险{index}",
+        "verificationPlan": f"核验{index}", "evidenceRefs": [ref],
+    } for index in range(4)]}
+
+    assert _backfill_interview_questions_from_risks(
+        report, minimum=4, allow_empty=True) == 4
+    assert len(report["interviewQuestions"]) == 4
+
+
+def test_report_section_salvages_only_a_complete_first_required_object():
+    first = json.dumps({"summary": "first", "dimensions": [1]})
+    distinct = json.dumps({"summary": "changed", "dimensions": [2]})
+
+    assert _salvage_first_complete_report_section(
+        first + distinct, ["summary", "dimensions"]) == {
+            "summary": "first", "dimensions": [1],
+        }
+    assert _salvage_first_complete_report_section(
+        '{"summary":"cut"', ["summary"]) is None
+    assert _salvage_first_complete_report_section(
+        '{"summary":"ok"}{"other":1}', ["dimensions"]) is None
 
 
 def test_parallel_report_uses_native_section_schema_and_avoids_fallback(

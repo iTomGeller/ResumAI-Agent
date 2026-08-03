@@ -391,7 +391,7 @@ cd "$SRC_DIR"
 $COMPOSE build ai-resume-workflow ai-resume-backend ai-resume-frontend
 
 log "bring up stack (volumes preserved)"
-$COMPOSE up -d mysql redis minio etcd milvus
+$COMPOSE up -d mysql redis minio etcd milvus langgraph-postgres
 # The original backend was launched outside the current Compose project and
 # therefore cannot be recreated in place despite sharing the same fixed name.
 # Remove only that orphan application container; named data/log/upload
@@ -411,14 +411,6 @@ if docker ps --format '{{.Names}}' | grep -q '^resumai-neo4j$'; then
   log "stopping legacy neo4j container (volume preserved)"
   docker stop resumai-neo4j || true
 fi
-# The legacy workflow-postgres container is no longer part of the compose
-# project. Stop it if still running from an older deployment; its volume
-# resumai-workflow-postgres-data is intentionally left untouched on disk.
-if docker ps --format '{{.Names}}' | grep -q '^ai-resume-workflow-postgres$'; then
-  log "stopping legacy checkpoint postgres (volume preserved)"
-  docker stop ai-resume-workflow-postgres || true
-fi
-
 log "wait health"
 for i in $(seq 1 60); do
   if curl -fsS http://127.0.0.1/api/health | grep -q UP; then

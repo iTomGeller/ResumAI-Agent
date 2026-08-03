@@ -1,5 +1,5 @@
 -- V6: conversational agent runtime — users, runs, run events, executions,
--- tool calls, layered memory, context snapshots, sandbox executions,
+-- tool calls, layered memory, context snapshots,
 -- policy learning and benchmark storage.
 -- All statements are guarded / IF NOT EXISTS so the file is re-runnable.
 
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS `agent_run` (
   `status`            VARCHAR(32)  NOT NULL DEFAULT 'QUEUED',
   `current_agent`     VARCHAR(64)  NULL,
   `current_tool`      VARCHAR(128) NULL,
-  `current_phase`     VARCHAR(64)  NULL COMMENT 'llm/tool/sandbox/plan',
+  `current_phase`     VARCHAR(64)  NULL COMMENT 'llm/tool/plan',
   `answer`            MEDIUMTEXT   NULL,
   `shared_state`      JSON         NULL,
   `metrics`           JSON         NULL COMMENT 'llmCalls/toolCalls/tokens/costs',
@@ -186,27 +186,6 @@ CREATE TABLE IF NOT EXISTS `context_snapshot` (
   KEY `idx_context_snapshot_conv` (`conversation_id`, `id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'Context 压缩快照';
 
--- @guard table:sandbox_execution
-CREATE TABLE IF NOT EXISTS `sandbox_execution` (
-  `id`              BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  `sandbox_id`      VARCHAR(96)  NOT NULL,
-  `run_id`          VARCHAR(64)  NOT NULL,
-  `conversation_id` VARCHAR(64)  NULL,
-  `tool_name`       VARCHAR(128) NOT NULL,
-  `container_id`    VARCHAR(96)  NULL,
-  `status`          VARCHAR(32)  NOT NULL DEFAULT 'RUNNING' COMMENT 'RUNNING/SUCCEEDED/FAILED/TIMED_OUT/OOM_KILLED/CANCELLED',
-  `exit_code`       INT          NULL,
-  `duration_ms`     BIGINT       NULL,
-  `stdout_tail`     VARCHAR(4000) NULL,
-  `stderr_tail`     VARCHAR(2000) NULL,
-  `error`           VARCHAR(2000) NULL,
-  `expire_at`       DATETIME     NULL,
-  `create_time`     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `finished_at`     DATETIME(3)  NULL,
-  UNIQUE KEY `uk_sandbox_execution` (`sandbox_id`),
-  KEY `idx_sandbox_run` (`run_id`, `id`)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'Sandbox 执行记录';
-
 -- @guard table:policy_bundle
 CREATE TABLE IF NOT EXISTS `policy_bundle` (
   `policy_id`   VARCHAR(64)  NOT NULL PRIMARY KEY,
@@ -316,9 +295,9 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
      'memoryRetrieval', JSON_OBJECT('topK', 5, 'minConfidence', 0.35),
      'evidenceVerification', JSON_OBJECT('enabled', TRUE, 'strict', FALSE, 'minSupportRatio', 0.5),
      'rewriteRounds', 1,
-     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 900, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30, 'sandboxTimeoutSeconds', 90)),
+     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 900, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30)),
    'ACTIVE', 1),
-  ('strict_evidence', '严格证据策略', '每个结论强制 Sandbox 证据核验，宁缺毋滥',
+  ('strict_evidence', '严格证据策略', '每个结论强制证据核验，宁缺毋滥',
    JSON_OBJECT(
      'agentOrder', JSON_ARRAY('JDAnalysisAgent','TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
      'maxAgentCount', 6, 'maxLlmCalls', 14, 'maxIterationsPerAgent', 2,
@@ -327,7 +306,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
      'memoryRetrieval', JSON_OBJECT('topK', 5, 'minConfidence', 0.5),
      'evidenceVerification', JSON_OBJECT('enabled', TRUE, 'strict', TRUE, 'minSupportRatio', 0.7),
      'rewriteRounds', 1,
-     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 1080, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30, 'sandboxTimeoutSeconds', 120)),
+     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 1080, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30)),
    'ACTIVE', 1),
   ('deep_analysis', '深度分析策略', '更多迭代与检索预算，追求覆盖率与深度',
    JSON_OBJECT(
@@ -338,7 +317,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
      'memoryRetrieval', JSON_OBJECT('topK', 8, 'minConfidence', 0.3),
      'evidenceVerification', JSON_OBJECT('enabled', TRUE, 'strict', FALSE, 'minSupportRatio', 0.6),
      'rewriteRounds', 2,
-     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 1200, 'llmTimeoutSeconds', 150, 'toolTimeoutSeconds', 40, 'sandboxTimeoutSeconds', 120)),
+     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 1200, 'llmTimeoutSeconds', 150, 'toolTimeoutSeconds', 40)),
    'ACTIVE', 1),
   ('low_cost', '低成本策略', '最小 Agent 组合与预算，快速回答',
    JSON_OBJECT(
@@ -349,7 +328,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
      'memoryRetrieval', JSON_OBJECT('topK', 3, 'minConfidence', 0.5),
      'evidenceVerification', JSON_OBJECT('enabled', FALSE, 'strict', FALSE, 'minSupportRatio', 0.3),
      'rewriteRounds', 1,
-     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 480, 'llmTimeoutSeconds', 90, 'toolTimeoutSeconds', 20, 'sandboxTimeoutSeconds', 60)),
+     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 480, 'llmTimeoutSeconds', 90, 'toolTimeoutSeconds', 20)),
    'ACTIVE', 1),
   ('backend_job', 'Java 后端岗位策略', '针对后端岗位加权基础/并发/中间件证据与追问',
    JSON_OBJECT(
@@ -362,7 +341,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
      'memoryRetrieval', JSON_OBJECT('topK', 5, 'minConfidence', 0.4),
      'evidenceVerification', JSON_OBJECT('enabled', TRUE, 'strict', TRUE, 'minSupportRatio', 0.6),
      'rewriteRounds', 1,
-     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 960, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30, 'sandboxTimeoutSeconds', 90)),
+     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 960, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30)),
    'ACTIVE', 1),
   ('agent_job', 'AI Agent 岗位策略', '针对 Agent/LLM 岗位加权工程化、评测与落地证据',
    JSON_OBJECT(
@@ -375,7 +354,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
      'memoryRetrieval', JSON_OBJECT('topK', 5, 'minConfidence', 0.4),
      'evidenceVerification', JSON_OBJECT('enabled', TRUE, 'strict', TRUE, 'minSupportRatio', 0.6),
      'rewriteRounds', 1,
-     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 960, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30, 'sandboxTimeoutSeconds', 90)),
+     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 960, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30)),
    'ACTIVE', 1),
   ('resume_rewrite', '简历改写策略', '项目改写与整体优化专用：改写轮次与 lint 检查',
    JSON_OBJECT(
@@ -386,6 +365,6 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
      'memoryRetrieval', JSON_OBJECT('topK', 4, 'minConfidence', 0.4),
      'evidenceVerification', JSON_OBJECT('enabled', TRUE, 'strict', FALSE, 'minSupportRatio', 0.4),
      'rewriteRounds', 2,
-     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 720, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30, 'sandboxTimeoutSeconds', 90)),
+     'timeoutPolicy', JSON_OBJECT('runTimeoutSeconds', 720, 'llmTimeoutSeconds', 120, 'toolTimeoutSeconds', 30)),
    'ACTIVE', 1)
 ON DUPLICATE KEY UPDATE `description` = VALUES(`description`);

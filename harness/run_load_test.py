@@ -379,10 +379,15 @@ def collect_runtime_metrics(
             stage = str(payload.get("stage") or "")
             if stage in {
                     "budget_reallocated", "parallel_report_retry",
-                    "parallel_report_fallback"}:
+                    "parallel_report_fallback",
+                    "parallel_report_question_backfill",
+                    "parallel_report_section_salvaged"}:
                 repair_stats[stage] += 1
             if event_type in {"llm.failed", "agent.failed", "tool.failed"} \
-                    or stage in {"budget_reallocated", "parallel_report_fallback"}:
+                    or stage in {
+                        "budget_reallocated", "parallel_report_fallback",
+                        "parallel_report_question_backfill",
+                        "parallel_report_section_salvaged"}:
                 compact_events.append({
                     "seq": event.get("seq"), "eventType": event_type,
                     "agentId": agent_id, "stage": stage,
@@ -577,6 +582,10 @@ def main() -> int:
     parser.add_argument("--allow-insecure-http", action="store_true")
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--count", type=int, default=100)
+    parser.add_argument(
+        "--ids", nargs="+", default=None,
+        help="run these manifest ids in the supplied order; overrides --count",
+    )
     parser.add_argument("--phase", action="append", type=parse_phase)
     parser.add_argument("--upload-workers", type=int, default=8)
     parser.add_argument("--poll-interval", type=float, default=5.0)
@@ -589,8 +598,21 @@ def main() -> int:
             and "127.0.0.1" not in args.base_url
             and "localhost" not in args.base_url):
         parser.error("plain HTTP target requires --allow-insecure-http")
+    manifest_all = json.loads(stress.MANIFEST.read_text(encoding="utf-8"))
+    if args.ids:
+        by_id = {str(row["id"]): row for row in manifest_all}
+        missing = [resume_id for resume_id in args.ids if resume_id not in by_id]
+        if missing:
+            parser.error("unknown manifest ids: " + ", ".join(missing))
+        manifest = [by_id[resume_id] for resume_id in args.ids]
+    else:
+        manifest = manifest_all[:args.count]
+        if len(manifest) != args.count:
+            raise RuntimeError(
+                f"manifest has {len(manifest)} rows, requested {args.count}")
+    request_count = len(manifest)
     phases = list(args.phase or DEFAULT_PHASES)
-    schedule = build_schedule(phases, args.count)
+    schedule = build_schedule(phases, request_count)
     if args.dry_run:
         print(json.dumps({
             "requests": len(schedule),
@@ -602,10 +624,6 @@ def main() -> int:
 
     outdir = Path(args.outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=False)
-    manifest = json.loads(stress.MANIFEST.read_text(encoding="utf-8"))[:args.count]
-    if len(manifest) != args.count:
-        raise RuntimeError(
-            f"manifest has {len(manifest)} rows, requested {args.count}")
     stress.BASE = args.base_url.rstrip("/")
     stress.AUTH_TOKEN = os.getenv("RESUMAI_AUTH_TOKEN", "")
     benchmark_manifest: Dict[str, Any] = {
@@ -640,7 +658,7 @@ def main() -> int:
         daemon=True)
     sampler.start()
 
-    log(f"OPEN-LOOP start requests={args.count} "
+    log(f"OPEN-LOOP start requests={request_count} "
         f"plannedIssueDuration={schedule[-1]['scheduledOffsetS']:.1f}s")
     futures = []
     with concurrent.futures.ThreadPoolExecutor(

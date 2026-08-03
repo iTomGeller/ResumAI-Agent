@@ -307,7 +307,37 @@ def test_context_assembly_and_budget_cap():
         output_schema="JSON")
     assert len(messages) == 2
     assert "超出预算已截断" in messages[0]["content"]
+    assert "[输出要求]\nJSON" in messages[0]["content"]
     assert "用户问题" in messages[1]["content"]
+    assert messages[1]["content"].startswith("[当前请求]\n用户问题")
+
+
+def test_context_places_candidate_independent_content_in_reusable_prefix():
+    manager = _manager()
+    common = dict(
+        system_prompt="固定系统提示",
+        policy_instructions="固定策略",
+        skill_instructions="固定技能",
+        user_request="请评估当前简历",
+        current_goal="完整评估",
+        recent_messages=[],
+        conversation_summary="",
+        memory_block="",
+        tool_results_block="",
+        output_schema="固定 JSON SCHEMA")
+
+    first = manager.assemble(
+        **common, shared_state_digest="候选人甲的动态状态")
+    second = manager.assemble(
+        **common, shared_state_digest="候选人乙的动态状态")
+
+    assert first[0] == second[0]
+    assert first[0]["content"].endswith(
+        "[输出要求]\n固定 JSON SCHEMA")
+    stable_user_prefix = "[当前请求]\n请评估当前简历\n\n[当前目标]\n完整评估"
+    assert first[1]["content"].startswith(stable_user_prefix)
+    assert second[1]["content"].startswith(stable_user_prefix)
+    assert first[1]["content"] != second[1]["content"]
 
 
 def test_recent_message_overflow_becomes_summary():

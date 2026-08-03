@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     workflow_internal_token: str = "change-me"
     workflow_build_version: str = "dev"
 
+    # The production compose file enables LangGraph explicitly. Keeping the
+    # local default off preserves dependency-light unit tests and provides the
+    # requested one-switch rollback to the legacy coordinator loop.
+    langgraph_runtime_enabled: bool = False
+    langgraph_checkpoint_dsn: str = ""
+
     skills_path: str = "/app/skills"
     mcp_config_path: str = ""  # empty → resolve via mcp_registry fallbacks
 

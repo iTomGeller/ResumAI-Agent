@@ -1,4 +1,4 @@
-# 测试报告（ECS 真实执行，2026-07-19 收敛式重构）
+# 历史测试报告（ECS 真实执行，2026-07-19；当前架构已迁移 LangGraph）
 
 执行环境：阿里云 ECS 4C16G（Ubuntu, Docker 29.1.3），项目目录 `/opt/resumai-src`，
 Compose project `resumai`，模型 deepseek-chat。
@@ -11,8 +11,6 @@ Compose project `resumai`，模型 deepseek-chat。
   `run_workflow` 零残留（CI 含防回流门禁）。
 - 旧 checkpoint PostgreSQL 容器已停用；卷 `resumai-workflow-postgres-data`
   保留在磁盘未删除。V7 迁移已应用（pause/resume 快照 + resume_task 桥接）。
-- Sandbox Worker 镜像按 Git SHA 固定（部署时写入 `SANDBOX_WORKER_TAG`），
-  运行中 Manager 环境变量已验证非 latest。
 
 ## 单元 / 集成测试
 
@@ -21,7 +19,7 @@ Compose project `resumai`，模型 deepseek-chat。
   重跑、toolCallId 配对压缩、PARTIAL_SUCCESS 语义、契约基准无 champion）。
 - 契约门禁 `run_agent_harness.py`：18 项全 PASS（构建期强制执行）。
 
-## 功能验收（真实 LLM + Sandbox）
+## 功能验收（真实 LLM）
 
 - 完整评估：SUCCEEDED，7 个 Agent 全执行（含 ReportAgent），LLM 8 次、
   工具 4 次、token 12190+7980、时延 46.2s、degraded 空。
@@ -64,7 +62,7 @@ Contract Benchmark（19 用例 × 7 策略）独立输出于 `reports/benchmark/
 
 ## 可靠性与持久化
 
-- 重启（backend+workflow+sandbox-manager）：conversation 39→39、agent_run
+- 重启（backend+workflow）：conversation 39→39、agent_run
   44→44、resume_task 205→205；重启后无 RUNNING/STARTING 残留。
 - Memory 生命周期：CONVERSATION 33、EPISODIC 44、WORKING(RUN) 20、
   FAILURE(GLOBAL) 6、HR_FEEDBACK 2 —— 每类均有真实写入且 scope 隔离。

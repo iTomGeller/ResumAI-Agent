@@ -65,9 +65,11 @@ _TOOL_RESULT_ID = re.compile(r"\[TOOL_RESULT \S+ id=(tc-[0-9a-f]+)")
 class ContextManager:
     """Token-budgeted context assembly with structured compaction.
 
-    Assembly order: system → policy → skills → current request → goal →
-    shared state → recent messages → conversation summary → memory → tool
-    results → output schema. Compaction triggers when the estimate crosses
+    Assembly order keeps the reusable prompt prefix first: system → policy →
+    skills → output contract → current request → goal → conversation summary
+    → recent messages → memory → shared state → tool results. DeepSeek's
+    automatic cache matches an exact prefix, so stable instructions must not
+    sit behind resume-specific state. Compaction triggers when the estimate crosses
     compactAtRatio of the model window and never drops the newest user
     request, the goal, cancellation constraints or any tool call whose
     result would be separated from it (pairing is checked per toolCallId).
@@ -128,8 +130,19 @@ class ContextManager:
         if skill_instructions:
             system_block += "\n\n[技能指令]\n" + self._cap(
                 skill_instructions, self.budget.skillBudget)
+        # The output contract is agent/version specific but candidate
+        # independent. Keeping it in the system prefix lets DeepSeek reuse it
+        # across runs instead of placing it after resume/tool content where an
+        # exact-prefix cache can never reach it.
+        if output_schema:
+            system_block += "\n\n[输出要求]\n" + output_schema
 
-        user_block_sections = []
+        # Put the usually stable evaluation intent before candidate-specific
+        # context. Section labels preserve semantics; the ordering only
+        # increases the reusable exact prefix.
+        user_block_sections = ["[当前请求]\n" + user_request]
+        if current_goal:
+            user_block_sections.append("[当前目标]\n" + current_goal)
         if prepared["summary"]:
             user_block_sections.append("[会话摘要]\n" + self._cap(prepared["summary"], 1500))
         if prepared["kept"]:
@@ -147,10 +160,6 @@ class ContextManager:
         if tool_results_block:
             user_block_sections.append("[工具观察]\n" + self._cap_tools(
                 tool_results_block, self.budget.toolResultBudget))
-        if current_goal:
-            user_block_sections.append("[当前目标]\n" + current_goal)
-        user_block_sections.append("[当前请求]\n" + user_request)
-        user_block_sections.append("[输出要求]\n" + output_schema)
 
         return [
             {"role": "system", "content": system_block},

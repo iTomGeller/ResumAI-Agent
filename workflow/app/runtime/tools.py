@@ -355,8 +355,12 @@ class ToolExecutor:
             return self.catalog_for(names)
         routed: set = set()
         if self.mcp_registry is not None:
-            routed = set(self.mcp_registry.tools_for_agent(agent_id))
-            for extra in routed:
+            # Preserve the configured route order. Iterating a set randomized
+            # native tool schema order between Python processes, invalidating
+            # DeepSeek's exact-prefix cache after every deployment.
+            routed_names = self.mcp_registry.tools_for_agent(agent_id)
+            routed = set(routed_names)
+            for extra in routed_names:
                 if extra not in names:
                     names.append(extra)
         declared_repositories = _declared_github_repositories(self.run_context)

@@ -425,6 +425,7 @@ class McpRegistry:
         self._call_gate_loop: Any = None
         self._call_semaphores: Dict[str, asyncio.Semaphore] = {}
         self._last_call_started: Dict[str, float] = {}
+        self._rate_limited_until: Dict[str, float] = {}
 
     def _current_probe_lock(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
@@ -453,6 +454,37 @@ class McpRegistry:
             self._call_semaphores[server] = semaphore
         return semaphore
 
+    def _rate_limit_cooldown_seconds(self, server: str) -> float:
+        try:
+            return max(1.0, float(
+                self._server_config(server).get(
+                    "rateLimitCooldownSeconds", 120.0)))
+        except (TypeError, ValueError):
+            return 120.0
+
+    def _rate_limit_blocked(
+            self, server: str, *, now: Optional[float] = None) -> bool:
+        return self._rate_limited_until.get(server, 0.0) > (
+            time.time() if now is None else now)
+
+    def _mark_rate_limited(self, server: str, message: str) -> None:
+        now = time.time()
+        cooldown = self._rate_limit_cooldown_seconds(server)
+        self._rate_limited_until[server] = max(
+            self._rate_limited_until.get(server, 0.0), now + cooldown)
+        health = self.health.get(server)
+        if health is not None:
+            health.status = "RATE_LIMITED"
+            health.error = str(message or "rate limited")[:300]
+        # Start recovery timing at the exhausted call. tools/list may remain
+        # healthy while every tools/call is 429, so an immediate re-probe must
+        # not re-advertise this provider to the next Run.
+        self._last_probe_at = now
+        self._last_probe_iso = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+        logger.warning(
+            "MCP %s rate-limit cooldown opened for %.1fs", server, cooldown)
+
     def needs_probe(self, *, now: Optional[float] = None) -> bool:
         """Return whether an initial or degraded-server probe is due.
 
@@ -463,12 +495,18 @@ class McpRegistry:
         """
         if not self._probed:
             return True
-        if not any(
-                health.status in {"DOWN", "RATE_LIMITED"}
-                for health in self.health.values()):
+        now_value = now if now is not None else time.time()
+        eligible = [
+            name for name, health in self.health.items()
+            if health.status in {"DOWN", "RATE_LIMITED"}
+            and not (
+                health.status == "RATE_LIMITED"
+                and self._rate_limit_blocked(name, now=now_value))
+        ]
+        if not eligible:
             return False
         checked_at = self._last_probe_at or 0.0
-        return (now if now is not None else time.time()) - checked_at \
+        return now_value - checked_at \
             >= DEGRADED_REPROBE_TTL_S
 
     async def _drop_server_state(self, server: str) -> None:
@@ -504,6 +542,9 @@ class McpRegistry:
                     (name, all_servers[name], name in optional)
                     for name, health in self.health.items()
                     if health.status in {"DOWN", "RATE_LIMITED"}
+                    and not (
+                        health.status == "RATE_LIMITED"
+                        and self._rate_limit_blocked(name))
                     and name in all_servers
                     and isinstance(all_servers.get(name), dict)
                 ]
@@ -558,6 +599,10 @@ class McpRegistry:
                 self.tools = next_tools
                 self._http_clients = next_http_clients
                 self._stdio_clients = next_stdio_clients
+                for name in degraded_names:
+                    if (self.health.get(name)
+                            and self.health[name].status == "AVAILABLE"):
+                        self._rate_limited_until.pop(name, None)
                 self._mark_probe_complete()
                 summary = {k: v.status for k, v in self.health.items()}
                 logger.info(
@@ -604,6 +649,7 @@ class McpRegistry:
             self.tools = staged.tools
             self._http_clients = staged._http_clients
             self._stdio_clients = staged._stdio_clients
+            self._rate_limited_until = {}
             await asyncio.gather(*(
                 client.close() for client in previous_stdio
             ), return_exceptions=True)
@@ -810,6 +856,11 @@ class McpRegistry:
                 description = (
                     f"{description.rstrip()} Runtime routing guidance: "
                     f"{routing_guidance}")
+            try:
+                timeout_seconds = max(
+                    1.0, float(server_cfg.get("timeoutSeconds", 40.0)))
+            except (TypeError, ValueError):
+                timeout_seconds = 40.0
             tool_executor.definitions[catalog_name] = ToolDefinition(
                 name=catalog_name,
                 # Keep the exact tools/list description that taught the model
@@ -834,7 +885,7 @@ class McpRegistry:
                     },
                     "required": ["success"],
                 },
-                timeout_seconds=40.0, max_retries=0,
+                timeout_seconds=timeout_seconds, max_retries=0,
                 network_policy="gateway", kind="mcp",
                 side_effect_level="read_only",
                 mcp_server=info.server,
@@ -866,6 +917,7 @@ class McpRegistry:
                 continue
             health = self.health.get(info.server)
             if (health and health.status == "AVAILABLE"
+                    and not self._rate_limit_blocked(info.server)
                     and self.has_live_client(info.server)):
                 available.append(name)
         return available
@@ -891,6 +943,12 @@ class McpRegistry:
                 "default": bool(cfg.get("default", False)) if isinstance(cfg, dict) else False,
                 "description": str(cfg.get("description") or "") if isinstance(cfg, dict) else "",
             }
+            rate_limit_until = self._rate_limited_until.get(name, 0.0)
+            if rate_limit_until > time.time():
+                entry["rateLimitRetryAt"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(rate_limit_until))
+                entry["rateLimitCooldownRemainingSeconds"] = max(
+                    0, int(rate_limit_until - time.time()))
             http_client = self._http_clients.get(name)
             if http_client is not None:
                 entry["sessionId"] = http_client.session_id or ""
@@ -921,6 +979,9 @@ class McpRegistry:
             status = health.status if health else "DOWN"
             return {"success": False, "status": status,
                     "text": f"MCP server {info.server} is {status}"}
+        if self._rate_limit_blocked(info.server):
+            return {"success": False, "status": "RATE_LIMITED",
+                    "text": f"MCP server {info.server} is cooling down"}
 
         # Whitelist gate for fetch-like / URL scrape tools.
         url = str(arguments.get("url") or arguments.get("urls") or "")
@@ -946,6 +1007,12 @@ class McpRegistry:
         semaphore = self._current_call_semaphore(
             info.server, max_concurrent)
         async with semaphore:
+            # A sibling call may have learned that quota is exhausted while
+            # this call waited for the per-server gate. Fail queued siblings
+            # immediately instead of serially paying the provider timeout.
+            if self._rate_limit_blocked(info.server):
+                return {"success": False, "status": "RATE_LIMITED",
+                        "text": f"MCP server {info.server} is cooling down"}
             for attempt in range(rate_limit_retries + 1):
                 elapsed = time.monotonic() - self._last_call_started.get(
                     info.server, 0.0)
@@ -975,6 +1042,11 @@ class McpRegistry:
                     if rate_limited and attempt < rate_limit_retries:
                         await asyncio.sleep(backoff_s * (2 ** attempt))
                         continue
+                    if rate_limited:
+                        self._mark_rate_limited(
+                            info.server,
+                            str(result.get("text") or result.get("error")
+                                or "RATE_LIMITED"))
                     if not result.get("success"):
                         result.setdefault(
                             "status",
@@ -991,10 +1063,9 @@ class McpRegistry:
                         else "AUTH_REQUIRED" if "AUTH_REQUIRED" in msg
                         else "DOWN")
                     if info.server in self.health:
-                        # A call-level 429 is transient quota pressure. Keep
-                        # the live catalog available; otherwise one burst makes
-                        # every sibling run fail fast until a full re-probe.
-                        if not rate_limited:
+                        if rate_limited:
+                            self._mark_rate_limited(info.server, msg)
+                        else:
                             self.health[info.server].status = status
                         self.health[info.server].error = msg[:300]
                     return {

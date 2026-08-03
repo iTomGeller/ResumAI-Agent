@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
 WORKFLOW_ROOT = Path(__file__).resolve().parents[1]
@@ -166,11 +168,11 @@ def test_monolithic_quality_report_fails_over_after_first_provider_error(
     client.quality_model = "quality-pro"
     client.model = "fast-flash"
     client.fallback_model = "fast-flash"
-    models = []
+    requests = []
 
     async def fake_invoke(messages, model, *args, **kwargs):
-        models.append(model)
-        if len(models) == 1:
+        requests.append((model, kwargs.get("stream")))
+        if len(requests) == 1:
             raise LlmError("TRANSPORT", "provider stalled", True)
         return (
             LlmTurn(content="ok", finish_reason="stop"),
@@ -190,7 +192,7 @@ def test_monolithic_quality_report_fails_over_after_first_provider_error(
         json_mode=False, use_quality=True))
 
     assert answer == "ok"
-    assert models == ["quality-pro", "fast-flash"]
+    assert requests == [("quality-pro", True), ("fast-flash", True)]
     assert budget.llm_calls == 2
 
 
@@ -244,6 +246,27 @@ def test_report_section_accepts_only_an_exact_duplicate_arguments_object():
     assert normalized == raw
 
 
+def test_report_section_accepts_an_incomplete_repeated_prefix():
+    raw = '{"summary":"grounded","dimensions":[1]}'
+    arguments, normalized, error = _parse_native_tool_arguments(
+        raw + raw[:24], allow_exact_duplicate=True)
+
+    assert error == ""
+    assert arguments == {"summary": "grounded", "dimensions": [1]}
+    assert normalized == raw
+
+
+def test_report_section_accepts_whitespace_variant_of_repeated_prefix():
+    raw = '{ "summary" : "grounded", "dimensions" : [1] }'
+    repeated_prefix = '{"summary":"grounded","dimensions":'
+    arguments, normalized, error = _parse_native_tool_arguments(
+        raw + repeated_prefix, allow_exact_duplicate=True)
+
+    assert error == ""
+    assert arguments == {"summary": "grounded", "dimensions": [1]}
+    assert json.loads(normalized) == arguments
+
+
 def test_report_section_rejects_distinct_or_arbitrary_extra_data():
     first = '{"summary":"grounded"}'
     distinct = '{"summary":"changed"}'
@@ -257,6 +280,67 @@ def test_report_section_rejects_distinct_or_arbitrary_extra_data():
         first + " trailing prose", allow_exact_duplicate=True)
     assert arguments == {}
     assert "trailingParse=" in error
+
+
+def test_streaming_tool_call_records_ttft_and_reconstructs_arguments():
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant"}}]},
+        {"choices": [{"delta": {"tool_calls": [{
+            "index": 0, "id": "call-report",
+            "function": {"name": "emit_report_section", "arguments": ""},
+        }]}}]},
+        {"choices": [{"delta": {"tool_calls": [{
+            "index": 0, "function": {"arguments": "{\"summary\":\"ok\","},
+        }]}}]},
+        {"choices": [{"delta": {"tool_calls": [{
+            "index": 0, "function": {"arguments": "\"dimensions\":[1]}"},
+        }]}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {
+            "prompt_tokens": 11, "completion_tokens": 7,
+            "prompt_cache_hit_tokens": 3}},
+    ]
+    sse = "".join(
+        f"data: {json.dumps(chunk)}\n\n" for chunk in chunks
+    ) + "data: [DONE]\n\n"
+    seen_request = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_request.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"},
+            content=sse.encode("utf-8"))
+
+    async def scenario():
+        budget = RunBudget()
+        llm = ResilientLlmClient(
+            NullEmitter(), budget, max_llm_calls=2,
+            llm_timeout_seconds=5, breaker=CircuitBreaker(threshold=5))
+        ttft = []
+        async with httpx.AsyncClient(
+                transport=httpx.MockTransport(handler)) as provider:
+            return await llm._invoke_stream(
+                provider, "https://provider.test/chat/completions",
+                {"Content-Type": "application/json"},
+                {"stream": True, "stream_options": {"include_usage": True}},
+                httpx.Timeout(5.0),
+                on_first_token=lambda milliseconds, kind: ttft.append(
+                    (milliseconds, kind))), ttft
+
+    (turn, usage, finish_reason), ttft = asyncio.run(scenario())
+    assert seen_request["stream"] is True
+    assert seen_request["stream_options"] == {"include_usage": True}
+    assert ttft and ttft[0][0] >= 0 and ttft[0][1] == "tool_call"
+    assert finish_reason == "tool_calls"
+    assert usage == {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "prompt_cache_hit_tokens": 3,
+    }
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].tool_call_id == "call-report"
+    assert turn.tool_calls[0].name == "emit_report_section"
+    assert turn.tool_calls[0].arguments == {
+        "summary": "ok", "dimensions": [1]}
 
 
 def test_budget_snapshot_preserves_scope_accounting():

@@ -100,6 +100,10 @@ REMOTE_ENV_OVERRIDE_KEYS = (
     "DEEPSEEK_API_KEY",
     "DEEPSEEK_API_URL",
     "DEEPSEEK_MODEL",
+    "DEEPSEEK_QUALITY_MODEL",
+    "LLM_MAX_CONCURRENT",
+    "LLM_HTTP_MAX_CONNECTIONS",
+    "LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS",
     "MYSQL_ROOT_PASSWORD",
     "MYSQL_DATABASE",
     "MYSQL_USER",
@@ -110,8 +114,6 @@ REMOTE_ENV_OVERRIDE_KEYS = (
     "MINIO_ROOT_PASSWORD",
     "WORKFLOW_INTERNAL_TOKEN",
     "WORKFLOW_POSTGRES_PASSWORD",
-    "OBJECT_STORAGE_ENABLED",
-    "MINIO_BUCKET",
     "EXA_API_KEY",
     "FIRECRAWL_API_KEY",
     "GITHUB_TOKEN",
@@ -371,7 +373,11 @@ def upload_env(ssh: paramiko.SSHClient, config: DeployConfig) -> None:
         "FRONTEND_PORT": "80",
         "UPLOAD_DIR": "/opt/ai-resume-agent-platform/uploads",
         "DEEPSEEK_API_URL": "https://api.deepseek.com/chat/completions",
-        "DEEPSEEK_MODEL": "deepseek-chat",
+        "DEEPSEEK_MODEL": "deepseek-v4-flash",
+        "DEEPSEEK_QUALITY_MODEL": "deepseek-v4-pro",
+        "LLM_MAX_CONCURRENT": "16",
+        "LLM_HTTP_MAX_CONNECTIONS": "16",
+        "LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS": "16",
         "MYSQL_HOST": "mysql",
         "MYSQL_PORT": "3306",
         "REDIS_HOST": "redis",
@@ -381,7 +387,7 @@ def upload_env(ssh: paramiko.SSHClient, config: DeployConfig) -> None:
         "MILVUS_PORT": "19530",
         "MILVUS_COLLECTION": "resume_chunk",
         "MILVUS_DIMENSION": "1024",
-        "MINIO_BUCKET": "resumai",
+        "LANGGRAPH_RUNTIME_ENABLED": "true",
         "PUBLIC_HOST": config.host,
     }
     for key, value in defaults.items():
@@ -432,7 +438,7 @@ def compose_up(ssh: paramiko.SSHClient, config: DeployConfig) -> None:
     )
     run(
         ssh,
-        f"cd {config.deploy_dir} && docker compose -f {config.compose_file} up -d mysql ai-resume-workflow-postgres",
+        f"cd {config.deploy_dir} && docker compose -f {config.compose_file} up -d mysql langgraph-postgres",
         timeout=600,
     )
     run(

@@ -7,7 +7,7 @@ INTERVAL_SECONDS="${3:-5}"
 
 mkdir -p "$(dirname "$OUT_FILE")"
 rm -f "$STOP_FILE"
-printf '%s\n' 'timestamp|docker_stats|container_state|backend_proc|workflow_proc|workflow_health|task_queue|run_queue|mysql|redis|disk' > "$OUT_FILE"
+printf '%s\n' 'timestamp|docker_stats|container_state|backend_proc|workflow_proc|workflow_health|task_queue|run_queue|mysql|redis|postgres|postgres_checkpoints|disk' > "$OUT_FILE"
 
 one_line() {
   tr '\r\n|' ',,;' | sed 's/,,*/,/g; s/,$//'
@@ -20,12 +20,14 @@ while [ ! -f "$STOP_FILE" ]; do
     docker stats --no-stream \
       --format '{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}},{{.PIDs}}' \
       ai-resume-backend ai-resume-workflow resumai-mysql resumai-redis \
+      resumai-langgraph-postgres resumai-milvus resumai-etcd resumai-minio \
       2>/dev/null | one_line
   )"
   container_state="$(
     docker inspect \
       --format '{{.Name}},restarts={{.RestartCount}},oom={{.State.OOMKilled}},status={{.State.Status}}' \
       ai-resume-backend ai-resume-workflow resumai-mysql resumai-redis \
+      resumai-langgraph-postgres resumai-milvus resumai-etcd resumai-minio \
       2>/dev/null | one_line
   )"
   backend_proc="$(
@@ -76,11 +78,30 @@ while [ ! -f "$STOP_FILE" ]; do
       | grep -E '^(used_memory_human|mem_fragmentation_ratio|instantaneous_ops_per_sec|connected_clients|blocked_clients|evicted_keys):' \
       | one_line
   )"
+  postgres_status="$(
+    docker exec resumai-langgraph-postgres sh -lc '
+      psql -U resumai -d resumai_checkpoint -At -F, -c "
+        SELECT numbackends, xact_commit, xact_rollback, blks_read, blks_hit,
+               temp_files, temp_bytes, deadlocks,
+               pg_database_size('\''resumai_checkpoint'\'')
+        FROM pg_stat_database
+        WHERE datname = '\''resumai_checkpoint'\'';"
+    ' 2>/dev/null | one_line
+  )"
+  postgres_checkpoints="$(
+    docker exec resumai-langgraph-postgres sh -lc '
+      psql -U resumai -d resumai_checkpoint -At -F, -c "
+        SELECT (SELECT count(*) FROM checkpoints),
+               (SELECT count(*) FROM checkpoint_writes),
+               (SELECT count(*) FROM checkpoint_blobs);"
+    ' 2>/dev/null | one_line
+  )"
   disk_status="$(df -P / /data 2>/dev/null | tail -n +2 | one_line)"
-  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "$timestamp" "$docker_stats" "$container_state" "$backend_proc" \
     "$workflow_proc" "$workflow_health" "$task_queue" "$run_queue" \
-    "$mysql_status" "$redis_status" "$disk_status" >> "$OUT_FILE"
+    "$mysql_status" "$redis_status" "$postgres_status" \
+    "$postgres_checkpoints" "$disk_status" >> "$OUT_FILE"
   cycle_elapsed="$(( $(date +%s) - cycle_started ))"
   cycle_remaining="$(( INTERVAL_SECONDS - cycle_elapsed ))"
   if [ "$cycle_remaining" -gt 0 ]; then

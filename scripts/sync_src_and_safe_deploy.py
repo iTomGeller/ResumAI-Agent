@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -39,6 +40,12 @@ STALE = [
     "workflow/app/conversation/react_agent.py",
 ]
 
+WORKTREE_NEW = [
+    "workflow/app/runtime/checkpoint.py",
+    "workflow/app/runtime/langgraph_executor.py",
+    "workflow/tests/test_langgraph_runtime.py",
+]
+
 
 def load_env() -> dict[str, str]:
     env: dict[str, str] = {}
@@ -62,6 +69,16 @@ def main() -> None:
         c not in "0123456789abcdef" for c in deploy_sha.lower()
     ):
         raise SystemExit("invalid git HEAD; refusing non-reproducible deploy")
+    changed = subprocess.check_output(
+        ["git", "diff", "--name-only", "--diff-filter=ACMRT", "HEAD"],
+        cwd=ROOT,
+        text=True,
+    ).splitlines()
+    deleted = subprocess.check_output(
+        ["git", "diff", "--name-only", "--diff-filter=D", "HEAD"],
+        cwd=ROOT,
+        text=True,
+    ).splitlines()
     host = env["ALIYUN_HOST"]
     user = env.get("ALIYUN_USER", "root")
     password = env["ALIYUN_PASSWORD"]
@@ -127,10 +144,8 @@ def main() -> None:
                 raise SystemExit(f"remote failed ({code})")
             return out + err
 
-        # Atomically replace only the deployment source tree. Runtime state is
-        # held in named Docker volumes and is never touched here. Extracting
-        # into a fresh directory prevents stale, previously-untracked Python
-        # modules or fake Skill/MCP fixtures from surviving a new release.
+        # Build an incoming tree from committed HEAD plus all tracked worktree
+        # edits/deletions. Compilation and tests still happen only on ECS.
         incoming = f"{SRC_DIR}.incoming"
         previous = f"{SRC_DIR}.previous"
         run(
@@ -139,10 +154,36 @@ def main() -> None:
             f"tar -xzf {remote_tar} -C {incoming}; "
             f"mv {remote_manifest} {incoming}/.deploy-source.sha256; "
             f"printf '%s\\n' '{deploy_sha}' > {incoming}/.deploy-commit; "
-            f"if test -f {SRC_DIR}/.env; then cp -a {SRC_DIR}/.env {incoming}/.env; fi; "
+            f"if test -f {SRC_DIR}/.env; then cp -a {SRC_DIR}/.env {incoming}/.env; fi",
+            timeout=300,
+        )
+
+        sftp = ssh.open_sftp()
+        try:
+            for relative in sorted(set(changed + WORKTREE_NEW)):
+                local_path = ROOT / relative
+                if not local_path.is_file():
+                    raise SystemExit(f"missing worktree source: {relative}")
+                remote_path = f"{incoming}/{relative}"
+                run(f"mkdir -p {remote_path.rsplit('/', 1)[0]}", timeout=30)
+                sftp.put(str(local_path), remote_path)
+        finally:
+            sftp.close()
+
+        if deleted:
+            delete_targets = " ".join(
+                shlex.quote(f"{incoming}/{relative}")
+                for relative in deleted
+            )
+            run(f"rm -f -- {delete_targets}", timeout=60)
+
+        # Swap only source directories. Named Docker volumes are outside this
+        # path and remain untouched.
+        run(
             f"rm -rf {previous}; "
             f"if test -d {SRC_DIR}; then mv {SRC_DIR} {previous}; fi; "
-            f"mv {incoming} {SRC_DIR}; rm -f {remote_tar}",
+            f"mv {incoming} {SRC_DIR}; "
+            f"rm -f {remote_tar}",
             timeout=180,
         )
 
@@ -203,6 +244,35 @@ def main() -> None:
             "grep -E '^(EMBEDDING_PROVIDER|EMBEDDING_MODEL|EMBEDDING_BASE_URL|CACHE_ENABLED)=' \"$ENV\"",
             timeout=30,
         )
+
+        print("\n[lock] generating Python hash lock on ECS")
+        run(
+            "docker run --rm "
+            f"-v {SRC_DIR}/workflow:/work -w /work "
+            "docker.m.daocloud.io/library/python:3.12-slim "
+            "sh -lc 'pip install -q pip-tools==7.5.1 "
+            "-i https://mirrors.aliyun.com/pypi/simple/ && "
+            "pip-compile --generate-hashes --strip-extras "
+            "--output-file=requirements.lock "
+            "--pip-args=\"-i https://mirrors.aliyun.com/pypi/simple/ --timeout 120\" "
+            "requirements.txt'",
+            timeout=1800,
+        )
+        run(
+            f"cd {SRC_DIR} && "
+            "find . -type f ! -name .env ! -name .deploy-commit "
+            "! -name .deploy-source.sha256 -printf '%P\\0' | "
+            "LC_ALL=C sort -z | xargs -0 sha256sum > .deploy-source.sha256",
+            timeout=120,
+        )
+        sftp = ssh.open_sftp()
+        try:
+            sftp.get(
+                f"{SRC_DIR}/workflow/requirements.lock",
+                str(ROOT / "workflow/requirements.lock"),
+            )
+        finally:
+            sftp.close()
 
         print("\n[deploy] starting ecs_safe_deploy.sh (long)")
         run(

@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS build
+FROM docker.m.daocloud.io/library/python:3.12-slim AS build
 
 WORKDIR /app
 
@@ -33,7 +33,7 @@ RUN python -m compileall -q app \
     && python run_agent_harness.py \
     && touch /tmp/runtime-tests-passed
 
-FROM python:3.12-slim AS runtime
+FROM docker.m.daocloud.io/library/python:3.12-slim AS runtime
 
 WORKDIR /app
 

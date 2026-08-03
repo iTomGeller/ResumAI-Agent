@@ -21,6 +21,12 @@ app.include_router(ops_router)
 
 @app.on_event("startup")
 async def startup() -> None:
+    if settings.langgraph_runtime_enabled:
+        from app.runtime.checkpoint import initialize_checkpointer
+
+        # Fail startup if durable LangGraph persistence is unavailable. An
+        # enabled graph runtime must not accept runs with an in-memory fallback.
+        await initialize_checkpointer()
     try:
         from app.runtime.skills import default_skill_manager
         count = default_skill_manager.reload()
@@ -65,16 +71,28 @@ async def health() -> dict:
 
 @app.get("/ready")
 async def ready() -> dict:
-    """Java owns durable state; this process is ready once it can execute.
-    Pause/resume snapshots travel through the Java control plane, so no
-    local checkpoint store is required (or advertised)."""
-    return {
+    """Report both runtime selection and durable checkpoint readiness."""
+    response = {
         "status": "READY",
         "service": "ai-resume-workflow",
-        "runtime": "agent-runs",
+        "runtime": (
+            "langgraph" if settings.langgraph_runtime_enabled
+            else "legacy-agent-runs"),
     }
+    if settings.langgraph_runtime_enabled:
+        from app.runtime.checkpoint import checkpointer_ready
+
+        response["checkpoint"] = (
+            "postgres-ready" if checkpointer_ready() else "postgres-down")
+        if not checkpointer_ready():
+            response["status"] = "NOT_READY"
+    return response
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
     await agent_run_registry.cancel_all()
+    if settings.langgraph_runtime_enabled:
+        from app.runtime.checkpoint import close_checkpointer
+
+        await close_checkpointer()

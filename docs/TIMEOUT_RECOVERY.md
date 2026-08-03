@@ -11,10 +11,6 @@ connect/read/total timeout；最多 2 次安全重试；指数退避+jitter；�
 completed/failed 事件带 toolCallId/idempotencyKey/sideEffectLevel；
 台账（ledger）随暂停快照迁移，恢复后已完成调用不重复执行。
 
-## Sandbox
-调用超时销毁容器；OOM 记录（OOM_KILLED）；用户取消立即 destroy；Manager
-重启后 reaper 按 TTL 清孤儿容器。
-
 ## 终端 Agent 失败
 ReportAgent 失败不重排（避免同因重试烧预算），直接生成显式标注的降级答案，
 Run 状态 PARTIAL_SUCCESS。
@@ -29,5 +25,6 @@ Run 状态 PARTIAL_SUCCESS。
 
 ## 重启恢复
 QUEUED 保留；runtime 仍活跃的 Run 被收养；孤儿 RUNNING → FAILED；
-PAUSING 已有快照 → PAUSED；PAUSED 凭 MySQL 快照跨重启可恢复。
+PAUSING 已有快照 → PAUSED；PAUSED 凭 PostgreSQL LangGraph checkpoint
+跨重启恢复，MySQL保留控制面快照副本。
 所有异常路径最终收敛为终态，不存在永久 RUNNING。

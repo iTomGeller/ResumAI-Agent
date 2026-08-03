@@ -15,11 +15,6 @@ services:
       NEO4J_URI: bolt://neo4j:7687
       MILVUS_HOST: milvus
       MILVUS_PORT: 19530
-      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-false}
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET: ${MINIO_BUCKET:-resumai}
       SPRING_PROFILES_ACTIVE: prod
       WORKFLOW_BASE_URL: http://ai-resume-workflow:8090
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
@@ -66,9 +61,14 @@ services:
       DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
       DEEPSEEK_QUALITY_MODEL: ${DEEPSEEK_QUALITY_MODEL:-deepseek-v4-pro}
+      LLM_MAX_CONCURRENT: ${LLM_MAX_CONCURRENT:-16}
+      LLM_HTTP_MAX_CONNECTIONS: ${LLM_HTTP_MAX_CONNECTIONS:-16}
+      LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS: ${LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS:-16}
       JAVA_BACKEND_URL: http://ai-resume-backend:8080
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       WORKFLOW_BUILD_VERSION: ${WORKFLOW_BUILD_VERSION:-dev}
+      LANGGRAPH_RUNTIME_ENABLED: ${LANGGRAPH_RUNTIME_ENABLED:-true}
+      LANGGRAPH_CHECKPOINT_DSN: postgresql://resumai:${WORKFLOW_POSTGRES_PASSWORD:?WORKFLOW_POSTGRES_PASSWORD must be set}@langgraph-postgres:5432/resumai_checkpoint?sslmode=disable
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
       CACHE_ENABLED: ${CACHE_ENABLED:-true}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -79,6 +79,11 @@ services:
       # so a stale value in the host .env cannot silently disable all public
       # MCP tools inside the workflow container.
       MCP_SKIP_PROBE: "0"
+      # Both remain reversible runtime switches. Skill IDs are only eager after
+      # the normal per-resume signal selector has chosen them.
+      SKILL_EAGER_IDS: ${SKILL_EAGER_IDS:-assess-technical-evidence,ground-project-claims,retrieve-public-candidate-evidence,risk_pattern_detection,calibrate-evidence-confidence}
+      REPORT_PARALLEL_SECTIONS: ${REPORT_PARALLEL_SECTIONS:-always}
+      LLM_STREAM_REPORT_SECTIONS: ${LLM_STREAM_REPORT_SECTIONS:-1}
       # EXP-7 replan sensitivity knob (default matches executor fallback)
       REPLAN_CONFIDENCE_THRESHOLD: ${REPLAN_CONFIDENCE_THRESHOLD:-0.55}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
@@ -86,6 +91,9 @@ services:
       - "8090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      langgraph-postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS --max-time 15 http://127.0.0.1:8090/ready || exit 1"]
       interval: 30s
@@ -95,10 +103,26 @@ services:
     networks:
       - resumai-net
 
-  # The legacy LangGraph checkpoint PostgreSQL was removed with the graph
-  # runtime: pause/resume snapshots now live in MySQL (agent_run.execution_
-  # snapshot) via the Java control plane. The old volume
-  # resumai-workflow-postgres-data is intentionally left on disk untouched.
+  langgraph-postgres:
+    image: docker.m.daocloud.io/library/postgres:16-alpine
+    container_name: resumai-langgraph-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: resumai_checkpoint
+      POSTGRES_USER: resumai
+      POSTGRES_PASSWORD: ${WORKFLOW_POSTGRES_PASSWORD:?WORKFLOW_POSTGRES_PASSWORD must be set}
+    expose:
+      - "5432"
+    volumes:
+      - langgraph-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resumai -d resumai_checkpoint"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - resumai-net
 
   ai-resume-agent-harness:
     build:
@@ -200,7 +224,7 @@ services:
       - resumai-net
 
   minio:
-    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
+    image: docker.m.daocloud.io/minio/minio:RELEASE.2024-05-28T17-19-04Z
     container_name: resumai-minio
     restart: unless-stopped
     environment:
@@ -247,7 +271,7 @@ services:
       - resumai-net
 
   milvus:
-    image: milvusdb/milvus:v2.4.4
+    image: docker.m.daocloud.io/milvusdb/milvus:v2.4.4
     container_name: resumai-milvus
     restart: unless-stopped
     command: ["milvus", "run", "standalone"]
@@ -304,6 +328,7 @@ volumes:
     name: resumai-uploads-data
   backend-logs:
     name: resumai-backend-logs
-  # resumai-workflow-postgres-data still exists on the host from the legacy
-  # LangGraph checkpoint store. It is no longer mounted by any service and is
-  # deliberately not deleted (no volume is ever pruned by deployment).
+  langgraph-postgres-data:
+    # New volume name deliberately avoids attaching the removed legacy graph's
+    # checkpoint schema on existing hosts.
+    name: resumai-langgraph-postgres-data

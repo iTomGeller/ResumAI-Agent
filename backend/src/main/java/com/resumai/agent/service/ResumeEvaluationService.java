@@ -816,8 +816,6 @@ public class ResumeEvaluationService {
         String fileName = file == null ? "" : file.getOriginalFilename();
         String normalizedCategory = normalizeJobCategory(jobCategory);
         String fileType = detectFileType(fileName);
-        if (file != null && !file.isEmpty()) {
-        }
         String resumeText = extractResumeText(file, fileType, normalizedCategory);
         String traceId = "trace-" + UUID.randomUUID();
         ResumeFileService.SavedResumeFile saved = resumeFileService.save(traceId, file, fileType);
@@ -828,7 +826,7 @@ public class ResumeEvaluationService {
                 jobDescription,
                 resumeText
         );
-        TaskResponse created = createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(), fileType, null);
+        TaskResponse created = createTaskInternal(request, traceId, saved.localPath(), null, fileType, null);
         markPlanMode(traceId, planMode);
         return created;
     }
@@ -845,8 +843,6 @@ public class ResumeEvaluationService {
                                                       boolean planMode) {
         String fileName = file == null ? "" : file.getOriginalFilename();
         String fileType = detectFileType(fileName);
-        if (file != null && !file.isEmpty()) {
-        }
         String resumeText = extractResumeText(file, fileType, "AUTO");
         String traceId = "trace-" + UUID.randomUUID();
         ResumeFileService.SavedResumeFile saved = resumeFileService.save(traceId, file, fileType);
@@ -864,7 +860,7 @@ public class ResumeEvaluationService {
         } catch (Exception e) {
             log.warn("[eval] hybrid JD pre-match skipped: {}", e.getMessage());
         }
-        TaskResponse created = createTaskInternal(request, traceId, saved.localPath(), saved.objectKey(),
+        TaskResponse created = createTaskInternal(request, traceId, saved.localPath(), null,
                 fileType, matches.isEmpty() ? null : matches);
         markPlanMode(traceId, planMode);
         return created;

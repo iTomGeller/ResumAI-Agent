@@ -1,26 +1,17 @@
-# ECS-optimized backend image: consumes a host-built Spring Boot jar and a
-# Temurin JRE tarball, so no Docker Hub pull is required (hub blob CDNs are
-# unreliable from this region). Functionally equivalent to Dockerfile.
-ARG BASE_IMAGE=python:3.12-slim
+# ECS-optimized backend image: consumes a host-built Spring Boot jar while the
+# runtime comes from a domestic registry mirror. Copying a host JRE is not
+# portable across distributions because java.security may live outside
+# JAVA_HOME (for example, an Ubuntu host JRE inside a Debian container).
+ARG BASE_IMAGE=docker.m.daocloud.io/library/eclipse-temurin:21-jre
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
 ENV TZ=Asia/Shanghai
-ENV JAVA_HOME=/opt/java
-ENV PATH="/opt/java/bin:${PATH}"
 
 RUN sed -i 's@deb.debian.org@mirrors.cloud.aliyuncs.com@g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
     && apt-get update -qq \
     && apt-get install -y -qq --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
-
-# Temurin 21 JRE tarball is fetched once on the ECS host (GitHub releases are
-# reachable) and shipped through the build context.
-COPY .jre-cache/temurin-21-jre.tar.gz /tmp/jre.tar.gz
-RUN mkdir -p /opt/java \
-    && tar -xzf /tmp/jre.tar.gz -C /opt/java --strip-components=1 \
-    && rm /tmp/jre.tar.gz \
-    && java -version
 
 COPY target/resumai-agent-backend.jar /app/resumai-agent-backend.jar
 COPY src/main/resources/skills/ /app/skills/

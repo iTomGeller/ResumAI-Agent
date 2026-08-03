@@ -7,7 +7,7 @@ import os
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
@@ -31,7 +31,7 @@ _provider_gate_limit = 0
 def _provider_concurrency_gate() -> tuple[asyncio.Semaphore, int]:
     global _provider_gate, _provider_gate_loop, _provider_gate_limit
     try:
-        limit = max(1, int(os.getenv("LLM_MAX_CONCURRENT", "8")))
+        limit = max(1, int(os.getenv("LLM_MAX_CONCURRENT", "16")))
     except ValueError:
         limit = 8
     loop = asyncio.get_running_loop()
@@ -71,6 +71,29 @@ class LlmError(RuntimeError):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.retryable = retryable
+
+
+def _strip_json_whitespace_outside_strings(value: str) -> str:
+    """Return JSON text without insignificant whitespace."""
+    compact: List[str] = []
+    in_string = False
+    escaped = False
+    for char in value:
+        if in_string:
+            compact.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        else:
+            if char == '"':
+                in_string = True
+                compact.append(char)
+            elif not char.isspace():
+                compact.append(char)
+    return "".join(compact)
 
 
 def _parse_native_tool_arguments(
@@ -114,6 +137,25 @@ def _parse_native_tool_arguments(
                     f"trailingRemainderChars={len(remainder)}")
                 return {}, text, detail
             except (json.JSONDecodeError, ValueError, TypeError) as tail_exc:
+                # Some compatible streaming providers emit one complete
+                # arguments object and then start repeating that same object
+                # before the stream ends. Keep the complete object only when
+                # the malformed tail is an exact textual prefix of it.
+                try:
+                    first, first_end = json.JSONDecoder().raw_decode(text)
+                    first_raw = text[:first_end].strip()
+                    trailing = text[first_end:].strip()
+                    compact_first = _strip_json_whitespace_outside_strings(
+                        first_raw)
+                    compact_trailing = _strip_json_whitespace_outside_strings(
+                        trailing)
+                    if (isinstance(first, dict) and compact_trailing
+                            and compact_first.startswith(compact_trailing)):
+                        normalized = json.dumps(
+                            first, ensure_ascii=False, separators=(",", ":"))
+                        return first, normalized, ""
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
                 return {}, text, (
                     f"{exc}; exactDuplicate=false; "
                     f"trailingParse={type(tail_exc).__name__}")
@@ -202,10 +244,35 @@ class ResilientLlmClient:
     @classmethod
     def _get_client(cls, timeout_seconds: float) -> httpx.AsyncClient:
         if cls._shared_client is None or cls._shared_client.is_closed:
+            try:
+                provider_limit = max(
+                    1, int(os.getenv("LLM_MAX_CONCURRENT", "16")))
+            except ValueError:
+                provider_limit = 16
+            try:
+                max_connections = max(
+                    provider_limit,
+                    int(os.getenv(
+                        "LLM_HTTP_MAX_CONNECTIONS",
+                        str(max(20, provider_limit)))),
+                )
+            except ValueError:
+                max_connections = max(20, provider_limit)
+            try:
+                max_keepalive = max(
+                    1, int(os.getenv(
+                        "LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS",
+                        str(min(max_connections, max(8, provider_limit // 2))))),
+                )
+            except ValueError:
+                max_keepalive = min(max_connections, max(8, provider_limit // 2))
+            max_keepalive = min(max_connections, max_keepalive)
             cls._shared_client = httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=10.0, read=timeout_seconds,
                                       write=30.0, pool=10.0),
-                limits=httpx.Limits(max_connections=20, max_keepalive_connections=8),
+                limits=httpx.Limits(
+                    max_connections=max_connections,
+                    max_keepalive_connections=max_keepalive),
             )
         return cls._shared_client
 
@@ -343,14 +410,62 @@ class ResilientLlmClient:
                 "queueWaitMs": queue_wait_ms,
                 "concurrencyLimit": concurrency_limit,
             })
+            first_token: Dict[str, Any] = {}
+            first_token_emit_task: Optional[asyncio.Task[Any]] = None
+
+            def on_first_token(ttft_ms: int, output_kind: str) -> None:
+                """Publish TTFT without blocking consumption of the SSE body."""
+                nonlocal first_token_emit_task
+                if first_token:
+                    return
+                first_token.update({
+                    "ttftMs": ttft_ms,
+                    "outputKind": output_kind,
+                })
+                first_token_emit_task = asyncio.create_task(
+                    self.emitter.emit(
+                        "llm.first_token", agent_id=agent_id, payload={
+                            **trace_payload,
+                            "model": model,
+                            "purpose": purpose,
+                            "callIndex": call_index,
+                            "providerAttempt": attempts,
+                            "budgetScope": scope,
+                            "ttftMs": ttft_ms,
+                            "outputKind": output_kind,
+                            "queueWaitMs": queue_wait_ms,
+                        }))
+
+            stream_response = (
+                str(os.getenv(
+                    "LLM_STREAM_REPORT_SECTIONS", "1")).strip().lower()
+                not in {"0", "false", "no", "off"}
+                and agent_id == "ReportAgent"
+                and (str(purpose or "") == "report"
+                     or str(purpose or "").startswith("report_")))
             try:
                 try:
-                    turn, usage, finish_reason = await self._invoke(
-                        messages, model, effective_max_tokens, temperature,
-                        json_mode and not tools, tools=tools,
-                        tool_choice=tool_choice)
+                    if stream_response:
+                        turn, usage, finish_reason = await self._invoke(
+                            messages, model, effective_max_tokens, temperature,
+                            json_mode and not tools, tools=tools,
+                            tool_choice=tool_choice,
+                            stream=True,
+                            on_first_token=on_first_token)
+                    else:
+                        # Preserve the long-standing call shape for benchmark
+                        # adapters and tests that replace _invoke directly.
+                        turn, usage, finish_reason = await self._invoke(
+                            messages, model, effective_max_tokens, temperature,
+                            json_mode and not tools, tools=tools,
+                            tool_choice=tool_choice)
                 finally:
                     gate.release()
+                if first_token_emit_task is not None:
+                    # The stream has already been consumed, so this wait does
+                    # not add provider backpressure. It only guarantees event
+                    # ordering before llm.completed is persisted.
+                    await first_token_emit_task
                 content = turn.content
                 if json_mode and not tools and not content.strip():
                     raise LlmError("EMPTY_JSON_CONTENT",
@@ -399,6 +514,7 @@ class ResilientLlmClient:
                 await self.emitter.emit("llm.completed", agent_id=agent_id, payload={
                     **trace_payload,
                     "model": model,
+                    "purpose": purpose,
                     "callIndex": call_index,
                     "budgetScope": scope,
                     "durationMs": int((time.monotonic() - started) * 1000),
@@ -409,6 +525,9 @@ class ResilientLlmClient:
                     "promptCacheHitTokens": cache_hit_tokens,
                     "attempts": attempts,
                     "finishReason": finish_reason,
+                    "streamed": stream_response,
+                    "ttftMs": first_token.get("ttftMs"),
+                    "firstOutputKind": first_token.get("outputKind"),
                     "toolCallCount": len(turn.tool_calls),
                     "toolNames": [call.name for call in turn.tool_calls],
                 })
@@ -485,7 +604,10 @@ class ResilientLlmClient:
                       max_tokens: int, temperature: float,
                       json_mode: bool, *,
                       tools: Optional[List[Dict[str, Any]]] = None,
-                      tool_choice: Optional[Any] = None
+                      tool_choice: Optional[Any] = None,
+                      stream: bool = False,
+                      on_first_token: Optional[
+                          Callable[[int, str], None]] = None,
                       ) -> tuple[LlmTurn, Dict[str, int], str]:
         url = f"{self.base_url}/chat/completions"
         timeout = httpx.Timeout(
@@ -496,8 +618,10 @@ class ResilientLlmClient:
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "stream": False,
+            "stream": stream,
         }
+        if stream:
+            body["stream_options"] = {"include_usage": True}
         if tools:
             body["tools"] = tools
             body["thinking"] = {"type": "disabled"}
@@ -509,27 +633,19 @@ class ResilientLlmClient:
         elif max_tokens <= 200:
             body["thinking"] = {"type": "disabled"}
         client = self._get_client(float(self.llm_timeout_seconds))
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        if stream:
+            headers["Accept"] = "text/event-stream"
+            return await self._invoke_stream(
+                client, url, headers, body, timeout,
+                on_first_token=on_first_token)
+
         response = await client.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=timeout,
-        )
-        if response.status_code >= 400:
-            retryable = response.status_code in RETRYABLE_STATUS
-            code = "RATE_LIMITED" if response.status_code == 429 else (
-                "SERVER_ERROR" if response.status_code >= 500 else "REQUEST_ERROR")
-            if response.status_code in (400, 413):
-                # prompt too long / bad schema: never retry blindly
-                retryable = False
-                code = "PROMPT_OR_SCHEMA_ERROR"
-            if response.status_code in (401, 403):
-                retryable = False
-                code = "AUTH_ERROR"
-            raise LlmError(code, response.text[:300], retryable)
+            url, headers=headers, json=body, timeout=timeout)
+        self._raise_for_provider_status(response.status_code, response.text)
         data = response.json()
         try:
             choice = data["choices"][0]
@@ -567,6 +683,137 @@ class ResilientLlmClient:
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "prompt_cache_hit_tokens": int(usage.get("prompt_cache_hit_tokens") or 0),
+        }, finish_reason
+
+    @staticmethod
+    def _raise_for_provider_status(status_code: int, body: str) -> None:
+        if status_code < 400:
+            return
+        retryable = status_code in RETRYABLE_STATUS
+        code = "RATE_LIMITED" if status_code == 429 else (
+            "SERVER_ERROR" if status_code >= 500 else "REQUEST_ERROR")
+        if status_code in (400, 413):
+            retryable = False
+            code = "PROMPT_OR_SCHEMA_ERROR"
+        if status_code in (401, 403):
+            retryable = False
+            code = "AUTH_ERROR"
+        raise LlmError(code, body[:300], retryable)
+
+    async def _invoke_stream(
+            self, client: httpx.AsyncClient, url: str,
+            headers: Dict[str, str], body: Dict[str, Any],
+            timeout: httpx.Timeout, *,
+            on_first_token: Optional[Callable[[int, str], None]] = None,
+    ) -> tuple[LlmTurn, Dict[str, int], str]:
+        """Consume an OpenAI-compatible SSE response into the existing turn.
+
+        Tool argument fragments are never parsed or exposed as a report until
+        the provider finishes the function call. This preserves the same
+        structured-output validation contract as the non-streaming path.
+        """
+        request_started = time.monotonic()
+        content_parts: List[str] = []
+        tool_parts: Dict[int, Dict[str, Any]] = {}
+        usage: Dict[str, Any] = {}
+        finish_reason = ""
+        first_output_seen = False
+
+        async with client.stream(
+                "POST", url, headers=headers, json=body,
+                timeout=timeout) as response:
+            if response.status_code >= 400:
+                raw_error = (await response.aread()).decode(
+                    "utf-8", errors="replace")
+                self._raise_for_provider_status(
+                    response.status_code, raw_error)
+
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                raw_data = line[5:].strip()
+                if raw_data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw_data)
+                except json.JSONDecodeError as exc:
+                    raise LlmError(
+                        "MALFORMED_STREAM", str(exc), True) from exc
+
+                if isinstance(chunk.get("usage"), dict):
+                    usage = chunk["usage"]
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                choice = choices[0] if isinstance(choices[0], dict) else {}
+                if choice.get("finish_reason") is not None:
+                    finish_reason = str(choice.get("finish_reason") or "")
+                delta = choice.get("delta") or {}
+                if not isinstance(delta, dict):
+                    continue
+                content_delta = delta.get("content")
+                if content_delta:
+                    content_parts.append(str(content_delta))
+                    if not first_output_seen:
+                        first_output_seen = True
+                        if on_first_token is not None:
+                            on_first_token(int(
+                                (time.monotonic() - request_started) * 1000),
+                                "content")
+                for raw_call in delta.get("tool_calls") or []:
+                    if not isinstance(raw_call, dict):
+                        continue
+                    try:
+                        index = int(raw_call.get("index", 0))
+                    except (TypeError, ValueError):
+                        index = 0
+                    item = tool_parts.setdefault(index, {
+                        "id": "", "name": "", "arguments": []})
+                    if raw_call.get("id"):
+                        item["id"] = str(raw_call["id"])
+                    function = raw_call.get("function") or {}
+                    if isinstance(function, dict):
+                        if function.get("name"):
+                            item["name"] += str(function["name"])
+                        arguments_delta = function.get("arguments")
+                        if arguments_delta:
+                            item["arguments"].append(
+                                str(arguments_delta))
+                    if (not first_output_seen
+                            and (item["name"] or item["arguments"])):
+                        first_output_seen = True
+                        if on_first_token is not None:
+                            on_first_token(int(
+                                (time.monotonic() - request_started) * 1000),
+                                "tool_call")
+
+        parsed_tool_calls: List[LlmToolCall] = []
+        for index, item in sorted(tool_parts.items()):
+            raw_arguments = "".join(item["arguments"])
+            arguments, raw_arguments_text, arguments_error = (
+                _parse_native_tool_arguments(
+                    raw_arguments,
+                    allow_exact_duplicate=(
+                        item["name"] == "emit_report_section")))
+            parsed_tool_calls.append(LlmToolCall(
+                tool_call_id=item["id"] or f"call-{index + 1}",
+                name=item["name"],
+                arguments=arguments,
+                raw_arguments=raw_arguments_text,
+                arguments_error=arguments_error,
+            ))
+        return LlmTurn(
+            content="".join(content_parts),
+            tool_calls=parsed_tool_calls,
+            finish_reason=finish_reason,
+        ), {
+            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "prompt_cache_hit_tokens": int(
+                usage.get("prompt_cache_hit_tokens") or 0),
         }, finish_reason
 
 

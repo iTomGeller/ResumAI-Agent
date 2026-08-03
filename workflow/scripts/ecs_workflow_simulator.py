@@ -178,16 +178,23 @@ SCENARIOS = {
 
 async def simulate(*, live: bool = False,
                    context_log: Optional[Path] = None,
-                   scenario: str = "short") -> dict[str, Any]:
-    if scenario not in SCENARIOS:
+                   scenario: str = "short",
+                   resume_text: Optional[str] = None,
+                   job_description: Optional[str] = None,
+                   run_label: Optional[str] = None,
+                   validate_contract: bool = True) -> dict[str, Any]:
+    if resume_text is None and scenario not in SCENARIOS:
         raise ValueError(f"unknown scenario: {scenario}")
+    effective_resume = resume_text if resume_text is not None else SCENARIOS[scenario]
+    effective_jd = job_description or JD
+    label = run_label or scenario
     request = AgentRunRequest(
-        runId=f"ecs-sim-{scenario}-run",
-        conversationId=f"ecs-sim-{scenario}-conversation",
-        userId="ecs-sim", traceId=f"ecs-sim-{scenario}-trace",
+        runId=f"ecs-sim-{label}-run",
+        conversationId=f"ecs-sim-{label}-conversation",
+        userId="ecs-sim", traceId=f"ecs-sim-{label}-trace",
         runType="full_evaluation", userMessage="评估这份简历",
-        resumeText=SCENARIOS[scenario],
-        jobDescription=JD,
+        resumeText=effective_resume,
+        jobDescription=effective_jd,
         policyId="balanced",
         policyConfig={"evidenceVerification": {"enabled": True}},
     )
@@ -225,6 +232,13 @@ async def simulate(*, live: bool = False,
             and executor.tools.definitions[call.tool].kind == "mcp"
         )
     ]
+    structured_report = result.get("structuredReport") or {}
+    dimensions = structured_report.get("dimensions") or []
+    interview_probes = (
+        structured_report.get("interviewProbes")
+        or structured_report.get("interviewQuestions")
+        or []
+    )
     summary = {
         "status": result.get("status"),
         "elapsedMs": elapsed_ms,
@@ -258,16 +272,16 @@ async def simulate(*, live: bool = False,
         "contextLog": str(context_log or (
             ROOT / ".sim-artifacts" / "llm-contexts.jsonl")) if live else None,
         "reportQuality": {
-            "score": (result.get("structuredReport") or {}).get("overallScore"),
-            "recommendation": (
-                result.get("structuredReport") or {}).get("recommendation"),
-            "strengths": len(
-                (result.get("structuredReport") or {}).get("strengths") or []),
-            "risks": len(
-                (result.get("structuredReport") or {}).get("risks") or []),
-            "questions": len(
-                (result.get("structuredReport") or {}).get(
-                    "interviewQuestions") or []),
+            "score": structured_report.get("overallScore"),
+            "recommendation": structured_report.get("recommendation"),
+            "dataQuality": structured_report.get("dataQuality"),
+            "dimensions": len(dimensions),
+            "dimensionEvidenceRefs": sum(
+                len(item.get("evidenceRefs") or [])
+                for item in dimensions if isinstance(item, dict)),
+            "strengths": len(structured_report.get("strengths") or []),
+            "risks": len(structured_report.get("risks") or []),
+            "questions": len(interview_probes),
             "answerChars": len(str(result.get("answer") or "")),
         },
     }
@@ -290,6 +304,8 @@ async def simulate(*, live: bool = False,
             encoding="utf-8")
         summary["eventLog"] = str(event_path)
 
+    if not validate_contract:
+        return summary
     agents = set(summary["plan"])
     if result.get("status") != "SUCCEEDED":
         raise SystemExit(f"simulation failed: {result.get('status')}")

@@ -12,17 +12,17 @@ bash scripts/ecs_safe_deploy.sh
 脚本内置步骤：
 1. preflight（磁盘/内存/容器/卷/commit）
 2. 备份 .env + gzip 压缩的 mysqldump（`/root/resumai-backups/<stamp>/`）；部署验收成功后默认保留最新 7 份（可用 `BACKUP_KEEP` 调整）
-3. `SANDBOX_WORKER_TAG=<git sha>` 写入 .env（Worker 镜像禁止 latest）
-4. compose config 校验（含旧 runtime 防回流 grep）
+3. 检查 `WORKFLOW_POSTGRES_PASSWORD` 与 LangGraph配置
+4. compose config 校验
 5. JDK21 `mvn clean package`（阿里云 Maven 镜像）
 6. `npm ci`（npmmirror）→ `npm run build`（仅在 ECS）
-7. Sandbox Worker（SHA tag）/ Manager / Workflow / Backend / Frontend 镜像构建
+7. Workflow / Backend / Frontend 镜像构建
    （workflow 镜像构建期强制 pytest + 契约门禁）
-8. `up -d`（原卷复用；旧 checkpoint postgres 若在运行则停止、卷保留）
+8. `up -d`（原卷复用；启动 LangGraph PostgreSQL Checkpointer）
 9. 健康检查 + resume_task 行数前后比对（下降即失败退出）
 
 禁止：`docker compose down -v`、`docker volume prune`、
-`docker system prune --volumes`、latest Sandbox 镜像、本地构建部署。
+`docker system prune --volumes`、本地构建部署。
 
 Schema：仅 `db/migrations/V*.sql`（guard 幂等）在 backend 启动时按需应用；
 无结构变化时跳过。

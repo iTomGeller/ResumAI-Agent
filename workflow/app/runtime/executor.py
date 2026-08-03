@@ -106,6 +106,30 @@ import os as _os
 
 REPLAN_CONFIDENCE_THRESHOLD = float(_os.getenv("REPLAN_CONFIDENCE_THRESHOLD", "0.55"))
 
+
+def _report_section_timeout_seconds() -> float:
+    """Wall-clock ceiling for one parallel Report section provider call."""
+    raw = _os.getenv("REPORT_SECTION_TIMEOUT_SECONDS", "75")
+    try:
+        return max(0.05, float(raw))
+    except (TypeError, ValueError):
+        return 75.0
+
+
+def _configured_eager_skill_ids() -> set[str]:
+    """Return the explicitly configured Skill eager-loading experiment set.
+
+    The empty default preserves provider-selected progressive disclosure.  The
+    experiment changes disclosure timing only: normal signal-based selection
+    still decides whether a Skill belongs to the current agent and resume.
+    """
+    raw = _os.getenv("SKILL_EAGER_IDS", "")
+    return {
+        item.strip()
+        for item in raw.split(",")
+        if item.strip()
+    }
+
 AGENT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容）：
 {
   "thought": "简要计划（一两句）",
@@ -360,7 +384,10 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
     question_properties = {
         "interviewQuestions": {
             "type": "array", "items": _INTERVIEW_PROBE_SCHEMA,
-            "minItems": 1, "maxItems": 8,
+            # Dynamic count is preserved (4-8); one generic question is not a
+            # useful deep-evaluation report and was the only real quality drop
+            # observed in the eager/live A/B.
+            "minItems": 4, "maxItems": 8,
         },
     }
     return {
@@ -395,7 +422,7 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
             "required": list(question_properties),
             "instruction": (
                 "只生成结构化面试追问：先从HIGH风险、关键JD缺口和最重要项目"
-                "形成待核验主题，合并重复主题后每个主题生成一题；最多8题，"
+                "形成待核验主题，合并重复主题后每个主题生成一题；必须4-8题，"
                 "超过预算按风险优先级截断，禁止为凑数重复问题。每题含目的、"
                 "触发依据、好信号、"
                 "红旗、1个追问和证据引用；好信号/红旗各1-2条，避免重复。"
@@ -403,6 +430,107 @@ def _parallel_report_section_specs() -> Dict[str, Dict[str, Any]]:
                 "arguments闭合后禁止重复输出第二个JSON对象或解释。"),
         },
     }
+
+
+def _backfill_interview_questions_from_risks(
+        report: Dict[str, Any], minimum: int = 4, *,
+        allow_empty: bool = False) -> int:
+    """Complete a short model question section from grounded risk outputs.
+
+    Some compatible providers accept the native ``minItems`` schema but still
+    return one interview question. Regenerating the whole report turns this
+    small provider defect into a 100s+ tail. Preserve the authored question and
+    deterministically turn distinct, evidence-bound risk verification plans
+    into the missing probes. An empty/malformed question section is not
+    backfilled and still follows the normal model retry path.
+    """
+    raw_questions = report.get("interviewQuestions")
+    if not isinstance(raw_questions, list):
+        raw_questions = report.get("interviewProbes")
+    questions = [
+        dict(item) for item in (raw_questions or [])
+        if isinstance(item, dict) and str(item.get("question") or "").strip()
+    ]
+    if (not questions and not allow_empty) or len(questions) >= minimum:
+        return 0
+
+    risks = [
+        item for item in (report.get("risks") or [])
+        if isinstance(item, dict)
+    ]
+    used_ids = {str(item.get("id") or "") for item in questions}
+    used_topics = {
+        re.sub(r"\s+", "", str(
+            item.get("triggeredBy") or item.get("question") or "")).lower()
+        for item in questions
+    }
+    added = 0
+    for risk_index, risk in enumerate(risks, start=1):
+        if len(questions) >= minimum:
+            break
+        claim = str(risk.get("claim") or "").strip()
+        verification = str(risk.get("verificationPlan") or "").strip()
+        refs = [
+            dict(ref) for ref in (risk.get("evidenceRefs") or [])
+            if isinstance(ref, dict)
+        ]
+        topic = re.sub(r"\s+", "", claim).lower()
+        if not claim or not refs or topic in used_topics:
+            continue
+        probe_id = f"risk-probe-{risk.get('id') or risk_index}"
+        if probe_id in used_ids:
+            continue
+        severity = str(risk.get("severity") or "MEDIUM").upper()
+        priority = severity if severity in {"HIGH", "MEDIUM", "LOW"} else "MEDIUM"
+        focus = verification or claim
+        questions.append({
+            "id": probe_id[:60],
+            "priority": priority,
+            "question": (
+                f"请结合具体项目、个人贡献和可复现证据说明：{focus}"
+            )[:400],
+            "objective": f"核验风险结论：{claim}"[:300],
+            "triggeredBy": f"风险项：{claim}"[:200],
+            "evidenceRefs": refs,
+            "goodSignals": [
+                "说明技术决策、个人贡献、验证步骤和量化口径",
+                "能给出代码、监控、复盘或其他可交叉验证证据",
+            ],
+            "redFlags": [
+                "只复述结论，无法说明数据来源或验证方法",
+            ],
+            "followUps": [
+                "如果重新实施一次，你会如何验证结果并控制风险？",
+            ],
+            "scoreRubric": "按证据可验证性、个人贡献清晰度和技术取舍评分",
+        })
+        used_ids.add(probe_id)
+        used_topics.add(topic)
+        added += 1
+
+    if added:
+        report["interviewQuestions"] = questions
+        report["interviewProbes"] = questions
+    return added
+
+
+def _salvage_first_complete_report_section(
+        raw_arguments: str, required: List[str]) -> Optional[Dict[str, Any]]:
+    """Keep a complete first section object before provider-added extra data.
+
+    This recovery is intentionally scoped to report sections. The returned
+    object still passes required-field checks and the normal structured report
+    quality gate before publication; generic native tools remain strict.
+    """
+    text = str(raw_arguments or "")
+    try:
+        candidate, end = json.JSONDecoder().raw_decode(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if (not isinstance(candidate, dict) or not text[end:].strip()
+            or any(field not in candidate for field in required)):
+        return None
+    return dict(candidate)
 
 # Dimension weights for deterministic overallScore (name normalized lowercase).
 _DIMENSION_WEIGHTS = {
@@ -1487,6 +1615,10 @@ class RunExecutor:
             "memoryHits": list(self.memory_hits)[:20],
             "failureHits": list(self.failure_hits)[:10],
             "memoryTraces": list(self.memory_traces)[-40:],
+            "replanCount": self.replan_count,
+            "arbitrated": self._arbitrated,
+            "reportAgentFailed": self.report_agent_failed,
+            "agentCounters": dict(self.agent_counters),
             "createdAt": time.time(),
         }
 
@@ -1518,6 +1650,16 @@ class RunExecutor:
             self.memory_hits = list(snapshot.get("memoryHits") or [])
             self.failure_hits = list(snapshot.get("failureHits") or [])
             self.memory_traces = list(snapshot.get("memoryTraces") or [])
+            self.replan_count = int(snapshot.get("replanCount", 0))
+            self._arbitrated = bool(snapshot.get("arbitrated", False))
+            self.report_agent_failed = bool(
+                snapshot.get("reportAgentFailed", False))
+            counters = snapshot.get("agentCounters")
+            if isinstance(counters, dict):
+                self.agent_counters = {
+                    str(k): dict(v) for k, v in counters.items()
+                    if isinstance(v, dict)
+                }
             plan_meta = snapshot.get("planMeta")
             if isinstance(plan_meta, dict):
                 self.plan_meta = dict(plan_meta)
@@ -1560,6 +1702,26 @@ class RunExecutor:
             agent_id=agent_id, run_type=request.runType,
             job_focus=self.policy.jobFocus, overrides=self.policy.skillOverrides,
             signals=signals, user_message=request.userMessage or "")
+        eager_skill_ids = _configured_eager_skill_ids()
+        eager_loaded_skills: Dict[str, Any] = {}
+        eager_skill_call_ids: Dict[str, str] = {}
+        for metadata in skills:
+            if metadata.skill_id not in eager_skill_ids:
+                continue
+            try:
+                loaded = default_skill_manager.load(metadata.skill_id)
+            except Exception as exc:  # noqa: BLE001 - fall back to progressive
+                logger.warning(
+                    "eager Skill load failed for %s; keeping progressive flow: %s",
+                    metadata.skill_id, exc)
+                continue
+            eager_loaded_skills[metadata.skill_id] = loaded
+            eager_skill_call_ids[metadata.skill_id] = (
+                f"skill-eager-{uuid.uuid4().hex[:16]}")
+        progressive_skills = [
+            skill for skill in skills
+            if skill.skill_id not in eager_loaded_skills
+        ]
         # Build the requested surface now, but do not expose Skill/MCP metadata
         # until we know this agent will actually execute an LLM turn. This
         # prevents deterministic fast paths from producing phantom standalone
@@ -1571,13 +1733,13 @@ class RunExecutor:
                 tool for tool in requested_tools
                 if tool not in {"knowledge_search", "resume_semantic_search"}
             ]
-        if skills:
+        if progressive_skills:
             requested_tools.append("load_skill")
-            # Metadata already advertises the exact optional resource paths.
-            # Hiding the generic reader when none exist prevents models from
-            # inventing SKILL.md/hash paths after the body was already loaded.
-            if any(skill.resource_paths for skill in skills):
-                requested_tools.append("read_skill_resource")
+        # Metadata/body already advertises the exact optional resource paths.
+        # Hiding the generic reader when none exist prevents models from
+        # inventing SKILL.md/hash paths after the body was already loaded.
+        if any(skill.resource_paths for skill in skills):
+            requested_tools.append("read_skill_resource")
 
         tool_results_block = ""
         pre_llm_tool_call_ids: List[str] = []
@@ -1628,6 +1790,13 @@ class RunExecutor:
                     tool_call_id=call.tool_call_id,
                     duration_ms=call.duration_ms)
 
+        # This block is immutable input to the provider. Native action results
+        # are carried by assistant/tool messages in ``native_history``. Once
+        # that history exists, rebuilding the original user message with the
+        # same observations duplicated at its tail destroys DeepSeek's exact
+        # prefix reuse and wastes prompt tokens on every Project action turn.
+        initial_tool_results_block = tool_results_block
+
         # Performance fast-path: high-quality deterministic parse → skip LLM.
         if definition.agent_id == "ResumeParserAgent":
             fast = self._maybe_skip_parser_llm(tool_results_block)
@@ -1667,6 +1836,11 @@ class RunExecutor:
             await default_skill_manager.emit_selection(
                 self.emitter, agent_id, skills,
                 trigger_reason="agent_capability_and_input_signals")
+            for skill_id, loaded in eager_loaded_skills.items():
+                await default_skill_manager.emit_loaded(
+                    self.emitter, agent_id, loaded,
+                    tool_call_id=eager_skill_call_ids[skill_id],
+                    reason="configured_eager_experiment")
         except Exception as exc:  # noqa: BLE001
             logger.debug("skill catalog/selection emit skipped: %s", exc)
 
@@ -1681,9 +1855,29 @@ class RunExecutor:
             # Successful deterministic pre-steps are already attached as
             # observations. Re-exposing the same tools made the model repeat
             # them and consume the action turn needed for Skill/MCP selection.
-            catalog = self.tools.catalog_for_agent(
-                agent_id, model_requested_tools)
+            # Per-agent Skill enums must not mutate the shared ToolDefinition
+            # schemas held by this run's other agents.
+            catalog = copy.deepcopy(self.tools.catalog_for_agent(
+                agent_id, model_requested_tools))
+            progressive_skill_ids = [
+                skill.skill_id for skill in progressive_skills]
+            selected_skill_ids = [skill.skill_id for skill in skills]
             for entry in catalog:
+                entry_name = str(entry.get("name") or "")
+                if entry_name in {"load_skill", "read_skill_resource"}:
+                    schema = entry.get("inputSchema")
+                    properties = schema.get("properties") \
+                        if isinstance(schema, dict) else None
+                    skill_id_schema = properties.get("skill_id") \
+                        if isinstance(properties, dict) else None
+                    if isinstance(skill_id_schema, dict):
+                        allowed_ids = (
+                            progressive_skill_ids
+                            if entry_name == "load_skill"
+                            else selected_skill_ids)
+                        skill_id_schema["enum"] = allowed_ids
+                        skill_id_schema["description"] = (
+                            "必须使用枚举中的规范 Skill ID；不要附加版本或哈希")
                 if entry.get("kind") == "mcp" or entry.get("mcpServer"):
                     exposure_id = f"catalog-{uuid.uuid4().hex[:16]}"
                     catalog_exposure_ids[str(entry.get("name") or "")] = exposure_id
@@ -1743,8 +1937,12 @@ class RunExecutor:
             # Skill metadata is present in the model context, but the body is
             # disclosed only if the model calls load_skill. Reserving a turn
             # makes that choice real without requiring any Skill invocation.
+            skill_action_available = any(
+                tool in requested_tools
+                for tool in {"load_skill", "read_skill_resource"}
+            )
             action_turn_ceiling = max(
-                research_turn_ceiling, 1 if skills else 0)
+                research_turn_ceiling, 1 if skill_action_available else 0)
         available_tool_turns = min(
             action_turn_ceiling,
             max(0, agent_tool_limit - agent_tool_calls))
@@ -1766,8 +1964,8 @@ class RunExecutor:
         action_turns = 0
         borrowed_repair_turns = 0
         json_repair_pending = False
-        loaded_skills: Dict[str, Any] = {}
-        loaded_skill_call_ids: Dict[str, str] = {}
+        loaded_skills: Dict[str, Any] = dict(eager_loaded_skills)
+        loaded_skill_call_ids: Dict[str, str] = dict(eager_skill_call_ids)
         applied_skill_ids: set = set()
         native_history: List[Dict[str, Any]] = []
         # Memory selection is immutable for this agent execution. Keeping the
@@ -1789,7 +1987,9 @@ class RunExecutor:
                 "actionTurns": action_turns,
                 "actionTurnAllowance": max_action_turns,
             })
-            effective_tool_results = tool_results_block
+            effective_tool_results = (
+                initial_tool_results_block
+                if native_history else tool_results_block)
             skill_text = default_skill_manager.render_progressive(
                 skills, list(loaded_skills.values()))
             messages = self.context.assemble(
@@ -2599,22 +2799,18 @@ class RunExecutor:
 
     def _should_parallel_report_sections(
             self, signals: Dict[str, Any]) -> bool:
-        """Use section fan-out only where the live A/B showed a benefit.
+        """Use section fan-out for every full report by default.
 
-        On a strong non-external resume, a single Pro synthesis was 31% faster
-        with equivalent structure. For sparse resumes section fan-out was 22%
-        faster, and on the external resume it was 10% faster. Keep an explicit
-        ``always`` escape hatch for controlled experiments.
+        The current-provider live A/B on strong, sparse and domestic-external
+        resumes reduced end-to-end latency by 37%-61% while preserving the
+        structured quality contract.  ``REPORT_PARALLEL_SECTIONS=0`` remains
+        the explicit rollback switch.
         """
         if not self._parallel_report_sections_enabled():
             return False
         mode = _os.getenv(
             "REPORT_PARALLEL_SECTIONS", "auto").strip().lower()
-        if mode in {"always", "force"}:
-            return True
-        return bool(
-            signals.get("has_external_urls")
-            or signals.get("is_sparse_resume"))
+        return mode not in {"0", "false", "no", "off"}
 
     async def _run_parallel_report_sections(
             self, messages: List[Dict[str, Any]], *, round_id: str,
@@ -2634,6 +2830,7 @@ class RunExecutor:
         async def generate(
                 section: str, spec: Dict[str, Any], attempt: int = 1,
         ) -> Tuple[str, Dict[str, Any]]:
+            section_started = time.monotonic()
             section_round = (
                 f"{round_id}:section:{section}:attempt:{attempt}")
             tool = {
@@ -2659,8 +2856,14 @@ class RunExecutor:
                 "content": (
                     "[并行报告小节任务]\n"
                     f"{spec['instruction']}\n"
+                    + (
+                        "硬性数量要求：interviewQuestions 必须输出4至8题，"
+                        "不得只输出1题；至少分别覆盖HIGH风险核验、JD核心缺口、"
+                        "项目技术深度、量化成果或履历可信度。\n"
+                        if section == "question" else "")
                     + ("这是质量闸门后的定向重试，必须严格满足数量、"
-                       "证据引用和结构要求。\n" if attempt > 1 else "")
+                       "证据引用和结构要求；上次结果不合格，本次少于4题"
+                       "将被拒绝。\n" if attempt > 1 else "")
                     + (
                         "直接输出一个完整 JSON 对象，不要使用 markdown。"
                         if uses_json_mode else
@@ -2719,26 +2922,51 @@ class RunExecutor:
                     content=str(raw or ""), tool_calls=[],
                     finish_reason="json_section")
             else:
-                turn = await self._chat_native_turn(
-                    section_messages,
-                    agent_id="ReportAgent",
-                    purpose=f"report_{section}",
-                    max_tokens=int(spec["maxTokens"]),
-                    tools=[tool],
-                    tool_choice={
-                        "type": "function",
-                        "function": {"name": "emit_report_section"},
-                    },
-                    use_quality=bool(spec["useQuality"]),
-                    trace_context=trace_context)
+                timeout_seconds = _report_section_timeout_seconds()
+                try:
+                    turn = await asyncio.wait_for(
+                        self._chat_native_turn(
+                            section_messages,
+                            agent_id="ReportAgent",
+                            purpose=f"report_{section}",
+                            max_tokens=int(spec["maxTokens"]),
+                            tools=[tool],
+                            tool_choice={
+                                "type": "function",
+                                "function": {"name": "emit_report_section"},
+                            },
+                            use_quality=bool(spec["useQuality"]),
+                            trace_context=trace_context),
+                        timeout=timeout_seconds)
+                except asyncio.TimeoutError as exc:
+                    raise LlmError(
+                        "TIMEOUT",
+                        f"ReportAgent {section} exceeded "
+                        f"{timeout_seconds:.2f}s wall-clock ceiling",
+                        True) from exc
             call = next(
                 (candidate for candidate in turn.tool_calls
                  if candidate.name == "emit_report_section"), None)
             if call is not None:
                 if call.arguments_error:
-                    raise LlmError(
-                        "MALFORMED_OUTPUT", call.arguments_error, False)
-                payload = dict(call.arguments)
+                    salvaged = (
+                        _salvage_first_complete_report_section(
+                            call.raw_arguments, spec["required"])
+                        if "Extra data" in call.arguments_error else None)
+                    if salvaged is None:
+                        raise LlmError(
+                            "MALFORMED_OUTPUT", call.arguments_error, False)
+                    payload = salvaged
+                    await self.emitter.emit(
+                        "run.progress", agent_id="ReportAgent", payload={
+                            "stage": "parallel_report_section_salvaged",
+                            "reason": "complete_first_object_before_extra_data",
+                            "section": section,
+                            "attempt": attempt,
+                            "occurredAt": _utc_now(),
+                        })
+                else:
+                    payload = dict(call.arguments)
             else:
                 payload = extract_json_object(turn.content)
             if not isinstance(payload, dict) or not payload:
@@ -2769,18 +2997,29 @@ class RunExecutor:
                     "MALFORMED_OUTPUT",
                     f"ReportAgent {section} missing: {', '.join(missing)}",
                     False)
+            await self.emitter.emit(
+                "report.section.completed", agent_id="ReportAgent", payload={
+                    **trace_context,
+                    "section": section,
+                    "attempt": attempt,
+                    "durationMs": int(
+                        (time.monotonic() - section_started) * 1000),
+                    "validated": True,
+                    "data": payload,
+                    "occurredAt": _utc_now(),
+                })
             return section, payload
 
         minimums = (
             {"dimensions": 2, "strengths": 1, "risks": 2,
-             "refs": 4}
+             "questions": 4, "refs": 4}
             if is_sparse_resume else
             # Three evidence-bound core risks are more useful than forcing a
             # fourth filler item. Production traces showed the old 4/8 floor
             # discarded a complete 4-dimension/8-question report with three
             # risks and seven refs, then spent ~140s on a worse fallback.
             {"dimensions": 4, "strengths": 2, "risks": 3,
-             "refs": 6}
+             "questions": 4, "refs": 6}
         )
         sections: Dict[str, Dict[str, Any]] = {}
         call_count = 0
@@ -2807,6 +3046,44 @@ class RunExecutor:
                 section, payload = result
                 sections[section] = payload
             return errors
+
+        async def backfill_short_question_section(
+                *, allow_empty: bool = False) -> int:
+            question_section = sections.get("question")
+            risk_section = sections.get("risk")
+            if not isinstance(risk_section, dict):
+                return 0
+            if not isinstance(question_section, dict):
+                if not allow_empty:
+                    return 0
+                question_section = {"interviewQuestions": []}
+                sections["question"] = question_section
+            original_count = len(
+                question_section.get("interviewQuestions") or
+                question_section.get("interviewProbes") or [])
+            combined = {**risk_section, **question_section}
+            added = _backfill_interview_questions_from_risks(
+                combined, minimum=minimums["questions"],
+                allow_empty=allow_empty)
+            if not added:
+                return 0
+            question_section["interviewQuestions"] = list(
+                combined["interviewQuestions"])
+            question_section["interviewProbes"] = list(
+                combined["interviewProbes"])
+            await self.emitter.emit(
+                "run.progress", agent_id="ReportAgent", payload={
+                    "stage": "parallel_report_question_backfill",
+                    "reason": (
+                        "question_generation_failed_twice" if allow_empty
+                        else "provider_schema_min_items_ignored"),
+                    "modelQuestionCount": original_count,
+                    "backfilledQuestionCount": added,
+                    "finalQuestionCount": len(
+                        question_section["interviewQuestions"]),
+                    "occurredAt": _utc_now(),
+                })
+            return added
 
         def assess() -> Tuple[
                 Optional[Dict[str, Any]], Dict[str, int],
@@ -2877,6 +3154,7 @@ class RunExecutor:
             return validated, observed, weak, retry
 
         errors = await run_sections(list(specs), attempt=1)
+        await backfill_short_question_section()
         if errors:
             # A missing section makes whole-report validation fail, but the
             # other concurrently generated sections may already be valid.
@@ -2900,6 +3178,12 @@ class RunExecutor:
                 })
             retry_errors = await run_sections(
                 sorted(retry_sections), attempt=2)
+            recovered_questions = await backfill_short_question_section(
+                allow_empty="question" in retry_errors)
+            if recovered_questions and len(
+                    (sections.get("question") or {}).get(
+                        "interviewQuestions") or []) >= minimums["questions"]:
+                retry_errors.pop("question", None)
             validated, observed, weak, _ = assess()
             errors = retry_errors
         if errors or weak or not validated:
@@ -3013,24 +3297,41 @@ class RunExecutor:
                                     "occurredAt": started_at,
                                     "startedAt": started_at,
                                 })
-        skill_id = str(proposed.arguments.get("skill_id") or "").strip()
+        requested_skill_ref = str(
+            proposed.arguments.get("skill_id") or "").strip()
+        skill_id = requested_skill_ref
         try:
             selected_ids = {skill.skill_id for skill in selected_skills}
+            # The rendered loaded header contains ``id@version#hash`` for
+            # provenance. Providers occasionally echo that full reference as
+            # the tool argument even though the schema asks for the canonical
+            # ID. Accept only a reference that resolves to an already-selected
+            # Skill, then normalize the trace/result to the canonical ID.
+            if skill_id not in selected_ids:
+                skill_id = next((
+                    candidate for candidate in selected_ids
+                    if requested_skill_ref.startswith(f"{candidate}@")
+                ), requested_skill_ref)
             if not skill_id or skill_id not in selected_ids:
                 raise KeyError(
-                    f"skill not selected for this agent: {skill_id or '<empty>'}")
+                    "skill not selected for this agent: "
+                    f"{requested_skill_ref or '<empty>'}")
             if tool == "load_skill":
-                loaded = default_skill_manager.load(skill_id)
-                loaded_skills[skill_id] = loaded
-                loaded_skill_call_ids[skill_id] = proposed.tool_call_id
-                await default_skill_manager.emit_loaded(
-                    self.emitter, agent_id, loaded,
-                    tool_call_id=proposed.tool_call_id,
-                    reason="llm_native_tool_call",
-                    round_id=(trace_context or {}).get("roundId"))
+                loaded = loaded_skills.get(skill_id)
+                already_loaded = loaded is not None
+                if loaded is None:
+                    loaded = default_skill_manager.load(skill_id)
+                    loaded_skills[skill_id] = loaded
+                    loaded_skill_call_ids[skill_id] = proposed.tool_call_id
+                    await default_skill_manager.emit_loaded(
+                        self.emitter, agent_id, loaded,
+                        tool_call_id=proposed.tool_call_id,
+                        reason="llm_native_tool_call",
+                        round_id=(trace_context or {}).get("roundId"))
                 result: Dict[str, Any] = {
                     "success": True,
                     "loaded": True,
+                    "alreadyLoaded": already_loaded,
                     "skillId": loaded.skill_id,
                     "skillVersion": loaded.version,
                     "resources": list(loaded.resource_paths),

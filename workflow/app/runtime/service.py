@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
 
+from app.config import settings
 from app.runtime.events import RuntimeEmitter
 from app.runtime.executor import RunExecutor
 from app.runtime.models import AgentRunRequest, CancelRequest, PauseRequest
@@ -161,7 +162,13 @@ async def _execute_run(handle: _AgentRunHandle) -> None:
     request = handle.request
     emitter = RuntimeEmitter(request.runId, request.conversationId, request.traceId)
     try:
-        executor = RunExecutor(request, emitter, pause_event=handle.pause_event)
+        executor_type = RunExecutor
+        if settings.langgraph_runtime_enabled:
+            from app.runtime.langgraph_executor import LangGraphRunExecutor
+
+            executor_type = LangGraphRunExecutor
+        executor = executor_type(
+            request, emitter, pause_event=handle.pause_event)
         result = await executor.execute()
         status = result.get("status", "FAILED")
         if status == "PAUSED":

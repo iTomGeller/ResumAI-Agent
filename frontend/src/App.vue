@@ -170,6 +170,13 @@ interface TaskResponse {
   } | null;
 }
 
+interface RunEventPayload {
+  runId: string;
+  eventType: string;
+  agentId?: string;
+  payload?: Record<string, unknown>;
+}
+
 interface TraceEvent {
   traceId: string;
   spanId: string;
@@ -473,6 +480,11 @@ const tasksLoaded = ref(false);
 const tasksError = ref(false);
 
 let eventSource: EventSource | null = null;
+let reportRunSource: EventSource | null = null;
+let subscribedReportRunId = '';
+const streamingReportSections = ref<Record<string, Record<string, unknown>>>({});
+const streamingReportTtftMs = ref<number | null>(null);
+const streamingReportSectionMs = ref<Record<string, number>>({});
 const resumeViewMode = ref<'pdf' | 'text'>('pdf');
 const pdfLoading = ref(false);
 const pdfError = ref(false);
@@ -486,6 +498,25 @@ const pdfPreviewUrl = computed(() => {
 });
 
 const activeTask = computed(() => tasks.value.find((t) => t.traceId === activeTraceId.value) ?? null);
+
+const liveStructuredReport = computed(() => {
+  const stored = activeTask.value?.structuredReport;
+  const partials = streamingReportSections.value;
+  if (!Object.keys(partials).length) return stored || null;
+  const merged = {
+    ...(stored || {}),
+    ...(partials.score || {}),
+    ...(partials.risk || {}),
+    ...(partials.question || {}),
+  } as NonNullable<TaskResponse['structuredReport']>;
+  if (!merged.interviewProbes?.length && merged.interviewQuestions?.length) {
+    merged.interviewProbes = merged.interviewQuestions.filter(
+      (item): item is NonNullable<typeof merged.interviewProbes>[number] =>
+        typeof item === 'object' && item != null,
+    );
+  }
+  return merged;
+});
 
 const finalReportFromTrace = computed(() => {
   const agents: TraceAgentView[] = agentExecutionTree.value?.executionTree || [];
@@ -515,8 +546,9 @@ const displayReport = computed(() => {
         risks.length ? `关键风险：\n${risks.map((r) => `- ${stripMarkdown(r)}`).join('\n')}` : '',
         questions.length ? `面试追问：\n${questions.map((q) => `- ${stripMarkdown(q)}`).join('\n')}` : '',
       ].filter(Boolean).join('\n\n'));
-  const structured = task?.structuredReport && Object.keys(task.structuredReport).length
-    ? task.structuredReport : null;
+  const structured = liveStructuredReport.value
+    && Object.keys(liveStructuredReport.value).length
+    ? liveStructuredReport.value : null;
   const summaryLine = stripMarkdown(
     structured?.summary
       || task?.riskSummary
@@ -1026,6 +1058,12 @@ watch(activeTraceId, (id, prev) => {
   resumeTextPagination.resetPage();
   expandedListKeys.value = {};
   if (id !== prev) {
+    reportRunSource?.close();
+    reportRunSource = null;
+    subscribedReportRunId = '';
+    streamingReportSections.value = {};
+    streamingReportTtftMs.value = null;
+    streamingReportSectionMs.value = {};
     agentExecutionTree.value = null;
     traceExpansionInitialized.value = '';
     expandedPhases.clear();
@@ -1099,7 +1137,7 @@ watch([activeTraceId, resumeViewMode], () => {
   }
 }, { immediate: true });
 
-onBeforeUnmount(() => { eventSource?.close(); pollTimers.forEach((t) => clearTimeout(t)); window.removeEventListener('hashchange', restoreFromHash); });
+onBeforeUnmount(() => { eventSource?.close(); reportRunSource?.close(); pollTimers.forEach((t) => clearTimeout(t)); window.removeEventListener('hashchange', restoreFromHash); });
 
 async function refreshAll() {
   refreshing.value = true;
@@ -1399,6 +1437,9 @@ watch(activeTask, (task) => {
     recommendation: task.recommendation,
     candidateId: task.conversationId || task.traceId,
   });
+  if (task.workflowRunId && isTaskActive(task)) {
+    subscribeReportRun(task.workflowRunId, task.traceId);
+  }
 }, { immediate: true });
 
 watch(activeKnowledgeDoc, (doc) => {
@@ -2317,6 +2358,52 @@ function subscribeTrace(traceId: string) {
       if (/^run\.(completed|failed|cancelled|timed_out)$/.test(step.eventType || '')) {
         refreshTaskDetail(traceId);
       }
+    }
+  });
+}
+
+function subscribeReportRun(runId: string, traceId: string) {
+  if (!runId || subscribedReportRunId === runId) return;
+  reportRunSource?.close();
+  subscribedReportRunId = runId;
+  reportRunSource = new EventSource(`/sse/runs/${encodeURIComponent(runId)}?afterSeq=0`);
+  reportRunSource.addEventListener('run', (raw) => {
+    if (activeTraceId.value !== traceId) return;
+    try {
+      const event = JSON.parse((raw as MessageEvent).data) as RunEventPayload;
+      const payload = event.payload || {};
+      if (event.eventType === 'llm.first_token'
+          && event.agentId === 'ReportAgent'
+          && String(payload.purpose || '').startsWith('report_')) {
+        const ttft = Number(payload.ttftMs);
+        if (Number.isFinite(ttft) && ttft >= 0) {
+          streamingReportTtftMs.value = streamingReportTtftMs.value == null
+            ? ttft : Math.min(streamingReportTtftMs.value, ttft);
+        }
+      } else if (event.eventType === 'report.section.completed') {
+        const section = String(payload.section || '');
+        const data = payload.data;
+        if (['score', 'risk', 'question'].includes(section)
+            && data && typeof data === 'object' && !Array.isArray(data)) {
+          streamingReportSections.value = {
+            ...streamingReportSections.value,
+            [section]: data as Record<string, unknown>,
+          };
+          const elapsed = Number(payload.durationMs);
+          if (Number.isFinite(elapsed) && elapsed >= 0) {
+            streamingReportSectionMs.value = {
+              ...streamingReportSectionMs.value,
+              [section]: elapsed,
+            };
+          }
+        }
+      } else if (/^run\.(completed|failed|cancelled|timed_out)$/.test(event.eventType)) {
+        reportRunSource?.close();
+        reportRunSource = null;
+        void refreshTaskDetail(traceId);
+      }
+    } catch {
+      // EventSource replay may contain a historical payload unknown to this UI.
     }
   });
 }
@@ -3350,6 +3437,22 @@ function clearNotices() { errorMessage.value = ''; successMessage.value = ''; }
 
         <!-- Report Tab -->
         <div v-if="detailTab === 'report'" class="report-content">
+          <div
+            v-if="streamingReportTtftMs != null || Object.keys(streamingReportSections).length"
+            class="report-stream-status"
+          >
+            <strong>报告实时生成</strong>
+            <span v-if="streamingReportTtftMs != null">首 Token {{ (streamingReportTtftMs / 1000).toFixed(1) }}s</span>
+            <span
+              v-for="section in ['score', 'risk', 'question']"
+              :key="section"
+              :class="{ done: !!streamingReportSections[section] }"
+            >
+              {{ section === 'score' ? '评分' : section === 'risk' ? '风险' : '面试题' }}
+              {{ streamingReportSections[section] ? '✓' : '生成中' }}
+              <small v-if="streamingReportSectionMs[section]">{{ (streamingReportSectionMs[section] / 1000).toFixed(1) }}s</small>
+            </span>
+          </div>
           <div v-if="activeRagFallback" class="notice warning rag-report-hint">{{ activeRagFallback }}</div>
           <div
             v-if="activeTask.evaluationState === 'SYSTEM_FAILED'"

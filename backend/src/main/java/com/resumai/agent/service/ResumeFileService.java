@@ -1,7 +1,6 @@
 package com.resumai.agent.service;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -19,12 +18,8 @@ public class ResumeFileService {
     private static final Logger log = LoggerFactory.getLogger(ResumeFileService.class);
 
     private final Path uploadRoot;
-    private final ObjectStorageService objectStorageService;
-
-    public ResumeFileService(@Value("${resumai.upload-dir:./uploads}") String uploadDir,
-                             ObjectStorageService objectStorageService) {
+    public ResumeFileService(@Value("${resumai.upload-dir:./uploads}") String uploadDir) {
         this.uploadRoot = Paths.get(uploadDir).toAbsolutePath().normalize();
-        this.objectStorageService = objectStorageService;
         try {
             Files.createDirectories(uploadRoot);
         } catch (IOException e) {
@@ -34,7 +29,7 @@ public class ResumeFileService {
 
     /**
      * 持久化原始简历文件，按 traceId 命名，防止路径穿越。
-     * 启用对象存储时同步上传 MinIO，并返回 object key。
+     * 文件系统是当前唯一持久化介质。
      */
     public SavedResumeFile save(String traceId, MultipartFile file, String fileType) {
         if (file == null || file.isEmpty() || !StringUtils.hasText(traceId)) {
@@ -49,9 +44,7 @@ public class ResumeFileService {
         try {
             Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
             log.info("Saved resume file for trace {} -> {}", traceId, target);
-            String objectKey = ObjectStorageService.resumeObjectKey(traceId, extension);
-            String storedKey = objectStorageService.putFile(objectKey, target, detectContentType(target));
-            return new SavedResumeFile(target.toString(), storedKey, extension);
+            return new SavedResumeFile(target.toString());
         } catch (IOException e) {
             log.warn("Failed to save resume file for {}: {}", traceId, e.getMessage());
             return SavedResumeFile.empty();
@@ -72,27 +65,9 @@ public class ResumeFileService {
         return null;
     }
 
-    public InputStream openObjectStream(String objectKey) {
-        return objectStorageService.getObjectStream(objectKey);
-    }
-
-    public String detectContentType(Path path) {
-        if (path == null) {
-            return "application/octet-stream";
-        }
-        String name = path.getFileName().toString().toLowerCase();
-        if (name.endsWith(".pdf")) {
-            return "application/pdf";
-        }
-        if (name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".csv")) {
-            return "text/plain; charset=utf-8";
-        }
-        return "application/octet-stream";
-    }
-
-    public record SavedResumeFile(String localPath, String objectKey, String extension) {
+    public record SavedResumeFile(String localPath) {
         static SavedResumeFile empty() {
-            return new SavedResumeFile(null, null, null);
+            return new SavedResumeFile(null);
         }
     }
 

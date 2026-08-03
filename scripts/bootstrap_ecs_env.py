@@ -19,10 +19,14 @@ DEFAULTS = {
     "MINIO_ROOT_USER": "minioadmin",
     "MINIO_ROOT_PASSWORD": "ResumaiMinio!2026",
     "WORKFLOW_INTERNAL_TOKEN": "resumai-workflow-internal-2026",
-    "WORKFLOW_POSTGRES_PASSWORD": "ResumaiWorkflowPg!2026",
+    "WORKFLOW_POSTGRES_PASSWORD": "ResumaiWorkflowPg-2026",
     "PUBLIC_HOST": "8.138.10.189",
     "DEEPSEEK_API_URL": "https://api.deepseek.com/v1",
-    "DEEPSEEK_MODEL": "deepseek-chat",
+    "DEEPSEEK_MODEL": "deepseek-v4-flash",
+    "DEEPSEEK_QUALITY_MODEL": "deepseek-v4-pro",
+    "LLM_MAX_CONCURRENT": "16",
+    "LLM_HTTP_MAX_CONNECTIONS": "16",
+    "LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS": "16",
 }
 
 
@@ -50,6 +54,11 @@ def main() -> None:
         f"DEEPSEEK_API_KEY={env['DEEPSEEK_API_KEY']}",
         f"DEEPSEEK_API_URL={env['DEEPSEEK_API_URL']}",
         f"DEEPSEEK_MODEL={env['DEEPSEEK_MODEL']}",
+        f"DEEPSEEK_QUALITY_MODEL={env['DEEPSEEK_QUALITY_MODEL']}",
+        f"LLM_MAX_CONCURRENT={env['LLM_MAX_CONCURRENT']}",
+        f"LLM_HTTP_MAX_CONNECTIONS={env['LLM_HTTP_MAX_CONNECTIONS']}",
+        ("LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS="
+         f"{env['LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS']}"),
         "EMBEDDING_PROVIDER=local",
         "EMBEDDING_ENABLED=true",
         f"EMBEDDING_API_KEY={env['DEEPSEEK_API_KEY']}",
@@ -77,7 +86,7 @@ def main() -> None:
         f"PUBLIC_HOST={env['PUBLIC_HOST']}",
         f"WORKFLOW_INTERNAL_TOKEN={env['WORKFLOW_INTERNAL_TOKEN']}",
         f"WORKFLOW_POSTGRES_PASSWORD={env['WORKFLOW_POSTGRES_PASSWORD']}",
-        "OBJECT_STORAGE_ENABLED=false",
+        "LANGGRAPH_RUNTIME_ENABLED=true",
         "",
     ])
 

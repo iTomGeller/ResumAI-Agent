@@ -66,19 +66,13 @@ public class LlmInvocationService {
 
     private final LlmInvocationMapper llmInvocationMapper;
 
-    private final ObjectStorageService objectStorageService;
-
     private final Map<String, LlmInvocation> cache = new ConcurrentHashMap<>();
 
 
 
-    public LlmInvocationService(LlmInvocationMapper llmInvocationMapper,
-
-                                  ObjectStorageService objectStorageService) {
+    public LlmInvocationService(LlmInvocationMapper llmInvocationMapper) {
 
         this.llmInvocationMapper = llmInvocationMapper;
-
-        this.objectStorageService = objectStorageService;
 
     }
 
@@ -154,19 +148,9 @@ public class LlmInvocationService {
 
 
 
-        if (objectStorageService.isEnabled()) {
+        entity.setPromptFull(sanitizedPrompt);
 
-            entity.setPromptObjectKey(objectStorageService.putText(ObjectStorageService.llmPromptKey(id), sanitizedPrompt));
-
-            entity.setResponseObjectKey(objectStorageService.putText(ObjectStorageService.llmResponseKey(id), sanitizedResponse));
-
-        } else {
-
-            entity.setPromptFull(sanitizedPrompt);
-
-            entity.setResponseFull(sanitizedResponse);
-
-        }
+        entity.setResponseFull(sanitizedResponse);
 
 
 
@@ -291,22 +275,6 @@ public class LlmInvocationService {
         String promptFull = entity.getPromptFull();
 
         String responseFull = entity.getResponseFull();
-
-        if (loadFullText && objectStorageService.isEnabled()) {
-
-            if (!StringUtils.hasText(promptFull) && StringUtils.hasText(entity.getPromptObjectKey())) {
-
-                promptFull = objectStorageService.getText(entity.getPromptObjectKey());
-
-            }
-
-            if (!StringUtils.hasText(responseFull) && StringUtils.hasText(entity.getResponseObjectKey())) {
-
-                responseFull = objectStorageService.getText(entity.getResponseObjectKey());
-
-            }
-
-        }
 
         return new LlmInvocationResponse(
 
