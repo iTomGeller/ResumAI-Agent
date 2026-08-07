@@ -88,7 +88,6 @@ public class AgentMemoryService {
         all.addAll(procedural);
 
         Map<String, Long> byType = new LinkedHashMap<>();
-        byType.put("working", 1L);
         byType.put("episodic", (long) episodic.size());
         byType.put("semantic", (long) semantic.size());
         byType.put("procedural", (long) procedural.size());
@@ -99,7 +98,8 @@ public class AgentMemoryService {
                 .toList();
 
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("memoryArchitecture", List.of("short_term_memory", "long_term_memory"));
+        response.put("memoryArchitecture", List.of(
+                "semantic_memory", "episodic_memory", "procedural_memory"));
         response.put("count", all.size());
         response.put("byType", byType);
         response.put("topMemories", top);

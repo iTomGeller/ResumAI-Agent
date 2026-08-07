@@ -171,44 +171,9 @@ public class AgentRunInternalController {
     public Map<String, Object> memoryWrite(@RequestHeader("X-Internal-Token") String token,
                                            @RequestBody MemoryWriteRequest request) {
         authorize(token);
-        if (hasText(request.runId())
-                && !lifecycleService.acceptsRuntimeMemoryWrite(request.runId())) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT, "run no longer accepts memory writes");
-        }
-        var row = memoryService.stageRuntimeWrite(new MemoryService.WriteRequest(
-                request.type(), request.ownerScope(), request.userId(), request.conversationId(),
-                request.runId(), request.content(), request.structuredContent(), request.source(),
-                request.sourceId(), request.confidence(), request.sensitivityLevel(),
-                request.ttlDays()));
-        if (hasText(request.runId())
-                && !lifecycleService.acceptsRuntimeMemoryWrite(request.runId())) {
-            // The run may have been cancelled between the pre-check and insert.
-            // Roll back only the row staged by this request. A run-wide update
-            // can race with terminal promotion and archive already-durable
-            // memories or unrelated WORKING checkpoint/scratch rows.
-            memoryService.archiveRuntimeWrite(
-                    request.runId(), row.getMemoryId());
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT, "run cancelled while staging memory");
-        }
-        Map<String, Object> audit = new LinkedHashMap<>();
-        audit.put("memoryId", row.getMemoryId());
-        audit.put("type", MemoryService.canonicalTaxonomy(row.getType()));
-        audit.put("memoryType", MemoryService.canonicalTaxonomy(row.getType()));
-        audit.put("taxonomy", MemoryService.canonicalTaxonomy(row.getType()));
-        audit.put("namespace", MemoryService.namespaceOf(row));
-        audit.put("scope", row.getOwnerScope());
-        audit.put("source", row.getSource());
-        audit.put("targetTaxonomy", MemoryService.canonicalTaxonomy(request.type()));
-        audit.put("reason", "WORKING".equals(MemoryService.canonicalTaxonomy(request.type()))
-                ? "run_scoped_memory_write" : "staged_until_terminal_success");
-        audit.put("occurredAt", Instant.now().toString());
-        if (hasText(request.runId())) {
-            lifecycleService.applyRuntimeEvent(request.runId(), "memory.written",
-                    "MemoryService", "memory_write", audit);
-        }
-        return Map.of("status", "OK", "memoryId", row.getMemoryId());
+        throw new ResponseStatusException(
+                HttpStatus.GONE,
+                "pre-terminal memory writes are disabled; use terminal memory candidates");
     }
 
     public record MemorySearchRequest(String query, List<String> types, String userId,

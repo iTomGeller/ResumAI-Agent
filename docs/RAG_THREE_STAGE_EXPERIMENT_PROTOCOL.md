@@ -6,9 +6,9 @@
 
 | 阶段 | 真实入口 | 查询 | 语料/作用域 | 当前检索 | 当前切分 | 当前 rewrite | 当前 rerank |
 |---|---|---|---|---|---|---|---|
-| JD 岗位召回 | `Coordinator -> jd_match_search -> /api/internal/tools/jd-search` | 完整 `resumeText`；向量截前 2000 字，BM25 截前 3000 字 | MySQL `jd_library` + Milvus JD collection | 文档级标准 BM25 + 按 JD 去重后的 dense + weighted RRF | 索引时固定 `recursive(400,80)`；JD 是 textarea 普通文本，代码仅前置“岗位/类别” | 无 | 线上关闭；代码可选 DeepSeek listwise |
-| 当前简历证据 | `Tech/Project/Report -> resume_semantic_search -> /api/internal/tools/resume-search` | workflow 模板 query 或 Copilot 原问题 | 仅本次请求的 `resumeText`；禁止跨候选人 | section 规则 + BM25-like phrase contains + RRF | 空行分块；只有一个块时退化按行；返回片段截 600 字 | 只有 followup/quick_answer 请求 rewrite，但实现原样返回 | controller 固定 overlap-density + length 规则 |
-| 评估知识库 | `Tech/Report -> knowledge_search -> /api/rag/knowledge-base/search` | workflow 模板 query 或 Copilot 原问题 | ECS 当前 19 文档/147 chunks | weighted contains（代码名 BM25-like，但非标准 BM25）+ Milvus + RRF k=60 | Markdown 标题和每个编号条目先作为边界；超长段再按 320/60 字符窗 | followup/quick_answer 标记 rewrite，但实现原样返回 | workflow 传 `rerank=true`，实际为 `feature_rerank_v1` |
+| JD 岗位召回 | `BusinessRagRetriever(jd) -> /api/internal/tools/jd-search -> [RAG上下文]/SharedState` | 完整 `resumeText`；向量截前 2000 字，BM25 截前 3000 字 | MySQL `jd_library` + Milvus `jd_library_bailian_te3_1024`；124 JD / 554 live chunks | 文档级标准 BM25 + 按 JD 去重后的 dense + weighted RRF | 索引时固定 `recursive(400,80)` | 无模型 tool call | 独立 Retrieval telemetry |
+| 当前简历证据 | `BusinessRagRetriever(resume) -> /api/internal/tools/resume-search -> [RAG上下文]` | Runtime 模板 query 或 Copilot 原问题 | 仅本次请求的 `resumeText`；禁止跨候选人；未上传时 live chunks 为 0 | section 规则 + BM25-like phrase contains + RRF | 空行分块；只有一个块时退化按行；返回片段截 600 字 | 无模型 tool call | controller 固定 overlap-density + length 规则 |
+| 评估知识库 | `BusinessRagRetriever(knowledge) -> /api/rag/knowledge-base/search -> [RAG上下文]` | Runtime 模板 query 或 Copilot 原问题 | 12 文档 / 106 live chunks；Milvus `kb_chunks_bailian_te3_1024` | weighted contains + Milvus + RRF k=60 | Markdown 标题/编号条目边界；超长段按 320/60 字符窗 | 无模型 tool call | `feature_rerank_v1` |
 
 结论：embedding 模型/维度对当前简历证据阶段的线上现状是 `N/A`。实验中可增加“仅当前候选人作用域的 dense”架构候选，但不得描述成当前实现，也不得使用全局简历 Milvus。
 

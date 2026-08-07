@@ -15,10 +15,8 @@ logger = logging.getLogger(__name__)
 
 # Canonical taxonomy. Legacy names are accepted only at the API boundary and
 # are normalized before filtering, prompting or trace emission.
-CANONICAL_TYPES = frozenset({"SEMANTIC", "EPISODIC", "PROCEDURAL", "WORKING"})
+CANONICAL_TYPES = frozenset({"SEMANTIC", "EPISODIC", "PROCEDURAL"})
 LEGACY_TYPE_MAP = {
-    "CONVERSATION": "WORKING",
-    "SHORT_TERM": "WORKING",
     "PREFERENCE": "SEMANTIC",
     "USER_PREFERENCE": "SEMANTIC",
     "DOMAIN": "SEMANTIC",
@@ -134,9 +132,9 @@ def allowed_types_for(consumer_agent: Optional[str]) -> frozenset[str]:
     if key in {"coordinator", "coordinatoragent"}:
         return COORDINATOR_TYPES
     if "resumeparser" in key or "conversation" in key:
-        return frozenset({"SEMANTIC", "WORKING"})
+        return frozenset({"SEMANTIC"})
     if "jdanalysis" in key or key == "jdagent":
-        return frozenset({"SEMANTIC", "PROCEDURAL", "WORKING"})
+        return frozenset({"SEMANTIC", "PROCEDURAL"})
     if "report" in key or "risk" in key:
         return frozenset({"EPISODIC", "SEMANTIC", "PROCEDURAL"})
     return SPECIALIST_TYPES
@@ -273,8 +271,8 @@ def filter_hits_for_consumer(
         elif scope == "GLOBAL" and hit_type != "PROCEDURAL" and not (
                 allows_failure(consumer_agent) and is_failure_episode(hit)):
             reason = f"scope_{scope}_excluded_for_{consumer_agent}"
-        elif scope == "RUN" and hit_type != "WORKING":
-            reason = "run_scope_requires_working_memory"
+        elif scope == "RUN":
+            reason = "run_scope_not_available_to_long_term_memory"
         elif not include_benchmark and is_benchmark_source(source):
             reason = "benchmark_source_excluded"
         elif is_control_plane_memory(hit) and (
@@ -459,8 +457,8 @@ class MemoryClient:
                     source_id: Optional[str] = None, confidence: float = 0.5,
                     ttl_days: Optional[int] = None) -> Optional[str]:
         type_ = canonical_taxonomy(type_)
-        if type_ == "WORKING":
-            owner_scope = "RUN"
+        if type_ not in CANONICAL_TYPES:
+            raise ValueError(f"unsupported memory taxonomy: {type_}")
         # Candidate/user semantic facts never write into a global namespace.
         if type_ == "SEMANTIC" and owner_scope.upper() == "GLOBAL":
             owner_scope = "USER"
@@ -550,8 +548,8 @@ class NullMemoryClient(MemoryClient):
                     source_id: Optional[str] = None, confidence: float = 0.5,
                     ttl_days: Optional[int] = None) -> Optional[str]:
         type_ = canonical_taxonomy(type_)
-        if type_ == "WORKING":
-            owner_scope = "RUN"
+        if type_ not in CANONICAL_TYPES:
+            raise ValueError(f"unsupported memory taxonomy: {type_}")
         if type_ == "SEMANTIC" and owner_scope.upper() == "GLOBAL":
             owner_scope = "USER"
         self.writes.append({

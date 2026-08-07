@@ -185,23 +185,6 @@ def build_tool_definitions() -> Dict[str, ToolDefinition]:
     def add(defn: ToolDefinition) -> None:
         definitions[defn.name] = defn
 
-    # ---- internal Java/Milvus retrieval tools (reused business tools) ----
-    add(ToolDefinition(
-        "resume_semantic_search", "在当前简历分块上做混合语义检索，返回证据片段",
-        {"type": "object", "properties": {"query": {"type": "string"},
-                                          "topK": {"type": "integer"},
-                                          "resumeText": {"type": "string"}},
-         "required": ["query"]},
-        ANY_OBJECT, timeout_seconds=25.0, kind="internal"))
-    add(ToolDefinition(
-        "jd_match_search", "在 JD 库中检索与简历最匹配的岗位",
-        TEXT_ARGS, ANY_OBJECT, timeout_seconds=25.0, kind="internal"))
-    add(ToolDefinition(
-        "knowledge_search", "检索岗位知识库（评估规则、技能知识）",
-        {"type": "object", "properties": {"query": {"type": "string"},
-                                          "topK": {"type": "integer"}},
-         "required": ["query"]},
-        ANY_OBJECT, timeout_seconds=20.0, kind="internal"))
     add(ToolDefinition(
         "timeline_validator", "基于规则的简历时间线快速校验（进程内）",
         TEXT_ARGS, SUCCESS_SCHEMA, timeout_seconds=10.0, kind="internal"))
@@ -491,10 +474,6 @@ class ToolExecutor:
                     trace_context=trace)
                 return call
 
-        # Wire enable_rewrite AFTER schema validation (internal flag, not in tool schema).
-        if enable_rewrite and tool in ("resume_semantic_search", "knowledge_search"):
-            args["_rewrite"] = True
-
         signature = self.signature(tool, {k: v for k, v in args.items()
                                           if k != "_rewrite"})
         self.signature_counts[signature] = self.signature_counts.get(signature, 0) + 1
@@ -694,11 +673,6 @@ class ToolExecutor:
                     result["evidencePolicy"] = deepwiki_policy
                 return result
             raise ToolValidationError(f"no MCP dispatcher for tool {defn.name}")
-        if defn.name in ("resume_semantic_search", "knowledge_search"):
-            return await self._retrieve_with_rewrite(defn, args, rewrite)
-        if defn.name == "jd_match_search":
-            return await gateway.java_jd_search(
-                resume_text=str(args.get("resumeText") or ""), top_k=3)
         if defn.name == "timeline_validator":
             return await gateway.timeline_validator(
                 resume_text=str(args.get("resumeText") or ""))

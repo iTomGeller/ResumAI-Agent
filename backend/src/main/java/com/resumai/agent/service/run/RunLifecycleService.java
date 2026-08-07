@@ -869,14 +869,14 @@ public class RunLifecycleService {
         eventService.publish(finished.getRunId(), finished.getConversationId(), finished.getTraceId(),
                 eventType, null, null, payload);
 
-        // 4. Promote/rollback runtime memory before independent learning hooks.
+        // 4. Persist long-term Memory only after the terminal result is accepted.
         boolean succeeded = terminal == RunStatus.SUCCEEDED
                 || terminal == RunStatus.PARTIAL_SUCCESS;
         try {
             if (succeeded) {
-                List<MemoryEntryRow> promoted =
-                        memoryService.promoteRunMemories(finished.getRunId());
-                for (MemoryEntryRow row : promoted) {
+                List<MemoryEntryRow> written =
+                        memoryService.writeRunMemoryCandidates(finished);
+                for (MemoryEntryRow row : written) {
                     Map<String, Object> memoryPayload = new LinkedHashMap<>();
                     String taxonomy = MemoryService.canonicalTaxonomy(row.getType());
                     memoryPayload.put("memoryId", row.getMemoryId());
@@ -888,19 +888,17 @@ public class RunLifecycleService {
                     memoryPayload.put("source", row.getSource());
                     memoryPayload.put("agent", "MemoryService");
                     memoryPayload.put("runId", finished.getRunId());
-                    memoryPayload.put("reason", "promoted_after_accepted_success");
+                    memoryPayload.put("reason", "written_after_accepted_success");
                     memoryPayload.put("occurredAt", Instant.now().toString());
                     eventService.publish(
                             finished.getRunId(), finished.getConversationId(),
                             finished.getTraceId(), "memory.written",
-                            "MemoryService", "memory_promote", memoryPayload);
+                            "MemoryService", "memory_write", memoryPayload);
                 }
                 memoryService.writeRunEpisode(finished, terminal.name());
             } else {
-                // Includes CANCELLED: pending durable stages and all RUN-scoped
-                // WORKING scratch/checkpoint/runtime rows are terminal garbage.
-                // PAUSED never enters this terminal branch and retains its
-                // checkpoint for resume.
+                // Legacy cleanup only. New Runtime versions do not create
+                // RUN-scoped Working Memory or pre-terminal durable rows.
                 memoryService.archiveRunProducedMemory(finished.getRunId());
                 memoryService.archiveRunWorkingMemory(finished.getRunId());
             }

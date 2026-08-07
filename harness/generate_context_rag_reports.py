@@ -289,6 +289,7 @@ def prompt_sections(invocation: dict[str, Any]) -> dict[str, bool]:
         "策略": "[策略要求]" in content,
         "Skill": "[技能指令]" in content,
         "请求": "[当前请求]" in content,
+        "RAG": "[RAG上下文]" in content,
         "Memory": "[相关记忆]" in content,
         "共享状态": "[共享状态]" in content,
         "工具观察": "[工具观察]" in content,
@@ -593,9 +594,6 @@ def _agent_skill_reference_blocks(
 
 
 _PRE_LLM_CONTEXT_KIND = {
-    "resume_semantic_search": "当前简历证据检索（RAG）",
-    "knowledge_search": "知识库检索（RAG）",
-    "jd_match_search": "JD 检索（RAG）",
     "locate_evidence": "简历文本证据定位上下文（非知识库 RAG）",
     "calculate_jd_coverage": "确定性 JD 覆盖率规则",
     "check_timeline": "确定性时间线规则",
@@ -607,10 +605,16 @@ def _agent_pre_llm_context_blocks(request: dict[str, Any]) -> str:
     """Explain retrieval/rule context directly injected into user messages."""
 
     observations: list[tuple[str, str, Any]] = []
+    rag_blocks: list[str] = []
     for message in request.get("messages") or []:
         content = message.get("content")
         if not isinstance(content, str):
             continue
+        rag_match = re.search(
+            r"\[RAG上下文\]\n(.*?)(?=\n\n\[[^\n]+\]\n|\Z)",
+            content, re.DOTALL)
+        if rag_match:
+            rag_blocks.append(rag_match.group(1).strip())
         for match in re.finditer(
                 r"^\[TOOL_RESULT\s+([^\s\]]+)[^\]]*\]\s*(.*)$",
                 content, re.MULTILINE):
@@ -633,22 +637,21 @@ def _agent_pre_llm_context_blocks(request: dict[str, Any]) -> str:
     lines = [
         "#### 直接注入该次 user prompt 的 RAG / 规则上下文",
         "",
-        "这里的检索与规则计算由 Runtime 在调用 LLM 前完成，结果直接写入"
-        " `messages[].content` 的 user prompt。审计文本沿用了"
-        " `[TOOL_CALL]/[TOOL_RESULT]` 内部回执标记，但它们不是模型 tool call，"
-        "也不会出现在 Provider `tools[]` 中。模型原生工具回合才表现为后续"
-        " `assistant → tool` messages。",
-        "",
-        "> **当前实现债务**：Provider 看到的是直接注入的 RAG context；"
-        "但 Runtime 内部尚未把 Retrieval 与 Tool 两条管线彻底拆开，"
-        "检索仍经 `ToolExecutor.execute()`、`tool_results_block` 和"
-        " `[工具观察]` 传递。因此这里描述的是当前真实实现，不声称代码层"
-        "已经完成 RAG/Tool 解耦。",
+        "三类业务检索由独立 `BusinessRagRetriever` 在 LLM 前确定性执行，"
+        "召回结果写入 user message 的 `[RAG上下文]`。它们不经过"
+        " `ToolExecutor`、不生成 assistant→tool 消息、不进入 Provider"
+        " `tools[]`，也不占 Agent tool budget。确定性规则工具仍单独进入"
+        " `[工具观察]`。",
         "",
     ]
-    if not observations:
+    if rag_blocks:
+        lines.append(_details(
+            "展开 [RAG上下文] 原文",
+            "\n\n".join(_text_fence(block) for block in rag_blocks)))
+        lines.append("")
+    if not observations and not rag_blocks:
         lines.append("该次 user prompt 没有额外的 Runtime 检索/规则上下文。")
-    else:
+    if observations:
         lines.extend([
             "| Runtime 数据源 | 上下文类型 | 注入位置 |",
             "|---|---|---|",
@@ -686,9 +689,7 @@ def readable_final_agent_prompts(invocations: list[dict[str, Any]]) -> str:
         ("ProjectAgent", None, "ProjectAgent 最终项目核验请求"),
         ("RiskAgent", None, "RiskAgent 最终风险结论请求"),
         ("EvidenceAgent", None, "EvidenceAgent 最终证据审计请求"),
-        ("ReportAgent", "report_score", "ReportAgent / score 最终重试请求"),
-        ("ReportAgent", "report_risk", "ReportAgent / risk 最终请求"),
-        ("ReportAgent", "report_question", "ReportAgent / question 最终请求"),
+        ("ReportAgent", "report", "ReportAgent 唯一结构化报告请求"),
     ]
     sections: list[str] = []
     for agent, purpose, title in targets:
@@ -1039,7 +1040,7 @@ def make_context_report(audit_dir: Path, font_path: Path) -> Path:
     section_rows = []
     for agent in AGENTS:
         rows = [item for item in invocations if item.get("agentRole") == agent]
-        merged = {key: any(prompt_sections(item)[key] for item in rows) for key in ["策略", "Skill", "请求", "Memory", "共享状态", "工具观察"]}
+        merged = {key: any(prompt_sections(item)[key] for item in rows) for key in ["策略", "Skill", "请求", "RAG", "Memory", "共享状态", "工具观察"]}
         flags = " / ".join(f"{key}:{'有' if value else '无'}" for key, value in merged.items())
         tool_names = ", ".join(sorted(available.get(agent, set()))) or "无"
         stats = per_agent.get(agent) or {}
@@ -1137,12 +1138,13 @@ providerRequest
 │  ├─ user
 │  │  ├─ [当前请求]
 │  │  ├─ [当前目标] / [会话摘要] / [近期消息]（存在才加入）
+│  │  ├─ [RAG上下文]（生成前确定性召回；存在才加入）
 │  │  ├─ [相关记忆]（有合格命中才加入；本例没有）
 │  │  ├─ [共享状态]（简历、JD、上游 Agent 产物）
-│  │  └─ [工具观察]（RAG、规则工具、MCP 返回）
+│  │  └─ [工具观察]（确定性规则工具；存在才加入）
 │  └─ assistant / tool / user follow-up（发生工具回合才追加）
 ├─ tools[]：本轮允许的 function schema（独立字段，不是 system 文本）
-└─ tool_choice：auto 或强制 emit_decision / emit_report_section
+└─ tool_choice：auto 或强制 emit_decision
 ```
 
 ### 5.1 五个 LLM 执行 Agent 的真实上下文库存
@@ -1155,13 +1157,11 @@ providerRequest
 
 ### 5.2 Coordinator 配置与每个 LLM 执行 Agent 的完整请求
 
-Coordinator 也作为第一个 Agent 块列在这里：完整展示仓库中的 `coordinator-system v1`，同时明确标注本轮确定性 planner 短路、Provider 调用为 0，不能把模板冒充成本轮真实请求。随后 Tech / Project / Risk / Evidence 选取各自最后一次有效请求；Report 因为实际分为 score / risk / question 三条并行分支，所以三条都展示，score 选取 `finishReason=length` 后的最终重试。
+Coordinator 也作为第一个 Agent 块列在这里：完整展示仓库中的 `coordinator-system v1`，同时明确标注本轮确定性 planner 短路、Provider 调用为 0，不能把模板冒充成本轮真实请求。随后 Tech / Project / Risk / Evidence 选取各自最后一次有效请求；ReportAgent 只展示唯一一次结构化报告请求。
 
 每个块依次展开：本 Agent 的生产 `SKILL.md` 全文 → 直接注入 user prompt 的 RAG/规则上下文及来源 → 请求参数 → 完整 system/user/assistant/tool messages → 完整 tools schema → 真实 Provider 响应。
 
-特别注意：报告原始审计文本中的 `[TOOL_CALL]/[TOOL_RESULT]` 是 Runtime 内部统一回执格式。对于 `resume_semantic_search`、`knowledge_search` 等检索源，Runtime 在调用 LLM 前完成检索，并把召回结果直接拼入 user message；它们不是 Agent 可调用工具，也不在 Provider `tools[]` 中。只有请求历史里的 `assistant → tool` 才是模型原生 tool call。
-
-这也暴露了当前实现债务：Provider/Agent 视角已经是“RAG context 直接注入 user prompt”，但 Runtime 代码内部仍复用 `ToolExecutor.execute()`、`tool_results_block`、`[工具观察]` 和 `[TOOL_RESULT]` 来承载检索结果。也就是说，**行为上是直接注入，代码抽象上尚未完成 Retrieval/Tool 解耦**；本报告不能把后者美化成已经完成。
+特别注意：JD、当前简历、知识库三类检索都由独立 Retrieval 层在 LLM 前完成，结果位于 `[RAG上下文]`；它们不是 Agent 可调用工具，也不在 Provider `tools[]` 中。只有请求历史里的 `assistant → tool` 才是模型原生 tool call。
 
 {coordinator_prompt_card}
 
@@ -1183,11 +1183,11 @@ Provider 请求里出现过的工具 schema 是“**可以调用**”，响应 `
 
 {called_lines}
 
-其中 ProjectAgent 的可用目录包含 `fetch_fetch`、`exa_web_fetch_exa`、`exa_web_search_exa`；本次 Runtime 指标记录了 `fetch.fetch` 1 次和 `exa.web_fetch_exa` 1 次成功返回。ReportAgent 只有 `emit_report_section`，没有公网 MCP，避免最终报告绕过 EvidenceAgent 自行搜网改写事实。
+其中 ProjectAgent 的可用目录包含 `fetch_fetch`、`exa_web_fetch_exa`、`exa_web_search_exa`；本次 Runtime 指标记录了 `fetch.fetch` 1 次和 `exa.web_fetch_exa` 1 次成功返回。ReportAgent 只有强制结构化提交 `emit_decision`，没有公网 MCP，避免最终报告绕过 EvidenceAgent 自行搜网改写事实。
 
 ## 8. Memory：项目里有，但本例没有硬塞
 
-ECS 恢复后的数据库物理行中仍能看到 `PREFERENCE`、`FAILURE` 等历史名称，但当前 Runtime 和 Java 服务对外只有四种正式 taxonomy：**WORKING、SEMANTIC、EPISODIC、PROCEDURAL**。读取时 `PREFERENCE → SEMANTIC`，`FAILURE → EPISODIC`；它们不是第五、第六种 Memory。历史 `USED` 记录覆盖 Report/Tech/Evidence/Risk/Project 五个 Agent，说明 Memory 子系统真实使用过。
+数据库物理行中可能仍保留历史 taxonomy，但当前 Runtime 和 Java 服务对外只保留三种正式 Memory：**SEMANTIC、EPISODIC、PROCEDURAL**。`PREFERENCE → SEMANTIC`，`FAILURE → EPISODIC`；Working Memory 不再读取或写入。
 
 但是本次代表 Run：
 
@@ -1197,16 +1197,15 @@ ECS 恢复后的数据库物理行中仍能看到 `PREFERENCE`、`FAILURE` 等�
 
 真正命中时，Memory 会位于 user message 中、在共享状态之前，形态为带类型/来源/置信度的相关记忆条目；未命中时该 section 整段省略。
 
-### 8.1 四种正式 Memory：本项目中的具体 case
+### 8.1 三种正式 Memory：本项目中的具体 case
 
 | 类型 | 回答什么问题 | 本项目中的具体写入 case | scope / 默认 TTL | 谁能读取、如何进入 Prompt |
 |---|---|---|---|---|
-| `WORKING` | “本次 Run 临时处理到什么上下文？” | 上传 C-014 后写入 `run_input_context`：简历长度、是否有 JD、runType、topSkills；Evidence 完成后还可写 `evidence_context`，记录已验证/未验证数量 | 强制 `RUN` / 1天；终态接受后归档，待晋升记录转成目标长期类型 | 只对同一 `runId` 可见；Coordinator、ResumeParser、JDAnalysis 可按策略读取，普通 Specialist 默认不读取 |
 | `SEMANTIC` | “这个候选人或用户有哪些稳定事实？” | `candidate_fact`：技能包含 LangGraph、RAG、Milvus，项目包含 ResumAI，经历包含快手/哔哩哔哩；用户明确说“以后优先输出中文”也作为 `SEMANTIC/USER`，不是单独的 PREFERENCE 类型 | 候选人事实 `CONVERSATION`，明确偏好 `USER` / 90天 | 同一候选人后续 revision 或同一用户后续请求检索；以 `[SEMANTIC|src=candidate_fact] ...` 进入 `[相关记忆]` |
 | `EPISODIC` | “之前一次评估发生了什么、得到了什么经验证据？” | `evaluation_insight`：本次建议、关键证据、JD缺口和面试验证重点；`cross_candidate_anchor`：同岗位候选人的总分、JD匹配和最大 gap。失败 Run 也只是 `outcome=FAILURE` 的 EPISODIC | 候选人洞察 `CONVERSATION`，对比锚点 `USER` / 90天 | Tech/Project/Risk/Evidence/Report 可读普通评估 episode；控制面失败 episode 仅 Coordinator 可读，不能进入 Risk/Report |
 | `PROCEDURAL` | “下一次类似任务应该怎样执行？” | `runtime_strategy[RISK_TIMELINE]`：履历风险场景保留 RiskAgent，并让 EvidenceAgent 或 ReportAgent 复核时间线；只保存候选人无关的路由和工具策略 | `USER` / 365天 | Coordinator 规划时优先读取，Specialist 也可读取获批准策略；以 `[PROCEDURAL|src=runtime_strategy] ...` 进入 `[相关记忆]` |
 
-一次成功 Run 的真实生命周期是：Python 先把所有 Runtime 写入暂存成 `WORKING/RUN`；Java 接受成功终态后，才把待晋升记录变成 `SEMANTIC/EPISODIC/PROCEDURAL`，并归档剩余 WORKING。取消、失败或未被接受的 Run 不会把候选人结论污染到长期 Memory。
+一次成功 Run 的真实生命周期是：Python 只在最终 SharedState 中生成三类长期 Memory 候选；Java 接受成功终态后才直接写入 `SEMANTIC/EPISODIC/PROCEDURAL`。取消、失败或未被接受的 Run 不写 Memory，也不再经过 Working 暂存/晋升。
 
 ### 8.2 数据库里真实存在的 Memory 长什么样
 

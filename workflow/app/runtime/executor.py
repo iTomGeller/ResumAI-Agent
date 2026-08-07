@@ -41,19 +41,13 @@ from app.runtime.models import (
     RunPaused,
 )
 from app.runtime.prompts import default_prompt_manager
+from app.runtime.retrieval import BusinessRagRetriever, RetrievalResult
 from app.runtime.builtin_tools import BuiltinToolRegistry
 from app.runtime.skills import default_skill_manager
 from app.runtime.state import SharedState
 from app.runtime.tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
-
-# Section fan-out creates three simultaneous quality-model calls. Under a
-# multi-resume burst, allowing every ReportAgent to fan out multiplies provider
-# contention and worsens both per-run latency and total drain time. The first
-# report keeps the quality-preserving parallel path; concurrent reports fall
-# back to the already validated monolithic Pro synthesis.
-_ACTIVE_PARALLEL_REPORTS = 0
 
 _SOURCE_URL = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
@@ -105,15 +99,6 @@ def _collect_source_urls(*values: Any, limit: int = 12) -> List[str]:
 import os as _os
 
 REPLAN_CONFIDENCE_THRESHOLD = float(_os.getenv("REPLAN_CONFIDENCE_THRESHOLD", "0.55"))
-
-
-def _report_section_timeout_seconds() -> float:
-    """Wall-clock ceiling for one parallel Report section provider call."""
-    raw = _os.getenv("REPORT_SECTION_TIMEOUT_SECONDS", "75")
-    try:
-        return max(0.05, float(raw))
-    except (TypeError, ValueError):
-        return 75.0
 
 
 def _configured_eager_skill_ids() -> set[str]:
@@ -317,8 +302,6 @@ EMIT_REPORT_TOOL = {
                                 "strengths": {"type": "array", "items": {"type": "string"}},
                                 "risks": {
                                     "type": "array", "items": _CANDIDATE_RISK_SCHEMA},
-                                "interviewQuestions": {
-                                    "type": "array", "items": _INTERVIEW_PROBE_SCHEMA},
                                 "interviewProbes": {
                                     "type": "array", "items": _INTERVIEW_PROBE_SCHEMA},
                                 "systemWarnings": {
@@ -331,7 +314,7 @@ EMIT_REPORT_TOOL = {
                                     "type": "array", "items": {"type": "string"}},
                             },
                             "required": ["recommendation", "dimensions", "strengths",
-                                         "risks", "interviewQuestions", "dataQuality"],
+                                         "risks", "interviewProbes", "dataQuality"],
                         },
                     },
                     "required": ["summary", "report"],
@@ -573,6 +556,7 @@ class RunExecutor:
         self.request = request
         self.emitter = emitter
         self.registry = registry or default_agent_registry
+        self.retriever = BusinessRagRetriever()
         self.policy = PolicyBundle.from_config(request.policyId, request.policyConfig)
         self.budget = RunBudget()
         global_llm_limit = max(0, int(self.policy.maxLlmCalls))
@@ -620,6 +604,7 @@ class RunExecutor:
         self.failure_hits: List[Dict[str, Any]] = []
         self.failure_notes: List[str] = []
         self.memory_traces: List[Dict[str, Any]] = []
+        self.pending_memory_writes: List[Dict[str, Any]] = []
         self.final_answer: str = ""
         self.degraded_reasons: List[str] = []
         self.agent_counters: Dict[str, Dict[str, int]] = {}
@@ -1727,12 +1712,6 @@ class RunExecutor:
         # prevents deterministic fast paths from producing phantom standalone
         # Skill/MCP rows in the trace.
         requested_tools = list(definition.tools)
-        if agent_id == "ReportAgent" and self.request.runType not in (
-                "followup", "quick_answer"):
-            requested_tools = [
-                tool for tool in requested_tools
-                if tool not in {"knowledge_search", "resume_semantic_search"}
-            ]
         if progressive_skills:
             requested_tools.append("load_skill")
         # Metadata/body already advertises the exact optional resource paths.
@@ -1741,6 +1720,8 @@ class RunExecutor:
         if any(skill.resource_paths for skill in skills):
             requested_tools.append("read_skill_resource")
 
+        rag_context_block, retrieval_refs = await self._retrieve_rag_context(
+            definition)
         tool_results_block = ""
         pre_llm_tool_call_ids: List[str] = []
         pre_llm_succeeded_tools: set[str] = set()
@@ -2002,6 +1983,7 @@ class RunExecutor:
                 recent_messages=request.recentMessages,
                 conversation_summary=request.conversationSummary or "",
                 memory_block=memory_block,
+                rag_context_block=rag_context_block,
                 tool_results_block=effective_tool_results,
                 output_schema=(REPORT_OUTPUT_SCHEMA if agent_id == "ReportAgent"
                                else AGENT_OUTPUT_SCHEMA))
@@ -2143,44 +2125,13 @@ class RunExecutor:
                 "parentAgentId": agent_id,
                 "contextRole": "MODEL_INPUT",
             }
-            if (is_report and single_pass_evaluation
-                    and self._should_parallel_report_sections(signals)):
-                terminal_available = self.budget.available_llm_calls_for_scope(
-                    self.policy.maxLlmCalls, "terminal")
-                # Keep three calls for the monolithic quality-model fallback
-                # (initial + provider retries). The section fan-out may use
-                # only the remainder, preventing 3 + N + 3 call storms.
-                section_call_budget = min(
-                    4, max(0, terminal_available - 3))
-                parallel_slot = (
-                    section_call_budget >= 3
-                    and self._try_acquire_parallel_report_slot())
-                if parallel_slot:
-                    try:
-                        section_output, section_calls = (
-                            await self._run_parallel_report_sections(
-                                messages,
-                                round_id=round_id,
-                                memory_refs=memory_refs,
-                                skill_refs=skill_refs,
-                                observed_tool_call_ids=observed_tool_call_ids,
-                                is_sparse_resume=bool(
-                                    signals.get("is_sparse_resume")),
-                                max_calls=section_call_budget))
-                    finally:
-                        self._release_parallel_report_slot()
-                    agent_llm_calls += section_calls
-                    if section_output is not None:
-                        decision_iterations += 1
-                        output = self._build_output(
-                            definition, section_output, tool_results_block)
-                        break
             await self.emitter.emit(
                 "llm.context.attached", agent_id=agent_id, payload={
                     **trace_context,
                     "memoryRefs": memory_refs,
                     "skillRefs": skill_refs,
                     "toolCatalogRefs": tool_catalog_refs,
+                    "retrievalRefs": retrieval_refs,
                     "observedToolCallIds": observed_tool_call_ids,
                     "memoryCount": len(memory_refs),
                     "skillCount": len(skill_refs),
@@ -2190,6 +2141,7 @@ class RunExecutor:
                         1 for ref in skill_refs
                         if ref["instructionsAttached"]),
                     "toolCatalogCount": len(tool_catalog_refs),
+                    "retrievalCount": len(retrieval_refs),
                     "messageCount": len(turn_messages),
                     "toolChoice": tool_choice,
                     "occurredAt": _utc_now(),
@@ -3453,22 +3405,6 @@ class RunExecutor:
             facts = self._resume_facts_from_parse(result)
             if facts:
                 self.state.put_artifact("resumeFacts", facts)
-        elif tool in ("knowledge_search", "resume_semantic_search"):
-            metric_result = self._with_measured_retrieval_latency(
-                result, duration_ms)
-            await self._emit_rag_metrics(
-                agent_id, metric_result, str(args.get("query") or ""),
-                tool_name=tool, tool_call_id=tool_call_id,
-                requested_k=int(args.get("topK") or 5))
-        elif tool == "jd_match_search":
-            self._store_jd_match_artifacts(result)
-            metric_result = self._with_measured_retrieval_latency(
-                result, duration_ms)
-            await self._emit_rag_metrics(
-                agent_id, metric_result, "resume_to_jd_catalog",
-                tool_name=tool, tool_call_id=tool_call_id,
-                requested_k=int(args.get("topK") or 3))
-
         defn = self.tools.definitions.get(tool)
         if defn is not None and defn.kind == "mcp":
             server = str(defn.mcp_server or "")
@@ -3615,21 +3551,12 @@ class RunExecutor:
         if not isinstance(report, dict):
             return "ReportAgent structured report 缺失或不是 JSON 对象"
 
-        # ``interviewProbes`` is the established richer runtime field. Accept
-        # it as the compatibility alias of the provider-schema field and
-        # normalize the in-flight decision so persisted output is canonical.
-        probes = report.get("interviewProbes")
-        questions = report.get("interviewQuestions")
-        if isinstance(probes, list) and (
-                not isinstance(questions, list) or not questions):
-            report["interviewQuestions"] = list(probes)
-
         required = (
             "recommendation",
             "dimensions",
             "strengths",
             "risks",
-            "interviewQuestions",
+            "interviewProbes",
             "dataQuality",
         )
         missing = [field for field in required if field not in report]
@@ -3639,7 +3566,7 @@ class RunExecutor:
                 + ", ".join(missing)
             )
         for field in (
-                "dimensions", "strengths", "risks", "interviewQuestions"):
+                "dimensions", "strengths", "risks", "interviewProbes"):
             if not isinstance(report.get(field), list):
                 return (
                     f"ReportAgent structured report 字段 {field} 必须是数组")
@@ -3707,7 +3634,7 @@ class RunExecutor:
 
     async def _emit_rag_metrics(
             self, agent_id: str, result: Any, query: str = "", *,
-            tool_name: str, tool_call_id: str,
+            retrieval_name: str, retrieval_id: str,
             requested_k: Any = None) -> None:
         """Emit measured multi-stage retrieval telemetry.
 
@@ -3823,8 +3750,8 @@ class RunExecutor:
             if isinstance(result.get("agenticRerank"), bool)
             else None)
         payload = {
-            "toolCallId": tool_call_id,
-            "toolName": tool_name,
+            "retrievalId": retrieval_id,
+            "retrievalName": retrieval_name,
             "query": query[:200] if query else "",
             "requestedK": int(requested_k) if isinstance(
                 requested_k, (int, float)) else None,
@@ -3899,7 +3826,7 @@ class RunExecutor:
         }
         await self.emitter.emit(
             "retrieval.completed", agent_id=agent_id,
-            tool_name=tool_name, payload=payload)
+            tool_name=f"retrieval.{retrieval_name}", payload=payload)
 
     def _store_jd_match_artifacts(self, result: Any) -> None:
         """Persist hybrid JD matches + effectiveJd for Tech coverage / sync."""
@@ -4663,17 +4590,10 @@ class RunExecutor:
             self.state.apply_artifacts({"effectiveJd": jd})
 
         if resume and not arts.get("jdMatches"):
-            args = {"resumeText": resume}
-            call = await self.tools.execute(
-                "CoordinatorAgent", "jd_match_search", args)
-            if call.status == "SUCCEEDED":
-                # Coordinator preflight is the normal producer of JD matches.
-                # Record it through the same path as Agent-owned calls so Ops
-                # receives retrieval.completed with rank and stage telemetry.
-                await self._record_tool_success(
-                    "CoordinatorAgent", "jd_match_search", args,
-                    call.result, tool_call_id=call.tool_call_id,
-                    duration_ms=call.duration_ms)
+            retrieval = await self.retriever.retrieve(
+                "jd", resume_text=resume, top_k=3)
+            await self._record_retrieval(
+                "CoordinatorAgent", retrieval, requested_k=3)
 
         # Refresh presence after JD match may have landed.
         arts = self.state.artifacts()
@@ -4691,15 +4611,11 @@ class RunExecutor:
         # ResumeParserAgent: skip re-parse when preflight already populated facts.
         if definition.agent_id == "ResumeParserAgent" and resume and not parsed_already:
             steps.append(("parse_resume", {"resumeText": resume}))
-        elif definition.agent_id == "JDAnalysisAgent" and resume:
-            if "jdMatches" not in artifacts:
-                steps.append(("jd_match_search", {"resumeText": resume}))
         elif definition.agent_id == "ProjectAgent" and resume:
             # Gather cheap internal project evidence before the model turn.
             # Otherwise the model predictably spends its first action turn on
             # these two builtins and cannot progress from Skill activation to
             # optional public MCP research within the bounded latency budget.
-            query = self._build_project_search_query(resume, artifacts)
             project_claims: List[str] = []
             facts = artifacts.get("resumeFacts") or {}
             if isinstance(facts, dict):
@@ -4724,12 +4640,6 @@ class RunExecutor:
                     "resumeText": resume,
                     "claims": project_claims,
                 }))
-            if query:
-                steps.append(("resume_semantic_search", {
-                    "query": query,
-                    "resumeText": resume,
-                    "topK": 5,
-                }))
         elif definition.agent_id == "RiskAgent" and resume \
                 and "timelineCheck" not in artifacts:
             steps.append(("check_timeline", {"resumeText": resume}))
@@ -4743,18 +4653,6 @@ class RunExecutor:
             if effective_jd and "jdCoverage" not in artifacts:
                 steps.append(("calculate_jd_coverage",
                               {"resumeText": resume, "jdText": effective_jd}))
-            # One broad evidence recall prevents a native model turn from
-            # issuing several near-duplicate semantic searches and exhausting
-            # the per-agent tool budget.  A successful prestep is removed from
-            # the later model catalog; Skill/MCP choices remain model-made.
-            tech_query = self._build_tech_search_query(
-                resume, effective_jd, artifacts)
-            if tech_query:
-                steps.append(("resume_semantic_search", {
-                    "query": tech_query,
-                    "resumeText": resume,
-                    "topK": 5,
-                }))
         elif definition.agent_id == "EvidenceAgent" and resume:
             claims = self.state.claims_for_verification()
             if claims:
@@ -4767,21 +4665,121 @@ class RunExecutor:
                                    artifacts.get("mcpEvidence") or [])}))
         elif definition.agent_id == "ResumeOptimizeAgent" and resume:
             steps.append(("resume_lint", {"resumeText": resume}))
-        # Knowledge RAG: inject relevant evaluation guidelines from KB
-        if definition.agent_id in ("ReportAgent", "TechAgent") and resume:
-            kb_query = self._build_knowledge_query(definition.agent_id, resume, artifacts, request)
-            if kb_query:
-                steps.append(("knowledge_search", {"query": kb_query}))
-        # Copilot 对话式 RAG
-        if definition.agent_id == "ReportAgent" \
-                and request.runType in ("followup", "quick_answer") \
-                and (request.userMessage or "").strip():
-            query = request.userMessage.strip()[:200]
-            steps.append(("knowledge_search", {"query": query}))
-            if resume:
-                steps.append(("resume_semantic_search", {
-                    "query": query, "resumeText": resume, "topK": 5}))
         return steps
+
+    def _rag_steps(self, definition: AgentDefinition) -> List[Dict[str, Any]]:
+        """Build deterministic retrieval work before the first model turn."""
+        request = self.request
+        resume = request.resumeText or ""
+        artifacts = self.state.artifacts()
+        effective_jd = str(
+            artifacts.get("effectiveJd") or request.jobDescription or "")
+        steps: List[Dict[str, Any]] = []
+        if definition.agent_id == "JDAnalysisAgent" and resume \
+                and not artifacts.get("jdMatches"):
+            steps.append({"source": "jd", "resume_text": resume, "top_k": 3})
+        if definition.agent_id == "ProjectAgent" and resume:
+            query = self._build_project_search_query(resume, artifacts)
+            if query:
+                steps.append({
+                    "source": "resume", "query": query, "top_k": 5,
+                    "resume_text": resume, "job_description": effective_jd})
+        if definition.agent_id == "TechAgent" and resume:
+            query = self._build_tech_search_query(
+                resume, effective_jd, artifacts)
+            if query:
+                steps.append({
+                    "source": "resume", "query": query, "top_k": 5,
+                    "resume_text": resume, "job_description": effective_jd})
+            kb_query = self._build_knowledge_query(
+                definition.agent_id, resume, artifacts, request)
+            if kb_query:
+                steps.append({
+                    "source": "knowledge", "query": kb_query, "top_k": 5})
+        if definition.agent_id == "ReportAgent":
+            if request.runType in ("followup", "quick_answer") \
+                    and (request.userMessage or "").strip():
+                query = request.userMessage.strip()[:200]
+            else:
+                query = self._build_knowledge_query(
+                    definition.agent_id, resume, artifacts, request)
+            if query:
+                steps.append({
+                    "source": "knowledge", "query": query, "top_k": 5})
+            if resume and request.runType in ("followup", "quick_answer"):
+                steps.append({
+                    "source": "resume", "query": query, "top_k": 5,
+                    "resume_text": resume, "job_description": effective_jd})
+        return steps
+
+    async def _retrieve_rag_context(
+            self, definition: AgentDefinition,
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        blocks: List[str] = []
+        refs: List[Dict[str, Any]] = []
+        artifacts = self.state.artifacts()
+        if definition.agent_id == "JDAnalysisAgent" \
+                and artifacts.get("jdMatches"):
+            retrieval_id = f"rag-state-{uuid.uuid4().hex[:12]}"
+            payload = {
+                "items": artifacts.get("jdMatches"),
+                "effectiveJd": artifacts.get("effectiveJd"),
+                "source": "preflight_jd_retrieval",
+            }
+            blocks.append(
+                f"[来源=jd retrievalId={retrieval_id}]\n"
+                + json.dumps(
+                    payload, ensure_ascii=False, separators=(",", ":"))[:6000])
+            refs.append({
+                "retrievalId": retrieval_id,
+                "source": "jd",
+                "query": "resume_to_jd_catalog",
+                "status": "REUSED_PREFLIGHT",
+                "durationMs": 0,
+            })
+        for step in self._rag_steps(definition):
+            source = str(step.pop("source"))
+            retrieval = await self.retriever.retrieve(source, **step)
+            await self._record_retrieval(
+                definition.agent_id, retrieval,
+                requested_k=step.get("top_k"))
+            refs.append({
+                "retrievalId": retrieval.retrieval_id,
+                "source": retrieval.source,
+                "query": retrieval.query,
+                "status": "SUCCEEDED" if retrieval.succeeded else "FAILED",
+                "durationMs": retrieval.duration_ms,
+            })
+            if retrieval.succeeded:
+                payload = json.dumps(
+                    retrieval.result, ensure_ascii=False, separators=(",", ":"))
+                blocks.append(
+                    f"[来源={retrieval.source} "
+                    f"retrievalId={retrieval.retrieval_id}]\n{payload[:6000]}")
+        return "\n\n".join(blocks), refs
+
+    async def _record_retrieval(
+            self, agent_id: str, retrieval: RetrievalResult, *,
+            requested_k: Any = None) -> None:
+        if retrieval.succeeded:
+            if retrieval.source == "jd":
+                self._store_jd_match_artifacts(retrieval.result)
+            await self._emit_rag_metrics(
+                agent_id, retrieval.result, retrieval.query,
+                retrieval_name=retrieval.source,
+                retrieval_id=retrieval.retrieval_id,
+                requested_k=requested_k)
+            return
+        await self.emitter.emit(
+            "retrieval.failed", agent_id=agent_id,
+            tool_name=f"retrieval.{retrieval.source}", payload={
+                "retrievalId": retrieval.retrieval_id,
+                "retrievalName": retrieval.source,
+                "query": retrieval.query[:200],
+                "error": retrieval.error,
+                "durationMs": retrieval.duration_ms,
+                "occurredAt": _utc_now(),
+            })
 
     def _build_knowledge_query(self, agent_id: str, resume: str,
                                artifacts: Dict[str, Any],
@@ -4995,40 +4993,13 @@ class RunExecutor:
             arts = self.state.artifacts()
             final_report = arts.get("finalReport") or {}
 
-            # 0a) WORKING: raw input context for this run only.
             resume_text = self.request.resumeText or ""
             parse_output = arts.get("parsedResume") \
                 if isinstance(arts.get("parsedResume"), dict) else {}
             resume_facts = arts.get("resumeFacts") \
                 if isinstance(arts.get("resumeFacts"), dict) else {}
             parsed = {**parse_output, **resume_facts}
-            if resume_text:
-                name = ""
-                if isinstance(parsed, dict):
-                    name = parsed.get("name") or parsed.get("candidateName") or ""
-                input_snapshot = (
-                    f"候选人: {name or '未知'}. "
-                    f"简历长度: {len(resume_text)}字. "
-                    f"JD: {(self.request.jobDescription or '')[:100] or '未提供'}. "
-                    f"运行类型: {self.request.runType}. "
-                    f"关键词: {resume_text[:200]}"
-                )
-                await self.memory.write(
-                    type_="WORKING", owner_scope="RUN",
-                    content=input_snapshot[:500],
-                    structured={
-                        "factKey": "run_input_context",
-                        "memoryKind": "working",
-                        "candidateName": name,
-                        "resumeLength": len(resume_text),
-                        "runType": self.request.runType,
-                        "hasJd": bool((self.request.jobDescription or "").strip()),
-                        "topSkills": (parsed.get("skills") or [])[:8]
-                                     if isinstance(parsed, dict) else [],
-                    },
-                    source="run_input", confidence=1.0)
-
-            # 0b) SEMANTIC: durable candidate facts extracted from the actual
+            # SEMANTIC: durable candidate facts extracted from the actual
             # resume. This is deliberately not an evaluation conclusion.
             semantic_written = False
             if isinstance(parsed, dict):
@@ -5071,7 +5042,7 @@ class RunExecutor:
                         fact_parts.append(f"经历={'; '.join(experiences[:3])}")
                     if education:
                         fact_parts.append(f"教育={'; '.join(education[:2])}")
-                    await self.memory.write(
+                    await self._queue_memory_write(
                         type_="SEMANTIC", owner_scope="CONVERSATION",
                         content=("候选人事实: " + " | ".join(fact_parts))[:900],
                         structured={
@@ -5092,28 +5063,8 @@ class RunExecutor:
                         ttl_days=90)
                     semantic_written = True
 
-            # 0c) WORKING: evidence & verification context.
             evidence_ledger = arts.get("evidence_ledger") or arts.get("evidenceLedger") or {}
-            if isinstance(evidence_ledger, dict) and evidence_ledger:
-                verified = [k for k, v in evidence_ledger.items()
-                            if isinstance(v, dict) and v.get("verified")]
-                unverified = [k for k, v in evidence_ledger.items()
-                              if isinstance(v, dict) and not v.get("verified")]
-                await self.memory.write(
-                    type_="WORKING", owner_scope="RUN",
-                    content=(f"证据核验: {len(verified)}项已验证, {len(unverified)}项未验证. "
-                             f"已验证: {'; '.join(verified[:4])}"),
-                    structured={
-                        "factKey": "evidence_context",
-                        "memoryKind": "working",
-                        "verifiedCount": len(verified),
-                        "unverifiedCount": len(unverified),
-                        "verified": verified[:5],
-                        "unverified": unverified[:5],
-                    },
-                    source="evidence_agent", confidence=0.9)
-
-            # 1) EPISODIC: evidence-chain insight (NOT conclusion reiteration)
+            # EPISODIC: evidence-chain insight (NOT conclusion reiteration)
             if isinstance(final_report, dict) and final_report.get("recommendation"):
                 rec = final_report["recommendation"]
                 dims = final_report.get("dimensions") or []
@@ -5152,7 +5103,7 @@ class RunExecutor:
                     p.get("question", "")[:40] for p in probes[:3]
                     if isinstance(p, dict) and p.get("question"))
 
-                await self.memory.write(
+                await self._queue_memory_write(
                     type_="EPISODIC", owner_scope="CONVERSATION",
                     content=(f"[评估洞察] {name or '候选人'} \u2192 {rec}\n"
                              f"关键证据:\n{evidence_text}\n"
@@ -5174,7 +5125,7 @@ class RunExecutor:
                         (d.get("score") for d in dims
                          if isinstance(d, dict) and "JD" in (d.get("name") or "").upper()),
                         None)
-                    await self.memory.write(
+                    await self._queue_memory_write(
                         type_="EPISODIC", owner_scope="USER",
                         content=(f"[对比锚点] 岗位={job_focus[:30]} | "
                                  f"候选人={name or '?'} | "
@@ -5198,7 +5149,7 @@ class RunExecutor:
                 tech_claims = [f.get("text", "")[:60] for f in tech_findings[:5]
                                if isinstance(f, dict) and f.get("text")]
                 if tech_claims:
-                    await self.memory.write(
+                    await self._queue_memory_write(
                         type_="EPISODIC", owner_scope="CONVERSATION",
                         content=f"技术发现: {'; '.join(tech_claims)}",
                         structured={"factKey": "tech_findings",
@@ -5211,7 +5162,7 @@ class RunExecutor:
                 verified_risks = [r for r in risks_found
                                   if isinstance(r, dict) and r.get("severity") in ("HIGH", "MEDIUM")]
                 if verified_risks:
-                    await self.memory.write(
+                    await self._queue_memory_write(
                         type_="EPISODIC", owner_scope="CONVERSATION",
                         content=(f"已识别风险({len(verified_risks)}项): " +
                                  "; ".join(r.get("claim", "")[:50] for r in verified_risks[:4])),
@@ -5228,7 +5179,7 @@ class RunExecutor:
                     p.get("question", "")[:50] for p in probes[:5]
                     if isinstance(p, dict) and p.get("question"))
                 if probe_summary:
-                    await self.memory.write(
+                    await self._queue_memory_write(
                         type_="EPISODIC", owner_scope="CONVERSATION",
                         content=f"面试追问要点({len(probes)}条): {probe_summary}",
                         structured={"factKey": "interview_probes",
@@ -5261,7 +5212,7 @@ class RunExecutor:
                     selected_agents)
                 strategy_key = (
                     f"execution_strategy:{self.request.runType}:{strategy_class}")
-                await self.memory.write(
+                await self._queue_memory_write(
                     type_="PROCEDURAL", owner_scope="USER",
                     content=(
                         f"简历评估执行策略[{strategy_class}]: {strategy_hint} "
@@ -5294,11 +5245,9 @@ class RunExecutor:
                 strategy_written = True
 
             # Emit memory write event
-            write_types = ["run_input_context"]
+            write_types = []
             if semantic_written:
                 write_types.append("candidate_profile")
-            if evidence_ledger:
-                write_types.append("evidence_context")
             if isinstance(final_report, dict) and final_report.get("recommendation"):
                 write_types.extend(["evaluation_result", "interview_probes"])
             if tech_findings:
@@ -5320,7 +5269,7 @@ class RunExecutor:
 
             # 6) User preferences (unchanged)
             for preference in self._explicit_preferences():
-                await self.memory.write(
+                await self._queue_memory_write(
                     type_="SEMANTIC", owner_scope="USER",
                     content=f"{preference['kind']}: {preference['text']}",
                     structured=preference,
@@ -5331,6 +5280,8 @@ class RunExecutor:
                 payload={"durationMs": 0, "llmCalls": 0, "toolCalls": 0,
                          "summary": f"记忆写入完成",
                          "confidence": 1.0})
+            self.state.data["memoryWriteCandidates"] = list(
+                self.pending_memory_writes)
         except Exception as exc:  # noqa: BLE001
             logger.info("memory write-back skipped: %s", exc)
             await self.emitter.emit(
@@ -5338,6 +5289,35 @@ class RunExecutor:
                 payload={"durationMs": 0, "llmCalls": 0, "toolCalls": 0,
                          "summary": f"记忆写入跳过: {exc}",
                          "confidence": 0.0})
+
+    async def _queue_memory_write(
+            self, *, type_: str, owner_scope: str, content: str,
+            structured: Optional[Dict[str, Any]] = None,
+            source: str = "model_generated",
+            source_id: Optional[str] = None, confidence: float = 0.5,
+            ttl_days: Optional[int] = None) -> Optional[str]:
+        """Queue a long-term memory for Java to persist after terminal accept.
+
+        No RUN-scoped or Working Memory row is created. Keeping persistence at
+        the accepted terminal boundary prevents cancelled/failed runs from
+        leaking candidate conclusions into durable memory.
+        """
+        taxonomy = str(type_ or "").strip().upper()
+        if taxonomy not in {"SEMANTIC", "EPISODIC", "PROCEDURAL"}:
+            return None
+        candidate_id = f"pending-{uuid.uuid4().hex[:16]}"
+        self.pending_memory_writes.append({
+            "candidateId": candidate_id,
+            "type": taxonomy,
+            "ownerScope": owner_scope,
+            "content": content,
+            "structuredContent": dict(structured or {}),
+            "source": source,
+            "sourceId": source_id,
+            "confidence": confidence,
+            "ttlDays": ttl_days,
+        })
+        return candidate_id
 
     def _result(self, status: str, answer: str, *, error_code: Optional[str] = None,
                 error_message: Optional[str] = None,

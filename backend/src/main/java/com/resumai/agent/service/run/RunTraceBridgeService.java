@@ -1245,6 +1245,9 @@ public class RunTraceBridgeService {
         if (toolName == null) {
             return "builtin";
         }
+        if (toolName.startsWith("retrieval.")) {
+            return "retrieval";
+        }
         if (toolName.startsWith("mcp_") || toolName.contains(".")) {
             return "mcp";
         }
@@ -1256,10 +1259,6 @@ public class RunTraceBridgeService {
                 "locate_evidence", "verify_report_evidence", "resume_lint",
                 "validate_report_schema").contains(toolName)) {
             return "builtin";
-        }
-        if (Set.of("knowledge_search", "resume_semantic_search", "jd_match_search")
-                .contains(toolName)) {
-            return "retrieval";
         }
         if ("external_profile_lookup".equals(toolName)) {
             return "external";

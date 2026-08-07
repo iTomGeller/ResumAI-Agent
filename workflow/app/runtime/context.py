@@ -120,7 +120,8 @@ class ContextManager:
                  skill_instructions: str, user_request: str, current_goal: str,
                  shared_state_digest: str, recent_messages: List[Dict[str, Any]],
                  conversation_summary: str, memory_block: str,
-                 tool_results_block: str, output_schema: str) -> List[Dict[str, str]]:
+                 rag_context_block: str, tool_results_block: str,
+                 output_schema: str) -> List[Dict[str, str]]:
         prepared = self.prepare_messages(recent_messages, conversation_summary)
 
         system_block = self._cap(system_prompt, self.budget.systemBudget)
@@ -151,6 +152,9 @@ class ContextManager:
                 f"{str(m.get('content') or '')[:400]}"
                 for m in prepared["kept"][-8:])
             user_block_sections.append("[近期消息]\n" + history)
+        if rag_context_block:
+            user_block_sections.append("[RAG上下文]\n" + self._cap(
+                rag_context_block, self.budget.toolResultBudget))
         if memory_block:
             user_block_sections.append("[相关记忆]\n" + self._cap(
                 memory_block, self.budget.memoryBudget))
@@ -195,6 +199,8 @@ class ContextManager:
                     kept_sections.append(section)
                 elif header.startswith("[工具观察]"):
                     kept_sections.append(self._summarize_tools(section))
+                elif header.startswith("[RAG上下文]"):
+                    kept_sections.append(section[:1600])
                 elif header.startswith("[近期消息]"):
                     lines = section.splitlines()
                     kept_sections.append("\n".join(lines[:1] + lines[-4:]))

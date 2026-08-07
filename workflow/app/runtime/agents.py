@@ -54,7 +54,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         "JDAnalysisAgent", "JD 分析", "岗位要求提取与归一化",
         ("jd_analysis",),
         skills=(),
-        tools=("jd_match_search", "knowledge_search"),
+        tools=(),
         max_iterations=2, max_tool_calls=4, timeout_seconds=150,
         output_type="jd_requirements",
         requires_artifacts=("resume_facts",),
@@ -64,7 +64,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         "TechAgent", "技术评估", "技能与 JD 匹配、深度信号评估",
         ("tech_evaluation",),
         skills=("assess-technical-evidence", "assess-production-engineering"),
-        tools=("calculate_jd_coverage", "resume_semantic_search", "knowledge_search"),
+        tools=("calculate_jd_coverage",),
         # Four deterministic pre-steps may precede Skill + documentation MCP
         # calls; five made valid provider actions fail as budget exhausted.
         max_iterations=2, max_tool_calls=10, timeout_seconds=240,
@@ -76,7 +76,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         "ProjectAgent", "项目分析", "项目复杂度、贡献与真实性",
         ("project_analysis",),
         skills=("ground-project-claims", "retrieve-public-candidate-evidence"),
-        tools=("locate_evidence", "resume_semantic_search"),
+        tools=("locate_evidence",),
         mcp_servers=("exa", "fetch"),
         # External evidence may require preflight + two Skills + several live
         # provider calls in one model-authored action batch.
@@ -113,13 +113,10 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         "ReportAgent", "报告生成", "汇总证据生成最终回答",
         ("report_generation",),
         skills=(),
-        # knowledge_search / resume_semantic_search: Copilot 追问（followup/
-        # quick_answer 只有 ReportAgent）需要对话式 RAG——先查评估标准与简历
-        # 证据再回答。Report 不直接调用公网 MCP。
-        # Final output is already provider-schema constrained and validated
-        # again at the runtime boundary.  The retrieval tools are exposed only
-        # for conversational follow-up, never for a full evaluation summary.
-        tools=("knowledge_search", "resume_semantic_search"),
+        # Full evaluation and Copilot follow-up both use deterministic
+        # pre-generation RAG injected into the user prompt. ReportAgent has no
+        # model-callable retrieval or public-network tools.
+        tools=(),
         max_iterations=2, max_tool_calls=4, timeout_seconds=240,
         failure_policy="abort", output_type="report",
         # evidence_ledger is preferred when present; followup/quick_answer may

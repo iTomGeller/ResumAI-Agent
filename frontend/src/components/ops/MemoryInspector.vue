@@ -31,7 +31,7 @@ const availableTypes = computed(() => {
 });
 const usageTypeCounts = computed(() => {
   const counts: Record<string, number> = {
-    SEMANTIC: 0, EPISODIC: 0, PROCEDURAL: 0, WORKING: 0,
+    SEMANTIC: 0, EPISODIC: 0, PROCEDURAL: 0,
   };
   for (const row of (props.panel?.usage || [])) {
     const type = canonicalType(row);
@@ -123,15 +123,14 @@ function ttlChipClass(state?: string): string {
       <div><span>Semantic used</span><strong>{{ usageTypeCounts.SEMANTIC }}</strong></div>
       <div><span>Episodic used</span><strong>{{ usageTypeCounts.EPISODIC }}</strong></div>
       <div><span>Procedural used</span><strong>{{ usageTypeCounts.PROCEDURAL }}</strong></div>
-      <div><span>Working used</span><strong>{{ usageTypeCounts.WORKING }}</strong></div>
       <div><span>TTL 有效</span><strong>{{ ttlSummary.ACTIVE }}</strong></div>
       <div><span>7天内到期</span><strong>{{ ttlSummary.EXPIRING_SOON }}</strong></div>
       <div><span>已到期</span><strong>{{ ttlSummary.EXPIRED }}</strong></div>
     </div>
     <div class="ttl-policy card">
       <strong>TTL 策略：</strong>绝对过期，召回不会续期；
-      默认 Working {{ ttlDefaults.WORKING ?? '-' }}天、Semantic {{ ttlDefaults.SEMANTIC ?? '-' }}天、
-      Episodic {{ ttlDefaults.EPISODIC ?? '-' }}天、Procedural {{ ttlDefaults.PROCEDURAL ?? '-' }}天。
+      默认 Semantic {{ ttlDefaults.SEMANTIC ?? '-' }}天、Episodic {{ ttlDefaults.EPISODIC ?? '-' }}天、
+      Procedural {{ ttlDefaults.PROCEDURAL ?? '-' }}天。
       单条记录若写入了不同 TTL，会标记“写入覆盖”。
     </div>
     <div class="card table-wrap">

@@ -83,7 +83,7 @@ public class OpsDebugService {
             "retrieval.started", "retrieval.completed", "retrieval.failed");
 
     public static final Set<String> RETRIEVAL_TOOL_NAMES = Set.of(
-            "knowledge_search", "resume_semantic_search", "jd_match_search");
+            "retrieval.knowledge", "retrieval.resume", "retrieval.jd");
 
     private static final Set<String> BUSINESS_ARTIFACT_KEYS = Set.of(
             "resumeFacts", "parsedResume", "technicalFindings", "finalReport",

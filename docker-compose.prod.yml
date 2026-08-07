@@ -92,7 +92,6 @@ services:
       # before the full instructions enter its context.  Eager loading remains
       # an explicit benchmark/debug override only.
       SKILL_EAGER_IDS: ${SKILL_EAGER_IDS:-}
-      REPORT_PARALLEL_SECTIONS: ${REPORT_PARALLEL_SECTIONS:-always}
       LLM_STREAM_REPORT_SECTIONS: ${LLM_STREAM_REPORT_SECTIONS:-1}
       # EXP-7 replan sensitivity knob (default matches executor fallback)
       REPLAN_CONFIDENCE_THRESHOLD: ${REPLAN_CONFIDENCE_THRESHOLD:-0.55}

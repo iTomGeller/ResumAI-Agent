@@ -65,7 +65,8 @@ Coordinator 规则优先：简单请求（时间线/改写/追问等）直接映
 
 - Token 估算区分 CJK/ASCII 并用真实 API usage 持续校准（`context.calibrate`）。
 - 压缩保留最新请求/目标/约束，Tool Call 与 Result 按 `toolCallId` 严格配对（数量对不上也会报违规）；CompactionRecord 真实记录 messageId 范围并落库 `context_snapshot`。
-- Memory 分层（WORKING/CONVERSATION/EPISODIC/USER_PREFERENCE/HR_FEEDBACK/DOMAIN/FAILURE）：Episodic/Failure 由 Java 在每次 Run 终态写入；用户偏好只从显式表述抽取（`_explicit_preferences`），模型推断不落长期记忆；检索按 scope 隔离并做敏感信息过滤。
+- JD、当前简历、知识库三类 RAG 由独立 Retrieval 层在生成前执行，结果进入 `[RAG上下文]`，不进入 Provider 工具目录。
+- Memory 只保留 `SEMANTIC / EPISODIC / PROCEDURAL`：Python 生成候选，Java 只在成功终态被接受后直接落库；Working Memory 不再读写。用户偏好只从显式表述抽取，模型推断不落长期记忆。
 
 ## 7. 证据政策
 
