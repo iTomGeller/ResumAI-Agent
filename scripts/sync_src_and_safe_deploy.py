@@ -75,7 +75,8 @@ def load_env() -> dict[str, str]:
         k, v = line.split("=", 1)
         env[k.strip()] = v.strip()
     # Explicit one-off target values override a stale ignored deployment file.
-    for key in list(env) + ["ALIYUN_HOST", "ALIYUN_USER", "ALIYUN_PASSWORD"]:
+    for key in list(env) + [
+            "ALIYUN_HOST", "ALIYUN_USER", "ALIYUN_PASSWORD", "SKIP_TESTS"]:
         if os.environ.get(key):
             env[key] = os.environ[key]
     return env
