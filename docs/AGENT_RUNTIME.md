@@ -54,6 +54,12 @@ Coordinator 规则优先：简单请求（时间线/改写/追问等）直接映
 
 并行组内每个 Agent 只读 SharedState 快照视图，输出串行合并；同键冲突写入 `conflicts` 而非覆盖。ReportAgent 是分析链显式终点：它失败时结果只能是标注过的 `PARTIAL_SUCCESS` 降级输出。
 
+### 4.1 Run 接收与 LLM 并发不是同一个粒度
+
+当前 LangGraph Run 通过 `graph.astream(...)` 异步执行，每个 `/agent/runs` 请求都会注册独立 `asyncio.Task`。Java 的全局 permit 只限制同时进入启动、Memory/RAG 和首轮 Prompt 准备的 Run；当 Runtime 发出首个 `llm.queued` 或 `llm.started` 事件时，该 permit 通过 `runId + globalPermitId` CAS 只释放一次，新会话的 Run 随即可进入 LangGraph。
+
+真正昂贵的模型并发由 Python `LLM_MAX_CONCURRENT` semaphore 在**每次 LLM 调用**处限制，调用结束立即释放。conversation permit 仍贯穿整个 workflow，保证同一会话 revision 串行。因此一个 Run 等待模型网络 I/O 时不会继续占用全局 Run admission，但也不会突破模型供应商并发上限。
+
 ## 5. 失败、预算与 Loop Guard
 
 - 预算：Run 级 LLM/Tool/Token/超时 + Agent 级迭代/工具/超时。

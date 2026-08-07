@@ -319,6 +319,7 @@ public class RunLifecycleService {
     // ------------------------------------------------------------------
 
     private static final Map<String, String> PHASE_STATUS = Map.of(
+            "llm.queued", RunStatus.WAITING_LLM.name(),
             "llm.started", RunStatus.WAITING_LLM.name(),
             "llm.completed", RunStatus.RUNNING.name(),
             "llm.failed", RunStatus.RUNNING.name(),
@@ -347,6 +348,11 @@ public class RunLifecycleService {
             eventService.publish(runId, run.getConversationId(), run.getTraceId(),
                     eventType, agentId, toolName, eventPayload);
             return;
+        }
+        if ("llm.queued".equals(eventType) || "llm.started".equals(eventType)) {
+            boolean released = releasePreLlmAdmissionPermit(run);
+            eventPayload.put("preLlmAdmissionPermitReleased", released);
+            eventPayload.put("providerConcurrencyOwner", "python_llm_semaphore");
         }
         eventService.publish(runId, run.getConversationId(), run.getTraceId(),
                 eventType, agentId, toolName, eventPayload);
@@ -378,6 +384,32 @@ public class RunLifecycleService {
             runMapper.update(null, update);
         }
         recordStructuredEvent(run, eventType, agentId, toolName, eventPayload);
+    }
+
+    /**
+     * Detach the coarse Java admission slot at the first blocking LLM boundary.
+     * Parallel agents may report this boundary concurrently, so the DB compare-
+     * and-set guarantees that exactly one callback releases the Redis permit.
+     * The conversation permit remains held until pause/terminal state.
+     */
+    private boolean releasePreLlmAdmissionPermit(AgentRun run) {
+        String permitId = run.getGlobalPermitId();
+        if (!StringUtils.hasText(permitId)) {
+            return false;
+        }
+        UpdateWrapper<AgentRun> clear = new UpdateWrapper<>();
+        clear.eq("run_id", run.getRunId())
+                .eq("global_permit_id", permitId)
+                .in("status", RunStatus.ACTIVE)
+                .set("global_permit_id", null)
+                .set("updated_at", LocalDateTime.now());
+        if (runMapper.update(null, clear) == 0) {
+            return false;
+        }
+        permitService.releaseGlobal(permitId);
+        log.debug("released pre-LLM admission permit run={} event boundary",
+                run.getRunId());
+        return true;
     }
 
     private void recordStructuredEvent(AgentRun run, String eventType, String agentId,

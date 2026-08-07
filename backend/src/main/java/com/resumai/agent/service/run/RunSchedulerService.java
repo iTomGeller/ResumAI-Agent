@@ -26,8 +26,8 @@ import org.springframework.util.StringUtils;
  * Dispatcher + watchdog for conversational runs.
  *
  * <p>Dispatch: pull QUEUED runs (FIFO per conversation), acquire the global
- * expirable permit (max 12 by the measured single-node default) and the
- * conversation permit (max 1),
+ * pre-LLM admission permit (max 12 by default) and the conversation permit
+ * (max 1),
  * CAS QUEUED→STARTING, then hand off to the lifecycle service. Watchdog:
  * renew permit leases for healthy runs, time out overdue runs, force-close
  * stuck CANCELLING/STARTING runs, and recover orphans after restart.</p>
@@ -137,7 +137,7 @@ public class RunSchedulerService {
             }
             String globalPermit = permitService.tryAcquireGlobal();
             if (globalPermit == null) {
-                return; // at capacity — later conversations must wait
+                return; // pre-LLM admission is full; retry next dispatch tick
             }
             String convPermit = permitService.tryAcquireConversation(run.getConversationId());
             if (convPermit == null) {
@@ -328,10 +328,14 @@ public class RunSchedulerService {
                 List.copyOf(RunStatus.ACTIVE), 500);
         List<Map<String, Object>> runs = new ArrayList<>();
         int withCheckpoint = 0;
+        int preLlmAdmissionHeld = 0;
         for (AgentRun run : active) {
             boolean checkpoint = StringUtils.hasText(run.getExecutionSnapshot());
             if (checkpoint) {
                 withCheckpoint++;
+            }
+            if (StringUtils.hasText(run.getGlobalPermitId())) {
+                preLlmAdmissionHeld++;
             }
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("runId", run.getRunId());
@@ -343,6 +347,13 @@ public class RunSchedulerService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("draining", draining);
         out.put("activeCount", active.size());
+        out.put("preLlmAdmissionCapacity",
+                permitService.globalAdmissionCapacity());
+        out.put("preLlmAdmissionAvailable",
+                permitService.availableGlobalPermits());
+        out.put("preLlmAdmissionHeldCount", preLlmAdmissionHeld);
+        out.put("llmDetachedActiveCount",
+                Math.max(0, active.size() - preLlmAdmissionHeld));
         out.put("checkpointedCount", withCheckpoint);
         out.put("readyToRestart", active.isEmpty()
                 || withCheckpoint == active.size());

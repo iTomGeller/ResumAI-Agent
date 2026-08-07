@@ -6,6 +6,7 @@
 > - ReportAgent 只有一个实例、一次完整结构化报告路径；已取消 score/risk/question 三分支及对应环境开关。
 > - Memory 只有 `SEMANTIC / EPISODIC / PROCEDURAL` 三类。Working Memory 不再读写；Python 把长期 Memory 候选放入最终 SharedState，Java 仅在成功终态被接受后直写，失败/取消 Run 不写。
 > - 当前 ECS 索引：JD 124 份/554 个 live chunks，知识库 12 份/106 个 live chunks；当前简历索引随上传按请求建立，尚未上传时 live chunks 为 0。三个 collection 均已建索引并 Loaded。
+> - Run 并发已拆成两层：Java permit 只覆盖启动到首个 `llm.queued/llm.started` 边界；每次 LLM 调用由 Python `LLM_MAX_CONCURRENT` 独立限流。一个 Run 等待 LLM 时，新会话 Run 可以继续进入 LangGraph；同一 conversation 仍严格串行。
 
 > 代码基线：`main = 4465b28`  
 > 数据基线：`reports/project_cache100_20260803`，2026-08-03 最新 100 份简历压测  

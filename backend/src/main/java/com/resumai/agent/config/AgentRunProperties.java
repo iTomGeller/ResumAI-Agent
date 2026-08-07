@@ -10,7 +10,11 @@ public class AgentRunProperties {
     /** Master switch for the conversational run scheduler. */
     private boolean enabled = true;
 
-    /** Global maximum number of concurrently RUNNING agent runs. */
+    /**
+     * Maximum concurrent run admissions before their first blocking LLM
+     * boundary. Provider concurrency is controlled separately by the Python
+     * LLM semaphore; this is not a whole-workflow execution limit.
+     */
     private int maxGlobalConcurrent = 12;
 
     /** Default wall-clock budget for one run (seconds). */
