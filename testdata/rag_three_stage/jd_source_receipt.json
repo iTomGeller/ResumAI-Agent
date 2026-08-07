@@ -1,0 +1,37 @@
+{
+  "dataset": "wangzihaogithub/job-educational-parser-dataset-08-0-0805",
+  "license": "apache-2.0",
+  "datasetUrl": "https://huggingface.co/datasets/wangzihaogithub/job-educational-parser-dataset-08-0-0805",
+  "pages": 0,
+  "rowsScanned": 197574,
+  "eligibleRows": 20298,
+  "selected": 120,
+  "categoryCounts": {
+    "BACKEND": 18,
+    "FRONTEND": 14,
+    "DATA": 15,
+    "ALGORITHM_AI": 19,
+    "PRODUCT": 12,
+    "INFRA": 13,
+    "QA_SECURITY": 13,
+    "MOBILE_EMBEDDED": 16
+  },
+  "lengthCohortCounts": {
+    "short": 40,
+    "medium": 40,
+    "long": 40
+  },
+  "formatCounts": {
+    "plain_compact": 120
+  },
+  "levelCounts": {
+    "experienced": 107,
+    "senior": 7,
+    "intern": 6
+  },
+  "descriptionChars": {
+    "min": 415,
+    "mean": 995.45,
+    "max": 2420
+  }
+}

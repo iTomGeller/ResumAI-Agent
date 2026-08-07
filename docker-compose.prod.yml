@@ -67,6 +67,7 @@ services:
       JAVA_BACKEND_URL: http://ai-resume-backend:8080
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       WORKFLOW_BUILD_VERSION: ${WORKFLOW_BUILD_VERSION:-dev}
+      CONTEXT_AUDIT_ENABLED: ${CONTEXT_AUDIT_ENABLED:-false}
       LANGGRAPH_RUNTIME_ENABLED: ${LANGGRAPH_RUNTIME_ENABLED:-true}
       LANGGRAPH_CHECKPOINT_DSN: postgresql://resumai:${WORKFLOW_POSTGRES_PASSWORD:?WORKFLOW_POSTGRES_PASSWORD must be set}@langgraph-postgres:5432/resumai_checkpoint?sslmode=disable
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
@@ -79,9 +80,11 @@ services:
       # so a stale value in the host .env cannot silently disable all public
       # MCP tools inside the workflow container.
       MCP_SKIP_PROBE: "0"
-      # Both remain reversible runtime switches. Skill IDs are only eager after
-      # the normal per-resume signal selector has chosen them.
-      SKILL_EAGER_IDS: ${SKILL_EAGER_IDS:-assess-technical-evidence,ground-project-claims,retrieve-public-candidate-evidence,risk_pattern_detection,calibrate-evidence-confidence}
+      # Progressive disclosure is the production default: after signal-based
+      # selection the model receives Skill metadata and must call load_skill
+      # before the full instructions enter its context.  Eager loading remains
+      # an explicit benchmark/debug override only.
+      SKILL_EAGER_IDS: ${SKILL_EAGER_IDS:-}
       REPORT_PARALLEL_SECTIONS: ${REPORT_PARALLEL_SECTIONS:-always}
       LLM_STREAM_REPORT_SECTIONS: ${LLM_STREAM_REPORT_SECTIONS:-1}
       # EXP-7 replan sensitivity knob (default matches executor fallback)

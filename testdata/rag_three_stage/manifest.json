@@ -1,0 +1,17 @@
+{
+  "jdDocuments": 120,
+  "jdQueries": 120,
+  "resumeDocuments": 30,
+  "resumeQueries": 120,
+  "knowledgeDocuments": 19,
+  "knowledgeQueries": 67,
+  "totalQueries": 307,
+  "schemaVersion": 1,
+  "frozen": true,
+  "stages": [
+    "jd_recall",
+    "resume_evidence",
+    "knowledge_recall"
+  ],
+  "note": "JD documents are frozen Apache-2.0 public dataset rows; JD retrieval queries and the resume/KB labels are synthetic and production-shaped. Never use full-resume final scores as RAG relevance labels."
+}

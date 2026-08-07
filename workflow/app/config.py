@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     java_backend_url: str = "http://ai-resume-backend:8080"
     workflow_internal_token: str = "change-me"
     workflow_build_version: str = "dev"
+    # Persist exact workflow Agent -> LLM request/response envelopes when
+    # explicitly enabled. Prompts contain candidate data, so the default is
+    # intentionally off; the Java persistence boundary performs redaction.
+    context_audit_enabled: bool = False
 
     # The production compose file enables LangGraph explicitly. Keeping the
     # local default off preserves dependency-light unit tests and provides the

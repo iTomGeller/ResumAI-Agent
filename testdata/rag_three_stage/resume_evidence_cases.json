@@ -1,0 +1,2672 @@
+[
+  {
+    "resumeId": "resume-01-java_backend",
+    "family": "java_backend",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年企业服务端与高并发交易系统经验，目标岗位为高级Java 后端工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Java 17、Spring Boot、MySQL、Redis。辅助工具：Kafka、JVM、MyBatis、Docker。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕交易链路、幂等状态机、慢查询与 JVM 故障治理建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Java 17与Kafka，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用JVM定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-01-1",
+        "label": "技术预检",
+        "query": "Java 17 Spring Boot MySQL 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-01-2",
+        "label": "项目预检",
+        "query": "项目 A Java 17 Kafka 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-01-3",
+        "label": "故障追问",
+        "query": "候选人用 JVM 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-01-4",
+        "label": "时间追问",
+        "query": "这位Java 后端工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-02-java_agent",
+    "family": "java_agent",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年大模型智能体运行时和知识检索工程经验，目标岗位为高级Java AI Agent 工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Java 21、Spring AI、RAG、Agent Runtime。辅助工具：Milvus、BM25、DeepSeek、LangGraph。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕工具调用、预算控制、检查点恢复与检索评测建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Java 21与Milvus，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用BM25定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-02-1",
+        "label": "技术预检",
+        "query": "Java 21 Spring AI RAG 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-02-2",
+        "label": "项目预检",
+        "query": "项目 A Java 21 Milvus 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-02-3",
+        "label": "故障追问",
+        "query": "候选人用 BM25 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-02-4",
+        "label": "时间追问",
+        "query": "这位Java AI Agent 工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-03-go_backend",
+    "family": "go_backend",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年云原生高并发服务端经验，目标岗位为高级Go 后端工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Go、Gin、gRPC、MySQL。辅助工具：Redis、Kafka、pprof、Kubernetes。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕低延迟服务、goroutine 泄漏与服务治理建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Go与Redis，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Kafka定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-03-1",
+        "label": "技术预检",
+        "query": "Go Gin gRPC 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-03-2",
+        "label": "项目预检",
+        "query": "项目 A Go Redis 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-03-3",
+        "label": "故障追问",
+        "query": "候选人用 Kafka 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-03-4",
+        "label": "时间追问",
+        "query": "这位Go 后端工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-04-cpp_backend",
+    "family": "cpp_backend",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年高性能基础服务经验，目标岗位为高级C++ 后端工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：C++17、Linux、网络编程、多线程。辅助工具：gRPC、CMake、perf、Redis。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕内存模型、锁竞争、网络时延与核心转储分析建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用C++17与gRPC，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用CMake定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-04-1",
+        "label": "技术预检",
+        "query": "C++17 Linux 网络编程 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-04-2",
+        "label": "项目预检",
+        "query": "项目 A C++17 gRPC 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-04-3",
+        "label": "故障追问",
+        "query": "候选人用 CMake 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-04-4",
+        "label": "时间追问",
+        "query": "这位C++ 后端工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-05-python_backend",
+    "family": "python_backend",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年数据密集型 Web 服务端经验，目标岗位为高级Python 后端工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Python、FastAPI、PostgreSQL、Celery。辅助工具：Redis、SQLAlchemy、pytest、Docker。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕异步接口、任务可靠投递和数据库性能治理建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Python与Redis，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用SQLAlchemy定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-05-1",
+        "label": "技术预检",
+        "query": "Python FastAPI PostgreSQL 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-05-2",
+        "label": "项目预检",
+        "query": "项目 A Python Redis 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-05-3",
+        "label": "故障追问",
+        "query": "候选人用 SQLAlchemy 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-05-4",
+        "label": "时间追问",
+        "query": "这位Python 后端工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-06-react_frontend",
+    "family": "react_frontend",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年声明式组件化 Web 应用经验，目标岗位为高级React 前端工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：React、TypeScript、Vite、状态管理。辅助工具：Next.js、Playwright、Web Vitals、Node.js。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕并发渲染、首屏性能、组件体系和前端可观测建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用React与Next.js，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Playwright定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-06-1",
+        "label": "技术预检",
+        "query": "React TypeScript Vite 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-06-2",
+        "label": "项目预检",
+        "query": "项目 A React Next.js 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-06-3",
+        "label": "故障追问",
+        "query": "候选人用 Playwright 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-06-4",
+        "label": "时间追问",
+        "query": "这位React 前端工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-07-vue_frontend",
+    "family": "vue_frontend",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年渐进式响应式 Web 应用经验，目标岗位为高级Vue 前端工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Vue 3、TypeScript、Pinia、Vite。辅助工具：Nuxt、Vitest、Element Plus、pnpm。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕响应式性能、低代码表单和组件库治理建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Vue 3与Nuxt，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Vitest定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-07-1",
+        "label": "技术预检",
+        "query": "Vue 3 TypeScript Pinia 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-07-2",
+        "label": "项目预检",
+        "query": "项目 A Vue 3 Nuxt 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-07-3",
+        "label": "故障追问",
+        "query": "候选人用 Vitest 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-07-4",
+        "label": "时间追问",
+        "query": "这位Vue 前端工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-08-mobile_flutter",
+    "family": "mobile_flutter",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年一套代码交付移动双端经验，目标岗位为高级Flutter 跨端工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Flutter、Dart、iOS、Android。辅助工具：Riverpod、Skia、Firebase、CI/CD。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕启动耗时、渲染卡顿、插件桥接和双端发布建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Flutter与Riverpod，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Skia定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-08-1",
+        "label": "技术预检",
+        "query": "Flutter Dart iOS 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-08-2",
+        "label": "项目预检",
+        "query": "项目 A Flutter Riverpod 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-08-3",
+        "label": "故障追问",
+        "query": "候选人用 Skia 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-08-4",
+        "label": "时间追问",
+        "query": "这位Flutter 跨端工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-09-ios",
+    "family": "ios",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年苹果移动端原生研发经验，目标岗位为高级iOS 工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Swift、UIKit、SwiftUI、iOS。辅助工具：Combine、Instruments、CocoaPods、XCTest。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕启动优化、内存泄漏、包体积与审核发布建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Swift与Combine，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Instruments定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-09-1",
+        "label": "技术预检",
+        "query": "Swift UIKit SwiftUI 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-09-2",
+        "label": "项目预检",
+        "query": "项目 A Swift Combine 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-09-3",
+        "label": "故障追问",
+        "query": "候选人用 Instruments 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-09-4",
+        "label": "时间追问",
+        "query": "这位iOS 工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-10-android",
+    "family": "android",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年安卓原生客户端研发经验，目标岗位为高级Android 工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Kotlin、Jetpack Compose、Android、MVVM。辅助工具：Coroutines、Room、Gradle、LeakCanary。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕ANR、冷启动、崩溃治理与模块化构建建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Kotlin与Coroutines，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Room定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-10-1",
+        "label": "技术预检",
+        "query": "Kotlin Jetpack Compose Android 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-10-2",
+        "label": "项目预检",
+        "query": "项目 A Kotlin Coroutines 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-10-3",
+        "label": "故障追问",
+        "query": "候选人用 Room 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-10-4",
+        "label": "时间追问",
+        "query": "这位Android 工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-11-data_engineer",
+    "family": "data_engineer",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年批流一体的数据加工平台经验，目标岗位为高级数据工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Spark、Flink、Kafka、Hive。辅助工具：Doris、Iceberg、Airflow、DataX。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕实时数仓、数据倾斜、Exactly Once 与质量 SLA建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Spark与Doris，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Iceberg定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-11-1",
+        "label": "技术预检",
+        "query": "Spark Flink Kafka 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-11-2",
+        "label": "项目预检",
+        "query": "项目 A Spark Doris 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-11-3",
+        "label": "故障追问",
+        "query": "候选人用 Iceberg 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-11-4",
+        "label": "时间追问",
+        "query": "这位数据工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-12-analytics_engineer",
+    "family": "analytics_engineer",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年连接数仓建模与业务分析经验，目标岗位为高级分析工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：dbt、SQL、指标体系、维度建模。辅助工具：Snowflake、BigQuery、Looker、Git。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕语义层、数据契约、口径治理和模型测试建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用dbt与Snowflake，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用BigQuery定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-12-1",
+        "label": "技术预检",
+        "query": "dbt SQL 指标体系 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-12-2",
+        "label": "项目预检",
+        "query": "项目 A dbt Snowflake 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-12-3",
+        "label": "故障追问",
+        "query": "候选人用 BigQuery 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-12-4",
+        "label": "时间追问",
+        "query": "这位分析工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-13-data_analyst",
+    "family": "data_analyst",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年用数据验证产品和运营决策经验，目标岗位为高级数据分析师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：SQL、Python、A/B 测试、统计分析。辅助工具：Tableau、Excel、因果推断、用户分群。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕实验设计、指标异动归因与业务策略评估建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用SQL与Tableau，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Excel定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-13-1",
+        "label": "技术预检",
+        "query": "SQL Python A/B 测试 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-13-2",
+        "label": "项目预检",
+        "query": "项目 A SQL Tableau 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-13-3",
+        "label": "故障追问",
+        "query": "候选人用 Excel 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-13-4",
+        "label": "时间追问",
+        "query": "这位数据分析师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-14-ml_engineer",
+    "family": "ml_engineer",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年将预测模型稳定部署到生产经验，目标岗位为高级机器学习工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：PyTorch、特征工程、模型训练、MLOps。辅助工具：XGBoost、MLflow、ONNX、Kubernetes。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕离线指标、线上漂移、推理延迟与训练复现建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用PyTorch与XGBoost，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用MLflow定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-14-1",
+        "label": "技术预检",
+        "query": "PyTorch 特征工程 模型训练 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-14-2",
+        "label": "项目预检",
+        "query": "项目 A PyTorch XGBoost 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-14-3",
+        "label": "故障追问",
+        "query": "候选人用 MLflow 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-14-4",
+        "label": "时间追问",
+        "query": "这位机器学习工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-15-llm_rag",
+    "family": "llm_rag",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年让生成模型基于企业知识可靠回答经验，目标岗位为高级大模型 RAG 工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Embedding、向量检索、Rerank、RAG 评测。辅助工具：Milvus、Elasticsearch、Qwen、LangChain。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕切分消融、混合召回、忠实度和检索延迟建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Embedding与Milvus，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Elasticsearch定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-15-1",
+        "label": "技术预检",
+        "query": "Embedding 向量检索 Rerank 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-15-2",
+        "label": "项目预检",
+        "query": "项目 A Embedding Milvus 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-15-3",
+        "label": "故障追问",
+        "query": "候选人用 Elasticsearch 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-15-4",
+        "label": "时间追问",
+        "query": "这位大模型 RAG 工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-16-nlp",
+    "family": "nlp",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年自然语言理解与文本结构化经验，目标岗位为高级NLP 算法工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Transformer、文本分类、信息抽取、PyTorch。辅助工具：BERT、CRF、SentencePiece、ONNX。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕标注一致性、长尾实体、领域迁移和模型压缩建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Transformer与BERT，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用CRF定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-16-1",
+        "label": "技术预检",
+        "query": "Transformer 文本分类 信息抽取 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-16-2",
+        "label": "项目预检",
+        "query": "项目 A Transformer BERT 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-16-3",
+        "label": "故障追问",
+        "query": "候选人用 CRF 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-16-4",
+        "label": "时间追问",
+        "query": "这位NLP 算法工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-17-computer_vision",
+    "family": "computer_vision",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年机器视觉感知算法经验，目标岗位为高级计算机视觉工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：OpenCV、目标检测、图像分割、PyTorch。辅助工具：YOLO、TensorRT、CUDA、Albumentations。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕小目标召回、数据闭环、边缘推理和显存优化建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用OpenCV与YOLO，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用TensorRT定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-17-1",
+        "label": "技术预检",
+        "query": "OpenCV 目标检测 图像分割 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-17-2",
+        "label": "项目预检",
+        "query": "项目 A OpenCV YOLO 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-17-3",
+        "label": "故障追问",
+        "query": "候选人用 TensorRT 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-17-4",
+        "label": "时间追问",
+        "query": "这位计算机视觉工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-18-devops",
+    "family": "devops",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年研发运维一体化自动交付经验，目标岗位为高级DevOps 工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Kubernetes、Docker、Terraform、CI/CD。辅助工具：Jenkins、Argo CD、Helm、Ansible。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕发布流水线、基础设施即代码和交付效率建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Kubernetes与Jenkins，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Argo CD定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-18-1",
+        "label": "技术预检",
+        "query": "Kubernetes Docker Terraform 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-18-2",
+        "label": "项目预检",
+        "query": "项目 A Kubernetes Jenkins 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-18-3",
+        "label": "故障追问",
+        "query": "候选人用 Argo CD 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-18-4",
+        "label": "时间追问",
+        "query": "这位DevOps 工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-19-sre",
+    "family": "sre",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年用可靠性工程保障线上服务经验，目标岗位为高级SRE 工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：SLO、Prometheus、Kubernetes、故障应急。辅助工具：Grafana、OpenTelemetry、eBPF、Go。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕错误预算、容量规划、事故复盘和降级演练建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用SLO与Grafana，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用OpenTelemetry定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-19-1",
+        "label": "技术预检",
+        "query": "SLO Prometheus Kubernetes 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-19-2",
+        "label": "项目预检",
+        "query": "项目 A SLO Grafana 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-19-3",
+        "label": "故障追问",
+        "query": "候选人用 OpenTelemetry 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-19-4",
+        "label": "时间追问",
+        "query": "这位SRE 工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-20-cloud_security",
+    "family": "cloud_security",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年保护公有云与容器基础设施经验，目标岗位为高级云安全工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：云原生安全、IAM、Kubernetes、威胁检测。辅助工具：Falco、WAF、SIEM、Terraform。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕最小权限、容器逃逸检测与云上事件响应建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用云原生安全与Falco，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用WAF定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-20-1",
+        "label": "技术预检",
+        "query": "云原生安全 IAM Kubernetes 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-20-2",
+        "label": "项目预检",
+        "query": "项目 A 云原生安全 Falco 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-20-3",
+        "label": "故障追问",
+        "query": "候选人用 WAF 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-20-4",
+        "label": "时间追问",
+        "query": "这位云安全工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-21-appsec",
+    "family": "appsec",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年在软件生命周期内消除应用漏洞经验，目标岗位为高级应用安全工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：代码审计、SDL、Web 安全、渗透测试。辅助工具：SAST、DAST、Burp Suite、OWASP。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕漏洞复现、供应链治理和研发安全左移建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用代码审计与SAST，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用DAST定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-21-1",
+        "label": "技术预检",
+        "query": "代码审计 SDL Web 安全 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-21-2",
+        "label": "项目预检",
+        "query": "项目 A 代码审计 SAST 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-21-3",
+        "label": "故障追问",
+        "query": "候选人用 DAST 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-21-4",
+        "label": "时间追问",
+        "query": "这位应用安全工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-22-qa_automation",
+    "family": "qa_automation",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年用工程化手段提升软件质量经验，目标岗位为高级测试开发工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Python、接口测试、自动化测试、质量平台。辅助工具：pytest、Playwright、JMeter、Allure。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕测试分层、流水线准入、稳定性与缺陷逃逸率建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Python与pytest，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用Playwright定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-22-1",
+        "label": "技术预检",
+        "query": "Python 接口测试 自动化测试 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-22-2",
+        "label": "项目预检",
+        "query": "项目 A Python pytest 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-22-3",
+        "label": "故障追问",
+        "query": "候选人用 Playwright 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-22-4",
+        "label": "时间追问",
+        "query": "这位测试开发工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-23-product_ai",
+    "family": "product_ai",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年把大模型能力设计成可用产品经验，目标岗位为高级AI 产品经理。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：AI 产品规划、RAG、Agent、评测体系。辅助工具：PRD、用户访谈、A/B 测试、Prompt。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕模型边界、答案质量、权限审计与商业转化建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用AI 产品规划与PRD，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用用户访谈定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-23-1",
+        "label": "技术预检",
+        "query": "AI 产品规划 RAG Agent 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-23-2",
+        "label": "项目预检",
+        "query": "项目 A AI 产品规划 PRD 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-23-3",
+        "label": "故障追问",
+        "query": "候选人用 用户访谈 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-23-4",
+        "label": "时间追问",
+        "query": "这位AI 产品经理是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-24-product_b2b",
+    "family": "product_b2b",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年面向企业客户设计复杂业务软件经验，目标岗位为高级B2B 产品经理。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：企业产品、需求分析、权限模型、商业化。辅助工具：PRD、客户访谈、SaaS、数据分析。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕多租户、审批流程、交付边界和续费增长建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用企业产品与PRD，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用客户访谈定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-24-1",
+        "label": "技术预检",
+        "query": "企业产品 需求分析 权限模型 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-24-2",
+        "label": "项目预检",
+        "query": "项目 A 企业产品 PRD 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-24-3",
+        "label": "故障追问",
+        "query": "候选人用 客户访谈 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-24-4",
+        "label": "时间追问",
+        "query": "这位B2B 产品经理是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-25-product_growth",
+    "family": "product_growth",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年通过实验驱动用户与收入增长经验，目标岗位为高级增长产品经理。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：增长实验、漏斗分析、用户分层、A/B 测试。辅助工具：SQL、埋点、留存、转化率。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕实验显著性、渠道质量和长期留存建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用增长实验与SQL，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用埋点定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-25-1",
+        "label": "技术预检",
+        "query": "增长实验 漏斗分析 用户分层 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-25-2",
+        "label": "项目预检",
+        "query": "项目 A 增长实验 SQL 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-25-3",
+        "label": "故障追问",
+        "query": "候选人用 埋点 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-25-4",
+        "label": "时间追问",
+        "query": "这位增长产品经理是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-26-ux",
+    "family": "ux",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年从用户研究到交互方案落地经验，目标岗位为高级用户体验设计师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：交互设计、用户研究、设计系统、Figma。辅助工具：可用性测试、原型、无障碍、数据分析。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕任务成功率、复杂流程、组件规范和研究闭环建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用交互设计与可用性测试，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用原型定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-26-1",
+        "label": "技术预检",
+        "query": "交互设计 用户研究 设计系统 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-26-2",
+        "label": "项目预检",
+        "query": "项目 A 交互设计 可用性测试 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-26-3",
+        "label": "故障追问",
+        "query": "候选人用 原型 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-26-4",
+        "label": "时间追问",
+        "query": "这位用户体验设计师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-27-dba",
+    "family": "dba",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年保障关系数据库稳定高效经验，目标岗位为高级数据库工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：MySQL、PostgreSQL、高可用、性能优化。辅助工具：备份恢复、分库分表、ProxySQL、Prometheus。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕执行计划、复制延迟、容灾演练和数据恢复建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用MySQL与备份恢复，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用分库分表定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-27-1",
+        "label": "技术预检",
+        "query": "MySQL PostgreSQL 高可用 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-27-2",
+        "label": "项目预检",
+        "query": "项目 A MySQL 备份恢复 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-27-3",
+        "label": "故障追问",
+        "query": "候选人用 分库分表 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-27-4",
+        "label": "时间追问",
+        "query": "这位数据库工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-28-embedded",
+    "family": "embedded",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年贴近硬件的实时软件研发经验，目标岗位为高级嵌入式软件工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：C、RTOS、驱动开发、ARM。辅助工具：FreeRTOS、SPI、I2C、JTAG。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕中断时延、功耗、硬件联调和现场故障定位建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用C与FreeRTOS，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用SPI定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-28-1",
+        "label": "技术预检",
+        "query": "C RTOS 驱动开发 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-28-2",
+        "label": "项目预检",
+        "query": "项目 A C FreeRTOS 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-28-3",
+        "label": "故障追问",
+        "query": "候选人用 SPI 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-28-4",
+        "label": "时间追问",
+        "query": "这位嵌入式软件工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-29-game_server",
+    "family": "game_server",
+    "benchmarkSplit": "calibration",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年多人在线游戏后端经验，目标岗位为高级游戏服务端工程师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：Go、C++、实时同步、分布式。辅助工具：Redis、UDP、帧同步、压测。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕房间调度、状态一致性、反作弊与延迟抖动建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用Go与Redis，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用UDP定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-29-1",
+        "label": "技术预检",
+        "query": "Go C++ 实时同步 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-29-2",
+        "label": "项目预检",
+        "query": "项目 A Go Redis 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-29-3",
+        "label": "故障追问",
+        "query": "候选人用 UDP 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      },
+      {
+        "caseId": "rsq-29-4",
+        "label": "时间追问",
+        "query": "这位游戏服务端工程师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "calibration"
+      }
+    ]
+  },
+  {
+    "resumeId": "resume-30-solution_architect",
+    "family": "solution_architect",
+    "benchmarkSplit": "heldout",
+    "sections": [
+      {
+        "sectionId": "summary",
+        "title": "个人摘要",
+        "content": "6 年把客户约束转化为可落地技术方案经验，目标岗位为高级解决方案架构师。既做需求交付，也参与质量治理。"
+      },
+      {
+        "sectionId": "skills",
+        "title": "技能",
+        "content": "核心技能：架构设计、云计算、客户方案、技术售前。辅助工具：Kubernetes、微服务、成本估算、POC。能够解释技术边界，不把工具名当成果。"
+      },
+      {
+        "sectionId": "experience",
+        "title": "工作经历",
+        "content": "2021.03 至今在甲公司负责核心平台；团队 7 人，本人负责两个模块。围绕需求澄清、方案取舍、迁移路径和投标交付建立指标，年度可用性达到 99.95%。日常承担需求评审、代码评审、灰度发布和值班，明确区分个人负责模块与平台团队提供的公共能力。2022 年推动统一监控口径，把无负责人告警从每周 18 条降到 3 条，并形成事故复盘模板。"
+      },
+      {
+        "sectionId": "project_primary",
+        "title": "核心项目",
+        "content": "项目 A：面向日活 80 万用户重构关键链路。使用架构设计与Kubernetes，峰值吞吐由 900 提升到 2100，P95 从 480ms 降至 170ms。基线环境为 4 台 8 核 16GB 实例，持续压测 45 分钟，观察 CPU、内存、错误率和下游连接数；不是把瞬时峰值当稳定吞吐。第一版激进缓存导致数据更新延迟，灰度阶段回滚，第二版增加版本校验与过期兜底。三轮压测后按 5%、20%、50%、100% 放量，并与旧版本对照一周，最终错误率由 0.42% 降到 0.08%。本人负责瓶颈定位、方案取舍和压测脚本，上游容量扩容由基础设施团队完成。"
+      },
+      {
+        "sectionId": "project_incident",
+        "title": "故障与复盘",
+        "content": "项目 B：一次发布后出现连接池耗尽和请求堆积，外部表现同样包含延迟升高，因此容易与项目 A 的性能优化混淆。先根据错误率和线程状态执行限流回滚，再用微服务定位到异常分支没有释放资源；恢复时间 37 分钟。修复后补充资源关闭测试、连接池水位告警、峰值容量演练与发布前检查。复盘确认监控只覆盖平均值，遗漏 P99 和等待队列，随后增加分位延迟与饱和度面板。该事故没有吞吐从 900 到 2100 的结果，相关数字只属于项目 A。"
+      },
+      {
+        "sectionId": "education",
+        "title": "教育背景",
+        "content": "2014.09-2018.06 本科，计算机相关专业；参与实验室项目但未将其包装为全职经验。"
+      },
+      {
+        "sectionId": "risk",
+        "title": "其他说明",
+        "content": "2019.01-2019.10 有九个月职业空窗，用于照顾家人和系统学习，时间线有明确说明。"
+      }
+    ],
+    "queries": [
+      {
+        "caseId": "rsq-30-1",
+        "label": "技术预检",
+        "query": "架构设计 云计算 客户方案 项目实践 性能优化 故障排查 量化成果",
+        "goldSections": [
+          "project_primary",
+          "project_incident"
+        ],
+        "caseType": "workflow_tech_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-30-2",
+        "label": "项目预检",
+        "query": "项目 A 架构设计 Kubernetes 架构",
+        "goldSections": [
+          "project_primary"
+        ],
+        "caseType": "workflow_project_query",
+        "querySource": "workflow_template",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-30-3",
+        "label": "故障追问",
+        "query": "候选人用 微服务 处理过什么事故？给出定位、止损、37 分钟恢复和预防动作",
+        "goldSections": [
+          "project_incident"
+        ],
+        "caseType": "hard_negative",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      },
+      {
+        "caseId": "rsq-30-4",
+        "label": "时间追问",
+        "query": "这位解决方案架构师是否存在超过六个月的空窗，原文有没有合理解释？",
+        "goldSections": [
+          "risk"
+        ],
+        "caseType": "cross_section",
+        "querySource": "copilot_question",
+        "benchmarkSplit": "heldout"
+      }
+    ]
+  }
+]

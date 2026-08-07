@@ -122,6 +122,22 @@ class RuntimeEmitter:
             {"runId": self.run_id, "executionSnapshot": snapshot},
             attempts=2, timeout=10.0)
 
+    async def save_llm_invocation(self, invocation: Dict[str, Any]) -> bool:
+        """Persist one exact provider attempt without putting it on SSE.
+
+        Full prompts belong in ``llm_invocation``: they must be durable for
+        Context Audit, but replaying them as ``run_event`` payloads would leak
+        candidate data to browser subscribers and inflate every trace stream.
+        """
+        if not settings.context_audit_enabled:
+            return False
+        body = dict(invocation)
+        body.setdefault("runId", self.run_id)
+        body.setdefault("traceId", self.trace_id)
+        return await self._post(
+            "/api/internal/agent-runs/llm-invocations", body,
+            attempts=2, timeout=20.0)
+
     async def _post(self, path: str, body: Dict[str, Any], *, attempts: int, timeout: float) -> bool:
         url = f"{self._base}{path}"
         delay = 1.0
@@ -157,6 +173,7 @@ class NullEmitter(RuntimeEmitter):
         self.events: list[Dict[str, Any]] = []
         self.result: Optional[Dict[str, Any]] = None
         self.checkpoints: list[Dict[str, Any]] = []
+        self.llm_invocations: list[Dict[str, Any]] = []
 
     async def emit(self, event_type: str, *, agent_id: Optional[str] = None,
                    tool_name: Optional[str] = None,
@@ -174,4 +191,11 @@ class NullEmitter(RuntimeEmitter):
 
     async def save_checkpoint(self, snapshot: Dict[str, Any]) -> bool:
         self.checkpoints.append(snapshot)
+        return True
+
+    async def save_llm_invocation(self, invocation: Dict[str, Any]) -> bool:
+        body = dict(invocation)
+        body.setdefault("runId", self.run_id)
+        body.setdefault("traceId", self.trace_id)
+        self.llm_invocations.append(body)
         return True

@@ -1,0 +1,1512 @@
+[
+  {
+    "caseId": "kbq-01-1",
+    "stage": "knowledge_recall",
+    "query": "只会调用模型 API 和做单轮 demo，大概属于什么级别？",
+    "goldDocIds": [
+      "kb-exp-01"
+    ],
+    "goldTitles": [
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）"
+    ],
+    "goldSectionHints": [
+      "一、分级标准"
+    ],
+    "goldSectionsByTitle": {
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）": [
+        "一、分级标准"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-01-2",
+    "stage": "knowledge_recall",
+    "query": "高级智能体工程师要会哪些生产保护机制？",
+    "goldDocIds": [
+      "kb-exp-01"
+    ],
+    "goldTitles": [
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）"
+    ],
+    "goldSectionHints": [
+      "一、分级标准"
+    ],
+    "goldSectionsByTitle": {
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）": [
+        "一、分级标准"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-01-3",
+    "stage": "knowledge_recall",
+    "query": "面试怎么检查候选人的检索质量意识？",
+    "goldDocIds": [
+      "kb-exp-01"
+    ],
+    "goldTitles": [
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）"
+    ],
+    "goldSectionHints": [
+      "二、核心考察维度"
+    ],
+    "goldSectionsByTitle": {
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）": [
+        "二、核心考察维度"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-01-4",
+    "stage": "knowledge_recall",
+    "query": "说接了 RAG 但没有任何召回指标，应如何判断？",
+    "goldDocIds": [
+      "kb-exp-01"
+    ],
+    "goldTitles": [
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）"
+    ],
+    "goldSectionHints": [
+      "三、红旗信号"
+    ],
+    "goldSectionsByTitle": {
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）": [
+        "三、红旗信号"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-01-5",
+    "stage": "knowledge_recall",
+    "query": "专家级智能体岗位和资深级的差别是什么？",
+    "goldDocIds": [
+      "kb-exp-01"
+    ],
+    "goldTitles": [
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）"
+    ],
+    "goldSectionHints": [
+      "一、分级标准"
+    ],
+    "goldSectionsByTitle": {
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）": [
+        "一、分级标准"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-02-1",
+    "stage": "knowledge_recall",
+    "query": "线程池和 JVM 能力不能只背八股，应该怎么核查？",
+    "goldDocIds": [
+      "kb-exp-02"
+    ],
+    "goldTitles": [
+      "Java 后端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "一、硬性要求核查"
+    ],
+    "goldSectionsByTitle": {
+      "Java 后端工程师评估标准": [
+        "一、硬性要求核查"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-02-2",
+    "stage": "knowledge_recall",
+    "query": "候选人说做过缓存一致性，追问哪些取舍？",
+    "goldDocIds": [
+      "kb-exp-02"
+    ],
+    "goldTitles": [
+      "Java 后端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "一、硬性要求核查"
+    ],
+    "goldSectionsByTitle": {
+      "Java 后端工程师评估标准": [
+        "一、硬性要求核查"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-02-3",
+    "stage": "knowledge_recall",
+    "query": "五千 QPS 的项目数字怎样判断自洽？",
+    "goldDocIds": [
+      "kb-exp-02"
+    ],
+    "goldTitles": [
+      "Java 后端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "二、深度信号"
+    ],
+    "goldSectionsByTitle": {
+      "Java 后端工程师评估标准": [
+        "二、深度信号"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-02-4",
+    "stage": "knowledge_recall",
+    "query": "所有项目都写核心开发为什么要降权？",
+    "goldDocIds": [
+      "kb-exp-02"
+    ],
+    "goldTitles": [
+      "Java 后端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "三、降权信号"
+    ],
+    "goldSectionsByTitle": {
+      "Java 后端工程师评估标准": [
+        "三、降权信号"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-02-5",
+    "stage": "knowledge_recall",
+    "query": "如何验证 Java 工程师真的治理过慢查询？",
+    "goldDocIds": [
+      "kb-exp-02"
+    ],
+    "goldTitles": [
+      "Java 后端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "一、硬性要求核查"
+    ],
+    "goldSectionsByTitle": {
+      "Java 后端工程师评估标准": [
+        "一、硬性要求核查"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-03-1",
+    "stage": "knowledge_recall",
+    "query": "会用框架和理解渲染原理分别算什么深度？",
+    "goldDocIds": [
+      "kb-exp-03"
+    ],
+    "goldTitles": [
+      "前端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "一、框架深度分层"
+    ],
+    "goldSectionsByTitle": {
+      "前端工程师评估标准": [
+        "一、框架深度分层"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-03-2",
+    "stage": "knowledge_recall",
+    "query": "前端性能优化必须提供哪些量化基线？",
+    "goldDocIds": [
+      "kb-exp-03"
+    ],
+    "goldTitles": [
+      "前端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "二、性能优化核查"
+    ],
+    "goldSectionsByTitle": {
+      "前端工程师评估标准": [
+        "二、性能优化核查"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-03-3",
+    "stage": "knowledge_recall",
+    "query": "长列表优化手段和使用场景怎么验证？",
+    "goldDocIds": [
+      "kb-exp-03"
+    ],
+    "goldTitles": [
+      "前端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "二、性能优化核查"
+    ],
+    "goldSectionsByTitle": {
+      "前端工程师评估标准": [
+        "二、性能优化核查"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-03-4",
+    "stage": "knowledge_recall",
+    "query": "复杂编辑器或跨端经历是否属于加分？",
+    "goldDocIds": [
+      "kb-exp-03"
+    ],
+    "goldTitles": [
+      "前端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "三、加分与红旗"
+    ],
+    "goldSectionsByTitle": {
+      "前端工程师评估标准": [
+        "三、加分与红旗"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-03-5",
+    "stage": "knowledge_recall",
+    "query": "把脚手架初始化说成架构设计是什么信号？",
+    "goldDocIds": [
+      "kb-exp-03"
+    ],
+    "goldTitles": [
+      "前端工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "三、加分与红旗"
+    ],
+    "goldSectionsByTitle": {
+      "前端工程师评估标准": [
+        "三、加分与红旗"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-04-1",
+    "stage": "knowledge_recall",
+    "query": "声称做过微调，需要问清哪四个要素？",
+    "goldDocIds": [
+      "kb-exp-04"
+    ],
+    "goldTitles": [
+      "算法与大模型工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "一、真实性核查"
+    ],
+    "goldSectionsByTitle": {
+      "算法与大模型工程师评估标准": [
+        "一、真实性核查"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-04-2",
+    "stage": "knowledge_recall",
+    "query": "模型准确率 95% 为什么不能直接相信？",
+    "goldDocIds": [
+      "kb-exp-04"
+    ],
+    "goldTitles": [
+      "算法与大模型工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "一、真实性核查"
+    ],
+    "goldSectionsByTitle": {
+      "算法与大模型工程师评估标准": [
+        "一、真实性核查"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-04-3",
+    "stage": "knowledge_recall",
+    "query": "推理部署能力应该核查哪些真实数字？",
+    "goldDocIds": [
+      "kb-exp-04"
+    ],
+    "goldTitles": [
+      "算法与大模型工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "二、工程落地能力"
+    ],
+    "goldSectionsByTitle": {
+      "算法与大模型工程师评估标准": [
+        "二、工程落地能力"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-04-4",
+    "stage": "knowledge_recall",
+    "query": "只调用接口却写训练大模型是什么风险？",
+    "goldDocIds": [
+      "kb-exp-04"
+    ],
+    "goldTitles": [
+      "算法与大模型工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "三、大模型应用方向补充"
+    ],
+    "goldSectionsByTitle": {
+      "算法与大模型工程师评估标准": [
+        "三、大模型应用方向补充"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-04-5",
+    "stage": "knowledge_recall",
+    "query": "怎样确认 LoRA 项目不是把微调夸成预训练？",
+    "goldDocIds": [
+      "kb-exp-04"
+    ],
+    "goldTitles": [
+      "算法与大模型工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "三、大模型应用方向补充"
+    ],
+    "goldSectionsByTitle": {
+      "算法与大模型工程师评估标准": [
+        "三、大模型应用方向补充"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-05-1",
+    "stage": "knowledge_recall",
+    "query": "PB 级数仓的规模真实性要用哪些数字交叉验证？",
+    "goldDocIds": [
+      "kb-exp-05"
+    ],
+    "goldTitles": [
+      "数据工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "一、规模真实性"
+    ],
+    "goldSectionsByTitle": {
+      "数据工程师评估标准": [
+        "一、规模真实性"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-05-2",
+    "stage": "knowledge_recall",
+    "query": "Spark 数据倾斜经历应该追问到什么程度？",
+    "goldDocIds": [
+      "kb-exp-05"
+    ],
+    "goldTitles": [
+      "数据工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "二、技术深度核查"
+    ],
+    "goldSectionsByTitle": {
+      "数据工程师评估标准": [
+        "二、技术深度核查"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-05-3",
+    "stage": "knowledge_recall",
+    "query": "Flink exactly once 的边界怎么核查？",
+    "goldDocIds": [
+      "kb-exp-05"
+    ],
+    "goldTitles": [
+      "数据工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "二、技术深度核查"
+    ],
+    "goldSectionsByTitle": {
+      "数据工程师评估标准": [
+        "二、技术深度核查"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-05-4",
+    "stage": "knowledge_recall",
+    "query": "只列 Hive Spark Flink 为什么不能证明有经验？",
+    "goldDocIds": [
+      "kb-exp-05"
+    ],
+    "goldTitles": [
+      "数据工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "三、降权信号"
+    ],
+    "goldSectionsByTitle": {
+      "数据工程师评估标准": [
+        "三、降权信号"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-05-5",
+    "stage": "knowledge_recall",
+    "query": "数仓口径治理应该有哪些落地证据？",
+    "goldDocIds": [
+      "kb-exp-05"
+    ],
+    "goldTitles": [
+      "数据工程师评估标准"
+    ],
+    "goldSectionHints": [
+      "二、技术深度核查"
+    ],
+    "goldSectionsByTitle": {
+      "数据工程师评估标准": [
+        "二、技术深度核查"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-06-1",
+    "stage": "knowledge_recall",
+    "query": "STAR 中如何区分参与、负责和主导？",
+    "goldDocIds": [
+      "kb-exp-06"
+    ],
+    "goldTitles": [
+      "项目真实性核验清单"
+    ],
+    "goldSectionHints": [
+      "一、STAR 完整性检查"
+    ],
+    "goldSectionsByTitle": {
+      "项目真实性核验清单": [
+        "一、STAR 完整性检查"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-06-2",
+    "stage": "knowledge_recall",
+    "query": "性能提升 300% 没有起点数字能采信吗？",
+    "goldDocIds": [
+      "kb-exp-06"
+    ],
+    "goldTitles": [
+      "项目真实性核验清单"
+    ],
+    "goldSectionHints": [
+      "二、量化指标可信度判定"
+    ],
+    "goldSectionsByTitle": {
+      "项目真实性核验清单": [
+        "二、量化指标可信度判定"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-06-3",
+    "stage": "knowledge_recall",
+    "query": "日活千级却写支撑亿级流量是什么问题？",
+    "goldDocIds": [
+      "kb-exp-06"
+    ],
+    "goldTitles": [
+      "项目真实性核验清单"
+    ],
+    "goldSectionHints": [
+      "二、量化指标可信度判定"
+    ],
+    "goldSectionsByTitle": {
+      "项目真实性核验清单": [
+        "二、量化指标可信度判定"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-06-4",
+    "stage": "knowledge_recall",
+    "query": "怎么用任职时间交叉验证项目真假？",
+    "goldDocIds": [
+      "kb-exp-06"
+    ],
+    "goldTitles": [
+      "项目真实性核验清单"
+    ],
+    "goldSectionHints": [
+      "三、交叉验证动作"
+    ],
+    "goldSectionsByTitle": {
+      "项目真实性核验清单": [
+        "三、交叉验证动作"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-06-5",
+    "stage": "knowledge_recall",
+    "query": "开源链接和简历声明应怎样比对？",
+    "goldDocIds": [
+      "kb-exp-06"
+    ],
+    "goldTitles": [
+      "项目真实性核验清单"
+    ],
+    "goldSectionHints": [
+      "三、交叉验证动作"
+    ],
+    "goldSectionsByTitle": {
+      "项目真实性核验清单": [
+        "三、交叉验证动作"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-07-1",
+    "stage": "knowledge_recall",
+    "query": "两段全职工作重叠三个月属于什么风险？",
+    "goldDocIds": [
+      "kb-exp-07"
+    ],
+    "goldTitles": [
+      "时间线风险判定标准"
+    ],
+    "goldSectionHints": [
+      "一、高风险"
+    ],
+    "goldSectionsByTitle": {
+      "时间线风险判定标准": [
+        "一、高风险"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-07-2",
+    "stage": "knowledge_recall",
+    "query": "没有说明的八个月空窗应该怎么处理？",
+    "goldDocIds": [
+      "kb-exp-07"
+    ],
+    "goldTitles": [
+      "时间线风险判定标准"
+    ],
+    "goldSectionHints": [
+      "二、中风险"
+    ],
+    "goldSectionsByTitle": {
+      "时间线风险判定标准": [
+        "二、中风险"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-07-3",
+    "stage": "knowledge_recall",
+    "query": "实习和在校时间重叠需要扣分吗？",
+    "goldDocIds": [
+      "kb-exp-07"
+    ],
+    "goldTitles": [
+      "时间线风险判定标准"
+    ],
+    "goldSectionHints": [
+      "三、合理情形"
+    ],
+    "goldSectionsByTitle": {
+      "时间线风险判定标准": [
+        "三、合理情形"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-07-4",
+    "stage": "knowledge_recall",
+    "query": "时间线风险输出为什么必须引用原文和月份？",
+    "goldDocIds": [
+      "kb-exp-07"
+    ],
+    "goldTitles": [
+      "时间线风险判定标准"
+    ],
+    "goldSectionHints": [
+      "四、输出要求"
+    ],
+    "goldSectionsByTitle": {
+      "时间线风险判定标准": [
+        "四、输出要求"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-07-5",
+    "stage": "knowledge_recall",
+    "query": "连续三段不足半年说明什么？",
+    "goldDocIds": [
+      "kb-exp-07"
+    ],
+    "goldTitles": [
+      "时间线风险判定标准"
+    ],
+    "goldSectionHints": [
+      "一、高风险"
+    ],
+    "goldSectionsByTitle": {
+      "时间线风险判定标准": [
+        "一、高风险"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-08-1",
+    "stage": "knowledge_recall",
+    "query": "方案里讲了为了某目标牺牲另一目标，算什么信号？",
+    "goldDocIds": [
+      "kb-exp-08"
+    ],
+    "goldTitles": [
+      "技术深度信号词典"
+    ],
+    "goldSectionHints": [
+      "一、深度实践信号"
+    ],
+    "goldSectionsByTitle": {
+      "技术深度信号词典": [
+        "一、深度实践信号"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-08-2",
+    "stage": "knowledge_recall",
+    "query": "技能清单很长但项目没出现，应该如何处理？",
+    "goldDocIds": [
+      "kb-exp-08"
+    ],
+    "goldTitles": [
+      "技术深度信号词典"
+    ],
+    "goldSectionHints": [
+      "二、关键词堆砌信号"
+    ],
+    "goldSectionsByTitle": {
+      "技术深度信号词典": [
+        "二、关键词堆砌信号"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-08-3",
+    "stage": "knowledge_recall",
+    "query": "怎么把深度表述转成验证型追问？",
+    "goldDocIds": [
+      "kb-exp-08"
+    ],
+    "goldTitles": [
+      "技术深度信号词典"
+    ],
+    "goldSectionHints": [
+      "三、追问转化规则"
+    ],
+    "goldSectionsByTitle": {
+      "技术深度信号词典": [
+        "三、追问转化规则"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-08-4",
+    "stage": "knowledge_recall",
+    "query": "候选人主动讲失败和回滚为什么有价值？",
+    "goldDocIds": [
+      "kb-exp-08"
+    ],
+    "goldTitles": [
+      "技术深度信号词典"
+    ],
+    "goldSectionHints": [
+      "一、深度实践信号"
+    ],
+    "goldSectionsByTitle": {
+      "技术深度信号词典": [
+        "一、深度实践信号"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-08-5",
+    "stage": "knowledge_recall",
+    "query": "高并发高可用却没有对象和数字是什么信号？",
+    "goldDocIds": [
+      "kb-exp-08"
+    ],
+    "goldTitles": [
+      "技术深度信号词典"
+    ],
+    "goldSectionHints": [
+      "二、关键词堆砌信号"
+    ],
+    "goldSectionsByTitle": {
+      "技术深度信号词典": [
+        "二、关键词堆砌信号"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "calibration"
+  },
+  {
+    "caseId": "kbq-09-1",
+    "stage": "knowledge_recall",
+    "query": "QPS 数字存疑时要追问机器和压测哪些信息？",
+    "goldDocIds": [
+      "kb-exp-09"
+    ],
+    "goldTitles": [
+      "面试追问题库（按风险类型）"
+    ],
+    "goldSectionHints": [
+      "一、针对指标存疑"
+    ],
+    "goldSectionsByTitle": {
+      "面试追问题库（按风险类型）": [
+        "一、针对指标存疑"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-09-2",
+    "stage": "knowledge_recall",
+    "query": "如何追问候选人在团队里的个人贡献边界？",
+    "goldDocIds": [
+      "kb-exp-09"
+    ],
+    "goldTitles": [
+      "面试追问题库（按风险类型）"
+    ],
+    "goldSectionHints": [
+      "二、针对职责边界模糊"
+    ],
+    "goldSectionsByTitle": {
+      "面试追问题库（按风险类型）": [
+        "二、针对职责边界模糊"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-09-3",
+    "stage": "knowledge_recall",
+    "query": "八个月空窗应该怎样开放式提问？",
+    "goldDocIds": [
+      "kb-exp-09"
+    ],
+    "goldTitles": [
+      "面试追问题库（按风险类型）"
+    ],
+    "goldSectionHints": [
+      "三、针对时间线异常"
+    ],
+    "goldSectionsByTitle": {
+      "面试追问题库（按风险类型）": [
+        "三、针对时间线异常"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-09-4",
+    "stage": "knowledge_recall",
+    "query": "如果数据量涨十倍，怎样验证技术深度？",
+    "goldDocIds": [
+      "kb-exp-09"
+    ],
+    "goldTitles": [
+      "面试追问题库（按风险类型）"
+    ],
+    "goldSectionHints": [
+      "四、针对技术深度验证"
+    ],
+    "goldSectionsByTitle": {
+      "面试追问题库（按风险类型）": [
+        "四、针对技术深度验证"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-09-5",
+    "stage": "knowledge_recall",
+    "query": "为什么不能给所有候选人输出同一套通用问题？",
+    "goldDocIds": [
+      "kb-exp-09"
+    ],
+    "goldTitles": [
+      "面试追问题库（按风险类型）"
+    ],
+    "goldSectionHints": [
+      "五、使用规则"
+    ],
+    "goldSectionsByTitle": {
+      "面试追问题库（按风险类型）": [
+        "五、使用规则"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-10-1",
+    "stage": "knowledge_recall",
+    "query": "综合分 58 分应该给什么推荐结论？",
+    "goldDocIds": [
+      "kb-exp-10"
+    ],
+    "goldTitles": [
+      "评分与推荐一致性规则"
+    ],
+    "goldSectionHints": [
+      "一、分数区间与推荐映射"
+    ],
+    "goldSectionsByTitle": {
+      "评分与推荐一致性规则": [
+        "一、分数区间与推荐映射"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-10-2",
+    "stage": "knowledge_recall",
+    "query": "核心维度低于四十分时总分上限是多少？",
+    "goldDocIds": [
+      "kb-exp-10"
+    ],
+    "goldTitles": [
+      "评分与推荐一致性规则"
+    ],
+    "goldSectionHints": [
+      "二、维度分与综合分自洽"
+    ],
+    "goldSectionsByTitle": {
+      "评分与推荐一致性规则": [
+        "二、维度分与综合分自洽"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-10-3",
+    "stage": "knowledge_recall",
+    "query": "证据不足时能不能随手给中间分？",
+    "goldDocIds": [
+      "kb-exp-10"
+    ],
+    "goldTitles": [
+      "评分与推荐一致性规则"
+    ],
+    "goldSectionHints": [
+      "二、维度分与综合分自洽"
+    ],
+    "goldSectionsByTitle": {
+      "评分与推荐一致性规则": [
+        "二、维度分与综合分自洽"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-10-4",
+    "stage": "knowledge_recall",
+    "query": "八十八分却不推荐为什么需要额外说明？",
+    "goldDocIds": [
+      "kb-exp-10"
+    ],
+    "goldTitles": [
+      "评分与推荐一致性规则"
+    ],
+    "goldSectionHints": [
+      "三、禁止事项"
+    ],
+    "goldSectionsByTitle": {
+      "评分与推荐一致性规则": [
+        "三、禁止事项"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-10-5",
+    "stage": "knowledge_recall",
+    "query": "报告修订后分数变化过大要做什么？",
+    "goldDocIds": [
+      "kb-exp-10"
+    ],
+    "goldTitles": [
+      "评分与推荐一致性规则"
+    ],
+    "goldSectionHints": [
+      "三、禁止事项"
+    ],
+    "goldSectionsByTitle": {
+      "评分与推荐一致性规则": [
+        "三、禁止事项"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-11-1",
+    "stage": "knowledge_recall",
+    "query": "工作五年的候选人学历最多占多大权重？",
+    "goldDocIds": [
+      "kb-exp-11"
+    ],
+    "goldTitles": [
+      "教育背景与证书权重指引"
+    ],
+    "goldSectionHints": [
+      "一、学历权重原则"
+    ],
+    "goldSectionsByTitle": {
+      "教育背景与证书权重指引": [
+        "一、学历权重原则"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-11-2",
+    "stage": "knowledge_recall",
+    "query": "什么样的竞赛或论文能算教育背景加分？",
+    "goldDocIds": [
+      "kb-exp-11"
+    ],
+    "goldTitles": [
+      "教育背景与证书权重指引"
+    ],
+    "goldSectionHints": [
+      "二、加分项判定"
+    ],
+    "goldSectionsByTitle": {
+      "教育背景与证书权重指引": [
+        "二、加分项判定"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-11-3",
+    "stage": "knowledge_recall",
+    "query": "证书和岗位无关时应该怎么处理？",
+    "goldDocIds": [
+      "kb-exp-11"
+    ],
+    "goldTitles": [
+      "教育背景与证书权重指引"
+    ],
+    "goldSectionHints": [
+      "三、证书处理规则"
+    ],
+    "goldSectionsByTitle": {
+      "教育背景与证书权重指引": [
+        "三、证书处理规则"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-11-4",
+    "stage": "knowledge_recall",
+    "query": "能否因为学校一般直接否定有经验的候选人？",
+    "goldDocIds": [
+      "kb-exp-11"
+    ],
+    "goldTitles": [
+      "教育背景与证书权重指引"
+    ],
+    "goldSectionHints": [
+      "四、禁止事项"
+    ],
+    "goldSectionsByTitle": {
+      "教育背景与证书权重指引": [
+        "四、禁止事项"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-11-5",
+    "stage": "knowledge_recall",
+    "query": "应届生和资深人员的学历权重为何不同？",
+    "goldDocIds": [
+      "kb-exp-11"
+    ],
+    "goldTitles": [
+      "教育背景与证书权重指引"
+    ],
+    "goldSectionHints": [
+      "一、学历权重原则"
+    ],
+    "goldSectionsByTitle": {
+      "教育背景与证书权重指引": [
+        "一、学历权重原则"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-12-1",
+    "stage": "knowledge_recall",
+    "query": "Staff Engineer 应如何对标国内职级？",
+    "goldDocIds": [
+      "kb-exp-12"
+    ],
+    "goldTitles": [
+      "英文简历评估补充规范"
+    ],
+    "goldSectionHints": [
+      "一、职级词校准"
+    ],
+    "goldSectionsByTitle": {
+      "英文简历评估补充规范": [
+        "一、职级词校准"
+      ]
+    },
+    "caseType": "lexical",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-12-2",
+    "stage": "knowledge_recall",
+    "query": "英文简历里的 led 和 owned 一定代表负责人吗？",
+    "goldDocIds": [
+      "kb-exp-12"
+    ],
+    "goldTitles": [
+      "英文简历评估补充规范"
+    ],
+    "goldSectionHints": [
+      "二、动词包装识别"
+    ],
+    "goldSectionsByTitle": {
+      "英文简历评估补充规范": [
+        "二、动词包装识别"
+      ]
+    },
+    "caseType": "semantic_paraphrase",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-12-3",
+    "stage": "knowledge_recall",
+    "query": "英文数字和日期格式怎样避免解析误差？",
+    "goldDocIds": [
+      "kb-exp-12"
+    ],
+    "goldTitles": [
+      "英文简历评估补充规范"
+    ],
+    "goldSectionHints": [
+      "三、量化与格式"
+    ],
+    "goldSectionsByTitle": {
+      "英文简历评估补充规范": [
+        "三、量化与格式"
+      ]
+    },
+    "caseType": "hard_negative",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-12-4",
+    "stage": "knowledge_recall",
+    "query": "简历用英文写能否直接证明口语流利？",
+    "goldDocIds": [
+      "kb-exp-12"
+    ],
+    "goldTitles": [
+      "英文简历评估补充规范"
+    ],
+    "goldSectionHints": [
+      "四、语言能力推断边界"
+    ],
+    "goldSectionsByTitle": {
+      "英文简历评估补充规范": [
+        "四、语言能力推断边界"
+      ]
+    },
+    "caseType": "policy_boundary",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-12-5",
+    "stage": "knowledge_recall",
+    "query": "Principal 头衔为什么必须结合组织规模判断？",
+    "goldDocIds": [
+      "kb-exp-12"
+    ],
+    "goldTitles": [
+      "英文简历评估补充规范"
+    ],
+    "goldSectionHints": [
+      "一、职级词校准"
+    ],
+    "goldSectionsByTitle": {
+      "英文简历评估补充规范": [
+        "一、职级词校准"
+      ]
+    },
+    "caseType": "long_tail",
+    "querySource": "copilot_question",
+    "benchmarkSplit": "heldout"
+  },
+  {
+    "caseId": "kbq-workflow-01",
+    "stage": "knowledge_recall",
+    "query": "技术评估 Java Spring Redis 标准",
+    "goldDocIds": [
+      "kb-exp-02"
+    ],
+    "goldTitles": [
+      "Java 后端工程师评估标准"
+    ],
+    "goldSectionHints": [],
+    "goldSectionsByTitle": {
+      "Java 后端工程师评估标准": [
+        "一、硬性要求核查",
+        "二、深度信号"
+      ]
+    },
+    "caseType": "workflow_template",
+    "querySource": "workflow_template",
+    "benchmarkSplit": "operational"
+  },
+  {
+    "caseId": "kbq-workflow-02",
+    "stage": "knowledge_recall",
+    "query": "技术评估 前端 React Vue 标准",
+    "goldDocIds": [
+      "kb-exp-03"
+    ],
+    "goldTitles": [
+      "前端工程师评估标准"
+    ],
+    "goldSectionHints": [],
+    "goldSectionsByTitle": {
+      "前端工程师评估标准": [
+        "一、框架深度分层",
+        "二、性能优化核查"
+      ]
+    },
+    "caseType": "workflow_template",
+    "querySource": "workflow_template",
+    "benchmarkSplit": "operational"
+  },
+  {
+    "caseId": "kbq-workflow-03",
+    "stage": "knowledge_recall",
+    "query": "技术评估 RAG LLM Agent 标准",
+    "goldDocIds": [
+      "kb-exp-01",
+      "kb-exp-04"
+    ],
+    "goldTitles": [
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）",
+      "算法与大模型工程师评估标准"
+    ],
+    "goldSectionHints": [],
+    "goldSectionsByTitle": {
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）": [
+        "一、分级标准",
+        "二、核心考察维度"
+      ],
+      "算法与大模型工程师评估标准": [
+        "二、工程落地能力",
+        "三、大模型应用方向补充"
+      ]
+    },
+    "caseType": "workflow_template",
+    "querySource": "workflow_template",
+    "benchmarkSplit": "operational"
+  },
+  {
+    "caseId": "kbq-workflow-04",
+    "stage": "knowledge_recall",
+    "query": "技术评估 Flink 数据 标准",
+    "goldDocIds": [
+      "kb-exp-05"
+    ],
+    "goldTitles": [
+      "数据工程师评估标准"
+    ],
+    "goldSectionHints": [],
+    "goldSectionsByTitle": {
+      "数据工程师评估标准": [
+        "一、规模真实性",
+        "二、技术深度核查"
+      ]
+    },
+    "caseType": "workflow_template",
+    "querySource": "workflow_template",
+    "benchmarkSplit": "operational"
+  },
+  {
+    "caseId": "kbq-workflow-05",
+    "stage": "knowledge_recall",
+    "query": "技术评估 AI LLM 算法 标准",
+    "goldDocIds": [
+      "kb-exp-04",
+      "kb-exp-01"
+    ],
+    "goldTitles": [
+      "算法与大模型工程师评估标准",
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）"
+    ],
+    "goldSectionHints": [],
+    "goldSectionsByTitle": {
+      "算法与大模型工程师评估标准": [
+        "一、真实性核查",
+        "三、大模型应用方向补充"
+      ],
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）": [
+        "一、分级标准",
+        "二、核心考察维度"
+      ]
+    },
+    "caseType": "workflow_template",
+    "querySource": "workflow_template",
+    "benchmarkSplit": "operational"
+  },
+  {
+    "caseId": "kbq-workflow-06",
+    "stage": "knowledge_recall",
+    "query": "技术能力评估标准 评分规范",
+    "goldDocIds": [
+      "kb-exp-01",
+      "kb-exp-02",
+      "kb-exp-03",
+      "kb-exp-04",
+      "kb-exp-05"
+    ],
+    "goldTitles": [
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）",
+      "Java 后端工程师评估标准",
+      "前端工程师评估标准",
+      "算法与大模型工程师评估标准",
+      "数据工程师评估标准"
+    ],
+    "goldSectionHints": [],
+    "goldSectionsByTitle": {
+      "AI Agent 工程师面试 Rubric（L3-L7 分级）": [
+        "二、核心考察维度"
+      ],
+      "Java 后端工程师评估标准": [
+        "一、硬性要求核查"
+      ],
+      "前端工程师评估标准": [
+        "一、框架深度分层"
+      ],
+      "算法与大模型工程师评估标准": [
+        "一、真实性核查"
+      ],
+      "数据工程师评估标准": [
+        "二、技术深度核查"
+      ]
+    },
+    "caseType": "workflow_template",
+    "querySource": "workflow_template",
+    "benchmarkSplit": "operational"
+  },
+  {
+    "caseId": "kbq-workflow-07",
+    "stage": "knowledge_recall",
+    "query": "简历评估 评分标准 录用建议 风险判断",
+    "goldDocIds": [
+      "kb-exp-10",
+      "kb-exp-07",
+      "kb-exp-06"
+    ],
+    "goldTitles": [
+      "评分与推荐一致性规则",
+      "时间线风险判定标准",
+      "项目真实性核验清单"
+    ],
+    "goldSectionHints": [],
+    "goldSectionsByTitle": {
+      "评分与推荐一致性规则": [
+        "一、分数区间与推荐映射",
+        "二、维度分与综合分自洽"
+      ],
+      "时间线风险判定标准": [
+        "一、高风险",
+        "二、中风险"
+      ],
+      "项目真实性核验清单": [
+        "一、STAR 完整性检查",
+        "二、量化指标可信度判定"
+      ]
+    },
+    "caseType": "workflow_template",
+    "querySource": "workflow_template",
+    "benchmarkSplit": "operational"
+  }
+]

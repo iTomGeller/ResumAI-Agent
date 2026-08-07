@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.dao.ContextSnapshotMapper;
 import com.resumai.agent.domain.entity.ContextSnapshotRow;
 import com.resumai.agent.service.InternalWorkflowService;
+import com.resumai.agent.service.LlmInvocationService;
 import com.resumai.agent.service.MemoryService;
 import com.resumai.agent.service.RunMemoryUsageService;
 import com.resumai.agent.service.run.RunLifecycleService;
@@ -37,6 +38,7 @@ public class AgentRunInternalController {
     private final RunSchedulerService schedulerService;
     private final MemoryService memoryService;
     private final RunMemoryUsageService runMemoryUsageService;
+    private final LlmInvocationService llmInvocationService;
     private final ContextSnapshotMapper contextSnapshotMapper;
     private final ObjectMapper objectMapper;
 
@@ -45,6 +47,7 @@ public class AgentRunInternalController {
                                       RunSchedulerService schedulerService,
                                       MemoryService memoryService,
                                       RunMemoryUsageService runMemoryUsageService,
+                                      LlmInvocationService llmInvocationService,
                                       ContextSnapshotMapper contextSnapshotMapper,
                                       ObjectMapper objectMapper) {
         this.internalWorkflowService = internalWorkflowService;
@@ -52,6 +55,7 @@ public class AgentRunInternalController {
         this.schedulerService = schedulerService;
         this.memoryService = memoryService;
         this.runMemoryUsageService = runMemoryUsageService;
+        this.llmInvocationService = llmInvocationService;
         this.contextSnapshotMapper = contextSnapshotMapper;
         this.objectMapper = objectMapper;
     }
@@ -77,6 +81,39 @@ public class AgentRunInternalController {
                 request.agentId(), request.toolName(),
                 request.payload() != null ? request.payload() : Map.of());
         return Map.of("status", "OK");
+    }
+
+    public record RuntimeLlmInvocationRequest(
+            String runId, String traceId, String spanId, String modelName,
+            String agentRole, String purpose, Long durationMs,
+            String prompt, String response, Integer inputTokens,
+            Integer outputTokens, String finishReason, String errorCode,
+            String errorBody) {
+    }
+
+    /**
+     * Durable Context Audit sink for Python workflow LLM calls. Full prompts
+     * are intentionally stored outside run_event so they are never replayed
+     * through the public SSE trace. LlmInvocationService applies PII/secret
+     * redaction before persistence.
+     */
+    @PostMapping("/llm-invocations")
+    public Map<String, String> ingestLlmInvocation(
+            @RequestHeader("X-Internal-Token") String token,
+            @RequestBody RuntimeLlmInvocationRequest request) {
+        authorize(token);
+        if (!hasText(request.runId()) || !hasText(request.agentRole())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "runId and agentRole required");
+        }
+        var saved = llmInvocationService.saveInvocation(
+                request.traceId(), request.spanId(), request.modelName(),
+                request.agentRole(), request.purpose(),
+                Math.max(0L, request.durationMs() != null ? request.durationMs() : 0L),
+                request.prompt(), request.response(), request.inputTokens(),
+                request.outputTokens(), request.finishReason(),
+                request.errorCode(), request.errorBody());
+        return Map.of("status", "OK", "invocationId", saved.getId());
     }
 
     public record RuntimeResultRequest(String runId, String status, String answer,

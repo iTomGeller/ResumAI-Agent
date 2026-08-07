@@ -44,6 +44,25 @@ WORKTREE_NEW = [
     "workflow/app/runtime/checkpoint.py",
     "workflow/app/runtime/langgraph_executor.py",
     "workflow/tests/test_langgraph_runtime.py",
+    "docs/RAG_THREE_STAGE_EXPERIMENT_PROTOCOL.md",
+    "harness/audit_three_stage_rag_chunks.py",
+    "harness/rag_three_stage_catalog.py",
+    "harness/rag_three_stage_lib.py",
+    "harness/run_three_stage_rag_experiments.py",
+    "harness/validate_three_stage_benchmark.py",
+    "scripts/build_real_jd_rag_corpus.py",
+    "scripts/build_three_stage_gold_spans.py",
+    "scripts/run_three_stage_rag_ecs.sh",
+    "scripts/seed_rag_experiment_jds.py",
+    "testdata/rag_three_stage/jd_catalog.json",
+    "testdata/rag_three_stage/jd_queries.json",
+    "testdata/rag_three_stage/jd_source_receipt.json",
+    "testdata/rag_three_stage/knowledge_documents_live.json",
+    "testdata/rag_three_stage/knowledge_documents.json",
+    "testdata/rag_three_stage/knowledge_queries.json",
+    "testdata/rag_three_stage/manifest.json",
+    "testdata/rag_three_stage/rag_gold_spans.json",
+    "testdata/rag_three_stage/resume_evidence_cases.json",
 ]
 
 
@@ -55,6 +74,10 @@ def load_env() -> dict[str, str]:
             continue
         k, v = line.split("=", 1)
         env[k.strip()] = v.strip()
+    # Explicit one-off target values override a stale ignored deployment file.
+    for key in list(env) + ["ALIYUN_HOST", "ALIYUN_USER", "ALIYUN_PASSWORD"]:
+        if os.environ.get(key):
+            env[key] = os.environ[key]
     return env
 
 

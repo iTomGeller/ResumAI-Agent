@@ -156,7 +156,7 @@ public class LlmInvocationService {
 
         entity.setErrorCode(errorCode);
 
-        entity.setErrorBody(errorBody);
+        entity.setErrorBody(preview(sanitize(errorBody)));
 
         entity.setCreateTime(now);
 

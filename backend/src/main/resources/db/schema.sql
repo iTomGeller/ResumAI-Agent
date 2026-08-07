@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS `resume_task` (
   `jd_match_score` DECIMAL(5,3) NULL     COMMENT 'JD 匹配分',
   `duration_ms`    BIGINT       NULL     COMMENT '评估耗时毫秒',
   `token_cost`     INT          NULL     COMMENT 'Token 成本',
-  `summary`        VARCHAR(2000) NULL    COMMENT '评估摘要',
+  `summary`        MEDIUMTEXT    NULL    COMMENT '评估摘要',
   `fail_reason`    VARCHAR(1024) NULL    COMMENT '失败原因',
   `result_payload` JSON         NULL     COMMENT '评估结果快照',
   `start_time`     DATETIME     NULL     COMMENT '任务开始时间',

@@ -330,43 +330,10 @@ test -n "$JAR"
 cp -f "$JAR" target/resumai-agent-backend.jar
 ls -lh target/resumai-agent-backend.jar
 
-log "fetch Temurin JRE cache if missing"
-mkdir -p "$SRC_DIR/backend/.jre-cache"
-JRE_CACHE="$SRC_DIR/backend/.jre-cache/temurin-21-jre.tar.gz"
-if [[ ! -s "$JRE_CACHE" ]] || ! tar -tzf "$JRE_CACHE" >/dev/null 2>&1; then
-  rm -f "$JRE_CACHE"
-  # Reuse the verified JRE already serving production before attempting a
-  # slow cross-border download. The archive keeps one top-level directory
-  # because Dockerfile.ecs extracts it with --strip-components=1.
-  if docker exec ai-resume-backend sh -c \
-      'java_bin="$(command -v java)"; test -n "$java_bin" && test -x "$java_bin"' \
-      2>/dev/null; then
-    log "export JRE from current healthy backend container"
-    JRE_TMP="$(mktemp -d)"
-    CONTAINER_JAVA_HOME="$(docker exec ai-resume-backend sh -c \
-      'java_bin="$(readlink -f "$(command -v java)")"; dirname "$(dirname "$java_bin")"')"
-    case "$CONTAINER_JAVA_HOME" in
-      /opt/java|/opt/java/openjdk) ;;
-      *) echo "unexpected container JAVA_HOME: $CONTAINER_JAVA_HOME" >&2; exit 1 ;;
-    esac
-    # Repack either the legacy /opt/java/openjdk layout or the normalized
-    # /opt/java layout as one top-level entry for --strip-components=1.
-    docker cp "ai-resume-backend:${CONTAINER_JAVA_HOME}" "$JRE_TMP/java" >/dev/null
-    tar -czf "$JRE_CACHE" -C "$JRE_TMP" java
-    rm -rf "$JRE_TMP"
-  else
-    # Tsinghua first, GitHub fallback; both have bounded retries and total time.
-    curl -fsSL --retry 2 --connect-timeout 15 --max-time 300 \
-      -o "$JRE_CACHE.tmp" \
-      "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jre/x64/linux/OpenJDK21U-jre_x64_linux_hotspot_21.0.7_6.tar.gz" || \
-    curl -fsSL --retry 2 --connect-timeout 15 --max-time 600 \
-      -o "$JRE_CACHE.tmp" \
-      "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.7%2B6/OpenJDK21U-jre_x64_linux_hotspot_21.0.7_6.tar.gz"
-    mv "$JRE_CACHE.tmp" "$JRE_CACHE"
-  fi
-fi
-tar -tzf "$JRE_CACHE" >/dev/null
-ls -lh "$SRC_DIR/backend/.jre-cache/"
+# Dockerfile.ecs obtains the runtime directly from the DaoCloud-mirrored
+# eclipse-temurin image.  The old host-side JRE tar cache was no longer copied
+# into that image and only introduced a fragile cross-border download.
+log "backend runtime uses DaoCloud mirrored Temurin 21 image"
 
 log "frontend lint + typecheck + build (ECS only)"
 cd "$SRC_DIR/frontend"

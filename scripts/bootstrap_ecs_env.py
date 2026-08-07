@@ -1,6 +1,7 @@
 """Bootstrap ECS .env from .deploy.local.env with safe defaults for missing keys."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -38,6 +39,16 @@ def load_env() -> dict[str, str]:
             continue
         k, v = line.split("=", 1)
         merged[k.strip()] = v.strip()
+    # One-off ECS replacements must not require rewriting the ignored local
+    # secret file. Explicit process values always win over its previous host.
+    for key, value in os.environ.items():
+        if value and (key in merged or key in {
+                "ALIYUN_HOST", "ALIYUN_USER", "ALIYUN_PASSWORD",
+                "DEPLOY_DIR", "DASHSCOPE_API_KEY", "OPENROUTER_API_KEY",
+                "EMBEDDING_PROVIDER", "EMBEDDING_ENABLED",
+                "EMBEDDING_API_KEY", "EMBEDDING_BASE_URL",
+                "EMBEDDING_MODEL", "MILVUS_DIMENSION"}):
+            merged[key] = value
     merged["PUBLIC_HOST"] = merged.get("ALIYUN_HOST", merged["PUBLIC_HOST"])
     return merged
 
@@ -59,11 +70,14 @@ def main() -> None:
         f"LLM_HTTP_MAX_CONNECTIONS={env['LLM_HTTP_MAX_CONNECTIONS']}",
         ("LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS="
          f"{env['LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS']}"),
-        "EMBEDDING_PROVIDER=local",
-        "EMBEDDING_ENABLED=true",
-        f"EMBEDDING_API_KEY={env['DEEPSEEK_API_KEY']}",
-        f"EMBEDDING_BASE_URL={env['DEEPSEEK_API_URL']}",
-        "EMBEDDING_MODEL=all-minilm-l6-v2",
+        f"EMBEDDING_PROVIDER={env.get('EMBEDDING_PROVIDER', 'dashscope')}",
+        f"EMBEDDING_ENABLED={env.get('EMBEDDING_ENABLED', 'true')}",
+        ("EMBEDDING_API_KEY=" + env.get(
+            "EMBEDDING_API_KEY", env.get("DASHSCOPE_API_KEY", ""))),
+        ("EMBEDDING_BASE_URL=" + env.get(
+            "EMBEDDING_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1")),
+        f"EMBEDDING_MODEL={env.get('EMBEDDING_MODEL', 'text-embedding-v3')}",
         "MYSQL_HOST=mysql",
         "MYSQL_PORT=3306",
         f"MYSQL_ROOT_PASSWORD={env['MYSQL_ROOT_PASSWORD']}",
@@ -80,7 +94,7 @@ def main() -> None:
         "MILVUS_HOST=milvus",
         "MILVUS_PORT=19530",
         "MILVUS_COLLECTION=resume_chunk",
-        "MILVUS_DIMENSION=384",
+        f"MILVUS_DIMENSION={env.get('MILVUS_DIMENSION', '1024')}",
         f"MINIO_ROOT_USER={env['MINIO_ROOT_USER']}",
         f"MINIO_ROOT_PASSWORD={env['MINIO_ROOT_PASSWORD']}",
         f"PUBLIC_HOST={env['PUBLIC_HOST']}",
