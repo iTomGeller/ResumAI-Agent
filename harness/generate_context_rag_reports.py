@@ -33,6 +33,31 @@ AGENT_CN = {
     "ReportAgent": "报告收口",
 }
 
+# Production SkillManager's single source of truth.  These are deliberately
+# shown next to each Agent request in the audit report so readers do not need
+# to jump to a separate appendix to understand the effective Skill contract.
+AGENT_SKILL_FILES = {
+    "TechAgent": [
+        ("assess-technical-evidence",
+         "backend/src/main/resources/skills/assess-technical-evidence/SKILL.md"),
+    ],
+    "ProjectAgent": [
+        ("ground-project-claims",
+         "backend/src/main/resources/skills/ground-project-claims/SKILL.md"),
+        ("retrieve-public-candidate-evidence",
+         "backend/src/main/resources/skills/retrieve-public-candidate-evidence/SKILL.md"),
+    ],
+    "RiskAgent": [
+        ("risk_pattern_detection",
+         "backend/src/main/resources/skills/risk_pattern_detection/SKILL.md"),
+    ],
+    "EvidenceAgent": [
+        ("calibrate-evidence-confidence",
+         "backend/src/main/resources/skills/calibrate-evidence-confidence/SKILL.md"),
+    ],
+    "ReportAgent": [],
+}
+
 
 def load_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
@@ -354,36 +379,21 @@ def exact_skill_injection_appendix(invocations: list[dict[str, Any]]) -> str:
             continue
         for label, block in states:
             sections.append(_details(label, _text_fence(block)) + "\n")
-        reference_skills = {
-            "TechAgent": (
-                "assess-technical-evidence",
-                "workflow/app/skills/assess-technical-evidence/SKILL.md",
-            ),
-            "RiskAgent": (
-                "risk-pattern-detection",
-                "workflow/app/skills/risk-pattern-detection/SKILL.md",
-            ),
-            "EvidenceAgent": (
-                "calibrate-evidence-confidence",
-                "workflow/app/skills/calibrate-evidence-confidence/SKILL.md",
-            ),
-        }
-        reference = reference_skills.get(agent)
         body_was_loaded = any(
             "[已加载技能指令]" in block for _, block in states)
-        if reference and not body_was_loaded:
-            skill_name, skill_path = reference
-            skill_body = _repository_text(skill_path)
-            sections.append(
-                "上面的内容只是本轮实际注入的 Lazy Skill 目录卡。"
-                "由于模型没有调用 `load_skill`，下面的正文未进入本轮 Prompt；"
-                "这里仍紧邻目录卡列出仓库 `SKILL.md` 全文，方便审计。\n\n"
-                + _details(
-                    f"展开 {skill_name}/SKILL.md 完整原文（本轮未注入）",
-                    _text_fence(skill_body),
+        if not body_was_loaded:
+            for skill_name, skill_path in AGENT_SKILL_FILES.get(agent, []):
+                skill_body = _repository_text(skill_path)
+                sections.append(
+                    "上面的内容只是本轮实际注入的 Lazy Skill 目录卡。"
+                    "由于模型没有调用 `load_skill`，下面的正文未进入本轮 Prompt；"
+                    "这里仍紧邻目录卡列出生产源 `SKILL.md` 全文，方便审计。\n\n"
+                    + _details(
+                        f"展开 {skill_name}/SKILL.md 完整原文（本轮未注入）",
+                        _text_fence(skill_body),
+                    )
+                    + "\n"
                 )
-                + "\n"
-            )
     return "\n".join(sections)
 
 
@@ -547,6 +557,106 @@ def _provider_detail_blocks(
     return "\n\n".join(blocks)
 
 
+def _agent_skill_reference_blocks(
+        agent: str, request: dict[str, Any]) -> str:
+    """Show production SKILL.md files inside the matching Agent prompt block."""
+
+    skills = AGENT_SKILL_FILES.get(agent, [])
+    if not skills:
+        return "#### 本 Agent 对应的 SKILL.md\n\n该 Agent 在 registry 中没有绑定 Skill。"
+    system = "\n".join(
+        str(message.get("content") or "")
+        for message in request.get("messages") or []
+        if message.get("role") == "system"
+    )
+    blocks = ["#### 本 Agent 对应的 SKILL.md（生产源全文）"]
+    for skill_id, skill_path in skills:
+        loaded = (
+            "[已加载技能指令]" in system
+            and skill_id in system
+        )
+        status = "该次请求已注入" if loaded else "该次请求只有目录，正文未注入"
+        blocks.append(_details(
+            f"{skill_id}/SKILL.md｜{status}",
+            f"生产源：`{skill_path}`\n\n{_text_fence(_repository_text(skill_path))}",
+        ))
+    return "\n\n".join(blocks)
+
+
+_PRE_LLM_TOOL_KIND = {
+    "resume_semantic_search": "当前简历证据检索（RAG）",
+    "knowledge_search": "知识库检索（RAG）",
+    "jd_match_search": "JD 检索（RAG）",
+    "locate_evidence": "简历文本证据定位（非知识库 RAG）",
+    "calculate_jd_coverage": "确定性 JD 覆盖率规则",
+    "check_timeline": "确定性时间线规则",
+    "verify_report_evidence": "确定性证据校验",
+}
+
+
+def _agent_pre_llm_context_blocks(request: dict[str, Any]) -> str:
+    """Explain exact pre-LLM observations already present in Agent messages."""
+
+    observations: list[tuple[str, str, Any]] = []
+    for message in request.get("messages") or []:
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        for match in re.finditer(
+                r"^\[TOOL_RESULT\s+([^\s\]]+)[^\]]*\]\s*(.*)$",
+                content, re.MULTILINE):
+            tool_name = match.group(1)
+            raw = match.group(2).strip()
+            try:
+                payload: Any = json.loads(raw)
+            except json.JSONDecodeError:
+                payload = raw
+            observations.append((
+                tool_name,
+                _PRE_LLM_TOOL_KIND.get(tool_name, "Runtime pre-step Tool"),
+                payload,
+            ))
+    native_history = any(
+        message.get("role") == "tool" or message.get("tool_calls")
+        for message in request.get("messages") or []
+    )
+    lines = [
+        "#### 该次请求中的 Pre-LLM Tool / RAG 上下文",
+        "",
+        "`[TOOL_RESULT ...]` 由 Runtime 在首次调用该 Agent 的 LLM 之前执行并拼入上下文，"
+        "所以首个 Provider 请求可以已经带结果；这不表示模型在请求之前调用过工具。"
+        "模型原生工具回合则表现为后续 `assistant → tool` messages。",
+        "",
+    ]
+    if not observations:
+        lines.append("该次请求没有 Runtime pre-step 观察。")
+    else:
+        lines.extend([
+            "| Tool | 类型 | 出现在首轮前 |",
+            "|---|---|---|",
+        ])
+        seen: set[str] = set()
+        for tool_name, kind, payload in observations:
+            lines.append(f"| `{tool_name}` | {kind} | 是 |")
+            if tool_name in seen:
+                continue
+            seen.add(tool_name)
+            rendered = (
+                _text_fence(payload) if isinstance(payload, str)
+                else _json_fence(payload)
+            )
+            lines.extend([
+                "",
+                _details(f"展开 {tool_name} 实际注入结果", rendered),
+            ])
+    lines.extend([
+        "",
+        f"该次请求是否还包含模型原生 `assistant → tool` 历史："
+        f"**{'是' if native_history else '否'}**。",
+    ])
+    return "\n".join(lines)
+
+
 def readable_final_agent_prompts(invocations: list[dict[str, Any]]) -> str:
     """Render final effective requests as readable message blocks, not escaped JSON strings."""
     ordered = sorted(invocations, key=lambda item: item.get("requestStartedAt") or "")
@@ -585,6 +695,8 @@ def readable_final_agent_prompts(invocations: list[dict[str, Any]]) -> str:
             f" invocation id=`{item.get('id')}`，purpose=`{item.get('purpose')}`，"
             f"Prompt/Completion=`{item.get('inputTokens', 0):,}/{item.get('outputTokens', 0):,}`，"
             f"duration=`{item.get('durationMs', 0) / 1000:.3f}s`，finish=`{item.get('finishReason')}`。\n\n"
+            f"{_agent_skill_reference_blocks(agent, request)}\n\n"
+            f"{_agent_pre_llm_context_blocks(request)}\n\n"
             f"{_provider_detail_blocks(request, response)}\n\n"
             "</details>"
         )
@@ -608,7 +720,7 @@ def _coordinator_prompt_v1() -> str:
 
 def risk_skill_reference_section(invocations: list[dict[str, Any]]) -> str:
     skill_body = _repository_text(
-        "workflow/app/skills/risk-pattern-detection/SKILL.md")
+        "backend/src/main/resources/skills/risk_pattern_detection/SKILL.md")
     risk_rows = [
         item for item in invocations if item.get("agentRole") == "RiskAgent"
     ]
@@ -627,11 +739,11 @@ def risk_skill_reference_section(invocations: list[dict[str, Any]]) -> str:
 | `check_timeline` | Python 内置规则 Tool | 解析履历年月，确定性地产出 gaps / overlaps 等结果 |
 | `timelineCheck` | SharedState artifact | `check_timeline` 的结果保存到这里，随后进入 RiskAgent 的共享上下文 |
 | `risk_pattern_detection` | Skill 注册 ID | RiskAgent 绑定的风险分析 Skill |
-| `risk-pattern-detection/SKILL.md` | Skill 原文件 | 定义时间线、夸大、一致性、角色匹配等风险框架 |
+| `risk_pattern_detection/SKILL.md` | 生产 Skill 原文件 | 定义时间线、夸大、一致性、角色匹配等风险框架 |
 
 本轮 `risk_pattern_detection` 的状态是 **selected，但 loaded=0**；RiskAgent 最终 Prompt 中完整 Skill body **{'已经注入' if loaded else '没有注入'}**。不过为了让审计文档能回答“这个 Skill 到底写了什么”，下面仍展示仓库原文件，并明确它是**代码配置参考，不冒充本轮实际 Prompt**。
 
-{_details('仓库原文：workflow/app/skills/risk-pattern-detection/SKILL.md（本轮未加载）', _text_fence(skill_body))}
+{_details('生产源：backend/src/main/resources/skills/risk_pattern_detection/SKILL.md（本轮未加载）', _text_fence(skill_body))}
 """
 
 
@@ -962,7 +1074,7 @@ providerRequest
 
 Coordinator 本轮没有 Provider 调用，因此不存在“本轮 Provider Prompt”；第 4 节已经同时列出它的实际确定性规划输入、计划输出，以及仓库中的 `coordinator-system v1` Prompt 模板。下面 Tech / Project / Risk / Evidence 选取各自最后一次有效请求；Report 因为实际分为 score / risk / question 三条并行分支，所以三条都展示，score 选取 `finishReason=length` 后的最终重试。
 
-每个块依次展开：请求参数 → 完整 system/user/assistant/tool messages → 完整 tools schema → 真实 Provider 响应。
+每个块依次展开：本 Agent 的生产 `SKILL.md` 全文 → 首轮前 Runtime Tool/RAG 结果及来源 → 请求参数 → 完整 system/user/assistant/tool messages → 完整 tools schema → 真实 Provider 响应。
 
 {final_agent_prompts}
 
@@ -986,7 +1098,7 @@ Provider 请求里出现过的工具 schema 是“**可以调用**”，响应 `
 
 ## 8. Memory：项目里有，但本例没有硬塞
 
-ECS 恢复后的持久化 Memory 共 **10,653** 条，其中 active **3,929** 条：EPISODIC 2,940、SEMANTIC 935、PREFERENCE 31、FAILURE 13、PROCEDURAL 10。历史 `USED` 记录覆盖 Report/Tech/Evidence/Risk/Project 五个 Agent，说明 Memory 子系统真实使用过。
+ECS 恢复后的数据库物理行中仍能看到 `PREFERENCE`、`FAILURE` 等历史名称，但当前 Runtime 和 Java 服务对外只有四种正式 taxonomy：**WORKING、SEMANTIC、EPISODIC、PROCEDURAL**。读取时 `PREFERENCE → SEMANTIC`，`FAILURE → EPISODIC`；它们不是第五、第六种 Memory。历史 `USED` 记录覆盖 Report/Tech/Evidence/Risk/Project 五个 Agent，说明 Memory 子系统真实使用过。
 
 但是本次代表 Run：
 
@@ -996,13 +1108,24 @@ ECS 恢复后的持久化 Memory 共 **10,653** 条，其中 active **3,929** �
 
 真正命中时，Memory 会位于 user message 中、在共享状态之前，形态为带类型/来源/置信度的相关记忆条目；未命中时该 section 整段省略。
 
-### 8.1 数据库里真实存在的 Memory 长什么样
+### 8.1 四种正式 Memory：本项目中的具体 case
+
+| 类型 | 回答什么问题 | 本项目中的具体写入 case | scope / 默认 TTL | 谁能读取、如何进入 Prompt |
+|---|---|---|---|---|
+| `WORKING` | “本次 Run 临时处理到什么上下文？” | 上传 C-014 后写入 `run_input_context`：简历长度、是否有 JD、runType、topSkills；Evidence 完成后还可写 `evidence_context`，记录已验证/未验证数量 | 强制 `RUN` / 1天；终态接受后归档，待晋升记录转成目标长期类型 | 只对同一 `runId` 可见；Coordinator、ResumeParser、JDAnalysis 可按策略读取，普通 Specialist 默认不读取 |
+| `SEMANTIC` | “这个候选人或用户有哪些稳定事实？” | `candidate_fact`：技能包含 LangGraph、RAG、Milvus，项目包含 ResumAI，经历包含快手/哔哩哔哩；用户明确说“以后优先输出中文”也作为 `SEMANTIC/USER`，不是单独的 PREFERENCE 类型 | 候选人事实 `CONVERSATION`，明确偏好 `USER` / 90天 | 同一候选人后续 revision 或同一用户后续请求检索；以 `[SEMANTIC|src=candidate_fact] ...` 进入 `[相关记忆]` |
+| `EPISODIC` | “之前一次评估发生了什么、得到了什么经验证据？” | `evaluation_insight`：本次建议、关键证据、JD缺口和面试验证重点；`cross_candidate_anchor`：同岗位候选人的总分、JD匹配和最大 gap。失败 Run 也只是 `outcome=FAILURE` 的 EPISODIC | 候选人洞察 `CONVERSATION`，对比锚点 `USER` / 90天 | Tech/Project/Risk/Evidence/Report 可读普通评估 episode；控制面失败 episode 仅 Coordinator 可读，不能进入 Risk/Report |
+| `PROCEDURAL` | “下一次类似任务应该怎样执行？” | `runtime_strategy[RISK_TIMELINE]`：履历风险场景保留 RiskAgent，并让 EvidenceAgent 或 ReportAgent 复核时间线；只保存候选人无关的路由和工具策略 | `USER` / 365天 | Coordinator 规划时优先读取，Specialist 也可读取获批准策略；以 `[PROCEDURAL|src=runtime_strategy] ...` 进入 `[相关记忆]` |
+
+一次成功 Run 的真实生命周期是：Python 先把所有 Runtime 写入暂存成 `WORKING/RUN`；Java 接受成功终态后，才把待晋升记录变成 `SEMANTIC/EPISODIC/PROCEDURAL`，并归档剩余 WORKING。取消、失败或未被接受的 Run 不会把候选人结论污染到长期 Memory。
+
+### 8.2 数据库里真实存在的 Memory 长什么样
 
 下面来自 ECS `memory_entry` 的真实 active 记录，只选择 `runtime_strategy/system_rule/evaluation_insight` 来源并脱敏；它们证明持久化数据存在，但**不代表本次 Run 使用了它们**。
 
 {memory_examples_table}
 
-### 8.2 命中后实际拼进 Prompt 的格式
+### 8.3 命中后实际拼进 Prompt 的格式
 
 当前代码先在 `_memory_context()` 中按 Agent 过滤，然后按 `topK` 截取，每条 content 最多 400 字符；`ContextManager.assemble()` 再把它放到共享状态之前。当前实现的准确形态如下：
 
