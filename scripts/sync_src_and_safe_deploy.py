@@ -283,6 +283,16 @@ def main() -> None:
             "requirements.txt'",
             timeout=1800,
         )
+        # A prior host build can leave ignored dependency/build directories in
+        # the source path. They are not part of the committed archive or hash
+        # manifest and may contain npm symlinks, which the deploy verifier
+        # correctly rejects. Remove only these exact, reproducible build
+        # outputs before generating the fresh manifest.
+        run(
+            f"rm -rf -- {SRC_DIR}/frontend/node_modules "
+            f"{SRC_DIR}/frontend/dist {SRC_DIR}/backend/target",
+            timeout=120,
+        )
         run(
             f"cd {SRC_DIR} && "
             "find . -type f ! -name .env ! -name .deploy-commit "
