@@ -290,7 +290,11 @@ providerRequest
 
 Coordinator 本轮没有 Provider 调用，因此不存在 Coordinator Prompt；它的真实控制面输入/输出已经在 4 节按事件展开。下面不再节选，也不把 `messages[].content` 塞进一行转义 JSON。Tech / Project / Risk / Evidence 选取各自最后一次有效请求；Report 因为实际分为 score / risk / question 三条并行分支，所以三条都展示，score 选取 `finishReason=length` 后的最终重试。
 
-每个块依次展开：本 Agent 的生产 `SKILL.md` 全文 → 首轮前 Runtime Tool/RAG 结果及来源 → 请求参数 → 完整 system/user/assistant/tool messages → 完整 tools schema → 真实 Provider 响应。
+每个块依次展开：本 Agent 的生产 `SKILL.md` 全文 → 直接注入 user prompt 的 RAG/规则上下文及来源 → 请求参数 → 完整 system/user/assistant/tool messages → 完整 tools schema → 真实 Provider 响应。
+
+特别注意：报告原始审计文本中的 `[TOOL_CALL]/[TOOL_RESULT]` 是 Runtime 内部统一回执格式。对于 `resume_semantic_search`、`knowledge_search` 等检索源，Runtime 在调用 LLM 前完成检索，并把召回结果直接拼入 user message；它们不是 Agent 可调用工具，也不在 Provider `tools[]` 中。只有请求历史里的 `assistant → tool` 才是模型原生 tool call。
+
+这也暴露了当前实现债务：Provider/Agent 视角已经是“RAG context 直接注入 user prompt”，但 Runtime 代码内部仍复用 `ToolExecutor.execute()`、`tool_results_block`、`[工具观察]` 和 `[TOOL_RESULT]` 来承载检索结果。也就是说，**行为上是直接注入，代码抽象上尚未完成 Retrieval/Tool 解耦**；本报告不能把后者美化成已经完成。
 
 <details>
 <summary><strong>TechAgent｜technical_findings｜Prompt/Completion 5,551/2,206｜15.048s｜点击展开完整原始请求</strong></summary>
@@ -355,18 +359,20 @@ description: 根据具体 JD 和候选人可定位证据评估技术主张、深
 
 </details>
 
-#### 该次请求中的 Pre-LLM Tool / RAG 上下文
+#### 直接注入该次 user prompt 的 RAG / 规则上下文
 
-`[TOOL_RESULT ...]` 是 Runtime 在首次调用该 Agent 的 LLM 之前执行并拼入上下文的结果，所以首个 Provider 请求可以已经带结果；这不是模型在请求之前调用过工具。模型原生工具回合表现为后续 `assistant → tool` messages。
+这里的检索与规则计算由 Runtime 在调用 LLM 前完成，结果直接写入 `messages[].content` 的 user prompt。审计文本沿用了 `[TOOL_CALL]/[TOOL_RESULT]` 内部回执标记，但它们不是模型 tool call，也不会出现在 Provider `tools[]` 中。模型原生工具回合才表现为后续 `assistant → tool` messages。
 
-| Tool | 类型 | 出现在首轮前 |
+> **当前实现债务**：Provider 看到的是直接注入的 RAG context；但 Runtime 内部尚未把 Retrieval 与 Tool 两条管线彻底拆开，检索仍经 `ToolExecutor.execute()`、`tool_results_block` 和 `[工具观察]` 传递。因此这里描述的是当前真实实现，不声称代码层已经完成 RAG/Tool 解耦。
+
+| Runtime 数据源 | 上下文类型 | 注入位置 |
 |---|---|---|
-| `calculate_jd_coverage` | 确定性 JD 覆盖率规则 | 是 |
-| `resume_semantic_search` | 当前简历证据检索（RAG） | 是 |
-| `knowledge_search` | 知识库检索（RAG） | 是 |
+| `calculate_jd_coverage` | 确定性 JD 覆盖率规则 | `user message.content` |
+| `resume_semantic_search` | 当前简历证据检索（RAG） | `user message.content` |
+| `knowledge_search` | 知识库检索（RAG） | `user message.content` |
 
 <details>
-<summary>展开 calculate_jd_coverage 实际注入结果</summary>
+<summary>展开 calculate_jd_coverage 直接注入 user prompt 的内容</summary>
 
 ````json
 {"success": true, "requirementCount": 1, "coveredCount": 1, "coverage": 1.0, "perRequirement": [{"requirement": "招聘 Java 21 / Spring Boot 3 / AI Agent 平台方向高级后端工程师，要求熟悉 RAG、Trace 可观测、Docker 部署、线上问题排查和端到端交付。必要技能：Java, Spring Boot, MySQ", "covered": true, "matchedTerms": ["spring", "boot", "ai", "agent", "rag"], "matchRatio": 0.625}], "missing": []}
@@ -375,7 +381,7 @@ description: 根据具体 JD 和候选人可定位证据评估技术主张、深
 </details>
 
 <details>
-<summary>展开 resume_semantic_search 实际注入结果</summary>
+<summary>展开 resume_semantic_search 直接注入 user prompt 的内容</summary>
 
 ````json
 {"chunks": ["ResumAI Agent 智能简历评估平台（Spring Boot + Vue3 + Milvus + Neo4j + DeepSeek）", "核心技能：熟悉 Milvus 向量数据库、Milvus、LLM、Spring AI、RAG", "- 了解领域驱动设计（DDD）思想并在项目中尝试落地", "了解与实践：Tool Orchestration、Observability、LangGraph、熟悉 LangGraph/LangChain 智能体编排、了解 LLM 可观测与追踪、Agent", "专业技能与项目关键词"], "hitCount": 5, "topScore": 0.3673333333333333, "fallbackUsed": false, "fallback": false, "fallbackReason": null, "fallbackStage": null, "backend": "current_resume", "strategy": "section_bm25_rrf", "errorType": null, "query": "Java Spring Boot Agent RAG Docker MySQL Redis LLM 项目实践 性能优化 故障排查 量化成果", "usedResumeTextFallback": false, "selectedChunks": ["- 了解领域驱动设计（DDD）思想并在项目中尝试落地", "专业技能与项目关键词"], "items": [{"chunkId": "current_resume#baf24591", "documentId": "current_resume", "title": "当前简历证据片段", "source": "current_resume", "content": "- 了解领域驱动设计（DDD）思想并在项目中尝试落地", "rank": 1, "finalScore": 0.3673, "rerankScore": 0.3673, "provenance": {"scope": "request_resume_text", "documentId": "current_resume"}}, {"chunkId": "current_resume#c1739e33", "documentId": "current_resume", "title": "当前简历证据片段", "source": "current_resume", "content": "专业技能与项目关键词", "rank": 2, "finalScore": 0.3567, "rerankScore": 0.3567, "provenance": {"scope": "request_resume_text", "documentId": "current_resume"}}, {"chunkId": "current_resume#e4ec216a", "documentId": "current_resume", "title": "当前简历证据片段", "source": "current_resume", "content": "ResumAI Agent 智能简历评估平台（Spring Boot + Vue3 + Milvus + Neo4j + DeepSeek）", "rank": 3, "finalScore": 0.19
@@ -384,7 +390,7 @@ description: 根据具体 JD 和候选人可定位证据评估技术主张、深
 </details>
 
 <details>
-<summary>展开 knowledge_search 实际注入结果</summary>
+<summary>展开 knowledge_search 直接注入 user prompt 的内容</summary>
 
 ````json
 {"chunks": [{"chunkId": "kb-36eeb907-844a-452e-ba94-700ed5ec1961#chunk-0", "docId": "kb-36eeb907-844a-452e-ba94-700ed5ec1961", "documentId": "kb-36eeb907-844a-452e-ba94-700ed5ec1961", "title": "Java 后端工程师评估标准", "docType": "tech_guide", "sectionPath": "# Java 后端工程师评估标准", "content": "# Java 后端工程师评估标准\n## 一、硬性要求核查", "contentPreview": "# Java 后端工程师评估标准 ## 一、硬性要求核查", "tokenEstimate": 14, "createdAt": "2026-08-05T16:29:37.588774230", "updatedAt": "2026-08-05T16:29:37.588774230", "version": "kb_v1_bailian_te3_1024", "docVersion": "kb_v1_bailian_te3_1024", "charStart": 0, "charEnd": 28, "contentHash": "a6cd44dd6b08ae43", "metadata": {"docId": "kb-36eeb907-844a-452e-ba94-700ed5ec1961", "documentId": "kb-36eeb907-844a-452e-ba94-700ed5ec1961", "chunkId": "kb-36eeb907-844a-452e-ba94-700ed5ec1961#chunk-0", "chunkIndex": 0, "tags": ["java", "backend", "rubric"], "source": "self_service_upload", "embeddingStatus": "reindexing", "indexStatus": "indexing", "embeddingProvider": "bailian", "indexVersion": "kb_v1_bailian_te3_1024", "version": "kb_v1_bailian_te3_1024", "createdAt": "2026-08-05T16:29:37.588774230", "updatedAt": "2026-08-05T16:29:37.588774230", "charStart": 0, "charEnd": 28, "contentHash": "a6cd44dd6b08ae43", "parserVersion": "kb_chunk_v1", "fallbackStage": "hybrid", "targetChunkChars": 320, "overlapChars": 60}, "provenance": {"documentId": "kb-36eeb907-844a-452e-ba94-700ed5ec1961", "chunkId": "kb-36eeb907-844a-452e-ba94-700ed5ec1961#chunk-0", "version": "kb_v1_bailian_te3_1024", "
@@ -1121,17 +1127,19 @@ allowed-tools: exa.web_search_exa exa.web_fetch_exa fetch.fetch
 
 </details>
 
-#### 该次请求中的 Pre-LLM Tool / RAG 上下文
+#### 直接注入该次 user prompt 的 RAG / 规则上下文
 
-`[TOOL_RESULT ...]` 是 Runtime 在首次调用该 Agent 的 LLM 之前执行并拼入上下文的结果，所以首个 Provider 请求可以已经带结果；这不是模型在请求之前调用过工具。模型原生工具回合表现为后续 `assistant → tool` messages。
+这里的检索与规则计算由 Runtime 在调用 LLM 前完成，结果直接写入 `messages[].content` 的 user prompt。审计文本沿用了 `[TOOL_CALL]/[TOOL_RESULT]` 内部回执标记，但它们不是模型 tool call，也不会出现在 Provider `tools[]` 中。模型原生工具回合才表现为后续 `assistant → tool` messages。
 
-| Tool | 类型 | 出现在首轮前 |
+> **当前实现债务**：Provider 看到的是直接注入的 RAG context；但 Runtime 内部尚未把 Retrieval 与 Tool 两条管线彻底拆开，检索仍经 `ToolExecutor.execute()`、`tool_results_block` 和 `[工具观察]` 传递。因此这里描述的是当前真实实现，不声称代码层已经完成 RAG/Tool 解耦。
+
+| Runtime 数据源 | 上下文类型 | 注入位置 |
 |---|---|---|
-| `locate_evidence` | 简历文本证据定位（非知识库 RAG） | 是 |
-| `resume_semantic_search` | 当前简历证据检索（RAG） | 是 |
+| `locate_evidence` | 简历文本证据定位（非知识库 RAG） | `user message.content` |
+| `resume_semantic_search` | 当前简历证据检索（RAG） | `user message.content` |
 
 <details>
-<summary>展开 locate_evidence 实际注入结果</summary>
+<summary>展开 locate_evidence 直接注入 user prompt 的内容</summary>
 
 ````json
 {"success": true, "claims": [{"claim": "项目经历", "found": true, "line": 26, "snippet": "项目经历", "matchScore": 1.0}, {"claim": "专业技能与项目关键词", "found": true, "line": 59, "snippet": "专业技能与项目关键词", "matchScore": 1.0}], "foundCount": 2, "supportRatio": 1.0}
@@ -1140,7 +1148,7 @@ allowed-tools: exa.web_search_exa exa.web_fetch_exa fetch.fetch
 </details>
 
 <details>
-<summary>展开 resume_semantic_search 实际注入结果</summary>
+<summary>展开 resume_semantic_search 直接注入 user prompt 的内容</summary>
 
 ````json
 {"chunks": ["项目经历", "- 了解领域驱动设计（DDD）思想并在项目中尝试落地", "专业技能与项目关键词"], "hitCount": 3, "topScore": 1.0, "fallbackUsed": false, "fallback": false, "fallbackReason": null, "fallbackStage": null, "backend": "current_resume", "strategy": "section_bm25_rrf", "errorType": null, "query": "项目经历", "usedResumeTextFallback": false, "selectedChunks": ["项目经历", "- 了解领域驱动设计（DDD）思想并在项目中尝试落地", "专业技能与项目关键词"], "items": [{"chunkId": "current_resume#471d8aec", "documentId": "current_resume", "title": "当前简历证据片段", "source": "current_resume", "content": "项目经历", "rank": 1, "finalScore": 1.0, "rerankScore": 1.0, "provenance": {"scope": "request_resume_text", "documentId": "current_resume"}}, {"chunkId": "current_resume#baf24591", "documentId": "current_resume", "title": "当前简历证据片段", "source": "current_resume", "content": "- 了解领域驱动设计（DDD）思想并在项目中尝试落地", "rank": 2, "finalScore": 0.3673, "rerankScore": 0.3673, "provenance": {"scope": "request_resume_text", "documentId": "current_resume"}}, {"chunkId": "current_resume#c1739e33", "documentId": "current_resume", "title": "当前简历证据片段", "source": "current_resume", "content": "专业技能与项目关键词", "rank": 3, "finalScore": 0.3567, "rerankScore": 0.3567, "provenance": {"scope": "request_resume_text", "documentId": "current_resume"}}], "usefulnessScore": 1.0, "rerankStrategy": "section_bm25_rrf_rerank_reflect", "rerankScores": [1.0, 0.367, 0.357], "ragPipeline": ["scope_guard(request_resume_text)", "candidate_recall(section-aware + bm25-like)", "rrf_merge(structural + lexical)", "re
@@ -1777,16 +1785,18 @@ allowed-tools: check_timeline knowledge_search
 
 </details>
 
-#### 该次请求中的 Pre-LLM Tool / RAG 上下文
+#### 直接注入该次 user prompt 的 RAG / 规则上下文
 
-`[TOOL_RESULT ...]` 是 Runtime 在首次调用该 Agent 的 LLM 之前执行并拼入上下文的结果，所以首个 Provider 请求可以已经带结果；这不是模型在请求之前调用过工具。模型原生工具回合表现为后续 `assistant → tool` messages。
+这里的检索与规则计算由 Runtime 在调用 LLM 前完成，结果直接写入 `messages[].content` 的 user prompt。审计文本沿用了 `[TOOL_CALL]/[TOOL_RESULT]` 内部回执标记，但它们不是模型 tool call，也不会出现在 Provider `tools[]` 中。模型原生工具回合才表现为后续 `assistant → tool` messages。
 
-| Tool | 类型 | 出现在首轮前 |
+> **当前实现债务**：Provider 看到的是直接注入的 RAG context；但 Runtime 内部尚未把 Retrieval 与 Tool 两条管线彻底拆开，检索仍经 `ToolExecutor.execute()`、`tool_results_block` 和 `[工具观察]` 传递。因此这里描述的是当前真实实现，不声称代码层已经完成 RAG/Tool 解耦。
+
+| Runtime 数据源 | 上下文类型 | 注入位置 |
 |---|---|---|
-| `check_timeline` | 确定性时间线规则 | 是 |
+| `check_timeline` | 确定性时间线规则 | `user message.content` |
 
 <details>
-<summary>展开 check_timeline 实际注入结果</summary>
+<summary>展开 check_timeline 直接注入 user prompt 的内容</summary>
 
 ````json
 {"success": true, "periodCount": 3, "periods": [{"raw": "2010.09 - 2014.06    ", "line": 6, "context": "2010.09 - 2014.06    山东大学    数据科学与大数据技术（本科）", "startMonth": 24128, "endMonth": 24173, "openEnded": false}, {"raw": "2017.07 - 至今", "line": 14, "context": "2017.07 - 至今    哔哩哔哩    高级智能体开发工程师", "startMonth": 24210, "endMonth": null, "openEnded": true}, {"raw": "2014.07 - 2017.06    ", "line": 20, "context": "2014.07 - 2017.06    快手    智能体开发工程师", "startMonth": 24174, "endMonth": 24209, "openEnded": false}], "overlaps": [], "gaps": [], "issues": [], "hasHighRisk": false}
@@ -2267,16 +2277,18 @@ description: 对简历原文、RAG、JD、用户补充和真实外部工具结�
 
 </details>
 
-#### 该次请求中的 Pre-LLM Tool / RAG 上下文
+#### 直接注入该次 user prompt 的 RAG / 规则上下文
 
-`[TOOL_RESULT ...]` 是 Runtime 在首次调用该 Agent 的 LLM 之前执行并拼入上下文的结果，所以首个 Provider 请求可以已经带结果；这不是模型在请求之前调用过工具。模型原生工具回合表现为后续 `assistant → tool` messages。
+这里的检索与规则计算由 Runtime 在调用 LLM 前完成，结果直接写入 `messages[].content` 的 user prompt。审计文本沿用了 `[TOOL_CALL]/[TOOL_RESULT]` 内部回执标记，但它们不是模型 tool call，也不会出现在 Provider `tools[]` 中。模型原生工具回合才表现为后续 `assistant → tool` messages。
 
-| Tool | 类型 | 出现在首轮前 |
+> **当前实现债务**：Provider 看到的是直接注入的 RAG context；但 Runtime 内部尚未把 Retrieval 与 Tool 两条管线彻底拆开，检索仍经 `ToolExecutor.execute()`、`tool_results_block` 和 `[工具观察]` 传递。因此这里描述的是当前真实实现，不声称代码层已经完成 RAG/Tool 解耦。
+
+| Runtime 数据源 | 上下文类型 | 注入位置 |
 |---|---|---|
-| `verify_report_evidence` | 确定性证据校验 | 是 |
+| `verify_report_evidence` | 确定性证据校验 | `user message.content` |
 
 <details>
-<summary>展开 verify_report_evidence 实际注入结果</summary>
+<summary>展开 verify_report_evidence 直接注入 user prompt 的内容</summary>
 
 ````json
 {"success": true, "supported": [{"claim": "技能列表自相矛盾/冗余：'熟悉 Milvus 向量数据库、Milvus' 重复；'熟悉 LangGraph/LangChain 智能体编排' 与'了解与实践：LangGraph' 冲突；'熟悉 Spring AI / FastAPI 服务化' 与'了解与实践' 部分重复。技能层级表述混乱，需澄清真实熟练度。", "matchRatio": 0.75, "location": {"line": 27, "snippet": "企业知识库问答系统（LangChain + Milvus + Redis）"}}, {"claim": "技术栈覆盖 AI Agent 后端全链路：Milvus（向量检索）、LangChain/LangGraph（智能体编排）、MCP（工具治理）、RAG（检索增强）、FastAPI/Spring Boot（服务化）、Prometheus/Grafana（可观测），与目标岗位高度相关。", "matchRatio": 1.0, "location": {"line": 52, "snippet": "熟练使用：Python、MCP、掌握 RAG 检索与重排、了解 Prompt 工程与评测、熟悉 Spring AI / FastAPI 服务化"}}, {"claim": "具备生产级工程能力信号：灰度/A-B 测试、提示词版本管理、离线评测集、故障应急复盘、Git 协作与 Code Review，符合高级工程师定位。", "matchRatio": 0.5, "location": {"line": 63, "snippet": "- 熟悉 Git 协作流程与 Code Review 规范，重视提交质量"}}, {"claim": "多个量化指标疑似重复使用：'1200ms→220ms' 同时出现在哔哩哔哩 Milvus 优化与'工作亮点'Git 协作优化两条；'58%' 同时出现在智能客服满意度与工作亮点 LangGraph 效率；'562万次' 同时出现在快手日均调用与工作亮点核心模块访问；'43%' 同时出现在提示词迭代效率与 Milvus 专项治理。同一数字被复用于不同场景，可信度存疑。", "matchRatio": 0.5, "location": {"line": 15, "snippet": "- 优化向量库 Milvus 的索引与分片策略，检索时延从 1200ms 降到 220ms，相关经验整理为内部文档与技术分享。"}}, {"claim": "时间线矛盾：教育 2010-2014（山东大学本科），但工作经历从 2014.07 快手开始，2017.07 至今哔哩哔哩。哔哩哔哩任职近 8 年（2017-至今），期间项目经历却包含 ResumAI（Spring Boot+Vue3+Neo4j+DeepSeek）等与哔哩哔哩业务无关的项目，归属关系（个人项目/公司项目）未说明。", "matchRatio": 0.5, "location": {"line": 37, "snippet": "ResumAI Agent 智能简历评估平台（Spring Boot + Vue3 + Milvus + Neo4j + DeepSeek）"}}, {"claim": "三个项目（企业知识库问答、智能客服 Agent、ResumAI）均与 AI Agent 后端方向一致，但项目归属（工作产出 vs 个人项目）未标注，且 ResumAI 技术栈
@@ -2648,16 +2660,18 @@ description: 对简历原文、RAG、JD、用户补充和真实外部工具结�
 该 Agent 在 registry 中没有绑定 Skill。
 
 
-#### 该次请求中的 Pre-LLM Tool / RAG 上下文
+#### 直接注入该次 user prompt 的 RAG / 规则上下文
 
-`[TOOL_RESULT ...]` 是 Runtime 在首次调用该 Agent 的 LLM 之前执行并拼入上下文的结果，所以首个 Provider 请求可以已经带结果；这不是模型在请求之前调用过工具。模型原生工具回合表现为后续 `assistant → tool` messages。
+这里的检索与规则计算由 Runtime 在调用 LLM 前完成，结果直接写入 `messages[].content` 的 user prompt。审计文本沿用了 `[TOOL_CALL]/[TOOL_RESULT]` 内部回执标记，但它们不是模型 tool call，也不会出现在 Provider `tools[]` 中。模型原生工具回合才表现为后续 `assistant → tool` messages。
 
-| Tool | 类型 | 出现在首轮前 |
+> **当前实现债务**：Provider 看到的是直接注入的 RAG context；但 Runtime 内部尚未把 Retrieval 与 Tool 两条管线彻底拆开，检索仍经 `ToolExecutor.execute()`、`tool_results_block` 和 `[工具观察]` 传递。因此这里描述的是当前真实实现，不声称代码层已经完成 RAG/Tool 解耦。
+
+| Runtime 数据源 | 上下文类型 | 注入位置 |
 |---|---|---|
-| `knowledge_search` | 知识库检索（RAG） | 是 |
+| `knowledge_search` | 知识库检索（RAG） | `user message.content` |
 
 <details>
-<summary>展开 knowledge_search 实际注入结果</summary>
+<summary>展开 knowledge_search 直接注入 user prompt 的内容</summary>
 
 ````json
 {"chunks": [{"chunkId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c#chunk-0", "docId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "documentId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "title": "英文简历评估补充规范", "docType": "policy", "sectionPath": "# 英文简历评估补充规范", "content": "# 英文简历评估补充规范\n## 一、职级词校准", "contentPreview": "# 英文简历评估补充规范 ## 一、职级词校准", "tokenEstimate": 11, "createdAt": "2026-08-05T16:29:37.661468691", "updatedAt": "2026-08-05T16:29:37.661468691", "version": "kb_v1_bailian_te3_1024", "docVersion": "kb_v1_bailian_te3_1024", "charStart": 0, "charEnd": 23, "contentHash": "da573240e7e67553", "metadata": {"docId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "documentId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "chunkId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c#chunk-0", "chunkIndex": 0, "tags": ["english", "resume"], "source": "self_service_upload", "embeddingStatus": "reindexing", "indexStatus": "indexing", "embeddingProvider": "bailian", "indexVersion": "kb_v1_bailian_te3_1024", "version": "kb_v1_bailian_te3_1024", "createdAt": "2026-08-05T16:29:37.661468691", "updatedAt": "2026-08-05T16:29:37.661468691", "charStart": 0, "charEnd": 23, "contentHash": "da573240e7e67553", "parserVersion": "kb_chunk_v1", "fallbackStage": "hybrid", "targetChunkChars": 320, "overlapChars": 60}, "provenance": {"documentId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "chunkId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c#chunk-0", "version": "kb_v1_bailian_te3_1024", "createdAt": "2026-08-05T16:29:
@@ -3142,16 +3156,18 @@ interviewProbes 按去重后的待核验主题动态生成，必须覆盖每个H
 该 Agent 在 registry 中没有绑定 Skill。
 
 
-#### 该次请求中的 Pre-LLM Tool / RAG 上下文
+#### 直接注入该次 user prompt 的 RAG / 规则上下文
 
-`[TOOL_RESULT ...]` 是 Runtime 在首次调用该 Agent 的 LLM 之前执行并拼入上下文的结果，所以首个 Provider 请求可以已经带结果；这不是模型在请求之前调用过工具。模型原生工具回合表现为后续 `assistant → tool` messages。
+这里的检索与规则计算由 Runtime 在调用 LLM 前完成，结果直接写入 `messages[].content` 的 user prompt。审计文本沿用了 `[TOOL_CALL]/[TOOL_RESULT]` 内部回执标记，但它们不是模型 tool call，也不会出现在 Provider `tools[]` 中。模型原生工具回合才表现为后续 `assistant → tool` messages。
 
-| Tool | 类型 | 出现在首轮前 |
+> **当前实现债务**：Provider 看到的是直接注入的 RAG context；但 Runtime 内部尚未把 Retrieval 与 Tool 两条管线彻底拆开，检索仍经 `ToolExecutor.execute()`、`tool_results_block` 和 `[工具观察]` 传递。因此这里描述的是当前真实实现，不声称代码层已经完成 RAG/Tool 解耦。
+
+| Runtime 数据源 | 上下文类型 | 注入位置 |
 |---|---|---|
-| `knowledge_search` | 知识库检索（RAG） | 是 |
+| `knowledge_search` | 知识库检索（RAG） | `user message.content` |
 
 <details>
-<summary>展开 knowledge_search 实际注入结果</summary>
+<summary>展开 knowledge_search 直接注入 user prompt 的内容</summary>
 
 ````json
 {"chunks": [{"chunkId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c#chunk-0", "docId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "documentId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "title": "英文简历评估补充规范", "docType": "policy", "sectionPath": "# 英文简历评估补充规范", "content": "# 英文简历评估补充规范\n## 一、职级词校准", "contentPreview": "# 英文简历评估补充规范 ## 一、职级词校准", "tokenEstimate": 11, "createdAt": "2026-08-05T16:29:37.661468691", "updatedAt": "2026-08-05T16:29:37.661468691", "version": "kb_v1_bailian_te3_1024", "docVersion": "kb_v1_bailian_te3_1024", "charStart": 0, "charEnd": 23, "contentHash": "da573240e7e67553", "metadata": {"docId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "documentId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "chunkId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c#chunk-0", "chunkIndex": 0, "tags": ["english", "resume"], "source": "self_service_upload", "embeddingStatus": "reindexing", "indexStatus": "indexing", "embeddingProvider": "bailian", "indexVersion": "kb_v1_bailian_te3_1024", "version": "kb_v1_bailian_te3_1024", "createdAt": "2026-08-05T16:29:37.661468691", "updatedAt": "2026-08-05T16:29:37.661468691", "charStart": 0, "charEnd": 23, "contentHash": "da573240e7e67553", "parserVersion": "kb_chunk_v1", "fallbackStage": "hybrid", "targetChunkChars": 320, "overlapChars": 60}, "provenance": {"documentId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "chunkId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c#chunk-0", "version": "kb_v1_bailian_te3_1024", "createdAt": "2026-08-05T16:29:
@@ -3596,16 +3612,18 @@ interviewProbes 按去重后的待核验主题动态生成，必须覆盖每个H
 该 Agent 在 registry 中没有绑定 Skill。
 
 
-#### 该次请求中的 Pre-LLM Tool / RAG 上下文
+#### 直接注入该次 user prompt 的 RAG / 规则上下文
 
-`[TOOL_RESULT ...]` 是 Runtime 在首次调用该 Agent 的 LLM 之前执行并拼入上下文的结果，所以首个 Provider 请求可以已经带结果；这不是模型在请求之前调用过工具。模型原生工具回合表现为后续 `assistant → tool` messages。
+这里的检索与规则计算由 Runtime 在调用 LLM 前完成，结果直接写入 `messages[].content` 的 user prompt。审计文本沿用了 `[TOOL_CALL]/[TOOL_RESULT]` 内部回执标记，但它们不是模型 tool call，也不会出现在 Provider `tools[]` 中。模型原生工具回合才表现为后续 `assistant → tool` messages。
 
-| Tool | 类型 | 出现在首轮前 |
+> **当前实现债务**：Provider 看到的是直接注入的 RAG context；但 Runtime 内部尚未把 Retrieval 与 Tool 两条管线彻底拆开，检索仍经 `ToolExecutor.execute()`、`tool_results_block` 和 `[工具观察]` 传递。因此这里描述的是当前真实实现，不声称代码层已经完成 RAG/Tool 解耦。
+
+| Runtime 数据源 | 上下文类型 | 注入位置 |
 |---|---|---|
-| `knowledge_search` | 知识库检索（RAG） | 是 |
+| `knowledge_search` | 知识库检索（RAG） | `user message.content` |
 
 <details>
-<summary>展开 knowledge_search 实际注入结果</summary>
+<summary>展开 knowledge_search 直接注入 user prompt 的内容</summary>
 
 ````json
 {"chunks": [{"chunkId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c#chunk-0", "docId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "documentId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "title": "英文简历评估补充规范", "docType": "policy", "sectionPath": "# 英文简历评估补充规范", "content": "# 英文简历评估补充规范\n## 一、职级词校准", "contentPreview": "# 英文简历评估补充规范 ## 一、职级词校准", "tokenEstimate": 11, "createdAt": "2026-08-05T16:29:37.661468691", "updatedAt": "2026-08-05T16:29:37.661468691", "version": "kb_v1_bailian_te3_1024", "docVersion": "kb_v1_bailian_te3_1024", "charStart": 0, "charEnd": 23, "contentHash": "da573240e7e67553", "metadata": {"docId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "documentId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "chunkId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c#chunk-0", "chunkIndex": 0, "tags": ["english", "resume"], "source": "self_service_upload", "embeddingStatus": "reindexing", "indexStatus": "indexing", "embeddingProvider": "bailian", "indexVersion": "kb_v1_bailian_te3_1024", "version": "kb_v1_bailian_te3_1024", "createdAt": "2026-08-05T16:29:37.661468691", "updatedAt": "2026-08-05T16:29:37.661468691", "charStart": 0, "charEnd": 23, "contentHash": "da573240e7e67553", "parserVersion": "kb_chunk_v1", "fallbackStage": "hybrid", "targetChunkChars": 320, "overlapChars": 60}, "provenance": {"documentId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c", "chunkId": "kb-77918415-a7ee-442f-9d28-ed69eaabe11c#chunk-0", "version": "kb_v1_bailian_te3_1024", "createdAt": "2026-08-05T16:29:

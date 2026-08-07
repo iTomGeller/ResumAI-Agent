@@ -583,11 +583,11 @@ def _agent_skill_reference_blocks(
     return "\n\n".join(blocks)
 
 
-_PRE_LLM_TOOL_KIND = {
+_PRE_LLM_CONTEXT_KIND = {
     "resume_semantic_search": "当前简历证据检索（RAG）",
     "knowledge_search": "知识库检索（RAG）",
     "jd_match_search": "JD 检索（RAG）",
-    "locate_evidence": "简历文本证据定位（非知识库 RAG）",
+    "locate_evidence": "简历文本证据定位上下文（非知识库 RAG）",
     "calculate_jd_coverage": "确定性 JD 覆盖率规则",
     "check_timeline": "确定性时间线规则",
     "verify_report_evidence": "确定性证据校验",
@@ -595,7 +595,7 @@ _PRE_LLM_TOOL_KIND = {
 
 
 def _agent_pre_llm_context_blocks(request: dict[str, Any]) -> str:
-    """Explain exact pre-LLM observations already present in Agent messages."""
+    """Explain retrieval/rule context directly injected into user messages."""
 
     observations: list[tuple[str, str, Any]] = []
     for message in request.get("messages") or []:
@@ -613,7 +613,8 @@ def _agent_pre_llm_context_blocks(request: dict[str, Any]) -> str:
                 payload = raw
             observations.append((
                 tool_name,
-                _PRE_LLM_TOOL_KIND.get(tool_name, "Runtime pre-step Tool"),
+                _PRE_LLM_CONTEXT_KIND.get(
+                    tool_name, "Runtime 预处理上下文"),
                 payload,
             ))
     native_history = any(
@@ -621,23 +622,32 @@ def _agent_pre_llm_context_blocks(request: dict[str, Any]) -> str:
         for message in request.get("messages") or []
     )
     lines = [
-        "#### 该次请求中的 Pre-LLM Tool / RAG 上下文",
+        "#### 直接注入该次 user prompt 的 RAG / 规则上下文",
         "",
-        "`[TOOL_RESULT ...]` 由 Runtime 在首次调用该 Agent 的 LLM 之前执行并拼入上下文，"
-        "所以首个 Provider 请求可以已经带结果；这不表示模型在请求之前调用过工具。"
-        "模型原生工具回合则表现为后续 `assistant → tool` messages。",
+        "这里的检索与规则计算由 Runtime 在调用 LLM 前完成，结果直接写入"
+        " `messages[].content` 的 user prompt。审计文本沿用了"
+        " `[TOOL_CALL]/[TOOL_RESULT]` 内部回执标记，但它们不是模型 tool call，"
+        "也不会出现在 Provider `tools[]` 中。模型原生工具回合才表现为后续"
+        " `assistant → tool` messages。",
+        "",
+        "> **当前实现债务**：Provider 看到的是直接注入的 RAG context；"
+        "但 Runtime 内部尚未把 Retrieval 与 Tool 两条管线彻底拆开，"
+        "检索仍经 `ToolExecutor.execute()`、`tool_results_block` 和"
+        " `[工具观察]` 传递。因此这里描述的是当前真实实现，不声称代码层"
+        "已经完成 RAG/Tool 解耦。",
         "",
     ]
     if not observations:
-        lines.append("该次请求没有 Runtime pre-step 观察。")
+        lines.append("该次 user prompt 没有额外的 Runtime 检索/规则上下文。")
     else:
         lines.extend([
-            "| Tool | 类型 | 出现在首轮前 |",
+            "| Runtime 数据源 | 上下文类型 | 注入位置 |",
             "|---|---|---|",
         ])
         seen: set[str] = set()
         for tool_name, kind, payload in observations:
-            lines.append(f"| `{tool_name}` | {kind} | 是 |")
+            lines.append(
+                f"| `{tool_name}` | {kind} | `user message.content` |")
             if tool_name in seen:
                 continue
             seen.add(tool_name)
@@ -647,7 +657,9 @@ def _agent_pre_llm_context_blocks(request: dict[str, Any]) -> str:
             )
             lines.extend([
                 "",
-                _details(f"展开 {tool_name} 实际注入结果", rendered),
+                _details(
+                    f"展开 {tool_name} 直接注入 user prompt 的内容",
+                    rendered),
             ])
     lines.extend([
         "",
@@ -1074,7 +1086,11 @@ providerRequest
 
 Coordinator 本轮没有 Provider 调用，因此不存在“本轮 Provider Prompt”；第 4 节已经同时列出它的实际确定性规划输入、计划输出，以及仓库中的 `coordinator-system v1` Prompt 模板。下面 Tech / Project / Risk / Evidence 选取各自最后一次有效请求；Report 因为实际分为 score / risk / question 三条并行分支，所以三条都展示，score 选取 `finishReason=length` 后的最终重试。
 
-每个块依次展开：本 Agent 的生产 `SKILL.md` 全文 → 首轮前 Runtime Tool/RAG 结果及来源 → 请求参数 → 完整 system/user/assistant/tool messages → 完整 tools schema → 真实 Provider 响应。
+每个块依次展开：本 Agent 的生产 `SKILL.md` 全文 → 直接注入 user prompt 的 RAG/规则上下文及来源 → 请求参数 → 完整 system/user/assistant/tool messages → 完整 tools schema → 真实 Provider 响应。
+
+特别注意：报告原始审计文本中的 `[TOOL_CALL]/[TOOL_RESULT]` 是 Runtime 内部统一回执格式。对于 `resume_semantic_search`、`knowledge_search` 等检索源，Runtime 在调用 LLM 前完成检索，并把召回结果直接拼入 user message；它们不是 Agent 可调用工具，也不在 Provider `tools[]` 中。只有请求历史里的 `assistant → tool` 才是模型原生 tool call。
+
+这也暴露了当前实现债务：Provider/Agent 视角已经是“RAG context 直接注入 user prompt”，但 Runtime 代码内部仍复用 `ToolExecutor.execute()`、`tool_results_block`、`[工具观察]` 和 `[TOOL_RESULT]` 来承载检索结果。也就是说，**行为上是直接注入，代码抽象上尚未完成 Retrieval/Tool 解耦**；本报告不能把后者美化成已经完成。
 
 {final_agent_prompts}
 
