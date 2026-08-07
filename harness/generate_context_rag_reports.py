@@ -730,6 +730,25 @@ def _coordinator_prompt_v1() -> str:
     return match.group(1).strip() if match else "未能从 prompts.py 读取 coordinator-system v1。"
 
 
+def coordinator_prompt_reference_card() -> str:
+    """Keep Coordinator visible beside every other Agent prompt.
+
+    Full evaluations currently short-circuit LLM refinement, so this is a
+    repository-backed prompt template rather than a fabricated provider
+    request.  The distinction belongs inside the card, not in place of it.
+    """
+    return (
+        "<details>\n"
+        "<summary><strong>CoordinatorAgent｜coordinator-system v1｜"
+        "本轮 Provider 调用 0 次｜点击展开完整 Prompt 配置</strong></summary>\n\n"
+        ">这是仓库中当前 Coordinator 的完整生产 Prompt 模板。"
+        "本次 `full_evaluation` 被确定性 planner 短路，因此该模板本轮没有发送给 Provider；"
+        "这里展示的是配置真值，不冒充真实请求。实际规划输入、计划输出和事件时间线见第 4 节。\n\n"
+        f"{_details('Coordinator system message：coordinator-system v1（完整原文）', _text_fence(_coordinator_prompt_v1()))}\n\n"
+        "</details>"
+    )
+
+
 def risk_skill_reference_section(invocations: list[dict[str, Any]]) -> str:
     skill_body = _repository_text(
         "backend/src/main/resources/skills/risk_pattern_detection/SKILL.md")
@@ -1003,6 +1022,7 @@ def make_context_report(audit_dir: Path, font_path: Path) -> Path:
 
     final_agent_prompts = readable_final_agent_prompts(invocations)
     coordinator_section = coordinator_control_plane_section(audit_dir, invocations)
+    coordinator_prompt_card = coordinator_prompt_reference_card()
     skill_injection_details = exact_skill_injection_appendix(invocations)
     risk_skill_reference = risk_skill_reference_section(invocations)
     provider_request_details = exact_provider_request_appendix(invocations)
@@ -1082,15 +1102,17 @@ providerRequest
 
 ![各 Agent 的真实上下文规模与缓存](assets/02_agent_context_tokens.png)
 
-### 5.2 这条链路中，每个 LLM 执行 Agent 最终真正发给 Provider 的完整请求
+### 5.2 Coordinator 配置与每个 LLM 执行 Agent 的完整请求
 
-Coordinator 本轮没有 Provider 调用，因此不存在“本轮 Provider Prompt”；第 4 节已经同时列出它的实际确定性规划输入、计划输出，以及仓库中的 `coordinator-system v1` Prompt 模板。下面 Tech / Project / Risk / Evidence 选取各自最后一次有效请求；Report 因为实际分为 score / risk / question 三条并行分支，所以三条都展示，score 选取 `finishReason=length` 后的最终重试。
+Coordinator 也作为第一个 Agent 块列在这里：完整展示仓库中的 `coordinator-system v1`，同时明确标注本轮确定性 planner 短路、Provider 调用为 0，不能把模板冒充成本轮真实请求。随后 Tech / Project / Risk / Evidence 选取各自最后一次有效请求；Report 因为实际分为 score / risk / question 三条并行分支，所以三条都展示，score 选取 `finishReason=length` 后的最终重试。
 
 每个块依次展开：本 Agent 的生产 `SKILL.md` 全文 → 直接注入 user prompt 的 RAG/规则上下文及来源 → 请求参数 → 完整 system/user/assistant/tool messages → 完整 tools schema → 真实 Provider 响应。
 
 特别注意：报告原始审计文本中的 `[TOOL_CALL]/[TOOL_RESULT]` 是 Runtime 内部统一回执格式。对于 `resume_semantic_search`、`knowledge_search` 等检索源，Runtime 在调用 LLM 前完成检索，并把召回结果直接拼入 user message；它们不是 Agent 可调用工具，也不在 Provider `tools[]` 中。只有请求历史里的 `assistant → tool` 才是模型原生 tool call。
 
 这也暴露了当前实现债务：Provider/Agent 视角已经是“RAG context 直接注入 user prompt”，但 Runtime 代码内部仍复用 `ToolExecutor.execute()`、`tool_results_block`、`[工具观察]` 和 `[TOOL_RESULT]` 来承载检索结果。也就是说，**行为上是直接注入，代码抽象上尚未完成 Retrieval/Tool 解耦**；本报告不能把后者美化成已经完成。
+
+{coordinator_prompt_card}
 
 {final_agent_prompts}
 

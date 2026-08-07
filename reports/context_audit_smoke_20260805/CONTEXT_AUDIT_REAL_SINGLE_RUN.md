@@ -286,15 +286,36 @@ providerRequest
 
 ![各 Agent 的真实上下文规模与缓存](assets/02_agent_context_tokens.png)
 
-### 5.2 这条链路中，每个 LLM 执行 Agent 最终真正发给 Provider 的完整请求
+### 5.2 Coordinator 配置与每个 LLM 执行 Agent 的完整请求
 
-Coordinator 本轮没有 Provider 调用，因此不存在 Coordinator Prompt；它的真实控制面输入/输出已经在 4 节按事件展开。下面不再节选，也不把 `messages[].content` 塞进一行转义 JSON。Tech / Project / Risk / Evidence 选取各自最后一次有效请求；Report 因为实际分为 score / risk / question 三条并行分支，所以三条都展示，score 选取 `finishReason=length` 后的最终重试。
+Coordinator 也作为第一个 Agent 块列在这里：完整展示仓库中的 `coordinator-system v1`，同时明确标注本轮确定性 planner 短路、Provider 调用为 0，不能把模板冒充成本轮真实请求。随后 Tech / Project / Risk / Evidence 选取各自最后一次有效请求；Report 因为实际分为 score / risk / question 三条并行分支，所以三条都展示，score 选取 `finishReason=length` 后的最终重试。
 
 每个块依次展开：本 Agent 的生产 `SKILL.md` 全文 → 直接注入 user prompt 的 RAG/规则上下文及来源 → 请求参数 → 完整 system/user/assistant/tool messages → 完整 tools schema → 真实 Provider 响应。
 
 特别注意：报告原始审计文本中的 `[TOOL_CALL]/[TOOL_RESULT]` 是 Runtime 内部统一回执格式。对于 `resume_semantic_search`、`knowledge_search` 等检索源，Runtime 在调用 LLM 前完成检索，并把召回结果直接拼入 user message；它们不是 Agent 可调用工具，也不在 Provider `tools[]` 中。只有请求历史里的 `assistant → tool` 才是模型原生 tool call。
 
 这也暴露了当前实现债务：Provider/Agent 视角已经是“RAG context 直接注入 user prompt”，但 Runtime 代码内部仍复用 `ToolExecutor.execute()`、`tool_results_block`、`[工具观察]` 和 `[TOOL_RESULT]` 来承载检索结果。也就是说，**行为上是直接注入，代码抽象上尚未完成 Retrieval/Tool 解耦**；本报告不能把后者美化成已经完成。
+
+<details>
+<summary><strong>CoordinatorAgent｜coordinator-system v1｜本轮 Provider 调用 0 次｜点击展开完整 Prompt 配置</strong></summary>
+
+>这是仓库中当前 Coordinator 的完整生产 Prompt 模板。本次 `full_evaluation` 被确定性 planner 短路，因此该模板本轮没有发送给 Provider；这里展示的是配置真值，不冒充真实请求。实际规划输入、计划输出和事件时间线见第 4 节。
+
+<details>
+<summary>Coordinator system message：coordinator-system v1（完整原文）</summary>
+
+````text
+你是简历评估系统的 Coordinator。根据用户问题、简历、JD、共享状态和策略预算，决定接下来由哪些专家 Agent 处理。
+可用 Agent 与职责：
+- ResumeParserAgent 简历结构化；JDAnalysisAgent JD 要求提取；TechAgent 技术栈匹配；
+- ProjectAgent 项目深度；RiskAgent 履历/时间线风险；EvidenceAgent 证据核验；
+- ReportAgent 汇总生成回答；ResumeOptimizeAgent 简历改写；InterviewQuestionAgent 面试追问。
+只选真正需要的 Agent，不为了数量凑齐。输出 JSON：{"plan": ["AgentA", ...], "reason": "简述"}
+````
+
+</details>
+
+</details>
 
 <details>
 <summary><strong>TechAgent｜technical_findings｜Prompt/Completion 5,551/2,206｜15.048s｜点击展开完整原始请求</strong></summary>
