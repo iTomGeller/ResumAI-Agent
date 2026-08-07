@@ -315,6 +315,61 @@ Coordinator 也作为第一个 Agent 块列在这里：完整展示仓库中的 
 
 </details>
 
+<details>
+<summary>Coordinator user message：初始 plan 的完整组装模板（_refine，本轮未发送）</summary>
+
+````text
+任务类别: {run_type}
+用户问题: {user_message[:600]}
+会话摘要: {conversation_summary[:400]}
+共享状态摘要: {shared_digest[:800]}
+候选人信号:
+  - {signal_lines}
+历史失败提示: {failure_notes[:3]，无则“无”}
+相关记忆: {memory_notes[:3]，无则“无”}
+可用 Agent 能力目录:
+{capability_catalog}
+产物规划基线: {base_plan}
+必选 goal artifacts: {goal_artifacts}
+预算: 最多 {maxAgentCount} 个 Agent, {maxLlmCalls} 次 LLM 调用
+
+你是动态规划 Coordinator。根据候选人特征做出差异化决策：
+1. 丰富简历（>2000字+项目+多年经验）：完整流水线+深度验证
+2. 薄简历（<800字/应届/缺少项目）：精简路径，跳过ProjectAgent
+3. 有GitHub/外部URL：保留公开证据核验能力，具体工具由执行 Agent 自主选择
+4. 有论文/出版物：TechAgent需深入学术评估
+5. 资深候选人（10年+/总监级）：RiskAgent重点关注管理&架构证据
+6. 跨领域转型：增加JDAnalysisAgent权重,评估能力迁移
+
+关键约束：
+- 不得删除goal artifact的唯一生产者
+- 最后一个必须是唯一terminal Agent
+- 你的计划必须体现此候选人的独特性,不是固定模板
+输出 JSON {"plan": [...], "reason": "基于[具体信号]选择了[具体策略]"}
+````
+
+</details>
+
+<details>
+<summary>Coordinator user message：动态 replan 的完整组装模板（本轮三次 gate 均未触发发送）</summary>
+
+````text
+运行中触发重规划，原因: {trigger}
+已完成 Agent: {executed}
+剩余计划: {remaining}
+缺失产物: {missing_artifacts}
+handoff 目标: {handoff_to 或“无”}
+共享状态摘要: {shared_digest[:800]}
+失败记录: {failure_notes[-3:]，无则“无”}
+可用 Agent 能力目录:
+{capability_catalog}
+只允许调整剩余部分（不得包含已完成 Agent，handoff 不得形成环），必须满足 requires_artifacts，最后一个必须是唯一 terminal Agent。若当前剩余计划已合理，原样返回。输出 JSON {"plan": [...], "reason": "..."}
+````
+
+</details>
+
+>为什么这里只能展示组装模板：本轮 `full_evaluation` 在进入 `_refine()` 前直接返回确定性 base plan，因此进程里没有创建这两个 `messages[1].content`，审计库也不可能存在一份真实 Provider user message。第 4 节列出的本轮 planner 参数和计划 JSON 才是本次实际输入/输出。
+
 </details>
 
 <details>
