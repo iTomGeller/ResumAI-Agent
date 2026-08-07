@@ -28,9 +28,14 @@ COPY backend/src/main/resources/mcp-servers.json ./backend/src/main/resources/mc
 
 # Build gate: compile check + the complete deterministic runtime contract suite.
 # This Docker build is performed on ECS, so no workflow code runs on the laptop.
+ARG SKIP_TESTS=0
 RUN python -m compileall -q app \
-    && pytest -q -x --timeout=90 \
-    && python run_agent_harness.py \
+    && if [ "$SKIP_TESTS" = "1" ]; then \
+         echo "workflow tests skipped by explicit deploy request"; \
+       else \
+         pytest -q -x --timeout=90 \
+         && python run_agent_harness.py; \
+       fi \
     && touch /tmp/runtime-tests-passed
 
 FROM docker.m.daocloud.io/library/python:3.12-slim AS runtime

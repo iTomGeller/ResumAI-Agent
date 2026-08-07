@@ -105,6 +105,7 @@ def main() -> None:
     host = env["ALIYUN_HOST"]
     user = env.get("ALIYUN_USER", "root")
     password = env["ALIYUN_PASSWORD"]
+    skip_tests = "1" if env.get("SKIP_TESTS", "0").strip() == "1" else "0"
     openrouter_key = env.get("EMBEDDING_API_KEY") or env.get("OPENROUTER_API_KEY") or ""
 
     tracked = subprocess.check_output(
@@ -300,7 +301,7 @@ def main() -> None:
         print("\n[deploy] starting ecs_safe_deploy.sh (long)")
         run(
             f"cd {SRC_DIR} && DEPLOY_SHA={deploy_sha} "
-            "bash scripts/ecs_safe_deploy.sh",
+            f"SKIP_TESTS={skip_tests} bash scripts/ecs_safe_deploy.sh",
             timeout=7200,
         )
         print("\n[ok] ECS deploy finished")

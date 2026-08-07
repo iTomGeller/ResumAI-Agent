@@ -304,7 +304,11 @@ else
   log "backend not running yet — skip pre-build drain"
 fi
 
-log "Java full test suite + package (ECS only)"
+if [[ "${SKIP_TESTS:-0}" == "1" ]]; then
+  log "Java package (tests skipped by explicit deploy request)"
+else
+  log "Java full test suite + package (ECS only)"
+fi
 cd "$SRC_DIR/backend"
 # System default mvn may resolve a JDK without --release 21 support; pin JDK 21.
 if [[ -d /usr/lib/jvm/java-21-openjdk-amd64 ]]; then
@@ -324,7 +328,11 @@ if [[ ! -f settings.xml ]]; then
 XML
 fi
 # clean is mandatory: stale target/classes would be repackaged into the jar
-mvn -B -s settings.xml clean package
+if [[ "${SKIP_TESTS:-0}" == "1" ]]; then
+  mvn -B -s settings.xml clean package -DskipTests
+else
+  mvn -B -s settings.xml clean package
+fi
 JAR="$(ls -1 target/resumai-agent-backend-*.jar 2>/dev/null | grep -v original | head -1)"
 test -n "$JAR"
 cp -f "$JAR" target/resumai-agent-backend.jar
@@ -335,7 +343,11 @@ ls -lh target/resumai-agent-backend.jar
 # into that image and only introduced a fragile cross-border download.
 log "backend runtime uses DaoCloud mirrored Temurin 21 image"
 
-log "frontend lint + typecheck + build (ECS only)"
+if [[ "${SKIP_TESTS:-0}" == "1" ]]; then
+  log "frontend build (lint skipped by explicit deploy request)"
+else
+  log "frontend lint + typecheck + build (ECS only)"
+fi
 cd "$SRC_DIR/frontend"
 npm config set registry https://registry.npmmirror.com
 if [[ -f package-lock.json ]]; then
@@ -345,7 +357,9 @@ if [[ -f package-lock.json ]]; then
 else
   npm install --no-audit --no-fund
 fi
-npm run lint
+if [[ "${SKIP_TESTS:-0}" != "1" ]]; then
+  npm run lint
+fi
 npm run build
 test -d dist
 

@@ -3,6 +3,11 @@
 # base-image pulls that are unreliable from this region. Apply with:
 #   docker compose -f docker-compose.prod.yml -f docker-compose.ecs.yml ...
 services:
+  ai-resume-workflow:
+    build:
+      args:
+        SKIP_TESTS: ${SKIP_TESTS:-0}
+
   ai-resume-backend:
     build:
       context: ./backend
