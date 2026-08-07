@@ -33,11 +33,14 @@ public class SkillProvider {
      * production runtime.
      */
     private static final Set<String> PRODUCTION_SKILLS = Set.of(
-            "route-conversation-turn",
-            "plan-evaluation-revision",
-            "evaluate-candidate-evidence",
+            "assess-production-engineering",
+            "assess-technical-evidence",
+            "audit-claim-consistency",
+            "audit-evidence-provenance",
+            "calibrate-evidence-confidence",
+            "ground-project-claims",
             "retrieve-public-candidate-evidence",
-            "calibrate-and-explain-decision"
+            "risk-pattern-detection"
     );
 
     @Value("${app.skills.path:skills}")

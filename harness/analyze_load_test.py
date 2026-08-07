@@ -23,11 +23,14 @@ EXPECTED_MCP_ENDPOINTS = [
     "fetch.fetch",
 ]
 EXPECTED_SKILLS = [
+    "assess-production-engineering",
     "assess-technical-evidence",
+    "audit-claim-consistency",
+    "audit-evidence-provenance",
     "calibrate-evidence-confidence",
     "ground-project-claims",
     "retrieve-public-candidate-evidence",
-    "risk_pattern_detection",
+    "risk-pattern-detection",
 ]
 CONTAINERS = (
     "ai-resume-backend", "ai-resume-workflow",
@@ -2004,11 +2007,14 @@ def markdown(report: Dict[str, Any]) -> str:
         "|---|---:|---:|---:|---:|---:|",
     ])
     skill_labels = {
+        "assess-production-engineering": "生产工程深度评估",
         "assess-technical-evidence": "技术证据评估",
+        "audit-claim-consistency": "主张一致性审计",
+        "audit-evidence-provenance": "证据来源链审计",
         "calibrate-evidence-confidence": "证据置信度校准",
         "ground-project-claims": "项目主张核验",
         "retrieve-public-candidate-evidence": "公网候选人证据",
-        "risk_pattern_detection": "履历风险模式",
+        "risk-pattern-detection": "履历风险模式",
     }
     for skill_id in EXPECTED_SKILLS:
         values = (skills.get("perSkill") or {}).get(skill_id, {})

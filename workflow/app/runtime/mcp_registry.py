@@ -161,11 +161,13 @@ class StreamableHttpMcpClient:
     timeouts and a simple circuit breaker."""
 
     def __init__(self, name: str, url: str, *, headers: Optional[Dict[str, str]] = None,
-                 request_timeout: float = DEFAULT_TIMEOUT) -> None:
+                 request_timeout: float = DEFAULT_TIMEOUT,
+                 proxy: Optional[str] = None) -> None:
         self.name = name
         self.url = url
         self.headers = dict(headers or {})
         self.request_timeout = request_timeout
+        self.proxy = str(proxy or "").strip() or None
         self.session_id: Optional[str] = None
         self.protocol_version = PROTOCOL_VERSION
         self._next_id = 0
@@ -250,7 +252,10 @@ class StreamableHttpMcpClient:
         if self._circuit_blocked():
             raise McpError(f"MCP {self.name} circuit open")
         try:
-            async with httpx.AsyncClient(timeout=self.request_timeout) as client:
+            async with httpx.AsyncClient(
+                    timeout=self.request_timeout,
+                    proxy=self.proxy,
+                    trust_env=self.proxy is None) as client:
                 response = await client.post(
                     self.url,
                     json=payload,
@@ -286,7 +291,10 @@ class StreamableHttpMcpClient:
             raise
         except Exception as exc:  # noqa: BLE001
             self._record_failure()
-            raise McpError(f"MCP {self.name} transport: {exc}") from exc
+            detail = str(exc).strip() or repr(exc)
+            raise McpError(
+                f"MCP {self.name} transport {type(exc).__name__}: {detail}"
+            ) from exc
 
     def _current_lock(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
@@ -498,7 +506,7 @@ class McpRegistry:
         now_value = now if now is not None else time.time()
         eligible = [
             name for name, health in self.health.items()
-            if health.status in {"DOWN", "RATE_LIMITED"}
+            if health.status in {"DOWN", "UNREACHABLE", "RATE_LIMITED"}
             and not (
                 health.status == "RATE_LIMITED"
                 and self._rate_limit_blocked(name, now=now_value))
@@ -541,7 +549,7 @@ class McpRegistry:
                 degraded = [
                     (name, all_servers[name], name in optional)
                     for name, health in self.health.items()
-                    if health.status in {"DOWN", "RATE_LIMITED"}
+                    if health.status in {"DOWN", "UNREACHABLE", "RATE_LIMITED"}
                     and not (
                         health.status == "RATE_LIMITED"
                         and self._rate_limit_blocked(name))
@@ -742,6 +750,10 @@ class McpRegistry:
                 status: HealthStatus = "AUTH_REQUIRED"
             elif "RATE_LIMITED" in msg or "429" in msg:
                 status = "RATE_LIMITED"
+            elif any(token in msg for token in (
+                    "ConnectTimeout", "ConnectError", "ReadTimeout",
+                    "NetworkError", "Name or service not known")):
+                status = "UNREACHABLE"
             else:
                 status = "DOWN"
             self.health[name] = McpServerHealth(
@@ -760,7 +772,15 @@ class McpRegistry:
                           allowed: set, prefix: str, url: str
                           ) -> List[McpToolInfo]:
         headers = _expand_headers(cfg.get("headers") or {})
-        client = StreamableHttpMcpClient(name, url, headers=headers)
+        proxy = _expand_env(str(cfg.get("proxy") or "")).strip() or None
+        try:
+            request_timeout = float(
+                cfg.get("timeoutSeconds") or DEFAULT_TIMEOUT)
+        except (TypeError, ValueError):
+            request_timeout = DEFAULT_TIMEOUT
+        client = StreamableHttpMcpClient(
+            name, url, headers=headers,
+            request_timeout=max(1.0, request_timeout), proxy=proxy)
         await client.initialize()
         remote_tools = await client.list_tools()
         tools = self._validated_discovery(

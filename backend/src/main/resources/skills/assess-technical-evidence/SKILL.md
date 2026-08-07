@@ -22,19 +22,9 @@ description: 根据具体 JD 和候选人可定位证据评估技术主张、深
 - 框架/API 的通用能力以内部知识库召回为参考，不额外调用 100 份差异化压测中始终未被模型选择的文档 MCP。
 - 技术文档只能说明框架能力，不能证明候选人真的做过；候选人事实仍必须绑定简历、项目或已核验外链。
 
-## 输出
+## 交付
 
-```json
-{
-  "dimensions": [{"requirementId": "jd-2", "claim": "", "depth": "used", "status": "partially_supported", "sourceRefs": []}],
-  "overallTechScore": 0,
-  "scoreBasis": [],
-  "strengths": [],
-  "gaps": [],
-  "interviewChecks": [],
-  "toolHealth": {}
-}
-```
+通过当前 Agent 的统一输出契约提交岗位维度、技术深度、优势、缺口和追问。不要定义、复述或包裹另一套 JSON Schema。
 
 ## 证据边界
 

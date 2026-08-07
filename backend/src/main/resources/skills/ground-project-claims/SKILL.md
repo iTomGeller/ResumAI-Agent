@@ -19,17 +19,9 @@ description: 核验项目复杂度、个人贡献和结果证据，并在不创�
 4. 在评估模式输出复杂度、业务价值、贡献和可验证性。
 5. 在改写模式仅重排已确认事实；未知信息生成问题或 `[待确认]` 占位符。
 
-## 输出
+## 交付
 
-```json
-{
-  "claims": [{"claimId": "p1-c1", "status": "candidate_claim", "sourceRefs": []}],
-  "assessment": {"complexity": "medium", "contribution": "partially_known", "reason": ""},
-  "rewrittenBullets": [],
-  "placeholders": [],
-  "clarifyingQuestions": []
-}
-```
+通过当前 Agent 的统一输出契约提交项目主张、复杂度、贡献边界、改写建议和待确认问题。不要定义、复述或包裹另一套 JSON Schema。
 
 ## 证据边界
 

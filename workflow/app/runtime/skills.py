@@ -21,11 +21,14 @@ logger = logging.getLogger(__name__)
 # Reviewed production catalog. Selection remains signal-gated and capped per
 # agent; membership here means "eligible", never "always inject/call".
 PRODUCTION_SKILLS = frozenset({
+    "assess-production-engineering",
     "assess-technical-evidence",
+    "audit-claim-consistency",
+    "audit-evidence-provenance",
     "calibrate-evidence-confidence",
     "ground-project-claims",
     "retrieve-public-candidate-evidence",
-    "risk_pattern_detection",
+    "risk-pattern-detection",
 })
 
 # Skills that are admin-only / not part of candidate evaluation.
@@ -366,6 +369,7 @@ class SkillManager:
                     or run_type in ("tech_match", "jd_gap", "full_evaluation",
                                     "jd_evaluation", "backend_eval", "agent_eval"):
                 add("assess-technical-evidence")
+                add("assess-production-engineering")
 
         if agent_id == "ProjectAgent":
             if signals.get("has_external_urls"):
@@ -376,9 +380,11 @@ class SkillManager:
         if agent_id == "RiskAgent":
             if signals.get("has_timeline", True) or run_type in (
                     "risk_check", "timeline_check", "interview_questions"):
-                add("risk_pattern_detection")
+                add("risk-pattern-detection")
+                add("audit-claim-consistency")
 
         if agent_id == "EvidenceAgent":
+            add("audit-evidence-provenance")
             add("calibrate-evidence-confidence")
 
         if agent_id == "ResumeOptimizeAgent":

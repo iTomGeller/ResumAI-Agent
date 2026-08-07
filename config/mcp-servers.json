@@ -12,6 +12,7 @@
       "default": true,
       "transport": "streamable-http",
       "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
+      "proxy": "${EXA_HTTPS_PROXY}",
       "description": "Official Exa hosted MCP; real keyless web search and page fetch with rate limits",
       "routingGuidance": "Fallback only after direct fetch reports network unreachability, or when the user explicitly asks to discover alternative public sources. Do not use Exa after an exact declared URL returns 404. Stop immediately on free-tier rate limiting.",
       "timeoutSeconds": 20,

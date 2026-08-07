@@ -1,7 +1,6 @@
 ---
 name: retrieve-public-candidate-evidence
 description: 集中定义免密 Exa 和 fetch 对候选人声明 URL 的绑定、超时/限流与 not_checked 契约。仅在简历含显式外链、用户要求公网核验，或项目证据核验需要外部来源时使用。
-allowed-tools: exa.web_search_exa exa.web_fetch_exa fetch.fetch
 ---
 
 # Retrieve Public Candidate Evidence
@@ -48,24 +47,9 @@ allowed-tools: exa.web_search_exa exa.web_fetch_exa fetch.fetch
 
 `not_checked` **绝不能**降级为 `unsupported` 或履历造假风险。
 
-## 输出
+## 交付
 
-```json
-{
-  "requests": [{"url": "", "provider": "exa", "toolStatus": "success"}],
-  "evidence": [{
-    "claimId": "",
-    "sourceUrl": "",
-    "title": "",
-    "publishedAt": null,
-    "provider": "exa",
-    "quote": "",
-    "identityLinkage": "explicit_resume_link"
-  }],
-  "notChecked": [],
-  "toolHealth": {"exa": "success", "fetch": "not_called"}
-}
-```
+通过当前 Agent 的统一输出契约提交已核验来源、身份绑定、未检查项和工具健康状态。不要定义、复述或包裹另一套 JSON Schema。
 
 ## 边界
 

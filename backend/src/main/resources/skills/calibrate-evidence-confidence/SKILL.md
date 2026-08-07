@@ -5,7 +5,7 @@ description: 对简历原文、RAG、JD、用户补充和真实外部工具结�
 
 # Calibrate Evidence Confidence
 
-以 claim 为单位融合证据，不使用固定来源权重。需要字段定义时读取 `references/evidence-record.md`。
+以 claim 为单位融合已经完成来源审计的证据，不使用固定来源权重。输入记录含义不清时可读取 `references/evidence-record.md`；该参考只解释证据记录，不定义 Agent 最终输出。
 
 ## 输入
 
@@ -20,12 +20,10 @@ description: 对简历原文、RAG、JD、用户补充和真实外部工具结�
 ## 工作流
 
 1. 按 `claimId` 分组。
-2. 对同一原文产生的 RAG chunk 去重；重复 chunk 不增加独立性。
-3. 将简历和用户表述标为 `candidate_claim`，不得改称外部验证。
-4. 仅接纳 `toolStatus=success` 且带 `sourceRef` 的外部结果。
-5. 单独判断外部账号身份关联；内容真实不等于账号属于候选人。
-6. 记录直接冲突、时间冲突和口径差异，不擅自选择有利版本。
-7. 根据证据状态输出结论，不因来源数量机械加分。
+2. 消费来源审计给出的重复、派生、工具状态和身份绑定关系。
+3. 对同一主张判断支持范围，不把部分支持扩大为完整支持。
+4. 记录直接冲突、时间冲突和口径差异，不擅自选择有利版本。
+5. 根据证据状态形成结论，不因来源数量机械加分。
 
 ## 状态定义
 
@@ -37,25 +35,9 @@ description: 对简历原文、RAG、JD、用户补充和真实外部工具结�
 
 `not_checked` 绝不能降级为 `unsupported` 或风险结论。
 
-## 输出
+## 交付
 
-```json
-{
-  "claims": [{
-    "claimId": "project-qps",
-    "status": "partially_supported",
-    "confidenceBand": "medium",
-    "supportingRefs": ["resume:p2:l8"],
-    "conflictingRefs": [],
-    "reason": "简历写明提升比例，但缺少基线和观测窗口",
-    "missingEvidence": ["baseline", "measurement_window"]
-  }],
-  "conflicts": [],
-  "unknowns": [],
-  "toolHealth": {"exa": "not_called", "fetch": "not_called"},
-  "sourceRefs": ["resume:p2:l8"]
-}
-```
+通过当前 Agent 的统一输出契约提交逐主张状态、置信区间、冲突、未知项和证据缺口。不要定义、复述或包裹另一套 JSON Schema。
 
 ## 边界
 

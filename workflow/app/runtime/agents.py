@@ -63,7 +63,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "TechAgent": AgentDefinition(
         "TechAgent", "技术评估", "技能与 JD 匹配、深度信号评估",
         ("tech_evaluation",),
-        skills=("assess-technical-evidence",),
+        skills=("assess-technical-evidence", "assess-production-engineering"),
         tools=("calculate_jd_coverage", "resume_semantic_search", "knowledge_search"),
         # Four deterministic pre-steps may precede Skill + documentation MCP
         # calls; five made valid provider actions fail as budget exhausted.
@@ -88,7 +88,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "RiskAgent": AgentDefinition(
         "RiskAgent", "风险审查", "时间线与履历风险检测",
         ("risk_detection", "timeline_check"),
-        skills=("risk_pattern_detection",),
+        skills=("risk-pattern-detection", "audit-claim-consistency"),
         tools=("check_timeline", "timeline_validator"),
         mcp_servers=("exa", "fetch"),
         max_iterations=2, max_tool_calls=4, timeout_seconds=180,
@@ -99,7 +99,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "EvidenceAgent": AgentDefinition(
         "EvidenceAgent", "证据核验", "对结论逐条核验并记录冲突",
         ("evidence_verification",),
-        skills=("calibrate-evidence-confidence",),
+        skills=("calibrate-evidence-confidence", "audit-evidence-provenance"),
         tools=("verify_report_evidence", "locate_evidence"),
         mcp_servers=("exa", "fetch"),
         max_iterations=2, max_tool_calls=6, timeout_seconds=210,

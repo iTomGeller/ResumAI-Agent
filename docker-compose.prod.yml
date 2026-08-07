@@ -80,6 +80,9 @@ services:
       # so a stale value in the host .env cannot silently disable all public
       # MCP tools inside the workflow container.
       MCP_SKIP_PROBE: "0"
+      # Exa's API/MCP domains are behind Cloudflare and may be unreachable
+      # from mainland ECS egress. Set an HTTP CONNECT proxy when required.
+      EXA_HTTPS_PROXY: ${EXA_HTTPS_PROXY:-}
       # Progressive disclosure is the production default: after signal-based
       # selection the model receives Skill metadata and must call load_skill
       # before the full instructions enter its context.  Eager loading remains

@@ -40,6 +40,8 @@ AGENT_SKILL_FILES = {
     "TechAgent": [
         ("assess-technical-evidence",
          "backend/src/main/resources/skills/assess-technical-evidence/SKILL.md"),
+        ("assess-production-engineering",
+         "backend/src/main/resources/skills/assess-production-engineering/SKILL.md"),
     ],
     "ProjectAgent": [
         ("ground-project-claims",
@@ -48,10 +50,14 @@ AGENT_SKILL_FILES = {
          "backend/src/main/resources/skills/retrieve-public-candidate-evidence/SKILL.md"),
     ],
     "RiskAgent": [
-        ("risk_pattern_detection",
-         "backend/src/main/resources/skills/risk_pattern_detection/SKILL.md"),
+        ("risk-pattern-detection",
+         "backend/src/main/resources/skills/risk-pattern-detection/SKILL.md"),
+        ("audit-claim-consistency",
+         "backend/src/main/resources/skills/audit-claim-consistency/SKILL.md"),
     ],
     "EvidenceAgent": [
+        ("audit-evidence-provenance",
+         "backend/src/main/resources/skills/audit-evidence-provenance/SKILL.md"),
         ("calibrate-evidence-confidence",
          "backend/src/main/resources/skills/calibrate-evidence-confidence/SKILL.md"),
     ],
@@ -292,10 +298,13 @@ def prompt_sections(invocation: dict[str, Any]) -> dict[str, bool]:
 def format_skill_table(skill_metrics: dict[str, Any]) -> str:
     skills = (skill_metrics.get("agentRuntime") or skill_metrics).get("skills") or {}
     owner = {
+        "assess-production-engineering": "TechAgent",
         "assess-technical-evidence": "TechAgent",
+        "audit-claim-consistency": "RiskAgent",
+        "audit-evidence-provenance": "EvidenceAgent",
         "ground-project-claims": "ProjectAgent",
         "retrieve-public-candidate-evidence": "ProjectAgent",
-        "risk_pattern_detection": "RiskAgent",
+        "risk-pattern-detection": "RiskAgent",
         "calibrate-evidence-confidence": "EvidenceAgent",
     }
     lines = ["| Agent | Skill | selected | loaded | applied | skipped | 真实解释 |", "|---|---|---:|---:|---:|---:|---|"]
@@ -793,7 +802,7 @@ handoff 目标: {handoff_to 或“无”}
 
 def risk_skill_reference_section(invocations: list[dict[str, Any]]) -> str:
     skill_body = _repository_text(
-        "backend/src/main/resources/skills/risk_pattern_detection/SKILL.md")
+        "backend/src/main/resources/skills/risk-pattern-detection/SKILL.md")
     risk_rows = [
         item for item in invocations if item.get("agentRole") == "RiskAgent"
     ]
@@ -811,12 +820,12 @@ def risk_skill_reference_section(invocations: list[dict[str, Any]]) -> str:
 | `timeline_check` | Agent capability / 路由标签 | 表示 RiskAgent 能处理时间线核验场景；它不是文件，也不是 Skill |
 | `check_timeline` | Python 内置规则 Tool | 解析履历年月，确定性地产出 gaps / overlaps 等结果 |
 | `timelineCheck` | SharedState artifact | `check_timeline` 的结果保存到这里，随后进入 RiskAgent 的共享上下文 |
-| `risk_pattern_detection` | Skill 注册 ID | RiskAgent 绑定的风险分析 Skill |
-| `risk_pattern_detection/SKILL.md` | 生产 Skill 原文件 | 定义时间线、夸大、一致性、角色匹配等风险框架 |
+| `risk-pattern-detection` | Skill 注册 ID | RiskAgent 绑定的风险分析 Skill |
+| `risk-pattern-detection/SKILL.md` | 生产 Skill 原文件 | 定义时间线、岗位相关风险与偏见边界 |
 
-本轮 `risk_pattern_detection` 的状态是 **selected，但 loaded=0**；RiskAgent 最终 Prompt 中完整 Skill body **{'已经注入' if loaded else '没有注入'}**。不过为了让审计文档能回答“这个 Skill 到底写了什么”，下面仍展示仓库原文件，并明确它是**代码配置参考，不冒充本轮实际 Prompt**。
+本轮 `risk-pattern-detection` 的状态是 **selected，但 loaded=0**；RiskAgent 最终 Prompt 中完整 Skill body **{'已经注入' if loaded else '没有注入'}**。不过为了让审计文档能回答“这个 Skill 到底写了什么”，下面仍展示仓库原文件，并明确它是**代码配置参考，不冒充本轮实际 Prompt**。
 
-{_details('生产源：backend/src/main/resources/skills/risk_pattern_detection/SKILL.md（本轮未加载）', _text_fence(skill_body))}
+{_details('生产源：backend/src/main/resources/skills/risk-pattern-detection/SKILL.md（本轮未加载）', _text_fence(skill_body))}
 """
 
 
