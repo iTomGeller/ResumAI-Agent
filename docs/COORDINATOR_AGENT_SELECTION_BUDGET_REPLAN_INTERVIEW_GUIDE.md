@@ -64,6 +64,10 @@ if (self.is_simple(run_type) or self.llm is None
 
 ## 2.1 真实决策链
 
+[![图 1：Coordinator 选择 Agent 的真实路径](assets/coordinator-guide/01-agent-selection-flow.png)](assets/coordinator-guide/01-agent-selection-flow.png)
+
+*图 1：图片本身带完整边框；点击可打开 1800px 高清原图。*
+
 ```text
 runType
   + resume/JD/已有 artifact
@@ -208,6 +212,10 @@ RiskAgent ───────┘
 [EvidenceAgent]
 [ReportAgent]
 ```
+
+[![图 2：完整评估的真实并行组与 JD→Tech 依赖缺边](assets/coordinator-guide/02-real-parallel-groups.png)](assets/coordinator-guide/02-real-parallel-groups.png)
+
+*图 2：蓝/绿/橙/红连线表示当前真实依赖；红色虚线标出声明存在、图中却缺失的 JD→Tech 硬边。*
 
 这意味着 Tech 不会等待同组 JDAnalysis 的 AgentOutput merge。当前 Tech 仍可读取原始 `jobDescription`、preflight 产生的 `effectiveJd` / `jdMatches` 等上下文，所以常见路径未必失败；但如果设计意图是让 Tech 严格消费 `JDAnalysisAgent` 新生成的 `jdRequirements`，当前图依赖没有保证这一点。
 
@@ -365,6 +373,10 @@ actionTurnQuota <= llmQuota - final_turn_reserve
 普通 Agent 至少保留 1 个 final turn；Report 逻辑上最多保留 2 个用于 final/repair。
 
 ## 3.4 一个可以当场手算的真实案例
+
+[![图 3：完整评估 12 次逻辑 LLM Turn 的分配](assets/coordinator-guide/03-budget-allocation.png)](assets/coordinator-guide/03-budget-allocation.png)
+
+*图 3：上方堆叠条是 12 次逻辑 turn 的完整去向；下方把三种 quota 分开，避免面试时混答。*
 
 仓库测试使用的场景是：
 
@@ -563,6 +575,10 @@ langgraph.replan, replanned=false
 
 不会。这是当前实现最需要诚实说明的地方。
 
+[![图 4：六种 Replan 检测信号与完整评估的真实修复能力](assets/coordinator-guide/04-replan-trigger-matrix.png)](assets/coordinator-guide/04-replan-trigger-matrix.png)
+
+*图 4：绿色是能真正修改 full-eval 计划的 deterministic repair；橙色是会检测但通常只得到 `replanned=false` 的信号。*
+
 完整评估在 `_maybe_replan()` 中主动构造：
 
 ```python
@@ -599,6 +615,10 @@ replan_coordinator = Coordinator(registry, policy, llm=None)
 ---
 
 ## 5. 怎么防止多次 Replan、循环和预算失控？
+
+[![图 5：Replan 的修改边界、防循环机制与 requestedNextAction 例外](assets/coordinator-guide/05-replan-boundaries.png)](assets/coordinator-guide/05-replan-boundaries.png)
+
+*图 5：中间是 remaining-plan patch；左右分别是会修改和不会修改的状态，底部单独标出绕过 `replanCount` 的动态插入入口。*
 
 ## 5.1 被接受的 Replan 最多两次
 
@@ -878,6 +898,10 @@ G3 [Report]
 ## 9. 如果让我改成更合理的下一版
 
 不需要推翻现有 Runtime，建议只加四个明确 contract。
+
+[![图 6：当前架构与更合理下一版的边界对比](assets/coordinator-guide/06-current-vs-target.png)](assets/coordinator-guide/06-current-vs-target.png)
+
+*图 6：保留现有 deterministic artifact orchestrator，只补任务契约、统一 PlanPatch 和版本化修复，不重写 RunExecutor。*
 
 ### 9.1 `AgentTaskSpec`
 
