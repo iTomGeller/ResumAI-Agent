@@ -167,8 +167,8 @@ def test_sparse_resume_keeps_parallel_evidence_pipeline():
     )
 
     assert planned["plan"] == [
-        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent", "ProjectAgent",
-        "RiskAgent", "EvidenceAgent", "ReportAgent",
+        "TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent",
+        "ReportAgent",
     ]
     assert sum(item["llmQuota"] for item in planned["budgetPlan"].values()) <= 12
     assert planned["budgetPlan"]["TechAgent"]["llmQuota"] == 4
@@ -192,8 +192,7 @@ def test_sparse_resume_with_project_hint_keeps_project_and_evidence():
         job_description="Java Spring",
     )
     assert planned["plan"] == [
-        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent", "ProjectAgent",
-        "EvidenceAgent", "ReportAgent",
+        "TechAgent", "ProjectAgent", "EvidenceAgent", "ReportAgent",
     ]
     assert "RiskAgent" not in planned["plan"]
     assert "project_findings" in planned["goalArtifacts"]
@@ -215,10 +214,10 @@ def test_evidence_disabled_skips_evidence_agent():
 
 def test_refine_cannot_drop_sole_goal_producer():
     coordinator = _coordinator({"evidenceVerification": {"enabled": True}})
-    base = ["ResumeParserAgent", "ProjectAgent", "EvidenceAgent", "ReportAgent"]
+    base = ["ProjectAgent", "EvidenceAgent", "ReportAgent"]
     goals = ["project_findings", "evidence_ledger", "final_report"]
     # LLM wrongly drops ProjectAgent — sole producer of project_findings.
-    refined = ["ResumeParserAgent", "EvidenceAgent", "ReportAgent"]
+    refined = ["EvidenceAgent", "ReportAgent"]
     protected = coordinator._protect_required_producers(refined, base, goals)
     assert "ProjectAgent" in protected
     assert protected[-1] == "ReportAgent"
@@ -228,7 +227,7 @@ def test_finalize_reports_missing_goal_artifacts_when_unproducible():
     coordinator = _coordinator()
     # Plan without ReportAgent producer for final_report — closure should repair.
     finalized = coordinator._finalize(
-        ["ResumeParserAgent"], "test",
+        ["TechAgent"], "test",
         goal_artifacts=["resume_facts", "final_report"])
     assert "ReportAgent" in finalized["plan"] or finalized.get("missingGoalArtifacts")
     # After repair, final_report should be producible.

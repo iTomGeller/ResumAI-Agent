@@ -38,28 +38,6 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         failure_policy="degrade", output_type="plan",
         requires_artifacts=(), produces_artifacts=("execution_plan",),
         cost_hint="low"),
-    "ResumeParserAgent": AgentDefinition(
-        "ResumeParserAgent", "简历解析", "简历结构化与事实提取",
-        ("resume_parsing",),
-        # Conversation routing is not a parser capability. Keeping it here
-        # produced a fake "Skill skipped" child on the deterministic no-LLM
-        # parser fast path.
-        skills=(),
-        tools=("parse_resume",),
-        max_iterations=1, max_tool_calls=2, timeout_seconds=150,
-        output_type="resume_facts",
-        requires_artifacts=(), produces_artifacts=("resume_facts", "parsed_resume"),
-        cost_hint="low"),
-    "JDAnalysisAgent": AgentDefinition(
-        "JDAnalysisAgent", "JD 分析", "岗位要求提取与归一化",
-        ("jd_analysis",),
-        skills=(),
-        tools=(),
-        max_iterations=2, max_tool_calls=4, timeout_seconds=150,
-        output_type="jd_requirements",
-        requires_artifacts=("resume_facts",),
-        produces_artifacts=("jd_requirements",),
-        cost_hint="medium", optional_when="has_jd_or_match"),
     "TechAgent": AgentDefinition(
         "TechAgent", "技术评估", "技能与 JD 匹配、深度信号评估",
         ("tech_evaluation",),
@@ -69,7 +47,9 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         # calls; five made valid provider actions fail as budget exhausted.
         max_iterations=2, max_tool_calls=10, timeout_seconds=240,
         output_type="technical_findings",
-        requires_artifacts=("resume_facts", "jd_requirements"),
+        # resume/JD parsing is deterministic preflight, not a separate Agent.
+        # Tech can still assess resume evidence when no effective JD exists.
+        requires_artifacts=("resume_facts",),
         produces_artifacts=("technical_findings",),
         cost_hint="medium", optional_when="has_jd_requirements"),
     "ProjectAgent": AgentDefinition(
@@ -124,26 +104,6 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         requires_artifacts=(),
         produces_artifacts=("final_report",),
         cost_hint="medium"),
-    "ResumeOptimizeAgent": AgentDefinition(
-        "ResumeOptimizeAgent", "简历优化", "事实不变前提下的改写",
-        ("resume_rewrite",),
-        skills=("ground-project-claims",),
-        tools=("resume_lint", "locate_evidence"),
-        max_iterations=2, max_tool_calls=4, timeout_seconds=240,
-        output_type="rewrite",
-        requires_artifacts=("project_findings",),
-        produces_artifacts=("rewrite",),
-        cost_hint="medium"),
-    "InterviewQuestionAgent": AgentDefinition(
-        "InterviewQuestionAgent", "面试追问", "针对风险与缺口生成追问",
-        ("interview_questions",),
-        skills=(),
-        tools=(),
-        max_iterations=2, max_tool_calls=2, timeout_seconds=150,
-        output_type="questions",
-        requires_artifacts=("risks",),
-        produces_artifacts=("interview_questions",),
-        cost_hint="low"),
 }
 
 

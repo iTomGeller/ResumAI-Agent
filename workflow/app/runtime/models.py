@@ -95,7 +95,7 @@ class PolicyBundle(BaseModel):
 
     policyId: str = "balanced"
     agentOrder: List[str] = Field(default_factory=lambda: [
-        "JDAnalysisAgent", "TechAgent", "ProjectAgent",
+        "TechAgent", "ProjectAgent",
         "RiskAgent", "EvidenceAgent", "ReportAgent"])
     # Empty = eligible for any runType. Explicit list is an allowlist
     # (e.g. low_cost must NOT include full_evaluation).

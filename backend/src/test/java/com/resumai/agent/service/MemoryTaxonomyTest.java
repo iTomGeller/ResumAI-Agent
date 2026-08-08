@@ -21,14 +21,14 @@ class MemoryTaxonomyTest {
 
     @Test
     void agentRoleProducesDifferentAllowedMemoryTypes() {
-        var parser = MemoryService.retrievalPlan(
-                null, "ResumeParserAgent", "解析当前候选人简历事实");
+        var tech = MemoryService.retrievalPlan(
+                null, "TechAgent", "评估当前候选人技术证据");
         var report = MemoryService.retrievalPlan(
                 null, "ReportAgent", "参考上次评估结果生成报告");
         var coordinator = MemoryService.retrievalPlan(
                 null, "CoordinatorAgent", "采用已批准的评分规则");
 
-        assertEquals(List.of("SEMANTIC", "WORKING"), parser.allowedTypes());
+        assertEquals(List.of("SEMANTIC", "EPISODIC", "PROCEDURAL"), tech.allowedTypes());
         assertTrue(report.allowedTypes().contains("EPISODIC"));
         assertFalse(report.allowedTypes().contains("WORKING"));
         assertEquals(List.of("WORKING", "SEMANTIC", "PROCEDURAL", "EPISODIC"),

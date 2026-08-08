@@ -111,10 +111,10 @@ def test_shared_state_appends_and_flags_conflicts():
     state.apply_output(_output("TechAgent", "technical_findings",
                                [{"text": "Kafka 有项目证据"}]))
     conflicts = state.apply_output(_output(
-        "ResumeParserAgent", "resume_facts", {"name": "张三"}))
+        "TechAgent", "resume_facts", {"name": "张三"}))
     assert conflicts == []
     conflicts = state.apply_output(_output(
-        "JDAnalysisAgent", "resume_facts", {"name": "李四"}))
+        "ProjectAgent", "resume_facts", {"name": "李四"}))
     assert conflicts == ["resumeFacts.name"]
     assert state.data["conflicts"], "conflicting fact must be recorded, not overwritten"
     assert state.data["resumeFacts"]["name"] == "张三", "original value preserved"
@@ -135,7 +135,7 @@ def test_resume_facts_list_does_not_clobber_dict():
             "experiences": [{"raw": "2025-2026"}],
             "source": "parse_resume_fast_path",
         }
-    }, by_agent="ResumeParserAgent")
+    }, by_agent="DeterministicPreflight")
     conflicts = state.apply_output(_output(
         "ProjectAgent", "resume_facts",
         [{"fact": "会 Java", "detail": "简历原文", "source": "技能栏"}]))

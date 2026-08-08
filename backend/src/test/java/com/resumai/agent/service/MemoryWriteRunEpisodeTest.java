@@ -207,7 +207,7 @@ class MemoryWriteRunEpisodeTest {
                 "actualExecution", true,
                 "candidateDataExcluded", true,
                 "selectedAgents", List.of(
-                        "JDAnalysisAgent", "TechAgent", "ReportAgent"));
+                        "TechAgent", "EvidenceAgent", "ReportAgent"));
 
         MemoryEntryRow accepted = svc.write(new MemoryService.WriteRequest(
                 "PROCEDURAL", "USER", "u1", "c1", "run-actual",

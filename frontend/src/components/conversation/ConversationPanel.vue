@@ -178,9 +178,9 @@ const recommendationText = computed(() => {
 
 // ---------- plan-approval mode ----------
 const AGENT_LABELS: Record<string, string> = {
-  ResumeParserAgent: '简历解析', JDAnalysisAgent: 'JD 分析', TechAgent: '技术评估',
+  CoordinatorAgent: '协调规划', TechAgent: '技术评估',
   ProjectAgent: '项目分析', RiskAgent: '风险审查', EvidenceAgent: '证据核验',
-  ReportAgent: '报告生成', ResumeOptimizeAgent: '简历优化', InterviewQuestionAgent: '面试追问',
+  ReportAgent: '报告生成',
 };
 const awaitingPlan = computed(() => !!activeRun.value?.awaitingPlanApproval
   || (effectiveStatus.value === 'PAUSED' && !!activeRun.value?.plannedPipeline?.length

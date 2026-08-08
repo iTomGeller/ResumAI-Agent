@@ -164,17 +164,15 @@ class RunTraceBridgeServiceCausalityTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void noLlmFastPathDoesNotRenderSkippedSkillAsExecutionRound() throws Exception {
-        String agent = "ResumeParserAgent";
+    void deterministicPreflightDoesNotRenderAsLlmRound() throws Exception {
+        String agent = "CoordinatorAgent";
         List<RunEvent> events = List.of(
-                event(1, "agent.started", agent, null, Map.of("description", "简历解析")),
+                event(1, "agent.started", agent, null, Map.of("description", "确定性预处理")),
                 event(2, "tool.started", agent, "parse_resume",
                         Map.of("toolCallId", "pre-parse", "arguments", Map.of("text", "cv"))),
                 event(3, "tool.completed", agent, "parse_resume",
                         Map.of("toolCallId", "pre-parse", "resultPreview", Map.of("ok", true))),
-                event(4, "skill.skipped", agent, "route-conversation-turn",
-                        Map.of("skillId", "route-conversation-turn", "lifecycleStage", "SKIPPED")),
-                event(5, "agent.completed", agent, null,
+                event(4, "agent.completed", agent, null,
                         Map.of("llmCalls", 0, "toolCalls", 1, "durationMs", 20))
         );
 

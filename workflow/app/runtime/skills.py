@@ -387,9 +387,6 @@ class SkillManager:
             add("audit-evidence-provenance")
             add("calibrate-evidence-confidence")
 
-        if agent_id == "ResumeOptimizeAgent":
-            add("ground-project-claims")
-
         # Legacy DB overrides cannot resurrect hidden aliases.
         override = overrides.get(agent_id)
         if override:

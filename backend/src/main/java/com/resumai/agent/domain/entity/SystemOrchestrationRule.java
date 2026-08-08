@@ -12,7 +12,7 @@ import lombok.Data;
  * 系统宏观调度规则实体。
  *
  * <p>该实体定义不同岗位类别所需的 Agent 拓扑、首选 RAG 策略、检索 TopK、
- * 最大重试次数与 RAGAS 阈值，是 OrchestratorAgent 动态派生子 Agent 的规则来源。</p>
+ * 最大重试次数与 RAGAS 阈值，是 CoordinatorAgent 动态规划执行 Agent 的规则来源。</p>
  */
 @Data
 @TableName("system_orchestration_rule")

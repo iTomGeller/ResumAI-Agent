@@ -448,18 +448,18 @@ public class ResumeEvaluationService {
         persistResumeTask(task, resumeObjectKey);
         tasks.put(traceId, task);
         traces.put(traceId, new ArrayList<>());
-        appendDagTrace(task.traceId, null, "OrchestratorAgent", "TASK_CREATED",
+        appendDagTrace(task.traceId, null, "CoordinatorAgent", "TASK_CREATED",
                 "任务创建", "TraceId 已生成，任务已进入 Redis Stream 队列。", "SUCCESS", 18L, 0,
                 null, null, "task_create", "BOTH",
                 "创建评估任务", "系统已接收简历并加入评估队列", null,
-                "OrchestratorAgent / TaskBootstrap", null, null, null, null, null, null);
+                "CoordinatorAgent / TaskBootstrap", null, null, null, null, null, null);
         if (StringUtils.hasText(resumeFilePath)) {
             int textLen = request.resumeText() != null ? request.resumeText().length() : 0;
-            appendDagTrace(task.traceId, null, "ResumeParserAgent", "UPLOAD_PARSE",
+            appendDagTrace(task.traceId, null, "CoordinatorAgent", "UPLOAD_PARSE",
                     "文件解析", "简历文件已接收并完成文本抽取", "SUCCESS", 0L, 0,
                     null, null, "upload_parse", "BOTH",
                     "上传解析", "文件已保存，正文已抽取，等待后台评估", null,
-                    "ResumeParserAgent / UploadHandler", null, null,
+                    "CoordinatorAgent / UploadHandler", null, null,
                     trim(request.fileName(), 80),
                     "文本长度: " + textLen,
                     null, null, null);
@@ -1292,15 +1292,17 @@ public class ResumeEvaluationService {
         Map<String, Object> tree = new LinkedHashMap<>();
         tree.put("traceId", traceId);
         tree.put("framework", "Unified Agent Runtime + DeepSeek");
-        tree.put("architecture", "8-Agent 6-Phase DAG Orchestration");
+        tree.put("architecture", "6-Agent LangGraph Orchestration");
 
         List<AgentExecutionTrace> deduped = dedupeTracesByEventId(traces);
         boolean hasLangGraphEvents = deduped.stream().anyMatch(t -> StringUtils.hasText(t.getEventId()));
 
         Map<String, List<AgentExecutionTrace>> groupedByNode = new LinkedHashMap<>();
-        Set<String> excludedAgents = Set.of("OrchestratorAgent", "ResumeParserAgent");
+        Set<String> allowedAgents = Set.of(
+                "CoordinatorAgent", "TechAgent", "ProjectAgent",
+                "RiskAgent", "EvidenceAgent", "ReportAgent");
         for (AgentExecutionTrace t : deduped) {
-            if (excludedAgents.contains(t.getAgentRole())) {
+            if (!allowedAgents.contains(t.getAgentRole())) {
                 continue;
             }
             String groupKey = hasLangGraphEvents && StringUtils.hasText(t.getNodeId())

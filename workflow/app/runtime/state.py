@@ -38,8 +38,6 @@ BLACKBOARD_KEYS = [
 _SECTION_READ_MAP: Dict[str, List[str]] = {
     # Each agent reads only what it needs (spec §9.1) — never other agents'
     # hidden reasoning, only structured outputs from canonical artifacts.
-    "ResumeParserAgent": ["parsedResume", "resumeFacts", "inputPresence"],
-    "JDAnalysisAgent": ["resumeFacts", "effectiveJd", "jdMatches", "inputPresence"],
     "TechAgent": ["resumeFacts", "jdRequirements", "effectiveJd", "jdCoverage",
                   "inputPresence"],
     "ProjectAgent": ["resumeFacts", "jdRequirements", "effectiveJd", "inputPresence"],
@@ -52,10 +50,6 @@ _SECTION_READ_MAP: Dict[str, List[str]] = {
                     "projectFindings", "risks", "evidence", "conflicts",
                     "recommendations", "jdCoverage", "timelineCheck",
                     "effectiveJd", "inputPresence"],
-    "ResumeOptimizeAgent": ["resumeFacts", "projectFindings", "evidence",
-                            "inputPresence"],
-    "InterviewQuestionAgent": ["technicalFindings", "projectFindings", "risks",
-                               "conflicts", "evidence", "inputPresence"],
     "CoordinatorAgent": CANONICAL_ARTIFACT_KEYS,
 }
 

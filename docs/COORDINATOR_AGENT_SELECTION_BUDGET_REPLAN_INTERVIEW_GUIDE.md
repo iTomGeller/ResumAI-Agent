@@ -1,7 +1,8 @@
 # Coordinator 选 Agent、预算与 Dynamic Replan：基于真实代码的面试级说明
 
-> 适用代码基线：`main@69f24d2`（2026-08-07）
+> 适用代码基线：当前 `main` 工作树（2026-08-08）。
 > 本文只描述当前仓库能够从源码证明的行为。凡是“设计上希望如此、但当前代码尚未做到”的地方，都会明确标成实现债，不把目标架构冒充现状。
+> 当前业务 Agent 只有六个：`CoordinatorAgent`、`TechAgent`、`ProjectAgent`、`RiskAgent`、`EvidenceAgent`、`ReportAgent`。简历解析与 JD 召回/归一化是 Runtime 的确定性 preflight，不是 Agent。
 
 ---
 
@@ -131,7 +132,7 @@ final_report
 | `has_framework_stack` | Spring、React、K8s、Kafka、LangGraph 等 | 增加 Tech action turns |
 | `has_microsoft_stack` | .NET、Azure、SQL Server 等 | 增加 Tech 文档检索预算 |
 | `evidence_enabled` | Policy 中 EvidenceVerification | 是否强制 EvidenceAgent |
-| `needs_parse` | 有原始简历但没有 `resume_facts` | 是否加入 ResumeParserAgent |
+| `needs_parse` | 有原始简历但没有 `resume_facts` | 是否由 deterministic preflight 补齐解析产物 |
 
 这些信号只是路由启发式，不是语义事实。例如，正则看到日期不代表履历必然存在冲突；它只代表时间线审查有输入基础。
 
@@ -160,13 +161,14 @@ Agent 的 artifact contract 来自 `AgentDefinition`：
 
 | Agent | requires_artifacts | produces_artifacts |
 |---|---|---|
-| ResumeParserAgent | 无 | `resume_facts`, `parsed_resume` |
-| JDAnalysisAgent | `resume_facts` | `jd_requirements` |
-| TechAgent | `resume_facts`, `jd_requirements` | `technical_findings` |
+| CoordinatorAgent | 无 | `execution_plan`（控制面，不进入 Specialist 并行组） |
+| TechAgent | `resume_facts` | `technical_findings` |
 | ProjectAgent | `resume_facts` | `project_findings` |
 | RiskAgent | `resume_facts` | `risks` |
 | EvidenceAgent | `resume_facts` | `evidence_ledger` |
 | ReportAgent | 无硬 requires | `final_report` |
+
+`resume_facts / parsed_resume / jd_requirements` 在 Agent 调度前由 preflight 写入 canonical artifact store。它们是 Planner 的输入产物，不再通过额外 Agent 生产。
 
 Planner 的核心循环是：
 
@@ -184,18 +186,10 @@ Planner 的核心循环是：
 当前软依赖是：
 
 ```text
-ResumeParserAgent
-  ├─ JDAnalysisAgent
-  ├─ TechAgent
-  ├─ ProjectAgent
-  └─ RiskAgent
-
 TechAgent ───────┐
 ProjectAgent ────┼─> EvidenceAgent -> ReportAgent
 RiskAgent ───────┘
 ```
-
-这里有一个真实的 contract 不一致：`TechAgent.requires_artifacts` 声明需要 `jd_requirements`，但 `AGENT_DEPENDENCIES["TechAgent"]` 当前只列了 `ResumeParserAgent`，没有 `JDAnalysisAgent`。而拓扑排序与并行分组实际读取的是 `AGENT_DEPENDENCIES`，不是自动从 `requires_artifacts -> producer` 推导依赖边。
 
 `_parallel_groups()` 只有同时满足下列条件才把 Agent 放入同组：
 
@@ -207,35 +201,23 @@ RiskAgent ───────┘
 因此，典型上传路径的**当前真实分组**是：
 
 ```text
-[ResumeParserAgent]
-[JDAnalysisAgent, TechAgent, ProjectAgent, RiskAgent]
-[EvidenceAgent]
-[ReportAgent]
-```
-
-[![图 2：完整评估的真实并行组与 JD→Tech 依赖缺边](assets/coordinator-guide/02-real-parallel-groups.png)](assets/coordinator-guide/02-real-parallel-groups.png)
-
-*图 2：蓝/绿/橙/红连线表示当前真实依赖；红色虚线标出声明存在、图中却缺失的 JD→Tech 硬边。*
-
-这意味着 Tech 不会等待同组 JDAnalysis 的 AgentOutput merge。当前 Tech 仍可读取原始 `jobDescription`、preflight 产生的 `effectiveJd` / `jdMatches` 等上下文，所以常见路径未必失败；但如果设计意图是让 Tech 严格消费 `JDAnalysisAgent` 新生成的 `jdRequirements`，当前图依赖没有保证这一点。
-
-这不是文档上的小区别，而是应修复的依赖建图债：Planner 应从 `requires_artifacts` 与 producer contract 自动生成硬依赖，或者显式补上 `JDAnalysisAgent -> TechAgent`，不能维护两套可能漂移的依赖真相。
-
-如果 `resume_facts`、`jd_requirements` 已经在 canonical artifact store 中，则 Parser/JD producer 不需要再跑，可能简化成：
-
-```text
+[deterministic preflight：parse_resume + JD retrieve/normalize]
 [TechAgent, ProjectAgent, RiskAgent]
 [EvidenceAgent]
 [ReportAgent]
 ```
 
-所以“Tech、Project、Risk 永远同一组”也是不准确的；是否同组取决于本次计划中还存在哪些依赖节点。
+[![图 2：完整评估的真实并行组](assets/coordinator-guide/02-real-parallel-groups.png)](assets/coordinator-guide/02-real-parallel-groups.png)
+
+*图 2：preflight 先准备简历/JD 输入，随后三个 Specialist 同组并行；Evidence 与唯一 ReportAgent 依次消费已经 merge 的上游产物。*
+
+Tech 不需要等待另一个 JD Agent。它在组开始前读取 preflight 已经写好的 `resumeFacts`、`effectiveJd`、`jdMatches` 和 `jdRequirements`。如果本次没有有效 JD，Tech 仍可只基于简历证据做技术评估；文档不能虚构一条不存在的 Agent 依赖边。
 
 ## 2.7 Coordinator 当前究竟动态了什么？
 
 真实动态项：
 
-- 是否需要 Parser/JD/Project/Risk/Evidence；
+- 是否需要 Tech/Project/Risk/Evidence；
 - 已有 artifact 是否可复用；
 - 剩余 Agent 的顺序；
 - 哪些 Specialist 可以并行；
@@ -361,8 +343,7 @@ hard_cap = min(policy.maxLlmCalls, 12)
 3. 识别到 framework/Microsoft stack，Tech 最多扩到 4；
 4. 有外部 URL，Project 最多扩到 3；
 5. 如果仍有余额，再给一轮 Skill 激活空间；
-6. Parser 不预留 LLM，因为生产路径优先确定性解析；
-7. JDAnalysis 不在 full-eval 的优先分配列表中，通常依赖短 JD deterministic fast path。
+6. parse/JD preflight 不分配 LLM quota，因为它们不是 Agent turn。
 
 最后一轮必须为结构化最终输出保留，因此：
 
@@ -401,13 +382,10 @@ evidence_enabled   = true
 计划是：
 
 ```text
-ResumeParserAgent
-JDAnalysisAgent
-TechAgent
-ProjectAgent
-RiskAgent
-EvidenceAgent
-ReportAgent
+deterministic preflight
+[TechAgent, ProjectAgent, RiskAgent]
+[EvidenceAgent]
+[ReportAgent]
 ```
 
 预算手算：
@@ -425,13 +403,11 @@ GitHub URL：Project 1 -> 3               剩 0
 
 | Agent | llmQuota | actionTurnQuota | 解释 |
 |---|---:|---:|---|
-| ResumeParser | 0 | 0 | 依赖确定性 parse fast path |
-| JDAnalysis | 0 | 0 | 短 JD 依赖 direct-text fast path |
 | Tech | 4 | 3 | Skill/文档检索最多三轮，最后一轮输出 |
 | Project | 3 | 2 | 外部证据 action 最多两轮，最后一轮输出 |
 | Risk | 1 | 0 | 直接输出，无 progressive Skill 轮次 |
 | Evidence | 1 | 0 | 直接输出，无 progressive Skill 轮次 |
-| Report | 3 | 1（计划值） | 实际没有模型可调用 action 工具，主要用于 final/repair |
+| Report | 3 | 1（计划值） | 一个 ReportAgent 的完整报告与必要 schema repair，不是三个 Report 分支 |
 
 总和是 12。
 
@@ -492,22 +468,11 @@ weights[agent] += 4.0 * history_ratio
 
 准确表述是“预算没有给它加载 Skill 的机会”，而不是“Agent 自主判断 Skill 不需要加载”。
 
-### 债 2：JDAnalysis 的 full-eval 配额依赖 deterministic fast path
+### 债 2：计划 quota 与底层 provider attempt 不是完全一一对应
 
-full-eval 优先分配列表没有 JDAnalysisAgent，因此它常得到 0 LLM quota。短 JD 会走 `_maybe_skip_jd_llm()`，这在常见路径可工作；但长 JD 如果没有其他 deterministic artifact 兜底，就存在计划选中了 JD Agent、却没有模型额度的脆弱边界。
+JSON repair 和 provider retry 会让物理 provider attempt 与“逻辑 Agent turn”不完全一一对应。安全性最终依赖全局 provider-call ledger，而不只是 `sum(llmQuota)`。
 
-更合理的实现应当明确二选一：
-
-- 把 JDAnalysis 定义成纯确定性节点并保证所有输入范围可处理；或
-- 在需要 LLM 的 JD 场景中给它明确 quota。
-
-### 债 3：计划 quota 与底层 provider attempt 不是完全一一对应
-
-JSON repair、provider retry 和未来可能启用的并行 Report section helper 会让物理 provider attempt 与“逻辑 Agent turn”不完全相等。安全性最终依赖全局 provider-call ledger，而不只是 `sum(llmQuota)`。
-
-### 债 4：仓库存在 Report section fan-out helper，但当前执行路径没有调用点
-
-`_run_parallel_report_sections()` 定义了 score/risk/question 三个并行 section，它们是同一个 ReportAgent 的内部生成分支，不是三个独立 Agent。但在当前 `executor.py` 中只有定义，没有调用引用，因此不能把它描述成当前必经生产路径。
+当前生产路径只有一个 `ReportAgent`，一次提交完整结构化报告。给 Report 预留多个 turn 是为了合法输出和 schema repair，不表示存在多个 Report Agent 或分段架构。
 
 ---
 
@@ -548,7 +513,7 @@ langgraph.replan, replanned=false
 
 - 当前 runType 属于 simple rule type；
 - `replan_count >= 2`；
-- 剩余计划里已经没有 non-terminal Agent，只剩 Report/Optimize/Question terminal。
+- 剩余计划里已经没有 non-terminal Agent，只剩唯一 terminal `ReportAgent`。
 
 这意味着 Evidence merge 后如果只剩 Report，通常不会再 Replan，因为已经没有可调整的中间执行空间。
 
@@ -778,34 +743,33 @@ invalidate artifact version
 ### 7.1 初始规划
 
 1. `runType=full_evaluation` 映射出七类目标 artifact；
-2. canonical store 还没有 `resume_facts`，所以加入 Parser；
-3. 短 JD 仍需要 `jd_requirements`，选择 JDAnalysis；
+2. preflight 用确定性解析生成 `resume_facts / parsed_resume`；
+3. 用户 JD 或 JD 库召回结果被确定性归一化为 `effectiveJd / jdRequirements`；
 4. 项目、时间线、Evidence 开关分别保留 Project、Risk、Evidence；
-5. Tech 依赖 JD requirements；
+5. Tech 读取 preflight JD 上下文；
 6. Report 作为唯一 terminal。
 
 按当前 `AGENT_DEPENDENCIES`，会得到：
 
 ```text
-G0 [ResumeParser]
-G1 [JDAnalysis, Tech, Project, Risk]
-G2 [Evidence]
-G3 [Report]
+preflight [parse_resume, JD retrieve/normalize]
+G0 [Tech, Project, Risk]
+G1 [Evidence]
+G2 [Report]
 ```
 
 ### 7.2 预算
 
-12 个 full-eval 逻辑 LLM turn 先保护 Report，再给 Specialist 基础额度；Spring 把 Tech 扩到 4，GitHub 把 Project 扩到 3。Parser/JD 在这个例子里分别走 deterministic fast path。
+12 个 full-eval 逻辑 LLM turn 先保护唯一 Report，再给 Specialist 基础额度；Spring 把 Tech 扩到 4，GitHub 把 Project 扩到 3。preflight 不占 Agent LLM quota。
 
 ### 7.3 执行与 Replan
 
-- G0 merge 后：剩余还有 non-terminal，可以检查 Replan；通常没有 trigger；
-- G1 并行执行，Reducer 只拼接结果，Merge 按 dispatch 原顺序写 canonical store；Tech 不会看到同组 JDAnalysis 尚未 merge 的新输出，只能使用组开始前已有的 JD/preflight 上下文；
+- G0 并行执行，Reducer 只拼接结果，Merge 按 dispatch 原顺序写 canonical store；三个 Specialist 都读取组开始前已经准备好的 JD/preflight 上下文；
 - 如果 Project 工具失败，会命中 `tool_failed`，但 full-eval 当前不会因此改计划；失败会留在运行状态，继续 Evidence/Report 降级收口；
 - 如果 Risk handoff 给一个尚未执行的合法 Agent，则可能插入 target，并触发 deterministic handoff repair；
-- 如果 G1 最近输出平均 confidence 低于 0.55，gate 能检测 low confidence，但 full-eval 不会调用 Coordinator LLM 改计划；
-- G2 Evidence 后只剩 Report，不再 Replan；
-- G3 Report 对已合并 artifacts 生成并校验最终结构化报告。
+- 如果 G0 最近输出平均 confidence 低于 0.55，gate 能检测 low confidence，但 full-eval 不会调用 Coordinator LLM 改计划；
+- G1 Evidence 后只剩 Report，不再 Replan；
+- G2 唯一 ReportAgent 对已合并 artifacts 生成并校验一次完整结构化报告。
 
 ### 7.4 这个例子说明了什么
 
@@ -982,8 +946,8 @@ Coordinator 输出的不再只有 Agent ID：
 7. 不要把 `replanned=false` 的 Replan gate 当作一次 Replan。
 8. 不要说“最多两次涵盖所有动态 Agent 插入”；requestedNextAction 是例外路径。
 9. 不要说“Replan 会撤回坏 artifact 或重跑 Agent”；当前不做。
-10. 不要把 score/risk/question report sections 说成三个独立 Report Agent；当前只是未接入调用点的内部 helper。
-11. 不要说 Tech 一定等待 JDAnalysis 完成；当前静态依赖图缺少这条边，二者可在同组并行。
+10. 不要把历史审计中的 score/risk/question 分段调用说成当前架构；当前只有一个 ReportAgent 的完整报告路径。
+11. 不要把 parse/JD preflight 说成 Agent；它们是调度前的确定性数据准备。
 
 ---
 

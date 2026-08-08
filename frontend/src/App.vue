@@ -2091,13 +2091,10 @@ const knownPhaseCount = ref(0);
 const AGENT_NAME_CN: Record<string, string> = {
   // 统一 Agent Runtime
   CoordinatorAgent: '协调规划',
-  ResumeParserAgent: '简历解析',
-  JDAnalysisAgent: 'JD 分析',
   TechAgent: '技术能力评估',
   ProjectAgent: '项目经历评估',
+  RiskAgent: '风险审查',
   EvidenceAgent: '证据核验',
-  ResumeOptimizeAgent: '简历优化',
-  InterviewQuestionAgent: '面试追问',
   // 兼容历史 trace 的旧命名
   IntentAgent: '意图识别',
   ResumeParseAgent: '简历结构化解析',
@@ -2112,13 +2109,10 @@ const AGENT_NAME_CN: Record<string, string> = {
 
 const AGENT_PURPOSE_CN: Record<string, string> = {
   CoordinatorAgent: '根据问题类型、上下文与历史失败动态规划 Agent 流水线。',
-  ResumeParserAgent: '用确定性工具把简历拆成技能、经历、项目和教育结构。',
-  JDAnalysisAgent: '提取并归一化岗位要求，计算覆盖与缺口。',
   TechAgent: '评估技术栈深度、工程经验和可验证证据。',
   ProjectAgent: '评估项目复杂度、职责边界和业务结果。',
+  RiskAgent: '核查履历时间线、职责边界和待验证风险。',
   EvidenceAgent: '逐条核验结论证据，标记无支撑的声明与冲突。',
-  ResumeOptimizeAgent: '在事实不变的前提下改写项目与经历描述。',
-  InterviewQuestionAgent: '针对风险与证据缺口生成验证型面试追问。',
   IntentAgent: '判断候选人类型、经验级别和后续评估策略。',
   ResumeParseAgent: '把简历文本拆成技能、经历、项目和教育等结构化信息。',
   JdMatchAgent: '从岗位库里找最匹配的 JD，并提取匹配依据和差距。',
@@ -2237,9 +2231,8 @@ function groupByPhase(tree: any[]): PhaseGroup[] {
 
   // 统一 Runtime 的 Agent（Coordinator 动态规划产出）用组内成员生成标题，
   // 让并行分组一目了然，而不是套旧的固定 DAG 文案。
-  const unifiedNames = new Set(['ResumeParserAgent', 'JDAnalysisAgent', 'TechAgent',
-    'ProjectAgent', 'RiskAgent', 'EvidenceAgent', 'ReportAgent',
-    'ResumeOptimizeAgent', 'InterviewQuestionAgent']);
+  const unifiedNames = new Set(['CoordinatorAgent', 'TechAgent', 'ProjectAgent',
+    'RiskAgent', 'EvidenceAgent', 'ReportAgent']);
   for (const group of phaseMap.values()) {
     if (group.agents.some((a: any) => unifiedNames.has(a.name))) {
       group.title = dynamicPhaseTitle(group.agents);

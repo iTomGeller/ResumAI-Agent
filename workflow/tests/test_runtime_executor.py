@@ -69,15 +69,11 @@ class FakeLlm:
         if agent_id == "CoordinatorAgent":
             return json.dumps({"plan": [], "reason": "keep rule plan"})
         section = {
-            "ResumeParserAgent": "resume_facts",
-            "JDAnalysisAgent": "jd_requirements",
             "TechAgent": "technical_findings",
             "ProjectAgent": "project_findings",
             "RiskAgent": "risks",
             "EvidenceAgent": "evidence",
             "ReportAgent": "recommendations",
-            "ResumeOptimizeAgent": "recommendations",
-            "InterviewQuestionAgent": "recommendations",
         }.get(agent_id, "technical_findings")
         claim_value: Any
         if section in {"resume_facts", "jd_requirements"}:
@@ -196,7 +192,7 @@ def test_tech_match_pipeline_produces_grounded_answer():
 
 def test_coordinator_rule_pipelines_cover_business_scenarios():
     for run_type, expected_head in [
-        ("full_evaluation", "JDAnalysisAgent"),
+        ("full_evaluation", "TechAgent"),
         ("timeline_check", "RiskAgent"),
         ("project_rewrite", "ProjectAgent"),
         ("interview_questions", "RiskAgent"),
@@ -206,7 +202,7 @@ def test_coordinator_rule_pipelines_cover_business_scenarios():
         plan = coordinator.base_plan(run_type, has_resume_facts=False, needs_parse=False)
         assert plan[0] == expected_head, f"{run_type} -> {plan}"
     rewrite_plan = TASK_PIPELINES["project_rewrite"]
-    assert rewrite_plan == ["ProjectAgent", "ResumeOptimizeAgent"]
+    assert rewrite_plan == ["ProjectAgent", "ReportAgent"]
 
 
 def test_followup_report_agent_runs_conversational_rag_presteps():

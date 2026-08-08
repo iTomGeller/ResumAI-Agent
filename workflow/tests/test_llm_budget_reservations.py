@@ -110,8 +110,8 @@ def test_coordinator_allocates_only_agent_assignable_remaining_calls():
     coordinator = Coordinator(
         default_agent_registry, PolicyBundle.from_config("balanced", {}), llm)
     ordered = [
-        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent",
-        "ProjectAgent", "RiskAgent", "EvidenceAgent", "ReportAgent",
+        "TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent",
+        "ReportAgent",
     ]
     plan = coordinator._budget_plan(ordered, "ReportAgent")
     assert sum(item["llmQuota"] for item in plan.values()) <= 8
@@ -390,8 +390,8 @@ def test_legacy_balanced_db_budget_is_bounded_and_keeps_tools_actionable():
         legacy_policy,
         type("BudgetedLlm", (), {"budget": budget})())
     ordered = [
-        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent",
-        "ProjectAgent", "RiskAgent", "EvidenceAgent", "ReportAgent",
+        "TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent",
+        "ReportAgent",
     ]
 
     plan = coordinator._budget_plan(
@@ -431,8 +431,8 @@ def test_external_url_budget_keeps_skill_mcp_and_final_turns_inside_cap():
         default_agent_registry, policy,
         type("BudgetedLlm", (), {"budget": budget})())
     ordered = [
-        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent",
-        "ProjectAgent", "RiskAgent", "EvidenceAgent", "ReportAgent",
+        "TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent",
+        "ReportAgent",
     ]
 
     plan = coordinator._budget_plan(

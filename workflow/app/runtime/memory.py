@@ -131,10 +131,8 @@ def allowed_types_for(consumer_agent: Optional[str]) -> frozenset[str]:
         return frozenset({"PROCEDURAL", "EPISODIC"})
     if key in {"coordinator", "coordinatoragent"}:
         return COORDINATOR_TYPES
-    if "resumeparser" in key or "conversation" in key:
+    if "conversation" in key:
         return frozenset({"SEMANTIC"})
-    if "jdanalysis" in key or key == "jdagent":
-        return frozenset({"SEMANTIC", "PROCEDURAL"})
     if "report" in key or "risk" in key:
         return frozenset({"EPISODIC", "SEMANTIC", "PROCEDURAL"})
     return SPECIALIST_TYPES

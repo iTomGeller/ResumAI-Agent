@@ -288,7 +288,7 @@ ALTER TABLE `human_feedback_log` ADD COLUMN `structured_payload` JSON NULL COMME
 INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `status`, `version`) VALUES
   ('balanced', '均衡策略', '默认策略：完整流水线、标准预算、启用证据核验',
    JSON_OBJECT(
-     'agentOrder', JSON_ARRAY('JDAnalysisAgent','TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
+     'agentOrder', JSON_ARRAY('TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
      'maxAgentCount', 6, 'maxLlmCalls', 12, 'maxIterationsPerAgent', 2,
      'toolBudget', JSON_OBJECT('maxToolCallsPerRun', 20, 'maxToolCallsPerAgent', 5),
      'contextBudget', JSON_OBJECT('modelWindow', 65536, 'systemBudget', 2200, 'policyBudget', 320, 'skillBudget', 1200, 'recentMessageBudget', 2600, 'memoryBudget', 1500, 'toolResultBudget', 3600, 'reservedOutputBudget', 2048, 'compactAtRatio', 0.75),
@@ -299,7 +299,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
    'ACTIVE', 1),
   ('strict_evidence', '严格证据策略', '每个结论强制证据核验，宁缺毋滥',
    JSON_OBJECT(
-     'agentOrder', JSON_ARRAY('JDAnalysisAgent','TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
+     'agentOrder', JSON_ARRAY('TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
      'maxAgentCount', 6, 'maxLlmCalls', 14, 'maxIterationsPerAgent', 2,
      'toolBudget', JSON_OBJECT('maxToolCallsPerRun', 26, 'maxToolCallsPerAgent', 6),
      'contextBudget', JSON_OBJECT('modelWindow', 65536, 'systemBudget', 2200, 'policyBudget', 320, 'skillBudget', 1200, 'recentMessageBudget', 2200, 'memoryBudget', 1500, 'toolResultBudget', 4200, 'reservedOutputBudget', 2048, 'compactAtRatio', 0.72),
@@ -310,7 +310,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
    'ACTIVE', 1),
   ('deep_analysis', '深度分析策略', '更多迭代与检索预算，追求覆盖率与深度',
    JSON_OBJECT(
-     'agentOrder', JSON_ARRAY('JDAnalysisAgent','TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
+     'agentOrder', JSON_ARRAY('TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
      'maxAgentCount', 7, 'maxLlmCalls', 18, 'maxIterationsPerAgent', 3,
      'toolBudget', JSON_OBJECT('maxToolCallsPerRun', 32, 'maxToolCallsPerAgent', 8),
      'contextBudget', JSON_OBJECT('modelWindow', 65536, 'systemBudget', 2400, 'policyBudget', 320, 'skillBudget', 1600, 'recentMessageBudget', 2600, 'memoryBudget', 2000, 'toolResultBudget', 5200, 'reservedOutputBudget', 2048, 'compactAtRatio', 0.7),
@@ -332,7 +332,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
    'ACTIVE', 1),
   ('backend_job', 'Java 后端岗位策略', '针对后端岗位加权基础/并发/中间件证据与追问',
    JSON_OBJECT(
-     'agentOrder', JSON_ARRAY('JDAnalysisAgent','TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
+     'agentOrder', JSON_ARRAY('TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
      'maxAgentCount', 6, 'maxLlmCalls', 13, 'maxIterationsPerAgent', 2,
      'jobFocus', 'java_backend',
      'skillOverrides', JSON_OBJECT('TechAgent', 'java_backend_evaluation'),
@@ -345,7 +345,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
    'ACTIVE', 1),
   ('agent_job', 'AI Agent 岗位策略', '针对 Agent/LLM 岗位加权工程化、评测与落地证据',
    JSON_OBJECT(
-     'agentOrder', JSON_ARRAY('JDAnalysisAgent','TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
+     'agentOrder', JSON_ARRAY('TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
      'maxAgentCount', 6, 'maxLlmCalls', 13, 'maxIterationsPerAgent', 2,
      'jobFocus', 'ai_agent',
      'skillOverrides', JSON_OBJECT('TechAgent', 'ai_agent_job_evaluation'),
@@ -358,7 +358,7 @@ INSERT INTO `policy_bundle` (`policy_id`, `name`, `description`, `config`, `stat
    'ACTIVE', 1),
   ('resume_rewrite', '简历改写策略', '项目改写与整体优化专用：改写轮次与 lint 检查',
    JSON_OBJECT(
-     'agentOrder', JSON_ARRAY('ProjectAgent','ResumeOptimizeAgent'),
+     'agentOrder', JSON_ARRAY('ProjectAgent','ReportAgent'),
      'maxAgentCount', 4, 'maxLlmCalls', 10, 'maxIterationsPerAgent', 2,
      'toolBudget', JSON_OBJECT('maxToolCallsPerRun', 12, 'maxToolCallsPerAgent', 4),
      'contextBudget', JSON_OBJECT('modelWindow', 65536, 'systemBudget', 2000, 'policyBudget', 280, 'skillBudget', 1200, 'recentMessageBudget', 2400, 'memoryBudget', 1200, 'toolResultBudget', 2600, 'reservedOutputBudget', 2600, 'compactAtRatio', 0.78),

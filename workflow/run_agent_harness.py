@@ -72,8 +72,10 @@ def scenario_coordinator_contracts() -> None:
     check("artifact_plan_ends_with_terminal",
           artifact_plan["plan"][-1] in TERMINAL_AGENTS,
           detail=str(artifact_plan["plan"]))
-    check("artifact_plan_contains_parser",
-          "ResumeParserAgent" in artifact_plan["plan"])
+    check("artifact_plan_only_uses_current_agents",
+          set(artifact_plan["plan"]) <= {
+              "TechAgent", "ProjectAgent", "RiskAgent",
+              "EvidenceAgent", "ReportAgent"})
     check("artifact_plan_persists_because",
           bool(artifact_plan.get("selectedBecause")))
     no_project = coordinator.plan_from_artifacts(
@@ -91,7 +93,7 @@ def scenario_coordinator_contracts() -> None:
                                  needs_parse=True)
     final = coordinator._finalize(plan, "gate")
     check("plan_ends_with_terminal", final["plan"][-1] in TERMINAL_AGENTS)
-    check("plan_contains_parser", "ResumeParserAgent" in final["plan"])
+    check("plan_contains_terminal", "ReportAgent" in final["plan"])
     groups = final["parallelGroups"]
     specialists = [g for g in groups if len(g) > 1]
     check("specialists_grouped_parallel", bool(specialists),
@@ -433,8 +435,7 @@ def scenario_revision_artifact_reuse() -> None:
             job_description=request.jobDescription or "",
             artifacts=artifacts)
     check("revision_skips_unaffected_agents",
-          "ResumeParserAgent" not in planned["plan"]
-          and "RiskAgent" not in planned["plan"],
+          "RiskAgent" not in planned["plan"],
           detail=str(planned["plan"]))
 
 

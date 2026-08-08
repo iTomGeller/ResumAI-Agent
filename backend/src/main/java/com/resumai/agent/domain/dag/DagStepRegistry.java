@@ -35,7 +35,7 @@ public final class DagStepRegistry {
 
         public static StepDefinition uploadStep() {
             return new StepDefinition("upload_parse", "upload_parse", null, List.of("task_create"),
-                    "文件已解析", "bootstrap", 1, "上传解析", "ResumeParserAgent / UploadHandler", "BOTH", true);
+                    "文件已解析", "bootstrap", 1, "上传解析", "CoordinatorAgent / UploadHandler", "BOTH", true);
         }
 
         public static StepDefinition parallelLane(String lane, int sortOrder, String businessLabel, String developerLabel) {
@@ -47,21 +47,21 @@ public final class DagStepRegistry {
 
     private static final List<StepDefinition> PIPELINE = List.of(
             StepDefinition.of("task_create", List.of(), "任务已接收", "bootstrap", 0,
-                    "创建评估任务", "OrchestratorAgent / TaskBootstrap", "BOTH"),
+                    "创建评估任务", "CoordinatorAgent / TaskBootstrap", "BOTH"),
             StepDefinition.uploadStep(),
             StepDefinition.of("resume_parse", List.of("upload_parse"), "简历已解析", "parse", 2,
-                    "解析简历基本信息", "ResumeParserAgent / ResumeParserSkill", "BOTH"),
+                    "解析简历基本信息", "DeterministicPreflight / parse_resume", "BOTH"),
             StepDefinition.of("graph_extraction", List.of("resume_parse"), "图谱已抽取", "parse", 3,
-                    "抽取知识图谱", "ResumeGraphAgent / GraphExtraction", "DEV"),
+                    "抽取知识图谱", "DeterministicPreflight / GraphExtraction", "DEV"),
             StepDefinition.of("jd_match", List.of("graph_extraction"), "岗位已匹配", "match", 4,
-                    "自动匹配最合适岗位", "JdMatchAgent / JdMatchSkill", "BOTH"),
+                    "自动匹配最合适岗位", "DeterministicPreflight / JdRagMatch", "BOTH"),
             StepDefinition.parallelLane("tech", 5, "评估技术能力", "TechAgent / TechStackAuditSkill"),
             StepDefinition.parallelLane("project", 6, "评估项目经历", "ProjectAgent / ProjectDepthSkill"),
             StepDefinition.parallelLane("risk", 7, "识别风险信号", "RiskAgent / RiskDetectionSkill"),
             StepDefinition.of("external_enrichment",
                     List.of("skill_eval:tech", "skill_eval:project", "skill_eval:risk"),
                     "外部资料已检索", "evidence", 8,
-                    "检索外部作品", "ExternalProfileAgent / GitHubMCP", "DEV"),
+                    "检索外部作品", "ProjectAgent / PublicEvidenceMCP", "DEV"),
             StepDefinition.of("rag_index",
                     List.of("external_enrichment"),
                     "向量已索引", "evidence", 9,
@@ -69,11 +69,11 @@ public final class DagStepRegistry {
             StepDefinition.of("historical_match",
                     List.of("rag_index"),
                     "历史候选人已匹配", "evidence", 10,
-                    "检索相似候选人", "HistoricalRagAgent / MilvusSearch", "DEV"),
+                    "检索相似候选人", "EvidenceAgent / MilvusSearch", "DEV"),
             StepDefinition.of("jd_requirements",
                     List.of("historical_match"),
                     "JD 需求已结构化", "evidence", 11,
-                    "提取 JD 结构化要求", "JdAnalysisAgent / RequirementExtraction", "DEV"),
+                    "提取 JD 结构化要求", "DeterministicPreflight / RequirementExtraction", "DEV"),
             StepDefinition.of("rag_retrieve",
                     List.of("jd_requirements"),
                     "证据已融合", "evidence", 12,
@@ -81,9 +81,9 @@ public final class DagStepRegistry {
             StepDefinition.of("llm_complete", List.of("rag_retrieve"), "AI 已评估", "evaluate", 13,
                     "AI生成评估报告", "DeepSeekChatModel / ChatCompletion", "BOTH"),
             StepDefinition.of("quality_check", List.of("llm_complete"), "质量已校验", "quality", 14,
-                    "可信度校验", "RagasJudgeAgent / QualityAssurance", "DEV"),
+                    "可信度校验", "EvidenceAgent / QualityAssurance", "DEV"),
             StepDefinition.of("report_generate", List.of("quality_check"), "报告已生成", "report", 15,
-                    "生成评估报告", "FinalReportAgent / ReportAssemblySkill", "BOTH")
+                    "生成评估报告", "ReportAgent / ReportAssembly", "BOTH")
     );
 
     private static final Map<String, StepDefinition> BY_NODE_ID = new LinkedHashMap<>();

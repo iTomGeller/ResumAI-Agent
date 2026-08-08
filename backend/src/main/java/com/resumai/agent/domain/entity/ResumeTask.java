@@ -11,7 +11,7 @@ import lombok.Data;
  * 简历评估任务实体。
  *
  * <p>该实体承载一次完整简历评估任务的生命周期信息，包括文件地址、岗位类别、
- * 执行模式、任务状态和全局 TraceId。后续 OrchestratorAgent 会以该表作为任务编排入口。</p>
+ * 执行模式、任务状态和全局 TraceId。后续 CoordinatorAgent 会以该表作为任务编排入口。</p>
  */
 @Data
 @TableName("resume_task")

@@ -988,10 +988,8 @@ public class MemoryService {
             }
         } else {
             String agent = normalizeAgent(consumerAgent);
-            if (agent.contains("RESUMEPARSER") || agent.contains("CONVERSATION")) {
+            if (agent.contains("CONVERSATION")) {
                 allowed.add("SEMANTIC");
-            } else if (agent.contains("JDANALYSIS") || agent.contains("JDAGENT")) {
-                allowed.addAll(List.of("SEMANTIC", "PROCEDURAL"));
             } else if (agent.contains("POLICY")) {
                 allowed.addAll(List.of("PROCEDURAL", "EPISODIC"));
             } else if (agent.contains("COORDINATOR")) {

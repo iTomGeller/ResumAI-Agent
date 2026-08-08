@@ -51,7 +51,6 @@
   },
   "optionalMcpServers": {},
   "agentToolRouting": {
-    "JDAnalysisAgent": [],
     "TechAgent": [],
     "ProjectAgent": [
       "fetch.fetch",
@@ -64,7 +63,6 @@
       "fetch.fetch"
     ],
     "RiskAgent": [],
-    "ReportAgent": [],
-    "InterviewQuestionAgent": []
+    "ReportAgent": []
   }
 }

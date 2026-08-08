@@ -150,7 +150,7 @@ def draw_vertical_pipeline(path: Path) -> None:
         (10.5, "Reducer merge + replan #1", "replanned=false，继续 dispatch"),
         (8.8, "EvidenceAgent", "逐条校准 supported / unsupported / conflicted"),
         (7.1, "Reducer merge + replan #2", "replanned=false，继续 dispatch"),
-        (5.4, "ReportAgent", "score / risk / question 分段生成后收口"),
+        (5.4, "ReportAgent", "唯一终态 Agent，一次生成完整结构化报告"),
         (3.7, "Reducer merge + replan #3", "replanned=false，最终 replanCount=0"),
         (2.0, "finalize + 业务结果落库", "resume_task + agent_run + PostgreSQL checkpoints"),
     ]
@@ -231,7 +231,7 @@ def draw_call_timeline(invocations: list[dict[str, Any]], path: Path) -> None:
     ax.set_yticks(y, labels)
     ax.invert_yaxis()
     ax.set_xlabel("相对首个 LLM 请求的时间（秒）")
-    ax.set_title("11 次真实 Provider 请求：并行、工具回合与 Report 重试")
+    ax.set_title(f"{len(rows)} 次当前架构 Provider 请求：并行、工具回合与重试")
     ax.grid(axis="x", alpha=0.25)
     for yi, left, duration in zip(y, offsets, durations):
         ax.text(left + duration + 0.5, yi, f"{duration:.1f}s", va="center", fontsize=13)
@@ -697,7 +697,14 @@ def readable_final_agent_prompts(invocations: list[dict[str, Any]]) -> str:
         if purpose is not None:
             candidates = [item for item in candidates if item.get("purpose") == purpose]
         if not candidates:
-            sections.append(f"### {title}\n\n本轮没有匹配的 Provider 请求。")
+            if agent == "ReportAgent":
+                sections.append(
+                    "### ReportAgent 唯一结构化报告配置\n\n"
+                    + _details(
+                        "ReportAgent system message：report-system v7（当前配置）",
+                        _text_fence(_report_prompt_v7())))
+            else:
+                sections.append(f"### {title}\n\n本轮没有匹配的 Provider 请求。")
             continue
         item = candidates[-1]
         request_envelope = parse_envelope(item, "promptFull")
@@ -740,6 +747,34 @@ def _coordinator_prompt_v1() -> str:
     return match.group(1).strip() if match else "未能从 prompts.py 读取 coordinator-system v1。"
 
 
+def _report_prompt_v7() -> str:
+    source = _repository_text("workflow/app/runtime/prompts.py")
+    prompt = re.search(
+        r'PromptVersion\("report-system",\s*"ReportAgent",\s*"v7",\s*"""(.*?)"""\s*\+\s*GROUNDING_RULES\)',
+        source,
+        re.DOTALL,
+    )
+    grounding = re.search(
+        r'GROUNDING_RULES\s*=\s*"""(.*?)"""', source, re.DOTALL)
+    if not prompt:
+        return "未能从 prompts.py 读取 report-system v7。"
+    parts = [prompt.group(1).strip()]
+    if grounding:
+        parts.append(grounding.group(1).strip())
+    return "\n\n".join(parts)
+
+
+def current_architecture_invocations(
+    invocations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Show only the single current Report request alongside Specialist calls."""
+    return [
+        item for item in invocations
+        if item.get("agentRole") != "ReportAgent"
+        or item.get("purpose") == "report"
+    ]
+
+
 def coordinator_prompt_reference_card() -> str:
     """Keep Coordinator visible beside every other Agent prompt.
 
@@ -767,7 +802,7 @@ def coordinator_prompt_reference_card() -> str:
 3. 有GitHub/外部URL：保留公开证据核验能力，具体工具由执行 Agent 自主选择
 4. 有论文/出版物：TechAgent需深入学术评估
 5. 资深候选人（10年+/总监级）：RiskAgent重点关注管理&架构证据
-6. 跨领域转型：增加JDAnalysisAgent权重,评估能力迁移
+6. 跨领域转型：由TechAgent评估能力迁移可行性
 
 关键约束：
 - 不得删除goal artifact的唯一生产者
@@ -1025,7 +1060,8 @@ def make_context_report(audit_dir: Path, font_path: Path) -> Path:
     raw = load_json(audit_dir / "raw_results.json", {})
     if isinstance(raw, list):
         raw = raw[0] if raw else {}
-    invocations = representative.get("invocations") or []
+    raw_invocations = representative.get("invocations") or []
+    invocations = current_architecture_invocations(raw_invocations)
     available, called = tool_inventory(invocations)
     assets = audit_dir / "assets"
     draw_vertical_pipeline(assets / "01_vertical_pipeline.png")
@@ -1055,7 +1091,7 @@ def make_context_report(audit_dir: Path, font_path: Path) -> Path:
         "ProjectAgent": "resumeFacts、project claims、effectiveJd、候选人公开 URL、上轮工具观察",
         "RiskAgent": "resumeFacts、timelineCheck、JD 输入存在性、规则工具 check_timeline 结果",
         "EvidenceAgent": "technicalFindings、projectFindings、risks、MCP evidence 与冲突",
-        "ReportAgent": "全部已合并/校准共享状态；按 score、risk、question 三种 purpose 生成分段",
+        "ReportAgent": "全部已合并/校准共享状态；一次生成完整 finalReport",
     }
     produces = {
         "TechAgent": "technical_findings：技术维度、深度、证据与关键缺口",
@@ -1087,7 +1123,7 @@ def make_context_report(audit_dir: Path, font_path: Path) -> Path:
 ## 1. 先说结论
 
 - 任务最终 `SUCCESS`，E2E **{summary.get('endToEndLatencyMs', {}).get('p50', 0) / 1000:.3f}s**，Runtime **{run.get('runLatencyMs', {}).get('runtime', {}).get('p50', 0) / 1000:.3f}s**。
-- Coordinator 控制面完成确定性规划（本轮 0 次 LLM）；五个 LLM 执行 Agent 全部运行，共 **{metrics.get('invocationCount', 0)}** 次真实 Provider 请求。Prompt / Completion 为 **{run.get('llm', {}).get('promptTokens', 0):,} / {run.get('llm', {}).get('completionTokens', 0):,} tokens**，费用 **¥{run.get('llm', {}).get('costCny', 0):.4f}**。
+- Coordinator 控制面完成确定性规划（本轮 0 次 LLM）；共展示 **{len(invocations)}** 次当前 Provider 请求。
 - `CONTEXT_AUDIT_ENABLED=true` 记录的是**最终发给 Provider 的 messages、tools schema、tool_choice 和真实响应**，不是从模板反推的伪样例；PII 扫描 **{metrics.get('piiLeakCheck', {}).get('phoneMatches', 0)} 个手机号、{metrics.get('piiLeakCheck', {}).get('emailMatches', 0)} 个邮箱命中**。
 - Skill 已是 **Lazy**：5 个 Skill 被路由选中，但只有 Tech 的 1 个和 Project 的 2 个被模型调用 `load_skill` 后加载/应用；Risk/Evidence 本轮选择跳过。
 - 本例没有 `[相关记忆]` 正文进入 Provider 请求，`memoryUsageByType={{}}`。这不是“项目没有 Memory”，而是本轮没有达到注入条件的相关记忆；数据库已有 10,653 条持久化 Memory，不能为了报告伪造一次命中。
@@ -1191,7 +1227,7 @@ Provider 请求里出现过的工具 schema 是“**可以调用**”，响应 `
 
 但是本次代表 Run：
 
-- Context Audit 的 11 次 Provider 请求都没有 `[相关记忆]` section；
+- Context Audit 展示的 Provider 请求都没有 `[相关记忆]` section；
 - `memoryUsageByType` 为空；
 - 因此本报告不展示伪造的 Memory 正文，也不把“库里有数据”等价成“本次注入了数据”。
 
@@ -1230,14 +1266,14 @@ Provider 请求里出现过的工具 schema 是“**可以调用**”，响应 `
 
 注意当前实现会出现两次 `[相关记忆]`：一次由 `_memory_context()` 生成，一次由 `ContextManager.assemble()` 包裹。这是代码现状，不在报告里替它美化。
 
-## 9. 11 次 LLM 调用为什么不是 5 次
+## 9. Provider 调用为什么可能多于 Agent 数
 
 ![真实 Provider 调用时间线](assets/03_provider_call_timeline.png)
 
 - TechAgent：首轮看 Skill 目录，调用 `load_skill`；第二轮带完整 Skill body 输出技术结论，共 2 次。
 - ProjectAgent：Skill 加载 + 外部 URL 工具回合 + 最终结构化提交，共 3 次。
 - RiskAgent / EvidenceAgent：各 1 次；本轮未加载完整 Skill。
-- ReportAgent：score / risk / question 并行分段，其中 score 首次 `finishReason=length` 后重试，所以共 4 次，也是本例 94.625s E2E 的主要长项。
+- ReportAgent：一次生成完整报告；同一 Agent 仍可能因 schema repair/provider retry 产生多个物理 attempt。
 
 ## 10. Context Audit 抓到了一个非常具体的质量问题
 
@@ -1254,11 +1290,11 @@ RiskAgent 的工具观察明确返回 `gaps=[]`，但它的 LLM 响应一度把�
 
 ## 12. LLM 执行 Agent 的 Skill 注入原文：目录态与加载态
 
-以下内容直接从 11 次真实 `system` message 的 `[技能指令]` 区段抽取。相同内容只展示一次，因此可以明确看到 Lazy 加载前后到底多了什么。
+以下内容直接从真实 `system` message 的 `[技能指令]` 区段抽取。相同内容只展示一次，因此可以明确看到 Lazy 加载前后到底多了什么。
 
 {skill_injection_details}
 
-## 13. 11 次真实 Provider 请求与响应全文
+## 13. 当前架构真实 Provider 请求与响应全文
 
 这部分是面试追问用的审计底稿，不再做“摘要代替原文”。每次请求都包含完整 messages、完整 tools schema、tool_choice、模型参数，以及真实响应的 toolCalls/usage。联系方式已经由服务端审计写入前脱敏，并在生成报告时再次扫描。
 

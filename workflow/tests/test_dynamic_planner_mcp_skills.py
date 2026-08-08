@@ -51,11 +51,6 @@ def test_skills_load_from_backend_resources():
 
 def test_skill_selection_is_one_or_two_and_revision_aware():
     manager = SkillManager(resolve_skills_root())
-    parser = manager.select_for(
-        agent_id="ResumeParserAgent", run_type="full_evaluation",
-        job_focus=None, overrides={}, signals={}, user_message="评估简历")
-    assert parser == [], "deterministic parser must not expose conversation Skills"
-
     why = manager.select_for(
         agent_id="ReportAgent", run_type="followup",
         job_focus=None, overrides={},
@@ -69,10 +64,8 @@ def test_skill_selection_is_one_or_two_and_revision_aware():
     assert revision == [], "revision routing is deterministic Java control-plane logic"
 
     for agent_id in (
-            "ResumeParserAgent", "JDAnalysisAgent", "TechAgent",
-            "ProjectAgent", "RiskAgent", "EvidenceAgent",
-            "ReportAgent", "ResumeOptimizeAgent",
-            "InterviewQuestionAgent"):
+            "CoordinatorAgent", "TechAgent", "ProjectAgent",
+            "RiskAgent", "EvidenceAgent", "ReportAgent"):
         selected = manager.select_for(
             agent_id=agent_id, run_type="full_evaluation",
             job_focus=None, overrides={},
@@ -194,11 +187,10 @@ def test_artifact_planner_is_primary_not_task_pipelines():
         resume_text="项目经历\nResumAI\n工作经历\n2022-2024 后端\nhttps://github.com/demo/x",
         job_description="Java Spring")
     assert planned["reason"].startswith("artifact")
-    assert planned["plan"][0] == "ResumeParserAgent"
+    assert planned["plan"][0] in {"TechAgent", "ProjectAgent", "RiskAgent"}
     assert "ProjectAgent" in planned["plan"]
     assert "RiskAgent" in planned["plan"]
-    assert planned["plan"][-1] in {"ReportAgent", "ResumeOptimizeAgent",
-                                   "InterviewQuestionAgent"}
+    assert planned["plan"][-1] == "ReportAgent"
     assert planned.get("selectedBecause")
     assert planned.get("budget") or planned.get("budgetPlan")
 

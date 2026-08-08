@@ -2,8 +2,6 @@ package com.resumai.agent.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.resumai.agent.ai.LlmCallResult;
-import com.resumai.agent.ai.DeepSeekClient;
 import com.resumai.agent.api.JdVersionConflictException;
 import com.resumai.agent.api.dto.JdDetailResponse;
 import com.resumai.agent.api.dto.JdMatchResult;
@@ -52,7 +50,6 @@ public class JdRagService {
 
     private final MilvusEmbeddingStore jdEmbeddingStore;
     private final EmbeddingModel embeddingModel;
-    private final DeepSeekClient deepSeekClient;
     private final JdLibraryMapper jdLibraryMapper;
     private final EmbeddingAvailability embeddingAvailability;
     private final MilvusVectorMaintenanceService vectorMaintenanceService;
@@ -103,13 +100,11 @@ public class JdRagService {
 
     public JdRagService(@Qualifier("jdEmbeddingStore") @org.springframework.lang.Nullable MilvusEmbeddingStore jdEmbeddingStore,
                         EmbeddingModel embeddingModel,
-                        DeepSeekClient deepSeekClient,
                         JdLibraryMapper jdLibraryMapper,
                         EmbeddingAvailability embeddingAvailability,
                         MilvusVectorMaintenanceService vectorMaintenanceService) {
         this.jdEmbeddingStore = jdEmbeddingStore;
         this.embeddingModel = embeddingModel;
-        this.deepSeekClient = deepSeekClient;
         this.jdLibraryMapper = jdLibraryMapper;
         this.embeddingAvailability = embeddingAvailability;
         this.vectorMaintenanceService = vectorMaintenanceService;
@@ -765,34 +760,6 @@ public class JdRagService {
         return checks;
     }
 
-    public record JdRequirementsResult(String text, String llmInvocationId) {}
-
-    public String extractRequirements(String jdText) {
-        return extractRequirements(jdText, null, null).text();
-    }
-
-    public JdRequirementsResult extractRequirements(String jdText, String traceId, String spanId) {
-        if (!StringUtils.hasText(jdText)) {
-            return new JdRequirementsResult("", null);
-        }
-        try {
-            String prompt = """
-                    请从以下岗位描述中提取结构化要求，输出格式：
-                    必要技能：[技能1, 技能2, ...]
-                    经验要求：X年以上
-                    学历要求：本科/硕士/博士
-                    核心职责：[职责1, 职责2, ...]
-                    加分项：[加分项1, 加分项2, ...]
-                    
-                    岗位描述：
-                    %s""".formatted(jdText.length() > 3000 ? jdText.substring(0, 3000) : jdText);
-            LlmCallResult result = deepSeekClient.evaluateResume(prompt, "JdAnalysisAgent", "jd_requirements", traceId, spanId);
-            return new JdRequirementsResult(result.text(), result.llmInvocationId());
-        } catch (Exception e) {
-            log.warn("JD requirement extraction failed: {}", e.getMessage());
-            return new JdRequirementsResult("", null);
-        }
-    }
     public int getIndexedJdCount() {
         try {
             Long count = jdLibraryMapper.selectCount(new LambdaQueryWrapper<JdLibrary>());

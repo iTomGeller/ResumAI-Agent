@@ -27,14 +27,11 @@ GROUNDING_RULES = """证据纪律（必须遵守）：
 _PROMPTS: List[PromptVersion] = [
     PromptVersion("coordinator-system", "CoordinatorAgent", "v1", """你是简历评估系统的 Coordinator。根据用户问题、简历、JD、共享状态和策略预算，决定接下来由哪些专家 Agent 处理。
 可用 Agent 与职责：
-- ResumeParserAgent 简历结构化；JDAnalysisAgent JD 要求提取；TechAgent 技术栈匹配；
-- ProjectAgent 项目深度；RiskAgent 履历/时间线风险；EvidenceAgent 证据核验；
-- ReportAgent 汇总生成回答；ResumeOptimizeAgent 简历改写；InterviewQuestionAgent 面试追问。
+- TechAgent 技术栈与能力迁移评估；ProjectAgent 项目深度；
+- RiskAgent 履历/时间线风险；EvidenceAgent 证据核验；
+- ReportAgent 是唯一终态 Agent，生成一次完整结构化结果。
+简历解析和 JD 召回/归一化由 Runtime 确定性 preflight 完成，不是可选 Agent。
 只选真正需要的 Agent，不为了数量凑齐。输出 JSON：{"plan": ["AgentA", ...], "reason": "简述"}"""),
-    PromptVersion("resume-parser-system", "ResumeParserAgent", "v1", """你是简历解析专家。基于 parse_resume 工具的结构化结果和原文，产出简历事实（resumeFacts）：技能清单、项目列表（名称/职责/技术）、工作经历（公司/时间）、教育、量化成果。
-""" + GROUNDING_RULES),
-    PromptVersion("jd-analysis-system", "JDAnalysisAgent", "v2", """你是岗位需求分析专家。从 JD 中提取硬性要求、加分项、技术关键词、岗位级别与类别；若用户没有提供 JD，Runtime 会在生成前从 JD 库检索并把候选岗位放入 [RAG上下文] 和共享状态。必须明确区分“用户提供的 JD”和“JD 库召回结果”。你不负责发起 RAG 调用。
-""" + GROUNDING_RULES),
     PromptVersion("tech-system", "TechAgent", "v3", """你是技术能力评估专家。逐项对照 JD 要求与简历证据：技能是否有项目支撑、只出现在技能栏还是有实践、深度信号（原理/调优/规模）。
 
 工具使用策略：
@@ -105,10 +102,6 @@ _PROMPTS: List[PromptVersion] = [
 8. 无法评估的维度 status=UNASSESSED, score=null。
 9. mcpEvidence 中成功的来源回执优先于并行 Specialist 对网络状态的猜测。必须区分“页面内容已取回”与“作者身份/候选人贡献未验证”，禁止把后者误写成“链接无法抓取”。
 """ + GROUNDING_RULES),
-    PromptVersion("resume-optimize-system", "ResumeOptimizeAgent", "v1", """你是简历改写专家。改写必须保持事实不变：不发明数字、不改变时间线、不虚构职责。改写后用 resume_lint 自查，输出改写前后对照及改动理由。
-""" + GROUNDING_RULES),
-    PromptVersion("interview-question-system", "InterviewQuestionAgent", "v1", """你是面试官助手。基于风险点、证据缺口和项目模糊点生成针对性追问：每题标注考察点、期望的好答案信号、追问动机（来自哪个结论/风险）。
-""" + GROUNDING_RULES),
     PromptVersion("compaction-system", "_context", "v1",
                   "你负责压缩对话历史为结构化摘要，保留：用户目标、已确认事实、未解决问题、最近修改要求。"),
 ]
@@ -147,15 +140,11 @@ class PromptManager:
 
     _AGENT_MAP = {
         "CoordinatorAgent": "coordinator-system",
-        "ResumeParserAgent": "resume-parser-system",
-        "JDAnalysisAgent": "jd-analysis-system",
         "TechAgent": "tech-system",
         "ProjectAgent": "project-system",
         "RiskAgent": "risk-system",
         "EvidenceAgent": "evidence-system",
         "ReportAgent": "report-system",
-        "ResumeOptimizeAgent": "resume-optimize-system",
-        "InterviewQuestionAgent": "interview-question-system",
     }
 
     def for_agent(self, agent_id: str, version: Optional[str] = None) -> PromptVersion:

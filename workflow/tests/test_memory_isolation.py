@@ -138,10 +138,10 @@ def test_canonical_taxonomy_and_agent_routes_are_diverse():
     assert canonical_taxonomy("CONVERSATION") == "WORKING"
     assert canonical_taxonomy("FAILURE") == "EPISODIC"
 
-    parser = allowed_types_for("ResumeParserAgent")
+    tech = allowed_types_for("TechAgent")
     report = allowed_types_for("ReportAgent")
-    assert parser == frozenset({"SEMANTIC", "WORKING"})
-    assert "EPISODIC" in report and "WORKING" not in report
+    assert tech == frozenset({"SEMANTIC", "EPISODIC", "PROCEDURAL"})
+    assert report == tech
 
 
 def test_usage_decision_has_taxonomy_namespace_reason_and_real_time():
@@ -155,14 +155,14 @@ def test_usage_decision_has_taxonomy_namespace_reason_and_real_time():
         "occurredAt": "2020-01-01T00:00:00Z",
     }]
     rows = decisions_from_hits(
-        used, [], "ResumeParserAgent", round_id="run:parser:round:1")
+        used, [], "TechAgent", round_id="run:tech:round:1")
     assert len(rows) == 1
     assert rows[0].taxonomy == "SEMANTIC"
     assert rows[0].memoryType == "SEMANTIC"
     assert rows[0].namespace == "conversation/abc123"
     assert rows[0].reason == "query_intent:SEMANTIC"
     assert rows[0].occurredAt and rows[0].occurredAt.endswith("Z")
-    assert rows[0].roundId == "run:parser:round:1"
+    assert rows[0].roundId == "run:tech:round:1"
     assert rows[0].occurredAt != used[0]["occurredAt"]
 
 
@@ -176,8 +176,9 @@ def test_working_memory_is_not_injected_into_report_agent():
          "ownerScope": "CONVERSATION", "source": "evaluation_result",
          "content": "prior successful evaluation"},
     ]
-    parser_used, _ = filter_hits_for_consumer(hits, "ResumeParserAgent")
+    tech_used, tech_ignored = filter_hits_for_consumer(hits, "TechAgent")
     report_used, report_ignored = filter_hits_for_consumer(hits, "ReportAgent")
-    assert {h["memoryId"] for h in parser_used} == {"work-1", "fact-1"}
+    assert {h["memoryId"] for h in tech_used} == {"fact-1", "episode-1"}
+    assert any(h["memoryId"] == "work-1" for h in tech_ignored)
     assert {h["memoryId"] for h in report_used} == {"fact-1", "episode-1"}
     assert any(h["memoryId"] == "work-1" for h in report_ignored)

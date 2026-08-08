@@ -447,17 +447,14 @@ ReportAgent 与前面的 Specialist 不同：provider function schema 先约束�
 
 这个读视图在 `SharedState.view_for(agent_id)` 中按 Agent 白名单裁剪；每个 Agent 看不到其他 Agent 的隐藏思考，只能看到已经写入共享黑板的结构化产物。
 
-### 1.2 代码中其余 Agent 为什么没有出现在压测主链路
+### 1.2 Coordinator 与确定性 preflight 为什么不在 Specialist 调用表
 
 | Agent | 作用 | 最新100份中的实际情况 |
 |---|---|---|
 | CoordinatorAgent | 根据 runType、目标产物、现有产物和简历信号生成计划；执行后可动态 Replan | 全量评估走确定性的 artifact backward-chain，不额外花一次 Coordinator LLM；真实 `agent.selected` 事件仍由它产生 |
-| ResumeParserAgent | 把简历解析成结构化事实 | 上传入口先由 Coordinator 调用确定性 `parse_resume`；解析质量足够时跳过 Parser LLM |
-| JDAnalysisAgent | 提取/归一化 JD 要求 | 用户 JD 或 `jd_match_search` 已在 preflight 形成 `effectiveJd/jdMatches` 时走确定性 fast path |
-| ResumeOptimizeAgent | 在不改变事实的前提下改写简历 | 只在 `resume_optimize/project_rewrite` 路由中使用，不属于本次完整评估 |
-| InterviewQuestionAgent | 风险专项场景生成追问 | 只在 `interview_questions` 路由中作为 terminal；完整评估的题目由 ReportAgent 的 question section 生成 |
+| deterministic preflight（不是 Agent） | `parse_resume` 生成 `resumeFacts/parsedResume`；JD 召回与归一化生成 `jdMatches/effectiveJd/jdRequirements` | 在 Agent dispatch 前完成，不产生额外 Agent 身份或 Agent LLM 调用 |
 
-因此，“系统里定义了十个 Agent”不等于“一份简历固定调用十次 LLM”。最新批次的常见路由只有四种：
+因此，当前系统只有六个业务 Agent：一个 Coordinator 控制面、四个 Specialist/校准 Agent和一个唯一 Report terminal。一份完整评估通常执行后五个 LLM Agent，Coordinator 的确定性规划不等于 Provider 调用。最新批次的常见路由只有四种：
 
 | 路由 | Run 数 |
 |---|---:|
@@ -744,7 +741,7 @@ Tech、Project、Risk、Evidence 的 system 尾部会附加：
 | RAG 上下文 | 有：Tech 的简历/知识库召回、Project 的简历召回 | `[RAG上下文]`，属于 `messages[1].content`；不是工具结果 |
 | 内部工具结果 | 有：例如 Tech 的 coverage、Project 的 locate_evidence | `[工具观察]`，属于 `messages[1].content` |
 | 公网MCP | **Tech没有**；Project/Evidence有fetch/Exa路由 | Provider请求顶层`tools[]`，不在任何Prompt文本中 |
-| 结构化收口工具 | 有：Specialist为`emit_decision`，Report section为`emit_report_section` | Provider请求顶层`tools[]`与`tool_choice` |
+| 结构化收口工具 | 有：Specialist 与唯一 ReportAgent 都通过强制 terminal schema 提交结构化输出 | Provider请求顶层`tools[]`与`tool_choice` |
 
 为什么这个 Case 没有历史对话：上传入口的 `ensureTaskConversation()` 新建 Session 时只写入简历和JD，不创建 `ConversationMessage`；随后 `buildRuntimePayload()` 查询消息表，首次评估得到空列表。`ContextManager.assemble()` 只有在字段非空时才追加 `[当前目标]`、`[会话摘要]` 和 `[近期消息]`。因此，**文档应该明确写“空”，但不能为了看起来完整而虚构一段历史对话。**
 
@@ -1204,17 +1201,13 @@ retrieve-public-candidate-evidence
 
 这才是“每个Agent的Prompt”在当前工程里的完整含义：**基础模板只是第一层；候选人数据在user共享状态，Skill在system附加块，MCP在provider tools字段，工具回执再进入后续user工具观察。**
 
-### 2.5 其余 Agent 的基础角色模板
+### 2.5 CoordinatorAgent 的基础角色模板
 
 | Agent | Prompt ID / 版本 | 真实 Prompt 核心内容 | 本次是否调用 LLM |
 |---|---|---|---|
 | CoordinatorAgent | `coordinator-system v1` | 根据问题、简历、JD、共享状态和预算选择真正需要的 Agent；输出 `{plan, reason}` | 否；完整评估直接使用 artifact planner |
-| ResumeParserAgent | `resume-parser-system v1` | 基于 `parse_resume` 与原文产出技能、项目、经历、教育、量化成果 | 否；确定性解析 fast path |
-| JDAnalysisAgent | `jd-analysis-system v1` | 提取硬性要求、加分项、技术关键词、级别；无 JD 时使用 JD 检索并标注来源 | 否；preflight/fast path |
-| ResumeOptimizeAgent | `resume-optimize-system v1` | 不发明数字、不改时间线、不虚构职责；改写后用 `resume_lint` 自检 | 未进入本批路由 |
-| InterviewQuestionAgent | `interview-question-system v1` | 基于风险、证据缺口、项目模糊点生成带考察点和好/坏信号的追问 | 未进入本批路由 |
 
-这些 Agent 的逐字 system prompt 如下；带 `GROUNDING_RULES` 的 Agent 会在正文后继续拼接同一套四条“证据纪律”。
+Coordinator 的逐字 system prompt 如下。简历解析与 JD 归一化是 Runtime preflight，因此不存在也不应展示对应 Agent Prompt。
 
 <details>
 <summary>CoordinatorAgent — coordinator-system v1</summary>
@@ -1222,75 +1215,14 @@ retrieve-public-candidate-evidence
 ```text
 你是简历评估系统的 Coordinator。根据用户问题、简历、JD、共享状态和策略预算，决定接下来由哪些专家 Agent 处理。
 可用 Agent 与职责：
-- ResumeParserAgent 简历结构化；JDAnalysisAgent JD 要求提取；TechAgent 技术栈匹配；
-- ProjectAgent 项目深度；RiskAgent 履历/时间线风险；EvidenceAgent 证据核验；
-- ReportAgent 汇总生成回答；ResumeOptimizeAgent 简历改写；InterviewQuestionAgent 面试追问。
+- TechAgent 技术栈与能力迁移评估；ProjectAgent 项目深度；
+- RiskAgent 履历/时间线风险；EvidenceAgent 证据核验；
+- ReportAgent 是唯一终态 Agent，生成一次完整结构化结果。
+简历解析和 JD 召回/归一化由 Runtime 确定性 preflight 完成，不是可选 Agent。
 只选真正需要的 Agent，不为了数量凑齐。输出 JSON：{"plan": ["AgentA", ...], "reason": "简述"}
 ```
 
 </details>
-
-<details>
-<summary>ResumeParserAgent — resume-parser-system v1</summary>
-
-```text
-你是简历解析专家。基于 parse_resume 工具的结构化结果和原文，产出简历事实（resumeFacts）：技能清单、项目列表（名称/职责/技术）、工作经历（公司/时间）、教育、量化成果。
-
-证据纪律（必须遵守）：
-1. 每条核心结论必须给出来源：简历原文行、JD 条目、工具结果或记忆条目。
-2. 不允许编造数字、项目、公司或技能；无法核实就明确写"无法核实"。
-3. 工具失败时报告失败，不得用猜测填补。
-4. 输出必须是合法 JSON，遵循给定 schema，不要输出多余文本。
-```
-
-</details>
-
-<details>
-<summary>JDAnalysisAgent — jd-analysis-system v1</summary>
-
-```text
-你是岗位需求分析专家。从 JD 中提取硬性要求、加分项、技术关键词、岗位级别与类别；若没有提供 JD，使用 jd_match_search 检索最接近的岗位并明确标注这是检索结果而非用户提供。
-
-证据纪律（必须遵守）：
-1. 每条核心结论必须给出来源：简历原文行、JD 条目、工具结果或记忆条目。
-2. 不允许编造数字、项目、公司或技能；无法核实就明确写"无法核实"。
-3. 工具失败时报告失败，不得用猜测填补。
-4. 输出必须是合法 JSON，遵循给定 schema，不要输出多余文本。
-```
-
-</details>
-
-<details>
-<summary>ResumeOptimizeAgent — resume-optimize-system v1</summary>
-
-```text
-你是简历改写专家。改写必须保持事实不变：不发明数字、不改变时间线、不虚构职责。改写后用 resume_lint 自查，输出改写前后对照及改动理由。
-
-证据纪律（必须遵守）：
-1. 每条核心结论必须给出来源：简历原文行、JD 条目、工具结果或记忆条目。
-2. 不允许编造数字、项目、公司或技能；无法核实就明确写"无法核实"。
-3. 工具失败时报告失败，不得用猜测填补。
-4. 输出必须是合法 JSON，遵循给定 schema，不要输出多余文本。
-```
-
-</details>
-
-<details>
-<summary>InterviewQuestionAgent — interview-question-system v1</summary>
-
-```text
-你是面试官助手。基于风险点、证据缺口和项目模糊点生成针对性追问：每题标注考察点、期望的好答案信号、追问动机（来自哪个结论/风险）。
-
-证据纪律（必须遵守）：
-1. 每条核心结论必须给出来源：简历原文行、JD 条目、工具结果或记忆条目。
-2. 不允许编造数字、项目、公司或技能；无法核实就明确写"无法核实"。
-3. 工具失败时报告失败，不得用猜测填补。
-4. 输出必须是合法 JSON，遵循给定 schema，不要输出多余文本。
-```
-
-</details>
-
-它们与主链路 Prompt 使用同一个策略块、上下文拼接器和输出约束。
 
 ### 2.6 代表 Run 的可核对模型输入证据
 
@@ -1310,13 +1242,13 @@ Python Workflow 的调用没有把 `prompt_full` 写入 Java 的 `llm_invocation
 | `messages[0].content` | Tech v3 基础模板 + balanced策略 + `assess-technical-evidence@v1#435f01775ae0`全文 + Specialist输出契约 | 第2.4.2节，已全文展开 |
 | `messages[1].content` | 固定上传请求 + 1条EPISODIC/2条PROCEDURAL Memory + `senior_backend_004`的简历事实和真实JD + 三个pre-step工具回执 | 第2.4.3节，候选人PII已脱敏 |
 | `tools` | Agent内部工具、实时健康的MCP function schema、terminal function；不是文本Prompt | `fetch_fetch`完整schema见第2.4.4节；各Agent目录见第2.4.5节 |
-| `tool_choice` | 普通action轮为`auto`；收口轮强制`emit_decision`，Report section强制`emit_report_section` | 第2.4.4、2.4.5节 |
+| `tool_choice` | 普通 action 轮为 `auto`；收口轮强制 terminal function，ReportAgent 一次提交完整报告 | 第2.4.4、2.4.5节 |
 
 这张表用于标明物理边界，不再重复一份带尖括号占位符的“伪Prompt”。第2.4.2和2.4.3才是本Case的脱敏重建正文。
 
 注意代码当前会出现两次连续的 `[相关记忆]`：`_memory_context()` 自己生成一次标题，`ContextManager.assemble()` 外面又包一次。语义无损，但这是实际形状，不应在面试中说成“精心设计的双层标签”。
 
-代表 Run 每次实际请求如下：
+代表 Run 的 Specialist 请求如下：
 
 | Agent/section | 模型 | messages | Memory | Skill正文 | tools schema | Prompt token | Cache-hit token | 单次命中率 | LLM耗时 |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -1324,24 +1256,8 @@ Python Workflow 的调用没有把 `prompt_full` 写入 Java 的 `llm_invocation
 | RiskAgent | deepseek-v4-flash | 3 | 3 | 1 | 1 | 4,010 | 1,664 | 41.50% | 16.11s |
 | TechAgent | deepseek-v4-flash | 2 | 3 | 1 | 1 | 4,991 | 1,536 | 30.78% | 17.25s |
 | EvidenceAgent | deepseek-v4-flash | 3 | 3 | 1 | 1 | 5,463 | 1,792 | 32.80% | 10.45s |
-| Report / risk | deepseek-v4-flash | 3 | 3 | 0 | 1 | 5,970 | 1,024 | 17.15% | 11.27s |
-| Report / question | deepseek-v4-flash | 3 | 3 | 0 | 1 | 6,056 | 1,024 | 16.91% | 24.22s |
-| Report / score | deepseek-v4-pro | 3 | 3 | 0 | 1 | 6,078 | 1,024 | 16.85% | 24.80s |
 
-这也解释了为什么“5 个 Agent”不等于“5 次 LLM”：该 Run 是 4 个 Specialist 调用加 3 个 Report section，共 7 次，累计 Prompt 37,332 token、Completion 11,063 token、Cache-hit 10,624 token，Runtime 54.15s，成本 ¥0.0499。
-
-Report 三个额外 user message 的任务分别是：
-
-```text
-score: 只生成技术能力、项目深度、JD匹配、履历可信度四维评分总览；
-       输出 summary、recommendation、dataQuality、strengths；不得生成风险和面试题。
-
-risk:  只生成4-6条候选人风险和4-8条 missingEvidence；
-       每条必须有影响、核验方式和证据；不得生成评分和面试题。
-
-question: 只生成4-8条结构化面试追问；覆盖 HIGH 风险、JD缺口、项目深度和量化成果；
-          每题必须包含目的、触发依据、好信号、红旗、追问和证据。
-```
+`ReportAgent` 读取全部已 merge/校准产物，一次生成评分、风险、建议、面试追问和缺失证据组成的完整 `finalReport`。
 
 ---
 
@@ -1411,7 +1327,7 @@ allowedTools: （未声明）
 
 - 代表 ProjectAgent 首轮实际 `toolCatalogCount=4`：`fetch_fetch`、`exa_web_fetch_exa`、`exa_web_search_exa`、`emit_decision`。成功的内部pre-step已作为`[工具观察]`写入user message，因此不会重复出现在该轮tools目录；两个Skill已eager，也不存在`load_skill`。
 - EvidenceAgent 虽然发现过 `fetch.fetch` catalog，但该轮 action quota 已收口，真正进入 LLM 请求的只有强制 `emit_decision`，所以 `toolCatalogCount=1`。
-- Report 的三次请求各只有一个强制 `emit_report_section`。
+- ReportAgent 只有一个完整报告请求，并通过强制 terminal schema 提交结果。
 
 最新100份的公网 MCP 结果必须按“工具调用完成”和“取得有效内容”分开：
 
@@ -1531,8 +1447,7 @@ Replan 检查：replanned=false，nextGroupIndex=1
         ↓
 group 2 / token=2：Evidence 9.377s → merge → Replan=false
         ↓
-group 3 / token=3：Report 18.056s
-    Report 内部又并行生成 score / risk / question
+group 3 / token=3：唯一 ReportAgent 生成完整结构化报告
         ↓
 merge → Replan=false → MemoryService → finalize
 ```
@@ -1708,7 +1623,7 @@ runtimeSnapshot：该 Agent 完成时看到的预算、Tool ledger、Guard 等 R
 
 这是当前实现最重要的粒度边界。`_run_agent()` 内部的 pre-step、`load_skill`、MCP、Provider 多轮调用都不是独立 LangGraph 节点。只要整个 `_agent_node` 还没有返回，就没有可复用的 Agent pending write。
 
-例如 ReportAgent 内部并行生成 score/risk/question：如果 score 和 risk 已返回、question 尚未返回时 Python 进程崩溃，LangGraph 只知道“ReportAgent 节点未完成”，不会从 question 那一小步继续，而会重新进入 ReportAgent。原有 Provider 调用仍在 Context Audit 中，但不等于可恢复的执行状态。
+例如唯一 ReportAgent 已发出 Provider 请求、但 `_agent_node` 尚未返回时 Python 进程崩溃，LangGraph 只知道“ReportAgent 节点未完成”，不会从模型调用内部继续，而会重新进入整个 ReportAgent 节点。先前 Provider attempt 仍可能留在 Context Audit 中，但不等于可恢复的执行状态。
 
 Tool 也是同样粒度：
 
@@ -2138,7 +2053,7 @@ Project 最高，是因为固定首轮消息不再被工具结果反复重写，
 
 ### 不应该说的内容
 
-- 不要说“一份简历固定跑十个 Agent”；最新主要是四到五个 Specialist/terminal，Parser/JD 常走 fast path。
+- 不要说“一份简历固定跑十个 Agent”；当前业务定义只有六个 Agent，完整评估通常是 Coordinator 确定性控制面加五个 LLM 执行 Agent，parse/JD 是 preflight。
 - 不要说“Coordinator 每次都用 LLM 规划”；完整评估现在是确定性 artifact planner。
 - 不要说“54次 fetch 全部成功”；只有4次取得内容。
 - 不要说“Memory 命中率 100%”；read hit rate 是39.5%，1,240是多 Agent 消费记录。

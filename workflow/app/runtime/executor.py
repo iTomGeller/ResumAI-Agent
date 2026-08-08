@@ -1503,8 +1503,6 @@ class RunExecutor:
             "EvidenceAgent": {"evidence_ledger"},
             "TechAgent": {"technical_findings"},
             "RiskAgent": {"risks"},
-            "JDAnalysisAgent": {"jd_requirements"},
-            "ResumeParserAgent": {"resume_facts", "parsed_resume"},
             "ReportAgent": {"final_report"},
         }
         attempted = set()
@@ -1793,26 +1791,6 @@ class RunExecutor:
         # same observations duplicated at its tail destroys DeepSeek's exact
         # prefix reuse and wastes prompt tokens on every Project action turn.
         initial_tool_results_block = tool_results_block
-
-        # Performance fast-path: high-quality deterministic parse → skip LLM.
-        if definition.agent_id == "ResumeParserAgent":
-            fast = self._maybe_skip_parser_llm(tool_results_block)
-            if fast is not None:
-                self.skill_selections[agent_id] = []
-                self.agent_counters[definition.agent_id] = {
-                    "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
-                    "fastPath": 1}
-                return fast
-
-        # Performance fast-path: JD short/provided → skip LLM.
-        if definition.agent_id == "JDAnalysisAgent":
-            fast = self._maybe_skip_jd_llm()
-            if fast is not None:
-                self.skill_selections[agent_id] = []
-                self.agent_counters[definition.agent_id] = {
-                    "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
-                    "fastPath": 1}
-                return fast
 
         # Performance fast-path: Evidence verify clean → skip arbitration LLM.
         if definition.agent_id == "EvidenceAgent":
@@ -3906,27 +3884,6 @@ class RunExecutor:
             "confidence": float(parsed.get("confidence") or 0.8),
         }
 
-    def _maybe_skip_parser_llm(self, tool_results_block: str) -> Optional[AgentOutput]:
-        facts = self.state.data.get("artifacts", {}).get("resumeFacts")
-        if not isinstance(facts, dict):
-            return None
-        if facts.get("source") not in ("parse_resume_fast_path", "raw_text_fallback"):
-            return None
-        summary = (f"确定性解析完成：技能 {len(facts.get('skills') or [])}、"
-                   f"项目 {len(facts.get('projects') or [])}、"
-                   f"经历 {len(facts.get('experiences') or [])}")
-        return AgentOutput(
-            agentId="ResumeParserAgent",
-            type="resume_facts",
-            claims=[{"text": summary, "confidence": facts.get("confidence", 0.8)}],
-            artifacts={"resumeFacts": facts},
-            evidence=[],
-            confidence=float(facts.get("confidence") or 0.8),
-            source="tools",
-            dependencies=[],
-            requestedNextAction=None,
-            summary=summary[:500])
-
     def _extract_candidate_urls(self, resume_text: str) -> List[str]:
         """Extract verifiable candidate URLs from resume (GitHub, LinkedIn, blog, portfolio)."""
         import re as _re
@@ -4117,15 +4074,15 @@ class RunExecutor:
             requestedNextAction=None,
             summary=summary[:500])
 
-    def _maybe_skip_jd_llm(self) -> Optional[AgentOutput]:
-        """Skip JDAnalysis LLM when JD is short text provided directly."""
+    def _prepare_jd_requirements(self) -> None:
+        """Deterministically normalize the one effective JD during preflight."""
         jd = (self.request.jobDescription or "").strip()
         effective = self.state.artifact("effectiveJd")
         if isinstance(effective, str) and effective.strip():
             jd = effective.strip()
-        if not jd or len(jd) > 800:
-            return None
-        requirements = {"rawJd": jd, "source": "direct_text_fast_path"}
+        if not jd:
+            return
+        requirements = {"rawJd": jd, "source": "deterministic_preflight"}
         lines = [l.strip() for l in jd.replace("；", "\n").replace("、", "\n").split("\n") if l.strip()]
         must_have = [l for l in lines if any(k in l for k in ("要求", "必须", "精通", "熟悉", "年以上", "经验"))]
         nice_to_have = [l for l in lines if l not in must_have and len(l) > 4]
@@ -4133,18 +4090,6 @@ class RunExecutor:
         requirements["niceToHave"] = nice_to_have[:8]
         requirements["title"] = lines[0] if lines else ""
         self.state.put_artifact("jdRequirements", requirements)
-        summary = f"JD 确定性提取完成：{len(must_have)} 必需 + {len(nice_to_have)} 优选"
-        return AgentOutput(
-            agentId="JDAnalysisAgent",
-            type="jd_requirements",
-            claims=[{"text": summary, "confidence": 0.8}],
-            artifacts={"jdRequirements": requirements},
-            evidence=[],
-            confidence=0.8,
-            source="tools",
-            dependencies=[],
-            requestedNextAction=None,
-            summary=summary)
 
     @staticmethod
     def render_report(report: Dict[str, Any]) -> str:
@@ -4611,6 +4556,9 @@ class RunExecutor:
             await self._record_retrieval(
                 "CoordinatorAgent", retrieval, requested_k=3)
 
+        # JD normalization is preflight data preparation, not an Agent turn.
+        self._prepare_jd_requirements()
+
         # Refresh presence after JD match may have landed.
         arts = self.state.artifacts()
         self.state.set_input_presence(
@@ -4623,11 +4571,7 @@ class RunExecutor:
         resume = request.resumeText or ""
         artifacts = self.state.artifacts()
         steps: List[tuple] = []
-        parsed_already = "parsedResume" in artifacts and bool(artifacts.get("parsedResume"))
-        # ResumeParserAgent: skip re-parse when preflight already populated facts.
-        if definition.agent_id == "ResumeParserAgent" and resume and not parsed_already:
-            steps.append(("parse_resume", {"resumeText": resume}))
-        elif definition.agent_id == "ProjectAgent" and resume:
+        if definition.agent_id == "ProjectAgent" and resume:
             # Gather cheap internal project evidence before the model turn.
             # Otherwise the model predictably spends its first action turn on
             # these two builtins and cannot progress from Skill activation to
@@ -4679,8 +4623,6 @@ class RunExecutor:
                                "claims": claims,
                                "externalEvidence": list(
                                    artifacts.get("mcpEvidence") or [])}))
-        elif definition.agent_id == "ResumeOptimizeAgent" and resume:
-            steps.append(("resume_lint", {"resumeText": resume}))
         return steps
 
     def _rag_steps(self, definition: AgentDefinition) -> List[Dict[str, Any]]:
@@ -4691,9 +4633,6 @@ class RunExecutor:
         effective_jd = str(
             artifacts.get("effectiveJd") or request.jobDescription or "")
         steps: List[Dict[str, Any]] = []
-        if definition.agent_id == "JDAnalysisAgent" and resume \
-                and not artifacts.get("jdMatches"):
-            steps.append({"source": "jd", "resume_text": resume, "top_k": 3})
         if definition.agent_id == "ProjectAgent" and resume:
             query = self._build_project_search_query(resume, artifacts)
             if query:
@@ -4733,26 +4672,6 @@ class RunExecutor:
     ) -> Tuple[str, List[Dict[str, Any]]]:
         blocks: List[str] = []
         refs: List[Dict[str, Any]] = []
-        artifacts = self.state.artifacts()
-        if definition.agent_id == "JDAnalysisAgent" \
-                and artifacts.get("jdMatches"):
-            retrieval_id = f"rag-state-{uuid.uuid4().hex[:12]}"
-            payload = {
-                "items": artifacts.get("jdMatches"),
-                "effectiveJd": artifacts.get("effectiveJd"),
-                "source": "preflight_jd_retrieval",
-            }
-            blocks.append(
-                f"[来源=jd retrievalId={retrieval_id}]\n"
-                + json.dumps(
-                    payload, ensure_ascii=False, separators=(",", ":"))[:6000])
-            refs.append({
-                "retrievalId": retrieval_id,
-                "source": "jd",
-                "query": "resume_to_jd_catalog",
-                "status": "REUSED_PREFLIGHT",
-                "durationMs": 0,
-            })
         for step in self._rag_steps(definition):
             source = str(step.pop("source"))
             retrieval = await self.retriever.retrieve(source, **step)
@@ -4992,10 +4911,10 @@ class RunExecutor:
                 "RISK_TIMELINE",
                 "履历风险场景保留 RiskAgent，并将时间线结论交给 EvidenceAgent 或 ReportAgent 复核。",
             )
-        if {"JDAnalysisAgent", "TechAgent"} <= selected:
+        if "TechAgent" in selected:
             return (
                 "JD_TECH",
-                "JD 技术匹配场景先结构化岗位要求，再由 TechAgent 逐项核对证据。",
+                "JD 由确定性 preflight 归一化，再由 TechAgent 逐项核对证据。",
             )
         return (
             "BASELINE",

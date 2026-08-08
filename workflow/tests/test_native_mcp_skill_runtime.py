@@ -1750,8 +1750,8 @@ def test_coordinator_order_helper_and_revision_reuse_contract():
         "ProjectAgent", "TechAgent", "ReportAgent"])
     assert ordered == ["TechAgent", "ProjectAgent", "ReportAgent"]
     full_plan = [
-        "ResumeParserAgent", "JDAnalysisAgent", "TechAgent",
-        "ProjectAgent", "RiskAgent", "EvidenceAgent", "ReportAgent"]
+        "TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent",
+        "ReportAgent"]
     rich_budget = coordinator._budget_plan(
         full_plan, "ReportAgent", signals={
             "is_rich_resume": True,
@@ -1821,11 +1821,12 @@ def test_coordinator_order_helper_and_revision_reuse_contract():
         resume_text=request.resumeText or "",
         job_description=request.jobDescription or "",
         artifacts=artifacts)
-    assert "ResumeParserAgent" not in planned["plan"]
+    assert set(planned["plan"]) <= {
+        "TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent",
+        "ReportAgent"}
     assert "RiskAgent" not in planned["plan"]
     for affected_agent in (
-            "JDAnalysisAgent", "TechAgent", "ProjectAgent",
-            "EvidenceAgent", "ReportAgent"):
+            "TechAgent", "ProjectAgent", "EvidenceAgent", "ReportAgent"):
         assert affected_agent in planned["plan"]
 
 
@@ -1879,10 +1880,9 @@ def test_memory_writeback_learns_candidate_free_procedure_from_actual_run():
         request, NullEmitter(), memory=memory,
         builtin_tools=BuiltinToolRegistry(), llm=_NativeMcpLlm())
     executor.executed = [
-        "JDAnalysisAgent", "TechAgent", "ProjectAgent",
-        "EvidenceAgent", "ReportAgent"]
+        "TechAgent", "ProjectAgent", "EvidenceAgent", "ReportAgent"]
     executor.agent_timings = {
-        "JDAnalysisAgent": 100, "TechAgent": 200, "ProjectAgent": 300,
+        "TechAgent": 200, "ProjectAgent": 300,
         "EvidenceAgent": 100, "ReportAgent": 200}
     executor.agent_counters = {
         "TechAgent": {"llmCalls": 2, "toolCalls": 1},
@@ -2525,7 +2525,7 @@ def test_jd_match_search_emits_rank_and_latency_telemetry():
     }
 
     run(executor._record_tool_success(
-        "JDAnalysisAgent", "jd_match_search",
+        "CoordinatorAgent", "jd_match_search",
         {"resumeText": request.resumeText, "topK": 3}, result,
         tool_call_id="tc-jd-rag"))
 

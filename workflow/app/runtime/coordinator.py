@@ -12,22 +12,22 @@ logger = logging.getLogger(__name__)
 
 # Safety fallback only — used when artifact planner AND LLM refinement both fail.
 TASK_PIPELINES: Dict[str, List[str]] = {
-    "full_evaluation": ["JDAnalysisAgent", "TechAgent", "ProjectAgent",
+    "full_evaluation": ["TechAgent", "ProjectAgent",
                         "RiskAgent", "EvidenceAgent", "ReportAgent"],
-    "jd_evaluation": ["JDAnalysisAgent", "TechAgent", "ProjectAgent",
+    "jd_evaluation": ["TechAgent", "ProjectAgent",
                       "RiskAgent", "EvidenceAgent", "ReportAgent"],
     "tech_match": ["TechAgent", "EvidenceAgent", "ReportAgent"],
     "project_analysis": ["ProjectAgent", "EvidenceAgent", "ReportAgent"],
     "risk_check": ["RiskAgent", "EvidenceAgent", "ReportAgent"],
     "timeline_check": ["RiskAgent", "EvidenceAgent", "ReportAgent"],
     "evidence_check": ["EvidenceAgent", "ReportAgent"],
-    "jd_gap": ["JDAnalysisAgent", "TechAgent", "EvidenceAgent", "ReportAgent"],
-    "project_rewrite": ["ProjectAgent", "ResumeOptimizeAgent"],
-    "resume_optimize": ["ProjectAgent", "ResumeOptimizeAgent"],
-    "interview_questions": ["RiskAgent", "InterviewQuestionAgent"],
-    "backend_eval": ["JDAnalysisAgent", "TechAgent", "ProjectAgent",
+    "jd_gap": ["TechAgent", "EvidenceAgent", "ReportAgent"],
+    "project_rewrite": ["ProjectAgent", "ReportAgent"],
+    "resume_optimize": ["ProjectAgent", "ReportAgent"],
+    "interview_questions": ["RiskAgent", "ReportAgent"],
+    "backend_eval": ["TechAgent", "ProjectAgent",
                      "RiskAgent", "EvidenceAgent", "ReportAgent"],
-    "agent_eval": ["JDAnalysisAgent", "TechAgent", "ProjectAgent",
+    "agent_eval": ["TechAgent", "ProjectAgent",
                    "RiskAgent", "EvidenceAgent", "ReportAgent"],
     # followup remains a lightweight evaluation refinement — chat uses
     # /conversation/reply (CopilotAnswer), never this pipeline.
@@ -59,13 +59,13 @@ GOAL_ARTIFACTS: Dict[str, List[str]] = {
     "jd_gap": [
         "resume_facts", "jd_requirements", "technical_findings",
         "evidence_ledger", "final_report"],
-    "project_rewrite": ["resume_facts", "project_findings", "rewrite"],
-    "resume_optimize": ["resume_facts", "project_findings", "rewrite"],
-    "interview_questions": ["resume_facts", "risks", "interview_questions"],
+    "project_rewrite": ["resume_facts", "project_findings", "final_report"],
+    "resume_optimize": ["resume_facts", "project_findings", "final_report"],
+    "interview_questions": ["resume_facts", "risks", "final_report"],
     "followup": ["final_report"],
 }
 
-TERMINAL_AGENTS = {"ReportAgent", "ResumeOptimizeAgent", "InterviewQuestionAgent"}
+TERMINAL_AGENTS = {"ReportAgent"}
 FULL_EVAL_TYPES = {
     "full_evaluation", "jd_evaluation", "backend_eval", "agent_eval",
 }
@@ -85,18 +85,14 @@ SIMPLE_RULE_TYPES = {
 # Soft dependency edges used for topo + parallel grouping (artifact edges are
 # the source of truth for *selection*; these keep ordering stable).
 AGENT_DEPENDENCIES: Dict[str, List[str]] = {
-    "ResumeParserAgent": [],
-    "JDAnalysisAgent": ["ResumeParserAgent"],
-    "TechAgent": ["ResumeParserAgent"],
-    "ProjectAgent": ["ResumeParserAgent"],
-    "RiskAgent": ["ResumeParserAgent"],
+    "TechAgent": [],
+    "ProjectAgent": [],
+    "RiskAgent": [],
     "EvidenceAgent": ["TechAgent", "ProjectAgent", "RiskAgent"],
     "ReportAgent": ["EvidenceAgent"],
-    "ResumeOptimizeAgent": ["ProjectAgent"],
-    "InterviewQuestionAgent": ["RiskAgent"],
 }
 
-PARALLELIZABLE = {"JDAnalysisAgent", "TechAgent", "ProjectAgent", "RiskAgent"}
+PARALLELIZABLE = {"TechAgent", "ProjectAgent", "RiskAgent"}
 
 # Logical planner artifact -> canonical SharedState keys.  The reverse aliases
 # let the Java control plane name invalidations in either representation.
@@ -175,8 +171,6 @@ class Coordinator:
                   needs_parse: bool) -> List[str]:
         """Safety-fallback pipeline (TASK_PIPELINES). Prefer plan_from_artifacts."""
         plan = list(TASK_PIPELINES.get(run_type, TASK_PIPELINES["full_evaluation"]))
-        if needs_parse and "ResumeParserAgent" not in plan:
-            plan.insert(0, "ResumeParserAgent")
         if not self.policy.evidenceVerification.enabled:
             plan = [a for a in plan if a != "EvidenceAgent"]
         # agentOrder only affects ordering preference — never strips required producers.
@@ -204,6 +198,10 @@ class Coordinator:
             required = [a for a in required if a != "risks"]
             if "risks" not in optional:
                 optional.append("risks")
+        if not signals.get("has_jd") and "jd_requirements" in required:
+            required = [a for a in required if a != "jd_requirements"]
+            if "jd_requirements" not in optional:
+                optional.append("jd_requirements")
         if not self.policy.evidenceVerification.enabled:
             if "evidence_ledger" in required:
                 required = [a for a in required if a != "evidence_ledger"]
@@ -403,13 +401,11 @@ class Coordinator:
         missing = [a for a in goal if a not in present]
         producers_cache: Dict[str, List[AgentDefinition]] = {}
 
-        # Upload path: deterministic parse (+ JD when applicable) before specialists.
-        if signals.get("needs_parse") and "ResumeParserAgent" not in selected:
-            selected.append("ResumeParserAgent")
-            selected_because["ResumeParserAgent"] = "上传后确定性解析简历"
+        # Upload parsing is deterministic preflight, not an LLM Agent.
+        if signals.get("needs_parse"):
             for art in ("resume_facts", "parsed_resume"):
                 artifact_edges.append({
-                    "from": "ResumeParserAgent", "artifact": art, "to": "*"})
+                    "from": "preflight.parse_resume", "artifact": art, "to": "*"})
             present = set(present) | {"resume_facts", "parsed_resume"}
             missing = [a for a in goal if a not in present]
 
@@ -680,14 +676,12 @@ class Coordinator:
         if not ordered:
             return {}
         sig = signals or {}
-        # ResumeParserAgent is deterministic in production and must not reserve
-        # provider calls that belong to the actual reasoning agents.
-        others = [a for a in ordered if a not in {terminal, "ResumeParserAgent"}]
+        others = [a for a in ordered if a != terminal]
         hist_ratios = self._extract_budget_ratios(execution_history, others)
         hard_cap = max(0, int(self.policy.maxLlmCalls))
         if sig.get("single_pass_evaluation"):
-            # One decision per specialist; Report uses three concurrent,
-            # focused sections. Specialists may use one optional progressive
+            # One bounded decision flow per specialist and one complete
+            # ReportAgent report. Specialists may use an optional progressive
             # Skill/tool turn; Project may use two for external research.
             hard_cap = min(hard_cap, 12)
         runtime_budget = getattr(self.llm, "budget", None)
@@ -787,8 +781,6 @@ class Coordinator:
             remaining -= 1
 
         base_weights = {
-            "ResumeParserAgent": 1.0,
-            "JDAnalysisAgent": 1.5,
             "TechAgent": 2.5,
             "ProjectAgent": 3.0,
             "RiskAgent": 2.0,
@@ -804,7 +796,6 @@ class Coordinator:
             weights["EvidenceAgent"] = weights.get("EvidenceAgent", 2.25) + 2.0
         if sig.get("has_jd") or sig.get("has_jd_requirements"):
             weights["TechAgent"] = weights.get("TechAgent", 2.5) + 2.0
-            weights["JDAnalysisAgent"] = weights.get("JDAnalysisAgent", 1.5) + 1.0
         if sig.get("has_timeline"):
             weights["RiskAgent"] = weights.get("RiskAgent", 2.0) + 1.0
         if hist_ratios:
@@ -816,10 +807,6 @@ class Coordinator:
         for agent in ordered:
             try:
                 definition = self.registry.get(agent)
-                if agent == "ResumeParserAgent":
-                    action_caps[agent] = 0
-                    total_caps[agent] = 0
-                    continue
                 decision_cap = max(1, min(
                     definition.max_iterations,
                     self.policy.maxIterationsPerAgent))
@@ -1025,7 +1012,7 @@ class Coordinator:
         if sig.get("has_management_exp"):
             signal_lines.append("有管理经验，评估应包含团队规模、管理方法论和跨部门协作能力")
         if sig.get("is_career_changer"):
-            signal_lines.append("跨领域转型候选人，JDAnalysisAgent 需额外评估能力迁移可行性")
+            signal_lines.append("跨领域转型候选人，TechAgent 需额外评估能力迁移可行性")
         if sig.get("has_certifications"):
             signal_lines.append("有行业认证，TechAgent 需验证认证有效性并作为加分项")
         if not sig.get("has_projects"):
@@ -1056,7 +1043,7 @@ class Coordinator:
             "3. 有GitHub/外部URL：保留公开证据核验能力，具体工具由执行 Agent 自主选择\n"
             "4. 有论文/出版物：TechAgent需深入学术评估\n"
             "5. 资深候选人（10年+/总监级）：RiskAgent重点关注管理&架构证据\n"
-            "6. 跨领域转型：增加JDAnalysisAgent权重,评估能力迁移\n\n"
+            "6. 跨领域转型：由TechAgent评估能力迁移可行性\n\n"
             "关键约束：\n"
             "- 不得删除goal artifact的唯一生产者\n"
             "- 最后一个必须是唯一terminal Agent\n"

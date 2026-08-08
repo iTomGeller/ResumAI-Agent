@@ -294,13 +294,13 @@ INSERT INTO `system_orchestration_rule`
    `top_k`, `max_retry`, `faithfulness_threshold`, `execution_policy`, `enabled`, `version`)
 VALUES
   (1, 'TECH',
-   JSON_ARRAY('ResumeParserAgent','TechAgent','ProjectAgent','RiskAgent','RagasJudgeAgent','FinalReportAgent'),
+   JSON_ARRAY('TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
    'HYBRID', 6, 2, 0.800, 'DAG_CONCURRENT', 1, 1),
   (2, 'PRODUCT',
-   JSON_ARRAY('ResumeParserAgent','TechAgent','ProjectAgent','RiskAgent','RagasJudgeAgent','FinalReportAgent'),
+   JSON_ARRAY('TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
    'GRAPHRAG', 5, 2, 0.800, 'SERIAL', 1, 1),
   (3, 'DESIGN',
-   JSON_ARRAY('ResumeParserAgent','ProjectAgent','RiskAgent','RagasJudgeAgent','FinalReportAgent'),
+   JSON_ARRAY('TechAgent','ProjectAgent','RiskAgent','EvidenceAgent','ReportAgent'),
    'VECTOR', 5, 2, 0.750, 'SERIAL', 1, 1)
 ON DUPLICATE KEY UPDATE `required_agents` = VALUES(`required_agents`);
 

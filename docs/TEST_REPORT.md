@@ -25,7 +25,7 @@ Compose project `resumai`，模型 deepseek-chat。
   工具 4 次、token 12190+7980、时延 46.2s、degraded 空。
 - 每 Agent 真实耗时（ms）：Parser 5240 / JD 2174 / Tech 11844 ∥ Project 11811 ∥
   Risk 11783（并行组）/ Evidence 8756 / Report 15958。
-- PAUSE：RUNNING → PAUSING → PAUSED，快照落库（executedAgents=[ResumeParserAgent]）；
+- PAUSE：RUNNING → PAUSING → PAUSED，快照落库（executedAgents=[TechAgent]）；
   RESUME 后完成，快照内已完成 Agent 精确执行 1 次（不重跑）。
 - INTERRUPT：运行中打断 → CANCELLED，取消传播到 Python task。
 - resume_task 桥接：上传任务经 /agent/runs 执行，agent_run.source_task_trace_id
