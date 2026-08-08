@@ -32,9 +32,9 @@ _provider_gate_limit = 0
 def _provider_concurrency_gate() -> tuple[asyncio.Semaphore, int]:
     global _provider_gate, _provider_gate_loop, _provider_gate_limit
     try:
-        limit = max(1, int(os.getenv("LLM_MAX_CONCURRENT", "16")))
+        limit = max(1, int(os.getenv("LLM_MAX_CONCURRENT", "64")))
     except ValueError:
-        limit = 8
+        limit = 64
     loop = asyncio.get_running_loop()
     if (_provider_gate is None or _provider_gate_loop is not loop
             or _provider_gate_limit != limit):
@@ -276,9 +276,9 @@ class ResilientLlmClient:
         if cls._shared_client is None or cls._shared_client.is_closed:
             try:
                 provider_limit = max(
-                    1, int(os.getenv("LLM_MAX_CONCURRENT", "16")))
+                    1, int(os.getenv("LLM_MAX_CONCURRENT", "64")))
             except ValueError:
-                provider_limit = 16
+                provider_limit = 64
             try:
                 max_connections = max(
                     provider_limit,

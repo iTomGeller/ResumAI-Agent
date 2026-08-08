@@ -13,12 +13,10 @@ import org.springframework.util.StringUtils;
 /**
  * Distributed concurrency control backed by Redis expirable semaphores.
  *
- * <p>Two levels: one global semaphore bounds concurrent run admission and
- * pre-LLM preparation across backend instances, plus a single-permit semaphore
- * per conversation that serializes its complete workflow. The global permit
- * is released at the first LLM queued/started boundary; provider concurrency
- * is then governed by the Python LLM semaphore. Permits carry a lease TTL so a
- * crashed instance cannot leak admission or conversation locks forever.</p>
+ * <p>Two levels: one global semaphore caps active workflow runs across all
+ * backend instances, plus a single-permit semaphore per conversation that
+ * serializes runs within one conversation. Permits carry a lease TTL so a
+ * crashed instance cannot leak a lock forever.</p>
  */
 @Service
 public class RunPermitService {
@@ -47,7 +45,7 @@ public class RunPermitService {
             // after deployment without deleting active permit leases.
             semaphore.setPermits(desired);
         }
-        log.info("global run admission capacity={} available={} acquired={}",
+        log.info("global run permit capacity={} available={} acquired={}",
                 semaphore.getPermits(), semaphore.availablePermits(),
                 semaphore.acquiredPermits());
     }
@@ -137,14 +135,6 @@ public class RunPermitService {
             return globalSemaphore().availablePermits();
         } catch (Exception e) {
             return 0;
-        }
-    }
-
-    public int globalAdmissionCapacity() {
-        try {
-            return globalSemaphore().getPermits();
-        } catch (Exception e) {
-            return Math.max(1, properties.getMaxGlobalConcurrent());
         }
     }
 

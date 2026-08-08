@@ -54,11 +54,11 @@ Coordinator 规则优先：简单请求（时间线/改写/追问等）直接映
 
 并行组内每个 Agent 只读 SharedState 快照视图，输出串行合并；同键冲突写入 `conflicts` 而非覆盖。ReportAgent 是分析链显式终点：它失败时结果只能是标注过的 `PARTIAL_SUCCESS` 降级输出。
 
-### 4.1 Run 接收与 LLM 并发不是同一个粒度
+### 4.1 Run 与 LLM 使用独立的硬上限
 
-当前 LangGraph Run 通过 `graph.astream(...)` 异步执行，每个 `/agent/runs` 请求都会注册独立 `asyncio.Task`。Java 的全局 permit 只限制同时进入启动、Memory/RAG 和首轮 Prompt 准备的 Run；当 Runtime 发出首个 `llm.queued` 或 `llm.started` 事件时，该 permit 通过 `runId + globalPermitId` CAS 只释放一次，新会话的 Run 随即可进入 LangGraph。
+Java 的全局 permit 覆盖完整 workflow，`RUN_MAX_GLOBAL_CONCURRENT=12` 表示跨 Backend 实例最多同时存在 12 个 active Run；直到成功、失败、取消或暂停终态才释放。conversation permit 同样贯穿完整 workflow，保证同一会话 revision 串行。不能在首个 LLM 边界永久释放 Run permit，否则模型返回后的所有 continuation 会绕过 Run 硬上限。
 
-真正昂贵的模型并发由 Python `LLM_MAX_CONCURRENT` semaphore 在**每次 LLM 调用**处限制，调用结束立即释放。conversation permit 仍贯穿整个 workflow，保证同一会话 revision 串行。因此一个 Run 等待模型网络 I/O 时不会继续占用全局 Run admission，但也不会突破模型供应商并发上限。
+Python Runtime 仍通过 `graph.astream(...)` 和独立 `asyncio.Task` 异步执行；等待模型不会阻塞事件循环或占用 OS 线程。`LLM_MAX_CONCURRENT=64` semaphore 只限制同时在途的模型请求，每次调用结束立即释放。当前不引入第三套 Agent execution semaphore：已有 4C8G 压测证明 Run12/16 与 LLM64 的资源边界稳定，先用更高的模型并发缩短 Run 槽位占用时间。
 
 ## 5. 失败、预算与 Loop Guard
 
