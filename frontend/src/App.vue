@@ -2102,7 +2102,6 @@ const AGENT_NAME_CN: Record<string, string> = {
   KnowledgeRetrievalAgent: '知识检索与上下文注入',
   TechEvalAgent: '技术能力评估',
   ProjectEvalAgent: '项目经历评估',
-  RiskAgent: '风险识别',
   EvidenceFusionAgent: '证据融合',
   ReportAgent: '报告生成',
 };
@@ -2119,7 +2118,6 @@ const AGENT_PURPOSE_CN: Record<string, string> = {
   KnowledgeRetrievalAgent: '按 Harness 策略检索自助知识库、Rubric 和团队偏好，并注入后续评估 Agent。',
   TechEvalAgent: '评估技术栈深度、工程经验和可验证证据。',
   ProjectEvalAgent: '评估项目复杂度、职责边界和业务结果。',
-  RiskAgent: '识别时间线、简历真实性和能力表述风险。',
   EvidenceFusionAgent: '汇总技术、项目、风险和 JD 证据，形成统一判断。',
   ReportAgent: '汇总证据与冲突，生成可追溯的最终评估报告。',
 };
