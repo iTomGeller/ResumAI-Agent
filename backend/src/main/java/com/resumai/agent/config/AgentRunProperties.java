@@ -10,7 +10,7 @@ public class AgentRunProperties {
     /** Master switch for the conversational run scheduler. */
     private boolean enabled = true;
 
-    /** Global maximum number of concurrently active workflow runs. */
+    /** Maximum workflows currently executing outside a suspended LLM wait. */
     private int maxGlobalConcurrent = 12;
 
     /** Default wall-clock budget for one run (seconds). */

@@ -114,6 +114,37 @@ class RuntimeEmitter:
         body["runId"] = self.run_id
         return await self._post("/api/internal/agent-runs/result", body, attempts=8, timeout=15.0)
 
+    async def release_run_execution_permit(self) -> None:
+        await self._transition_run_execution_permit("release")
+
+    async def acquire_run_execution_permit(self) -> None:
+        await self._transition_run_execution_permit("acquire")
+
+    async def _transition_run_execution_permit(self, action: str) -> None:
+        """Fail closed until Java acknowledges the idempotent transition."""
+        url = (
+            f"{self._base}/api/internal/agent-runs/{self.run_id}/"
+            f"execution-permit/{action}")
+        delay = 0.05
+        while True:
+            try:
+                client = await self._http_client()
+                response = await client.post(
+                    url, headers=_headers(), timeout=10.0)
+                if response.status_code < 400:
+                    return
+                if response.status_code != 429:
+                    logger.warning(
+                        "execution permit %s failed status=%s body=%s",
+                        action, response.status_code, response.text[:200])
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "execution permit %s transport error: %s", action, exc)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 1.0)
+
     async def save_checkpoint(self, snapshot: Dict[str, Any]) -> bool:
         """Group-boundary checkpoint: persisted on the Java side so a FAILED
         run can be retried from the last completed agent group."""
@@ -188,6 +219,12 @@ class NullEmitter(RuntimeEmitter):
     async def emit_result(self, result: Dict[str, Any]) -> bool:
         self.result = result
         return True
+
+    async def release_run_execution_permit(self) -> None:
+        return None
+
+    async def acquire_run_execution_permit(self) -> None:
+        return None
 
     async def save_checkpoint(self, snapshot: Dict[str, Any]) -> bool:
         self.checkpoints.append(snapshot)

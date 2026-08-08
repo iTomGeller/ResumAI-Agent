@@ -26,7 +26,7 @@ import org.springframework.util.StringUtils;
  * Dispatcher + watchdog for conversational runs.
  *
  * <p>Dispatch: pull QUEUED runs (FIFO per conversation), acquire the global
- * workflow permit (max 12 by default) and the conversation permit (max 1),
+ * workflow execution permit (max 12 by default) and conversation permit (1),
  * CAS QUEUED→STARTING, then hand off to the lifecycle service. Watchdog:
  * renew permit leases for healthy runs, time out overdue runs, force-close
  * stuck CANCELLING/STARTING runs, and recover orphans after restart.</p>
@@ -136,7 +136,7 @@ public class RunSchedulerService {
             }
             String globalPermit = permitService.tryAcquireGlobal();
             if (globalPermit == null) {
-                return; // active workflow capacity is full; retry next dispatch tick
+                return; // workflow execution capacity is full
             }
             String convPermit = permitService.tryAcquireConversation(run.getConversationId());
             if (convPermit == null) {
@@ -327,10 +327,14 @@ public class RunSchedulerService {
                 List.copyOf(RunStatus.ACTIVE), 500);
         List<Map<String, Object>> runs = new ArrayList<>();
         int withCheckpoint = 0;
+        int executionPermitHeld = 0;
         for (AgentRun run : active) {
             boolean checkpoint = StringUtils.hasText(run.getExecutionSnapshot());
             if (checkpoint) {
                 withCheckpoint++;
+            }
+            if (StringUtils.hasText(run.getGlobalPermitId())) {
+                executionPermitHeld++;
             }
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("runId", run.getRunId());
@@ -342,6 +346,13 @@ public class RunSchedulerService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("draining", draining);
         out.put("activeCount", active.size());
+        out.put("workflowExecutionCapacity",
+                permitService.globalExecutionCapacity());
+        out.put("workflowExecutionAvailable",
+                permitService.availableGlobalPermits());
+        out.put("workflowExecutionHeldCount", executionPermitHeld);
+        out.put("llmSuspendedActiveCount",
+                Math.max(0, active.size() - executionPermitHeld));
         out.put("checkpointedCount", withCheckpoint);
         out.put("readyToRestart", active.isEmpty()
                 || withCheckpoint == active.size());

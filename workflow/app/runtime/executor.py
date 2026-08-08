@@ -20,7 +20,9 @@ from app.runtime.llm import (
     LlmToolCall,
     LlmTurn,
     ResilientLlmClient,
+    WorkflowRunExecutionController,
     extract_json_object,
+    workflow_agent_execution,
 )
 from app.runtime.loop_guard import LoopGuard
 from app.runtime.memory import (
@@ -588,6 +590,7 @@ class RunExecutor:
             self.policy.timeoutPolicy.llmTimeoutSeconds,
             max_cost_cny=self.policy.maxCostCny,
             max_total_tokens=self.policy.maxTotalTokens)
+        self.workflow_execution = WorkflowRunExecutionController(emitter)
         # The tool executor holds an llm reference only for query rewriting
         # (agentic retrieval); it never drives its own decision loop.
         self.tools = ToolExecutor(
@@ -979,18 +982,21 @@ class RunExecutor:
                 if isinstance(h, dict)
                 and h.get("source") in {"runtime_strategy", "execution_profile"}
             ]
-            planned = await coordinator.plan(
-                run_type=request.runType, user_message=request.userMessage,
-                conversation_summary=request.conversationSummary or "",
-                shared_digest=self.state.view_for("CoordinatorAgent", max_chars=2000),
-                failure_notes=self.failure_notes,
-                memory_notes=execution_profiles or [
-                    str(h.get("content", ""))[:120] for h in self.memory_hits[:3]],
-                needs_parse=needs_parse,
-                resume_text=request.resumeText or "",
-                job_description=request.jobDescription or "",
-                artifacts=arts,
-                shared=self.state.data)
+            async with workflow_agent_execution(self.workflow_execution):
+                planned = await coordinator.plan(
+                    run_type=request.runType, user_message=request.userMessage,
+                    conversation_summary=request.conversationSummary or "",
+                    shared_digest=self.state.view_for(
+                        "CoordinatorAgent", max_chars=2000),
+                    failure_notes=self.failure_notes,
+                    memory_notes=execution_profiles or [
+                        str(h.get("content", ""))[:120]
+                        for h in self.memory_hits[:3]],
+                    needs_parse=needs_parse,
+                    resume_text=request.resumeText or "",
+                    job_description=request.jobDescription or "",
+                    artifacts=arts,
+                    shared=self.state.data)
             self.plan = planned["plan"]
             self.parallel_groups = planned["parallelGroups"]
             self.budget_plan = planned.get("budgetPlan") or planned.get("budget") or {}
@@ -1323,11 +1329,13 @@ class RunExecutor:
             "证据不足以定夺=uncertain（报告中如实标注）。\n"
             f"冲突列表: {json.dumps(items, ensure_ascii=False)}")
         try:
-            raw = await self.llm.chat(
-                [{"role": "system",
-                  "content": "你是评估冲突仲裁者，只依据给定材料裁决，不新增事实。"},
-                 {"role": "user", "content": prompt_user}],
-                agent_id="EvidenceAgent", purpose="arbitration", max_tokens=600)
+            async with workflow_agent_execution(self.workflow_execution):
+                raw = await self.llm.chat(
+                    [{"role": "system",
+                      "content": "你是评估冲突仲裁者，只依据给定材料裁决，不新增事实。"},
+                     {"role": "user", "content": prompt_user}],
+                    agent_id="EvidenceAgent", purpose="arbitration",
+                    max_tokens=600)
             parsed = extract_json_object(raw)
             rulings = {str(r.get("claim", ""))[:200]: r
                        for r in parsed.get("rulings", []) if isinstance(r, dict)}
@@ -1427,12 +1435,13 @@ class RunExecutor:
             # or re-reserving a provider call in the single-pass workflow.
             replan_coordinator = Coordinator(
                 self.registry, self.policy, None)
-        adjusted = await replan_coordinator.adaptive_replan(
-            remaining=remaining, executed=self.executed,
-            shared_digest=shared_digest, trigger=trigger,
-            failure_notes=self.failure_notes,
-            missing_artifacts=missing,
-            handoff_to=handoff_to)
+        async with workflow_agent_execution(self.workflow_execution):
+            adjusted = await replan_coordinator.adaptive_replan(
+                remaining=remaining, executed=self.executed,
+                shared_digest=shared_digest, trigger=trigger,
+                failure_notes=self.failure_notes,
+                missing_artifacts=missing,
+                handoff_to=handoff_to)
         if adjusted is None:
             return
         self.replan_count += 1
@@ -1668,6 +1677,13 @@ class RunExecutor:
         return int(value) if isinstance(value, (int, float)) and value >= 0 else fallback
 
     async def _run_agent(self, definition: AgentDefinition) -> AgentOutput:
+        # Parallel Agent branches share one workflow permit. It is detached
+        # only while every live branch is suspended in provider I/O.
+        async with workflow_agent_execution(self.workflow_execution):
+            return await self._run_agent_in_slot(definition)
+
+    async def _run_agent_in_slot(
+            self, definition: AgentDefinition) -> AgentOutput:
         request = self.request
         agent_id = definition.agent_id
         if agent_id in TERMINAL_AGENTS:

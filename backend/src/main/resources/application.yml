@@ -94,9 +94,8 @@ resumai:
     internal-token: ${WORKFLOW_INTERNAL_TOKEN:change-me}
   agent-run:
     enabled: ${AGENT_RUN_ENABLED:true}
-    # 8/10/12-concurrency ECS knee-point experiment: 12 kept zero failures,
-    # improved 12-run makespan by ~25% vs 8, and stayed below the 25% max-run
-    # inflation guard with no OOM/restart/DB lock contention.
+    # Workflows share 12 execution slots. Python releases one only when every
+    # parallel branch is waiting on LLM, then reacquires it before continuation.
     max-global-concurrent: ${RUN_MAX_GLOBAL_CONCURRENT:12}
     run-timeout-seconds: ${RUN_TIMEOUT_SECONDS:900}
     dispatch-interval-ms: ${RUN_DISPATCH_INTERVAL_MS:500}

@@ -7,8 +7,10 @@ import logging
 import os
 import random
 import time
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 import httpx
 
@@ -27,6 +29,104 @@ RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 _provider_gate: Optional[asyncio.Semaphore] = None
 _provider_gate_loop: Optional[asyncio.AbstractEventLoop] = None
 _provider_gate_limit = 0
+
+class WorkflowRunExecutionController:
+    """Reference-count one Java workflow permit across parallel branches."""
+
+    def __init__(self, emitter: RuntimeEmitter) -> None:
+        self.emitter = emitter
+        self._lock_instance: Optional[asyncio.Lock] = None
+        self._permit_held = True
+        self._runnable = 0
+        self._waiting_llm = 0
+
+    def _lock(self) -> asyncio.Lock:
+        if self._lock_instance is None:
+            self._lock_instance = asyncio.Lock()
+        return self._lock_instance
+
+    async def enter_agent(self) -> "_WorkflowAgentLease":
+        lease = _WorkflowAgentLease(self)
+        async with self._lock():
+            if not self._permit_held:
+                await self.emitter.acquire_run_execution_permit()
+                self._permit_held = True
+            self._runnable += 1
+            lease.state = "runnable"
+        return lease
+
+    async def suspend_for_llm(self, lease: "_WorkflowAgentLease") -> None:
+        async with self._lock():
+            if lease.state != "runnable":
+                return
+            self._runnable = max(0, self._runnable - 1)
+            self._waiting_llm += 1
+            lease.state = "waiting_llm"
+            await self._release_if_fully_suspended()
+
+    async def resume_after_llm(self, lease: "_WorkflowAgentLease") -> int:
+        async with self._lock():
+            if lease.state != "waiting_llm":
+                return 0
+            started = time.monotonic()
+            if not self._permit_held:
+                await self.emitter.acquire_run_execution_permit()
+                self._permit_held = True
+            wait_ms = int((time.monotonic() - started) * 1000)
+            self._waiting_llm = max(0, self._waiting_llm - 1)
+            self._runnable += 1
+            lease.state = "runnable"
+            return wait_ms
+
+    async def leave_agent(self, lease: "_WorkflowAgentLease") -> None:
+        async with self._lock():
+            if lease.state == "runnable":
+                self._runnable = max(0, self._runnable - 1)
+            elif lease.state == "waiting_llm":
+                self._waiting_llm = max(0, self._waiting_llm - 1)
+            lease.state = "closed"
+            await self._release_if_fully_suspended()
+
+    async def _release_if_fully_suspended(self) -> None:
+        if (self._permit_held and self._runnable == 0
+                and self._waiting_llm > 0):
+            await self.emitter.release_run_execution_permit()
+            self._permit_held = False
+
+
+class _WorkflowAgentLease:
+    def __init__(self, controller: WorkflowRunExecutionController) -> None:
+        self.controller = controller
+        self.state = "new"
+
+    async def suspend_for_llm(self) -> None:
+        await self.controller.suspend_for_llm(self)
+
+    async def resume_after_llm(self) -> int:
+        return await self.controller.resume_after_llm(self)
+
+    async def close(self) -> None:
+        await self.controller.leave_agent(self)
+
+
+_current_workflow_agent_lease: ContextVar[Optional[_WorkflowAgentLease]] = (
+    ContextVar("workflow_agent_execution_lease", default=None))
+
+
+@asynccontextmanager
+async def workflow_agent_execution(
+        controller: WorkflowRunExecutionController) -> AsyncIterator[None]:
+    inherited = _current_workflow_agent_lease.get()
+    if inherited is not None:
+        yield
+        return
+    lease = await controller.enter_agent()
+    token = _current_workflow_agent_lease.set(lease)
+    try:
+        yield
+    finally:
+        _current_workflow_agent_lease.reset(token)
+        await lease.close()
 
 
 def _provider_concurrency_gate() -> tuple[asyncio.Semaphore, int]:
@@ -312,9 +412,7 @@ class ResilientLlmClient:
         if agent_id == "CoordinatorAgent" or purpose_key in {
                 "plan", "replan", "arbitration"}:
             return "control"
-        if agent_id in {
-                "ReportAgent", "ResumeOptimizeAgent",
-                "InterviewQuestionAgent"}:
+        if agent_id == "ReportAgent":
             return "terminal"
         return f"agent:{agent_id or 'unknown'}"
 
@@ -499,6 +597,10 @@ class ResilientLlmClient:
                             self.max_llm_calls)})
                 raise
             _call_start = _time_mod.perf_counter()
+            execution_lease = _current_workflow_agent_lease.get()
+            execution_reacquire_wait_ms = 0
+            if execution_lease is not None:
+                await execution_lease.suspend_for_llm()
             gate, concurrency_limit = _provider_concurrency_gate()
             queue_started = time.monotonic()
             was_queued = gate.locked()
@@ -563,6 +665,7 @@ class ResilientLlmClient:
                 and (str(purpose or "") == "report"
                      or str(purpose or "").startswith("report_")))
             audit_finalized = False
+            provider_cancelled = False
             try:
                 try:
                     if stream_response:
@@ -579,8 +682,14 @@ class ResilientLlmClient:
                             messages, model, effective_max_tokens, temperature,
                             json_mode and not tools, tools=tools,
                             tool_choice=tool_choice)
+                except asyncio.CancelledError:
+                    provider_cancelled = True
+                    raise
                 finally:
                     gate.release()
+                    if execution_lease is not None and not provider_cancelled:
+                        execution_reacquire_wait_ms = (
+                            await execution_lease.resume_after_llm())
                 if first_token_emit_task is not None:
                     # The stream has already been consumed, so this wait does
                     # not add provider backpressure. It only guarantees event
@@ -662,6 +771,8 @@ class ResilientLlmClient:
                     "durationMs": int((time.monotonic() - started) * 1000),
                     "queueWaitMs": queue_wait_ms,
                     "concurrencyLimit": concurrency_limit,
+                    "agentExecutionReacquireWaitMs": (
+                        execution_reacquire_wait_ms),
                     "promptTokens": prompt_tokens,
                     "completionTokens": completion_tokens,
                     "promptCacheHitTokens": cache_hit_tokens,

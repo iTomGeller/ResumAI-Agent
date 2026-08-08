@@ -83,6 +83,27 @@ public class AgentRunInternalController {
         return Map.of("status", "OK");
     }
 
+    @PostMapping("/{runId}/execution-permit/release")
+    public Map<String, String> releaseExecutionPermit(
+            @RequestHeader("X-Internal-Token") String token,
+            @PathVariable String runId) {
+        authorize(token);
+        lifecycleService.releaseExecutionPermit(runId);
+        return Map.of("status", "RELEASED");
+    }
+
+    @PostMapping("/{runId}/execution-permit/acquire")
+    public Map<String, String> acquireExecutionPermit(
+            @RequestHeader("X-Internal-Token") String token,
+            @PathVariable String runId) {
+        authorize(token);
+        if (!lifecycleService.tryAcquireExecutionPermit(runId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS, "workflow execution capacity full");
+        }
+        return Map.of("status", "ACQUIRED");
+    }
+
     public record RuntimeLlmInvocationRequest(
             String runId, String traceId, String spanId, String modelName,
             String agentRole, String purpose, Long durationMs,

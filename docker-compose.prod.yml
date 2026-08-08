@@ -19,6 +19,7 @@ services:
       WORKFLOW_BASE_URL: http://ai-resume-workflow:8090
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       WORKFLOW_MODE: python
+      RUN_MAX_GLOBAL_CONCURRENT: ${RUN_MAX_GLOBAL_CONCURRENT:-12}
       # Keep uploaded resumes, KB manifests/chunks and file-backed Memory on
       # the named volume below. Relying on the application default (/app/uploads)
       # loses these files whenever the backend container is recreated.
@@ -65,8 +66,7 @@ services:
       DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
       DEEPSEEK_QUALITY_MODEL: ${DEEPSEEK_QUALITY_MODEL:-deepseek-v4-pro}
-      # Run12 can fan out to ~36 Flash calls, while one ReportAgent caps Pro at
-      # 12. Flash64 and Pro16 were both verified at 100% success on this ECS.
+      # Workflow execution and provider calls are the only capacity permits.
       LLM_MAX_CONCURRENT: ${LLM_MAX_CONCURRENT:-64}
       LLM_HTTP_MAX_CONNECTIONS: ${LLM_HTTP_MAX_CONNECTIONS:-64}
       LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS: ${LLM_HTTP_MAX_KEEPALIVE_CONNECTIONS:-32}

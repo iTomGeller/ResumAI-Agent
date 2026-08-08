@@ -381,6 +381,61 @@ public class RunLifecycleService {
         recordStructuredEvent(run, eventType, agentId, toolName, eventPayload);
     }
 
+    /** Idempotently release this Run's execution permit while all branches await LLM. */
+    public void releaseExecutionPermit(String runId) {
+        AgentRun run = runMapper.selectById(runId);
+        if (run == null) {
+            return;
+        }
+        String permitId = run.getGlobalPermitId();
+        if (!StringUtils.hasText(permitId)) {
+            return;
+        }
+        UpdateWrapper<AgentRun> clear = new UpdateWrapper<>();
+        clear.eq("run_id", run.getRunId())
+                .eq("global_permit_id", permitId)
+                .set("global_permit_id", null)
+                .set("updated_at", LocalDateTime.now());
+        if (runMapper.update(null, clear) == 0) {
+            return;
+        }
+        permitService.releaseGlobal(permitId);
+        log.debug("released workflow execution permit run={}", run.getRunId());
+    }
+
+    /**
+     * Try to reacquire the same workflow execution capacity before a returned
+     * LLM result is allowed to continue. False means the Python coroutine must
+     * remain suspended and retry; terminal runs are allowed to unwind.
+     */
+    public boolean tryAcquireExecutionPermit(String runId) {
+        AgentRun run = runMapper.selectById(runId);
+        if (run == null || RunStatus.isTerminal(run.getStatus())) {
+            return true;
+        }
+        if (StringUtils.hasText(run.getGlobalPermitId())) {
+            return true;
+        }
+        String permitId = permitService.tryAcquireGlobal();
+        if (!StringUtils.hasText(permitId)) {
+            return false;
+        }
+        UpdateWrapper<AgentRun> attach = new UpdateWrapper<>();
+        attach.eq("run_id", runId)
+                .isNull("global_permit_id")
+                .in("status", RunStatus.ACTIVE)
+                .set("global_permit_id", permitId)
+                .set("updated_at", LocalDateTime.now());
+        if (runMapper.update(null, attach) > 0) {
+            log.debug("reacquired workflow execution permit run={}", runId);
+            return true;
+        }
+        permitService.releaseGlobal(permitId);
+        AgentRun current = runMapper.selectById(runId);
+        return current == null || RunStatus.isTerminal(current.getStatus())
+                || StringUtils.hasText(current.getGlobalPermitId());
+    }
+
     private void recordStructuredEvent(AgentRun run, String eventType, String agentId,
                                        String toolName, Map<String, Object> payload) {
         try {
