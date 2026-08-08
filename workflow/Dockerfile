@@ -49,6 +49,7 @@ RUN sed -i 's@deb.debian.org@mirrors.cloud.aliyuncs.com@g' /etc/apt/sources.list
 COPY --from=build /usr/local /usr/local
 COPY --from=build /app /app
 COPY --from=build /tmp/runtime-tests-passed /app/.runtime-tests-passed
+COPY workflow/docker-entrypoint.sh /app/docker-entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1
 ENV SKILLS_PATH=/app/skills
@@ -58,4 +59,5 @@ EXPOSE 8090
 HEALTHCHECK --interval=20s --timeout=5s --retries=5 \
     CMD curl -fsS http://127.0.0.1:8090/health || exit 1
 
+ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]
