@@ -17,6 +17,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -43,12 +44,12 @@ public class MemoryService {
 
     /** Canonical taxonomy exposed to the runtime and trace UI. */
     public static final Set<String> TYPES = Set.of(
-            "SEMANTIC", "EPISODIC", "PROCEDURAL");
+            "RECENT_CASE", "JOB_PROFILE");
     public static final Set<String> SCOPES = Set.of("RUN", "CONVERSATION", "USER", "GLOBAL");
 
     /** Default evaluation-safe pool; per-agent retrieval plans narrow this further. */
     public static final List<String> SPECIALIST_TYPES = List.of(
-            "SEMANTIC", "EPISODIC", "PROCEDURAL");
+            "RECENT_CASE", "JOB_PROFILE");
 
     /** Control-plane error codes that must never enter Report/Risk context. */
     public static final Set<String> CONTROL_PLANE_ERROR_CODES = Set.of(
@@ -61,16 +62,11 @@ public class MemoryService {
      * Read/write compatibility for rows created before the canonical taxonomy.
      * FAILURE remains an episodic outcome, never a fifth memory taxonomy.
      */
-    private static final Map<String, String> LEGACY_TYPE_REMAP = Map.ofEntries(
-            Map.entry("PREFERENCE", "SEMANTIC"),
-            Map.entry("USER_PREFERENCE", "SEMANTIC"),
-            Map.entry("DOMAIN", "SEMANTIC"),
-            Map.entry("FAILURE", "EPISODIC"));
+    private static final Map<String, String> LEGACY_TYPE_REMAP = Map.of();
 
     private static final Map<String, Set<String>> STORAGE_TYPES = Map.of(
-            "SEMANTIC", Set.of("SEMANTIC", "PREFERENCE", "USER_PREFERENCE", "DOMAIN"),
-            "EPISODIC", Set.of("EPISODIC", "FAILURE"),
-            "PROCEDURAL", Set.of("PROCEDURAL"));
+            "RECENT_CASE", Set.of("RECENT_CASE"),
+            "JOB_PROFILE", Set.of("JOB_PROFILE"));
 
     private static final Set<String> TRUSTED_PROCEDURAL_SOURCES = Set.of(
             "approved_skill", "skill_registry", "system_approved");
@@ -82,9 +78,8 @@ public class MemoryService {
             Pattern.CASE_INSENSITIVE);
 
     private static final Map<String, Duration> TTL_BY_TYPE = Map.of(
-            "SEMANTIC", Duration.ofDays(90),
-            "EPISODIC", Duration.ofDays(90),
-            "PROCEDURAL", Duration.ofDays(365));
+            "RECENT_CASE", Duration.ofDays(30),
+            "JOB_PROFILE", Duration.ofDays(180));
 
     /** Effective type defaults exposed to Ops; writes may still override ttlDays. */
     public static Map<String, Long> ttlPolicyDays() {
@@ -142,18 +137,6 @@ public class MemoryService {
                 ? request.type().trim().toUpperCase(Locale.ROOT) : "";
         String type = normalize(canonicalTaxonomy(rawType), TYPES, "type");
         String scope = normalize(request.ownerScope(), SCOPES, "ownerScope");
-        if ("SEMANTIC".equals(type) && "GLOBAL".equals(scope)) {
-            // Candidate/job/user facts are tenant facts, not global truths.
-            if (!StringUtils.hasText(request.userId())) {
-                throw new IllegalArgumentException("SEMANTIC GLOBAL write requires a user namespace");
-            }
-            log.warn("coercing SEMANTIC GLOBAL write to USER scope");
-            scope = "USER";
-        }
-        if ("PROCEDURAL".equals(type) && !isApprovedProcedure(request)) {
-            throw new IllegalArgumentException(
-                    "PROCEDURAL memory requires an approved policy/skill source");
-        }
         validateScopeOwner(request, scope);
         String content = redactSecrets(request.content());
         if (!StringUtils.hasText(content)) {
@@ -163,6 +146,10 @@ public class MemoryService {
         if (isBenchmarkSource(source) && "GLOBAL".equals(scope)) {
             // Keep benchmark seeds out of the global namespace.
             scope = "USER";
+        }
+        if ("JOB_PROFILE".equals(type)) {
+            request = consolidateJobProfile(request, scope);
+            content = redactSecrets(request.content());
         }
         String hash = sha256(type + "|" + scope + "|" + scopeKey(request, scope)
                 + "|" + runtimeDedupDiscriminator(request, source)
@@ -988,19 +975,16 @@ public class MemoryService {
             }
         } else {
             String agent = normalizeAgent(consumerAgent);
-            if (agent.contains("CONVERSATION")) {
-                allowed.add("SEMANTIC");
-            } else if (agent.contains("POLICY")) {
-                allowed.addAll(List.of("PROCEDURAL", "EPISODIC"));
-            } else if (agent.contains("COORDINATOR")) {
-                allowed.addAll(List.of("SEMANTIC", "PROCEDURAL", "EPISODIC"));
-            } else if (agent.contains("REPORT") || agent.contains("RISK")) {
-                allowed.addAll(List.of("EPISODIC", "SEMANTIC", "PROCEDURAL"));
+            if (agent.contains("REPORT")) {
+                allowed.add("JOB_PROFILE");
+            } else if (agent.contains("CONVERSATION") || agent.contains("POLICY")) {
+                // This product has no conversational/user-preference Memory.
             } else {
                 allowed.addAll(SPECIALIST_TYPES);
             }
         }
-        if (allowed.isEmpty()) {
+        if (allowed.isEmpty() && !normalizeAgent(consumerAgent).contains("CONVERSATION")
+                && !normalizeAgent(consumerAgent).contains("POLICY")) {
             allowed.addAll(SPECIALIST_TYPES);
         }
 
@@ -1028,14 +1012,11 @@ public class MemoryService {
         }
         String q = query.toLowerCase(Locale.ROOT);
         List<String> out = new ArrayList<>();
-        if (containsAny(q, "候选人", "简历", "岗位", "jd", "技能", "经历", "偏好", "事实")) {
-            out.add("SEMANTIC");
+        if (containsAny(q, "最近", "近期", "相似简历", "案例", "证据缺口")) {
+            out.add("RECENT_CASE");
         }
-        if (containsAny(q, "历史", "上次", "之前", "成功", "失败", "评估结果", "经验", "对比")) {
-            out.add("EPISODIC");
-        }
-        if (containsAny(q, "规则", "流程", "策略", "评分标准", "skill", "技能说明", "怎么评")) {
-            out.add("PROCEDURAL");
+        if (containsAny(q, "岗位", "jd", "长期", "画像", "稳定要求", "常见风险")) {
+            out.add("JOB_PROFILE");
         }
         return out;
     }
@@ -1111,9 +1092,9 @@ public class MemoryService {
 
     private static double recencyHalfLifeDays(String taxonomy) {
         return switch (taxonomy) {
-            case "SEMANTIC" -> 60.0;
-            case "PROCEDURAL" -> 365.0;
-            default -> 90.0;
+            case "RECENT_CASE" -> 15.0;
+            case "JOB_PROFILE" -> 90.0;
+            default -> 30.0;
         };
     }
 
@@ -1134,8 +1115,7 @@ public class MemoryService {
                     && request.userId().equals(row.getUserId());
         }
         if ("GLOBAL".equals(scope)) {
-            return "PROCEDURAL".equals(taxonomy)
-                    || (allowFailure && isFailureEpisode(row));
+            return allowFailure && isFailureEpisode(row);
         }
         return false;
     }
@@ -1210,6 +1190,115 @@ public class MemoryService {
         return selectedAgents instanceof List<?> agents
                 && !agents.isEmpty()
                 && StringUtils.hasText(String.valueOf(strategyClass));
+    }
+
+    /**
+     * Keep one evolving profile per exact job/JD fingerprint. New accepted
+     * cases add bounded, de-identified business signals; raw resume text and
+     * recommendations are never part of this merge.
+     */
+    private WriteRequest consolidateJobProfile(WriteRequest request, String scope) {
+        String key = factKey(request);
+        if (!StringUtils.hasText(key)) {
+            throw new IllegalArgumentException("JOB_PROFILE requires a stable factKey");
+        }
+        QueryWrapper<MemoryEntryRow> query = new QueryWrapper<MemoryEntryRow>()
+                .eq("type", "JOB_PROFILE")
+                .eq("owner_scope", scope)
+                .eq("source_id", key)
+                .eq("status", "ACTIVE");
+        addExactScope(query, request, scope);
+        MemoryEntryRow previous = memoryMapper.selectOne(query.last("limit 1"));
+
+        Map<String, Object> merged = new LinkedHashMap<>();
+        if (previous != null) {
+            Object decoded = readJson(previous.getStructuredContent());
+            if (decoded instanceof Map<?, ?> old) {
+                old.forEach((name, value) -> merged.put(String.valueOf(name), value));
+            }
+        }
+        Map<String, Object> incoming = request.structuredContent() == null
+                ? Map.of() : request.structuredContent();
+        for (String field : List.of(
+                "factKey", "memoryKind", "jobKey", "jobCategory",
+                "jdFingerprint", "piiExcluded", "rawResumeExcluded",
+                "_producerVersion")) {
+            if (incoming.containsKey(field)) {
+                merged.put(field, incoming.get(field));
+            }
+        }
+        for (String field : List.of(
+                "stableRequirements", "commonGaps", "commonRiskPatterns",
+                "unsupportedClaimPatterns", "derivedFromRunIds")) {
+            merged.put(field, mergeUniqueValues(
+                    merged.get(field), incoming.get(field),
+                    "derivedFromRunIds".equals(field) ? 12 : 20));
+        }
+        int previousSamples = previous == null ? 0 : numberValue(
+                merged.get("sampleCount"), 0);
+        int incomingSamples = numberValue(incoming.get("sampleCount"), 1);
+        merged.put("sampleCount", Math.max(1, previousSamples + incomingSamples));
+
+        String content = "岗位画像=" + textValue(merged.get("jobKey"), "UNKNOWN")
+                + "; 样本数=" + merged.get("sampleCount")
+                + "; 稳定要求=" + joinValues(merged.get("stableRequirements"), 5)
+                + "; 常见证据缺口=" + joinValues(merged.get("commonGaps"), 4)
+                + "; 常见风险=" + joinValues(merged.get("commonRiskPatterns"), 4);
+        return new WriteRequest(
+                request.type(), request.ownerScope(), request.userId(),
+                request.conversationId(), request.runId(), content, merged,
+                request.source(), request.sourceId(), request.confidence(),
+                request.sensitivityLevel(), request.ttlDays());
+    }
+
+    private static List<String> mergeUniqueValues(
+            Object oldValue, Object newValue, int limit) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        for (Object raw : List.of(oldValue == null ? List.of() : oldValue,
+                newValue == null ? List.of() : newValue)) {
+            if (raw instanceof Iterable<?> items) {
+                for (Object item : items) {
+                    String text = String.valueOf(item == null ? "" : item).trim();
+                    if (StringUtils.hasText(text)) {
+                        values.add(text.length() > 180 ? text.substring(0, 180) : text);
+                    }
+                }
+            }
+        }
+        return values.stream().limit(limit).toList();
+    }
+
+    private static int numberValue(Object value, int fallback) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private static String textValue(Object value, String fallback) {
+        String text = String.valueOf(value == null ? "" : value).trim();
+        return StringUtils.hasText(text) ? text : fallback;
+    }
+
+    private static String joinValues(Object value, int limit) {
+        if (!(value instanceof Iterable<?> items)) {
+            return "无";
+        }
+        List<String> texts = new ArrayList<>();
+        for (Object item : items) {
+            String text = String.valueOf(item == null ? "" : item).trim();
+            if (StringUtils.hasText(text)) {
+                texts.add(text);
+            }
+            if (texts.size() >= limit) {
+                break;
+            }
+        }
+        return texts.isEmpty() ? "无" : String.join("; ", texts);
     }
 
     private String factKey(WriteRequest request) {

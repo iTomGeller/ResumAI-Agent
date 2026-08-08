@@ -72,7 +72,7 @@ Coordinator 规则优先：简单请求（时间线/改写/追问等）直接映
 - Token 估算区分 CJK/ASCII 并用真实 API usage 持续校准（`context.calibrate`）。
 - 压缩保留最新请求/目标/约束，Tool Call 与 Result 按 `toolCallId` 严格配对（数量对不上也会报违规）；CompactionRecord 真实记录 messageId 范围并落库 `context_snapshot`。
 - JD、当前简历、知识库三类 RAG 由独立 Retrieval 层在生成前执行，结果进入 `[RAG上下文]`，不进入 Provider 工具目录。
-- Memory 只保留 `SEMANTIC / EPISODIC / PROCEDURAL`：Python 生成候选，Java 只在成功终态被接受后直接落库；Working Memory 不再读写。用户偏好只从显式表述抽取，模型推断不落长期记忆。
+- Memory 只保留两层岗位业务记忆：`RECENT_CASE`（同岗位脱敏案例，TTL 30 天、最多召回 2 条）和 `JOB_PROFILE`（按 `jobCategory + JD fingerprint` 聚合的岗位画像，TTL 180 天、召回 1 条）。两者都不保存用户对话、用户偏好、候选人 PII、完整简历、完整报告或录用结论；失败/取消 Run 不写。TTL 来自 `harness/run_business_memory_ttl_experiment.py` 对 100 份简历、15 个岗位 cohort 的受控时间回放。
 
 ## 7. 证据政策
 

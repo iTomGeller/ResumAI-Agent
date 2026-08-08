@@ -4,7 +4,7 @@
 >
 > - 三套业务 RAG 是 JD 库、当前简历、评估知识库。它们由 `BusinessRagRetriever` 在 LLM 前确定性检索，写入 user message 的 `[RAG上下文]`；不在 Provider `tools[]` 中，不产生模型 tool call，也不占 tool budget。
 > - ReportAgent 只有一个实例、一次完整结构化报告路径；已取消 score/risk/question 三分支及对应环境开关。
-> - Memory 只有 `SEMANTIC / EPISODIC / PROCEDURAL` 三类。Working Memory 不再读写；Python 把长期 Memory 候选放入最终 SharedState，Java 仅在成功终态被接受后直写，失败/取消 Run 不写。
+> - Memory 只有 `RECENT_CASE / JOB_PROFILE` 两层岗位业务记忆。前者保存 30 天内同岗位脱敏案例，后者按 JD fingerprint 聚合并保存 180 天；不保存用户对话、候选人 PII、完整报告或录用结论。Python 把候选写入最终 SharedState，Java 仅在成功终态被接受后落库。
 > - 当前 ECS 索引：JD 124 份/554 个 live chunks，知识库 12 份/106 个 live chunks；当前简历索引随上传按请求建立，尚未上传时 live chunks 为 0。三个 collection 均已建索引并 Loaded。
 > - 容量只用两个 permit：`RUN_MAX_GLOBAL_CONCURRENT=12` 是可运行 workflow 数，同一 Run 的并行分支共享，并在全部等待 LLM 时释放、任一结果返回后重新获取；`LLM_MAX_CONCURRENT=64` 是供应商请求数。没有第三套 Agent semaphore。
 
@@ -736,7 +736,7 @@ Tech、Project、Risk、Evidence 的 system 尾部会附加：
 | 基础角色模板 | 有：`tech-system v3`等 | `messages[0].content` |
 | Skills | 有：Tech 1个；Project 2个；Risk 1个；Evidence 1个；Report 0个 | `[技能指令]`，属于`messages[0].content` |
 | 用户简历与JD | 有：简历4490字符；JD 157字符 | `[共享状态]`，属于`messages[1].content` |
-| Memory | 有：代表Trace中每个主Agent消费1条EPISODIC和2条PROCEDURAL | `[相关记忆]`，属于`messages[1].content` |
+| Memory | 当前版本最多消费2条同岗位RECENT_CASE和1条JOB_PROFILE | `[同岗位业务记忆]`，属于`messages[1].content` |
 | 历史对话 | **没有**：初次上传创建新Conversation，`recentMessages=[]`、`conversationSummary=null`、`currentGoal=null` | 为空时`ContextManager`直接不生成对应section |
 | RAG 上下文 | 有：Tech 的简历/知识库召回、Project 的简历召回 | `[RAG上下文]`，属于 `messages[1].content`；不是工具结果 |
 | 内部工具结果 | 有：例如 Tech 的 coverage、Project 的 locate_evidence | `[工具观察]`，属于 `messages[1].content` |
@@ -767,7 +767,7 @@ Tech、Project、Risk、Evidence 的 system 尾部会附加：
       "role": "user",
       "contains": [
         "固定上传评估请求",
-        "1条EPISODIC + 2条PROCEDURAL Memory",
+        "最多2条RECENT_CASE + 1条JOB_PROFILE",
         "senior_backend_004的resumeFacts/rawExcerpt",
         "job-java-agent的effectiveJd",
         "Project pre-step的resume_semantic_search观察"
@@ -927,10 +927,10 @@ TechAgent 实际收到的 user message 按下面结构组装。以下值来自�
   | 候选人=<OTHER_STRESS_CANDIDATE> | 总分=61 | JD匹配=40
   | 推荐=NEED_MANUAL_REVIEW
 # 上下文
-  [PROCEDURAL|src=runtime_strategy]
+  [RECENT_CASE|src=recent_job_case]
   简历评估执行策略[RISK_TIMELINE]：履历风险场景保留RiskAgent，
   并将时间线结论交给EvidenceAgent或ReportAgent复核。
-  [PROCEDURAL|src=runtime_strategy]
+  [JOB_PROFILE|src=job_profile]
   简历评估执行策略[PROJECT_EVIDENCE]：项目或外部链接场景保留
   ProjectAgent与EvidenceAgent，并为证据工具调用预留action turn。
 
@@ -1240,7 +1240,7 @@ Python Workflow 的调用没有把 `prompt_full` 写入 Java 的 `llm_invocation
 | 真实载荷部分 | 这个 Case 的具体内容 | 完整示例位置 |
 |---|---|---|
 | `messages[0].content` | Tech v3 基础模板 + balanced策略 + `assess-technical-evidence@v1#435f01775ae0`全文 + Specialist输出契约 | 第2.4.2节，已全文展开 |
-| `messages[1].content` | 固定上传请求 + 1条EPISODIC/2条PROCEDURAL Memory + `senior_backend_004`的简历事实和真实JD + 三个pre-step工具回执 | 第2.4.3节，候选人PII已脱敏 |
+| `messages[1].content` | 固定上传请求 + 最多2条同岗位脱敏案例/1条岗位画像 + 当前简历事实和真实JD + pre-step工具回执 | 候选人PII不进入Memory |
 | `tools` | Agent内部工具、实时健康的MCP function schema、terminal function；不是文本Prompt | `fetch_fetch`完整schema见第2.4.4节；各Agent目录见第2.4.5节 |
 | `tool_choice` | 普通 action 轮为 `auto`；收口轮强制 terminal function，ReportAgent 一次提交完整报告 | 第2.4.4、2.4.5节 |
 
@@ -1340,64 +1340,60 @@ allowedTools: （未声明）
 
 ### 3.3 Memory 的真实检索与注入链
 
-每个 Run 在 observe 阶段并行发起四次检索：
+每个 Run 在 observe 阶段并行发起两次同岗位业务检索：
 
 ```text
-PROCEDURAL：可复用的执行策略，最多2条
-SEMANTIC：候选人事实或明确偏好，最多4条
-EPISODIC：历史评估与同岗位对比锚点，最多5条
-FAILURE：控制面失败经验，最多3条，仅 Coordinator 可见
+RECENT_CASE：30天内的同岗位脱敏案例，最多2条
+JOB_PROFILE：当前 jobCategory + JD fingerprint 的聚合画像，最多1条
 ```
 
-然后 `_merge_memory_hits()` 保证候选人事实、同会话 episode、跨候选人锚点和 procedure 不被单一类型挤掉；`filter_hits_for_consumer()` 再按 Agent 做二次隔离：
+`_merge_memory_hits()` 为岗位画像保留一个位置，再补最多两条近期案例；`filter_hits_for_consumer()` 按 Agent 做二次隔离：
 
-- Specialist 不允许看到控制面 FAILURE。
-- Report/Risk 额外防止错误码、进程故障等控制面噪声进入候选人结论。
-- GLOBAL 只有 PROCEDURAL 可以进入普通 Specialist。
-- RUN scope 只有 WORKING memory 合法。
+- Coordinator、Tech、Project、Risk、Evidence 可读取两层业务 Memory。
+- Report 只读取 `JOB_PROFILE`，不把上一位候选人的案例当作当前推荐依据。
+- `jobCategory` 不同直接拒绝；`JOB_PROFILE` 的 JD fingerprint 不同也直接拒绝。
+- GLOBAL/RUN Memory 不进入评估 Prompt。
 - benchmark source 默认不注入生产评估。
 
-代表 Run 的五个主 Agent 都实际附加了 3 条记忆：
+召回结果的结构示例：
 
 ```json
 [
   {
-    "type": "EPISODIC",
-    "source": "cross_candidate_anchor",
+    "type": "RECENT_CASE",
+    "source": "recent_job_case",
     "scope": "USER",
-    "finalScore": 0.312,
+    "structuredContent": {
+      "jobCategory": "BACKEND",
+      "jdFingerprint": "...",
+      "piiExcluded": true,
+      "verifiedMatches": ["Spring Boot生产经验"],
+      "jdGaps": ["高并发压测证据不足"]
+    },
     "used": true
   },
   {
-    "type": "PROCEDURAL",
-    "source": "runtime_strategy",
+    "type": "JOB_PROFILE",
+    "source": "job_profile",
     "scope": "USER",
-    "finalScore": 0.570,
-    "used": true
-  },
-  {
-    "type": "PROCEDURAL",
-    "source": "runtime_strategy",
-    "scope": "USER",
-    "finalScore": 0.541,
+    "structuredContent": {
+      "sampleCount": 12,
+      "stableRequirements": ["Spring Boot生产经验"],
+      "commonGaps": ["性能指标缺少基线"]
+    },
     "used": true
   }
 ]
 ```
 
-最新100份的 Memory 数据：
+TTL 由受控回放确定，不使用时间高度集中的线上压测记录：
 
-| 指标 | 真实值 |
-|---|---:|
-| memory search | 400 次 |
-| returned hits | 258 |
-| read hit rate | 39.5% |
-| Agent消费记录 USED | 1,240 |
-| PROCEDURAL 消费 | 962 |
-| EPISODIC 消费 | 278 |
-| 检索 P50 / P95 | 28 / 43.05ms |
+| 层 | 候选 TTL | 选择 | 首次通过的门槛 |
+|---|---|---:|---|
+| RECENT_CASE | 7/14/30/45/60/90 天 | 30 天 | 正常岗位 Top-2 覆盖 91.12%（14 天仅 57.95%） |
+| JOB_PROFILE | 30/60/90/180/365 天 | 180 天 | 稀疏岗位建立后可用率 99.89%（90 天为 96.10%） |
 
-“258 个检索命中”与“1,240 次 Agent 消费”并不矛盾：一个 Run 先得到安全 Memory 池，同一条合适的策略可以分别注入 Tech、Project、Risk、Evidence、Report，于是形成多个 consumer usage 记录。
+实验脚本为 `harness/run_business_memory_ttl_experiment.py`，结果保存在 `reports/experiments/business_memory_ttl_controlled.{json,md}`。JD 发生变化时依靠 fingerprint 立即使旧画像失效，不能等待 TTL。
 
 ![Memory流转](../reports/project_cache100_20260803/charts/10_memory_flow.svg)
 

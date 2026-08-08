@@ -536,10 +536,39 @@ class Coordinator:
             artifacts=artifacts, shared=shared)
         signals["single_pass_evaluation"] = run_type in FULL_EVAL_TYPES
         self._last_signals = signals
-        self._execution_history = [
-            n for n in (memory_notes if isinstance(memory_notes, list) else [])
-            if isinstance(n, dict) and (n.get("source") == "execution_profile"
-                                        or "execution_profile" in str(n.get("structured", {}).get("factKey", "")))]
+        self._business_memory = [
+            note for note in (memory_notes if isinstance(memory_notes, list) else [])
+            if isinstance(note, dict)
+            and str(note.get("type") or note.get("memoryType") or "")
+            in {"RECENT_CASE", "JOB_PROFILE"}
+        ]
+        # Runtime counters belong to telemetry, not business Memory. Business
+        # memories influence priority through evidence/project/risk signals.
+        self._execution_history = []
+        for note in self._business_memory:
+            structured = note.get("structuredContent") or note.get("structured") or {}
+            if not isinstance(structured, dict):
+                continue
+            if structured.get("unsupportedClaims") \
+                    or structured.get("unsupportedClaimPatterns"):
+                signals["memory_evidence_gaps"] = True
+            if structured.get("commonGaps") or structured.get("jdGaps"):
+                signals["memory_project_gaps"] = True
+            if structured.get("riskPatterns") \
+                    or structured.get("commonRiskPatterns"):
+                signals["memory_risk_patterns"] = True
+
+        if self._business_memory:
+            base = self._finalize(
+                list(base.get("plan") or []),
+                str(base.get("reason") or "artifact_backward_chain"),
+                selected_because=base.get("selectedBecause"),
+                skipped_because=base.get("skippedBecause"),
+                artifact_edges=base.get("artifactEdges"),
+                goal_artifacts=base.get("goalArtifacts"),
+                optional_artifacts=base.get("optionalArtifacts"),
+                present_artifacts=set(base.get("presentArtifacts") or []),
+            )
 
         # Evaluation routing is deterministic and signal-driven. Spending a
         # coordinator provider call to restate the artifact plan adds latency
@@ -724,8 +753,16 @@ class Coordinator:
                     remaining -= 1
             # Give the other reasoning specialists room to activate one Skill
             # from metadata. They keep the turn when no activation is useful.
-            for agent in (
-                    "TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent"):
+            memory_priority = []
+            if sig.get("memory_evidence_gaps"):
+                memory_priority.append("EvidenceAgent")
+            if sig.get("memory_project_gaps"):
+                memory_priority.append("ProjectAgent")
+            if sig.get("memory_risk_patterns"):
+                memory_priority.append("RiskAgent")
+            memory_priority.extend(
+                ["TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent"])
+            for agent in dict.fromkeys(memory_priority):
                 if remaining <= 0:
                     break
                 if agent in quotas and quotas[agent] == 1:

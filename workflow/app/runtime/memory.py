@@ -13,16 +13,12 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Canonical taxonomy. Legacy names are accepted only at the API boundary and
-# are normalized before filtering, prompting or trace emission.
-CANONICAL_TYPES = frozenset({"SEMANTIC", "EPISODIC", "PROCEDURAL"})
-LEGACY_TYPE_MAP = {
-    "PREFERENCE": "SEMANTIC",
-    "USER_PREFERENCE": "SEMANTIC",
-    "DOMAIN": "SEMANTIC",
-    "FAILURE": "EPISODIC",
-}
-SPECIALIST_TYPES = frozenset({"SEMANTIC", "EPISODIC", "PROCEDURAL"})
+# Business memory has two deliberately narrow layers. Old candidate facts,
+# evaluation episodes and procedures are not aliases for either new layer;
+# deployment archives them so stale conclusions cannot enter new prompts.
+CANONICAL_TYPES = frozenset({"RECENT_CASE", "JOB_PROFILE"})
+LEGACY_TYPE_MAP: Dict[str, str] = {}
+SPECIALIST_TYPES = CANONICAL_TYPES
 COORDINATOR_TYPES = CANONICAL_TYPES
 CONTROL_PLANE_ERROR_CODES = frozenset({
     "ORPHANED_ON_RESTART", "RUNTIME_START_FAILED", "START_STUCK",
@@ -127,14 +123,14 @@ def is_failure_episode(hit: Dict[str, Any]) -> bool:
 
 def allowed_types_for(consumer_agent: Optional[str]) -> frozenset[str]:
     key = str(consumer_agent or "Specialist").replace("-", "").replace("_", "").lower()
-    if key.startswith("policy"):
-        return frozenset({"PROCEDURAL", "EPISODIC"})
     if key in {"coordinator", "coordinatoragent"}:
         return COORDINATOR_TYPES
-    if "conversation" in key:
-        return frozenset({"SEMANTIC"})
-    if "report" in key or "risk" in key:
-        return frozenset({"EPISODIC", "SEMANTIC", "PROCEDURAL"})
+    if "conversation" in key or "resumeparser" in key or key.startswith("policy"):
+        return frozenset()
+    # Report consumes the stable job calibration only. It must not reuse a
+    # previous candidate's recent case as the current recommendation.
+    if "report" in key:
+        return frozenset({"JOB_PROFILE"})
     return SPECIALIST_TYPES
 
 
@@ -266,7 +262,7 @@ def filter_hits_for_consumer(
             reason = "control_plane_not_injectable"
         elif is_failure_episode(hit) and not allows_failure(consumer_agent):
             reason = "failure_reserved_for_coordinator"
-        elif scope == "GLOBAL" and hit_type != "PROCEDURAL" and not (
+        elif scope == "GLOBAL" and not (
                 allows_failure(consumer_agent) and is_failure_episode(hit)):
             reason = f"scope_{scope}_excluded_for_{consumer_agent}"
         elif scope == "RUN":
@@ -457,9 +453,6 @@ class MemoryClient:
         type_ = canonical_taxonomy(type_)
         if type_ not in CANONICAL_TYPES:
             raise ValueError(f"unsupported memory taxonomy: {type_}")
-        # Candidate/user semantic facts never write into a global namespace.
-        if type_ == "SEMANTIC" and owner_scope.upper() == "GLOBAL":
-            owner_scope = "USER"
         structured_payload = dict(structured or {})
         structured_payload.setdefault(
             "_producerVersion", settings.workflow_build_version)
@@ -548,8 +541,6 @@ class NullMemoryClient(MemoryClient):
         type_ = canonical_taxonomy(type_)
         if type_ not in CANONICAL_TYPES:
             raise ValueError(f"unsupported memory taxonomy: {type_}")
-        if type_ == "SEMANTIC" and owner_scope.upper() == "GLOBAL":
-            owner_scope = "USER"
         self.writes.append({
             "type": type_, "ownerScope": owner_scope, "content": content,
             "structured": structured or {}, "source": source,

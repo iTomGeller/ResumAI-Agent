@@ -951,15 +951,11 @@ public class RunLifecycleService {
                             finished.getTraceId(), "memory.written",
                             "MemoryService", "memory_write", memoryPayload);
                 }
-                memoryService.writeRunEpisode(finished, terminal.name());
             } else {
                 // Legacy cleanup only. New Runtime versions do not create
                 // RUN-scoped Working Memory or pre-terminal durable rows.
                 memoryService.archiveRunProducedMemory(finished.getRunId());
                 memoryService.archiveRunWorkingMemory(finished.getRunId());
-            }
-            if (terminal == RunStatus.FAILED || terminal == RunStatus.TIMED_OUT) {
-                memoryService.writeFailureMemory(finished, errorCode, errorMessage);
             }
         } catch (Exception e) {
             log.warn("post-run memory finalization failed run={}: {}",

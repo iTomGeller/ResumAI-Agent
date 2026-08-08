@@ -1,0 +1,290 @@
+{
+  "experiment": "business_memory_ttl_controlled_replay",
+  "generatedAt": "2026-08-08T08:29:37Z",
+  "source": "testdata\\stress_resumes\\manifest.json",
+  "corpus": {
+    "cases": 100,
+    "jobCohorts": 15,
+    "cohortSizes": {
+      "ai_agent_engineer": 10,
+      "algorithm_ml": 6,
+      "career_gap": 4,
+      "data_platform": 7,
+      "devops_sre": 7,
+      "junior_frontend": 7,
+      "llm_rag_engineer": 8,
+      "mobile_engineer": 5,
+      "new_grad": 6,
+      "product_manager": 8,
+      "qa_automation": 5,
+      "security_backend": 5,
+      "senior_backend": 12,
+      "senior_frontend": 7,
+      "sparse_risk": 3
+    }
+  },
+  "method": {
+    "simulationDays": 365.0,
+    "seeds": 40,
+    "cadencesPerJobPerWeek": {
+      "sparse": 0.25,
+      "normal": 1.0,
+      "busy": 5.0
+    },
+    "recentTopK": 2,
+    "jobProfileMinCases": 3,
+    "identityDependency": "NONE; memories are job-scoped and de-identified",
+    "productionMutation": "NONE"
+  },
+  "selectionGates": {
+    "RECENT_CASE": {
+      "normalCoverageTop2": 0.9,
+      "busyCoverageTop2": 0.95,
+      "normalMeanSimilarity": 0.9
+    },
+    "JOB_PROFILE": {
+      "minimumAvailabilityAcrossCadences": 0.99
+    }
+  },
+  "results": {
+    "RECENT_CASE": {
+      "sparse": [
+        {
+          "ttlDays": 7,
+          "coverageAtLeastOne": 0.2171,
+          "coverageTop2": 0.0239,
+          "eligibleQueries": 11.9867,
+          "meanAttachedCases": 0.2225,
+          "meanSelectedSimilarity": 0.7706
+        },
+        {
+          "ttlDays": 14,
+          "coverageAtLeastOne": 0.3912,
+          "coverageTop2": 0.0798,
+          "eligibleQueries": 11.9867,
+          "meanAttachedCases": 0.4345,
+          "meanSelectedSimilarity": 0.8348
+        },
+        {
+          "ttlDays": 30,
+          "coverageAtLeastOne": 0.6527,
+          "coverageTop2": 0.264,
+          "eligibleQueries": 11.9867,
+          "meanAttachedCases": 0.8454,
+          "meanSelectedSimilarity": 0.8579
+        },
+        {
+          "ttlDays": 45,
+          "coverageAtLeastOne": 0.7934,
+          "coverageTop2": 0.4301,
+          "eligibleQueries": 11.9867,
+          "meanAttachedCases": 1.1271,
+          "meanSelectedSimilarity": 0.8653
+        },
+        {
+          "ttlDays": 60,
+          "coverageAtLeastOne": 0.8786,
+          "coverageTop2": 0.5659,
+          "eligibleQueries": 11.9867,
+          "meanAttachedCases": 1.3295,
+          "meanSelectedSimilarity": 0.8723
+        },
+        {
+          "ttlDays": 90,
+          "coverageAtLeastOne": 0.9634,
+          "coverageTop2": 0.7596,
+          "eligibleQueries": 11.9867,
+          "meanAttachedCases": 1.5829,
+          "meanSelectedSimilarity": 0.889
+        }
+      ],
+      "normal": [
+        {
+          "ttlDays": 7,
+          "coverageAtLeastOne": 0.6327,
+          "coverageTop2": 0.259,
+          "eligibleQueries": 51.1583,
+          "meanAttachedCases": 0.8746,
+          "meanSelectedSimilarity": 0.8604
+        },
+        {
+          "ttlDays": 14,
+          "coverageAtLeastOne": 0.865,
+          "coverageTop2": 0.5795,
+          "eligibleQueries": 51.1583,
+          "meanAttachedCases": 1.4166,
+          "meanSelectedSimilarity": 0.875
+        },
+        {
+          "ttlDays": 30,
+          "coverageAtLeastOne": 0.9859,
+          "coverageTop2": 0.9112,
+          "eligibleQueries": 51.1583,
+          "meanAttachedCases": 1.8602,
+          "meanSelectedSimilarity": 0.9182
+        },
+        {
+          "ttlDays": 45,
+          "coverageAtLeastOne": 0.9983,
+          "coverageTop2": 0.9679,
+          "eligibleQueries": 51.1583,
+          "meanAttachedCases": 1.9279,
+          "meanSelectedSimilarity": 0.9499
+        },
+        {
+          "ttlDays": 60,
+          "coverageAtLeastOne": 0.9999,
+          "coverageTop2": 0.9784,
+          "eligibleQueries": 51.1583,
+          "meanAttachedCases": 1.9397,
+          "meanSelectedSimilarity": 0.9683
+        },
+        {
+          "ttlDays": 90,
+          "coverageAtLeastOne": 1.0,
+          "coverageTop2": 0.9801,
+          "eligibleQueries": 51.1583,
+          "meanAttachedCases": 1.9414,
+          "meanSelectedSimilarity": 0.9831
+        }
+      ],
+      "busy": [
+        {
+          "ttlDays": 7,
+          "coverageAtLeastOne": 0.9933,
+          "coverageTop2": 0.9559,
+          "eligibleQueries": 259.25,
+          "meanAttachedCases": 1.9416,
+          "meanSelectedSimilarity": 0.9336
+        },
+        {
+          "ttlDays": 14,
+          "coverageAtLeastOne": 1.0,
+          "coverageTop2": 0.9956,
+          "eligibleQueries": 259.25,
+          "meanAttachedCases": 1.9879,
+          "meanSelectedSimilarity": 0.9823
+        },
+        {
+          "ttlDays": 30,
+          "coverageAtLeastOne": 1.0,
+          "coverageTop2": 0.9961,
+          "eligibleQueries": 259.25,
+          "meanAttachedCases": 1.9884,
+          "meanSelectedSimilarity": 0.9971
+        },
+        {
+          "ttlDays": 45,
+          "coverageAtLeastOne": 1.0,
+          "coverageTop2": 0.9961,
+          "eligibleQueries": 259.25,
+          "meanAttachedCases": 1.9884,
+          "meanSelectedSimilarity": 0.9977
+        },
+        {
+          "ttlDays": 60,
+          "coverageAtLeastOne": 1.0,
+          "coverageTop2": 0.9961,
+          "eligibleQueries": 259.25,
+          "meanAttachedCases": 1.9884,
+          "meanSelectedSimilarity": 0.9977
+        },
+        {
+          "ttlDays": 90,
+          "coverageAtLeastOne": 1.0,
+          "coverageTop2": 0.9961,
+          "eligibleQueries": 259.25,
+          "meanAttachedCases": 1.9884,
+          "meanSelectedSimilarity": 0.9977
+        }
+      ]
+    },
+    "JOB_PROFILE": {
+      "sparse": [
+        {
+          "ttlDays": 30,
+          "availability": 0.6517,
+          "eligibleQueries": 9.9867
+        },
+        {
+          "ttlDays": 60,
+          "availability": 0.8749,
+          "eligibleQueries": 9.9867
+        },
+        {
+          "ttlDays": 90,
+          "availability": 0.961,
+          "eligibleQueries": 9.9867
+        },
+        {
+          "ttlDays": 180,
+          "availability": 0.9989,
+          "eligibleQueries": 9.9867
+        },
+        {
+          "ttlDays": 365,
+          "availability": 1.0,
+          "eligibleQueries": 9.9867
+        }
+      ],
+      "normal": [
+        {
+          "ttlDays": 30,
+          "availability": 0.9856,
+          "eligibleQueries": 49.1583
+        },
+        {
+          "ttlDays": 60,
+          "availability": 0.9999,
+          "eligibleQueries": 49.1583
+        },
+        {
+          "ttlDays": 90,
+          "availability": 1.0,
+          "eligibleQueries": 49.1583
+        },
+        {
+          "ttlDays": 180,
+          "availability": 1.0,
+          "eligibleQueries": 49.1583
+        },
+        {
+          "ttlDays": 365,
+          "availability": 1.0,
+          "eligibleQueries": 49.1583
+        }
+      ],
+      "busy": [
+        {
+          "ttlDays": 30,
+          "availability": 1.0,
+          "eligibleQueries": 257.25
+        },
+        {
+          "ttlDays": 60,
+          "availability": 1.0,
+          "eligibleQueries": 257.25
+        },
+        {
+          "ttlDays": 90,
+          "availability": 1.0,
+          "eligibleQueries": 257.25
+        },
+        {
+          "ttlDays": 180,
+          "availability": 1.0,
+          "eligibleQueries": 257.25
+        },
+        {
+          "ttlDays": 365,
+          "availability": 1.0,
+          "eligibleQueries": 257.25
+        }
+      ]
+    }
+  },
+  "decision": {
+    "RECENT_CASE": 30,
+    "JOB_PROFILE": 180
+  }
+}

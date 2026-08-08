@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import inspect
 import json
 import logging
@@ -652,14 +653,7 @@ class RunExecutor:
     @staticmethod
     def _memory_retrieval_query(
             request: AgentRunRequest) -> Tuple[str, List[str]]:
-        """Build a short semantic recall query from candidate-bearing cues.
-
-        Memory ranking normalizes lexical overlap by the number of query
-        terms.  Feeding the whole resume made a compact candidate fact or user
-        preference score below the relevance floor even when it clearly
-        matched.  Keep identity, project/timeline lines and technical tokens,
-        but never use the raw document as the retrieval query.
-        """
+        """Build a de-identified query for same-job business memories."""
         resume = request.resumeText or ""
         lines = [line.strip() for line in resume.splitlines() if line.strip()]
         cue_lines: List[str] = []
@@ -688,8 +682,8 @@ class RunExecutor:
                 f"{resume_cues} | 技术词={','.join(technical_tokens)}"
                 if resume_cues else f"技术词={','.join(technical_tokens)}")
         parts = [
-            ("user_message", (request.userMessage or "")[:100]),
-            ("current_goal", (request.currentGoal or "")[:120]),
+            ("run_type", request.runType or ""),
+            ("job_category", (request.jobCategory or "")[:100]),
             ("job_description", (request.jobDescription or "")[:220]),
             ("resume_cues", resume_cues[:480]),
         ]
@@ -700,93 +694,37 @@ class RunExecutor:
         return query, basis
 
     @staticmethod
-    def _episodic_memory_query(request: AgentRunRequest) -> str:
-        """Focused query for prior evaluations and same-job comparison anchors."""
-        resume = request.resumeText or ""
-        first_line = next(
-            (line.strip()[:80] for line in resume.splitlines() if line.strip()), "")
-        technical_tokens: List[str] = []
-        for token in re.findall(
-                r"[A-Za-z][A-Za-z0-9.+#_-]{1,30}", resume):
-            if token.lower() not in {value.lower() for value in technical_tokens}:
-                technical_tokens.append(token)
-            if len(technical_tokens) >= 10:
-                break
-        parts = [
-            "历史评估 评估结果 同岗位对比 风险 结论",
-            (request.currentGoal or "")[:100],
-            (request.jobDescription or "")[:240],
-            first_line,
-            " ".join(technical_tokens),
-        ]
-        return "\n".join(part.strip() for part in parts if part and part.strip())
+    def _business_memory_matches_request(
+            hit: Dict[str, Any], request: AgentRunRequest) -> bool:
+        """Defense in depth: never inject a memory from another job/JD."""
+        structured = hit.get("structuredContent") or hit.get("structured") or {}
+        if not isinstance(structured, dict):
+            return False
+        current_category = (request.jobCategory or "").strip().upper()
+        memory_category = str(structured.get("jobCategory") or "").strip().upper()
+        if current_category and memory_category != current_category:
+            return False
+        normalized_jd = re.sub(
+            r"\s+", " ", (request.jobDescription or "").strip()).lower()
+        if normalized_jd and str(hit.get("type") or "") == "JOB_PROFILE":
+            fingerprint = hashlib.sha256(
+                normalized_jd.encode("utf-8")).hexdigest()[:20]
+            if str(structured.get("jdFingerprint") or "") != fingerprint:
+                return False
+        return bool(current_category or normalized_jd)
 
     @staticmethod
-    def _procedural_memory_query(request: AgentRunRequest) -> str:
-        """Small candidate-free query for reusable, observed run strategies."""
-        text = " ".join((
-            request.runType or "",
-            request.userMessage or "",
-            request.currentGoal or "",
-            request.resumeText or "",
-        )).lower()
-        cues = ["简历评估", "执行策略", request.runType or "full_evaluation"]
-        if any(token in text for token in (
-                "项目", "github", "开源", "project", "作品集")):
-            cues.extend(["项目", "证据核验"])
-        if any(token in text for token in (
-                "空档", "风险", "离职", "gap", "时间线")):
-            cues.extend(["风险", "时间线"])
-        if request.jobDescription:
-            cues.extend(["JD", "技术匹配"])
-        return " ".join(dict.fromkeys(cues))
 
     @staticmethod
     def _merge_memory_hits(
-            procedures: List[Dict[str, Any]],
-            semantic_hits: List[Dict[str, Any]],
-            episodic_hits: List[Dict[str, Any]],
+            recent_cases: List[Dict[str, Any]],
+            job_profiles: List[Dict[str, Any]],
+            legacy_unused: Optional[List[Dict[str, Any]]] = None,
             *,
             limit: int,
     ) -> List[Dict[str, Any]]:
-        """Fuse real hits with a reserved slot per safe memory class.
-
-        The old procedure-first concatenation let two PROCEDURAL rows dominate
-        short result sets.  Reserve the first available hit for candidate facts
-        or preferences, same-conversation episodes, cross-candidate comparison
-        anchors and procedures, then fill remaining capacity by score.
-        """
-        safe_semantic_hits: List[Dict[str, Any]] = []
-        for hit in semantic_hits:
-            scope = str(hit.get("ownerScope") or hit.get("scope") or "").upper()
-            source = str(hit.get("source") or "")
-            # Candidate facts are conversation-isolated by the backend. At
-            # USER scope only explicit preferences are safe; legacy evaluation
-            # conclusions must never become facts for another candidate.
-            if scope == "CONVERSATION" or (
-                    scope == "USER" and source == "user_explicit"):
-                safe_semantic_hits.append(hit)
-
-        same_conversation_episodes: List[Dict[str, Any]] = []
-        comparison_anchors: List[Dict[str, Any]] = []
-        other_safe_episodes: List[Dict[str, Any]] = []
-        for hit in episodic_hits:
-            scope = str(hit.get("ownerScope") or hit.get("scope") or "").upper()
-            source = str(hit.get("source") or "")
-            if source == "cross_candidate_anchor":
-                comparison_anchors.append(hit)
-            elif scope == "CONVERSATION":
-                same_conversation_episodes.append(hit)
-            elif scope != "USER":
-                other_safe_episodes.append(hit)
-
-        buckets = [
-            safe_semantic_hits,
-            same_conversation_episodes,
-            comparison_anchors,
-            list(procedures),
-            other_safe_episodes,
-        ]
+        """Keep one job profile and at most two de-identified recent cases."""
+        buckets = [list(job_profiles[:1]), list(recent_cases[:2])]
         merged: List[Dict[str, Any]] = []
         seen = set()
 
@@ -880,69 +818,54 @@ class RunExecutor:
                         f"失效 {len(self.revision_reuse['invalidatedArtifacts'])} 个"),
                     **self.revision_reuse,
                 })
-            # Candidate facts, prior episodes and reusable procedures use
-            # independent focused queries. Run them concurrently so diversity
-            # does not add control-plane latency.
+            # Business memory is job-scoped, de-identified, and split into a
+            # small recent-case layer plus one stable job profile.
             memory_query, memory_query_basis = self._memory_retrieval_query(
                 request)
-            episodic_query = self._episodic_memory_query(request)
             recall_limit = self.policy.memoryRetrieval.topK
-            procedure_hits, semantic_hits, episodic_hits, failure_hits = (
+            recent_case_hits, job_profile_hits = (
                 await asyncio.gather(
                     self.memory.search(
-                        self._procedural_memory_query(request),
-                        types=["PROCEDURAL"], top_k=min(2, recall_limit),
+                        memory_query, types=["RECENT_CASE"],
+                        top_k=min(2, recall_limit),
                         min_confidence=self.policy.memoryRetrieval.minConfidence,
                         consumer_agent="SpecialistAgent"),
                     self.memory.search(
-                        memory_query, types=["SEMANTIC"],
-                        top_k=min(4, recall_limit),
+                        memory_query, types=["JOB_PROFILE"], top_k=1,
                         min_confidence=self.policy.memoryRetrieval.minConfidence,
                         consumer_agent="SpecialistAgent"),
-                    self.memory.search(
-                        episodic_query, types=["EPISODIC"],
-                        top_k=min(5, recall_limit),
-                        min_confidence=self.policy.memoryRetrieval.minConfidence,
-                        consumer_agent="SpecialistAgent"),
-                    self.memory.search(
-                        episodic_query, types=["FAILURE"], top_k=3,
-                        min_confidence=self.policy.memoryRetrieval.minConfidence,
-                        consumer_agent="CoordinatorAgent"),
                 ))
+            recent_case_hits = [
+                hit for hit in recent_case_hits
+                if self._business_memory_matches_request(hit, request)]
+            job_profile_hits = [
+                hit for hit in job_profile_hits
+                if self._business_memory_matches_request(hit, request)]
             self.memory_hits = self._merge_memory_hits(
-                procedure_hits, semantic_hits, episodic_hits,
+                recent_case_hits, job_profile_hits,
                 limit=self.policy.memoryRetrieval.topK)
-            # FAILURE is Coordinator / policy-evolution only.
-            self.failure_hits = failure_hits
-            self.failure_notes = [
-                str(h.get("content", ""))[:160] for h in self.failure_hits][:3]
+            self.failure_hits = []
+            self.failure_notes = []
             # Memory retrieval must be observable in the trace, not a black box.
             type_counts: Dict[str, int] = {}
-            for hit in self.memory_hits + self.failure_hits:
+            for hit in self.memory_hits:
                 hit_type = str(hit.get("type") or "UNKNOWN")
                 type_counts[hit_type] = type_counts.get(hit_type, 0) + 1
             observe_trace = memory_trace_entries(
                 [{"used": True, "ignoredReason": None, **h} for h in self.memory_hits],
                 [],
                 "SpecialistAgent",
-            ) + memory_trace_entries(
-                [{"used": True, "ignoredReason": None, **h} for h in self.failure_hits],
-                [],
-                "CoordinatorAgent",
             )
             self.memory_traces.extend(observe_trace)
             await self.emitter.emit("run.progress", payload={
                 "stage": "memory",
-                "message": (f"记忆命中 {len(self.memory_hits)} 条"
-                            f"（FAILURE 仅 Coordinator {len(self.failure_hits)} 条）"),
+                "message": f"岗位业务记忆命中 {len(self.memory_hits)} 条",
                 "memoryHits": len(self.memory_hits),
-                "failureHits": len(self.failure_hits),
-                "queryBasis": memory_query_basis + [
-                    "evaluation_history", "runtime_strategy"],
+                "failureHits": 0,
+                "queryBasis": memory_query_basis + ["same_job_business_memory"],
                 "retrievedTypeCounts": {
-                    "SEMANTIC": len(semantic_hits),
-                    "EPISODIC": len(episodic_hits),
-                    "PROCEDURAL": len(procedure_hits),
+                    "RECENT_CASE": len(recent_case_hits),
+                    "JOB_PROFILE": len(job_profile_hits),
                 },
                 "memoryTypeCounts": type_counts,
                 "memoryTrace": observe_trace[:12],
@@ -977,10 +900,10 @@ class RunExecutor:
                 and request.runType in ("full_evaluation", "jd_evaluation",
                                         "backend_eval", "agent_eval",
                                         "resume_optimize", "project_rewrite")
-            execution_profiles = [
+            business_memories = [
                 h for h in self.memory_hits
                 if isinstance(h, dict)
-                and h.get("source") in {"runtime_strategy", "execution_profile"}
+                and str(h.get("type") or "") in {"RECENT_CASE", "JOB_PROFILE"}
             ]
             async with workflow_agent_execution(self.workflow_execution):
                 planned = await coordinator.plan(
@@ -989,7 +912,7 @@ class RunExecutor:
                     shared_digest=self.state.view_for(
                         "CoordinatorAgent", max_chars=2000),
                     failure_notes=self.failure_notes,
-                    memory_notes=execution_profiles or [
+                    memory_notes=business_memories or [
                         str(h.get("content", ""))[:120]
                         for h in self.memory_hits[:3]],
                     needs_parse=needs_parse,
@@ -4789,11 +4712,7 @@ class RunExecutor:
         if definition.memory_policy == "none":
             return "", None
         agent_id = definition.agent_id
-        # Coordinator may additionally see FAILURE hits for planning hints;
-        # Report/Risk and other specialists only see the evaluation-safe pool.
         pool = list(self.memory_hits)
-        if agent_id == "CoordinatorAgent":
-            pool = pool + list(self.failure_hits)
         if not pool:
             return "", None
         used, ignored = filter_hits_for_consumer(pool, agent_id)
@@ -4807,29 +4726,16 @@ class RunExecutor:
             "memoryTrace": trace[:20],
             "decisions": decisions,
         }
-        lines = ["[相关记忆]"]
-        insights = []
-        anchors = []
-        context = []
+        lines = [
+            "[同岗位业务记忆]",
+            "以下仅用于校准证据检查，不是当前候选人的事实或结论；必须以当前简历/JD/工具证据为准。",
+        ]
         for hit in used[: self.policy.memoryRetrieval.topK]:
             content = str(hit.get("content", ""))[:400]
             source = hit.get("source") or "?"
-            if "对比锚点" in content or source == "cross_candidate_anchor":
-                anchors.append(f"  {content}")
-            elif "评估洞察" in content or "证据" in content or source == "evaluation_insight":
-                insights.append(f"  {content}")
-            else:
-                context.append(f"  [{hit.get('type')}|src={source}] {content}")
-        if insights:
-            lines.append("# 历史评估洞察")
-            lines.extend(insights[:3])
-        if anchors:
-            lines.append("# 同岗位对比基准")
-            lines.extend(anchors[:3])
-        if context:
-            lines.append("# 上下文")
-            lines.extend(context[:2])
-        block = "\n".join(lines) if len(lines) > 1 else ""
+            label = "近期脱敏案例" if hit.get("type") == "RECENT_CASE" else "岗位长期画像"
+            lines.append(f"- [{label}|src={source}] {content}")
+        block = "\n".join(lines) if used else ""
         return block, audit
 
     @staticmethod
@@ -4922,308 +4828,162 @@ class RunExecutor:
         )
 
     async def _write_memories(self, summary: str) -> None:
-        await self.emitter.emit("agent.started", agent_id="MemoryService",
-                                payload={"description": "评估记忆持久化"})
+        """Write only de-identified, same-job business memories.
+
+        RECENT_CASE is one accepted workflow case (30d). JOB_PROFILE is an
+        upsertable job/JD profile (180d); Java consolidates repeated writes by
+        its stable factKey. Neither record contains identity fields, raw resume
+        text, report prose, recommendation, interview questions, or user chat.
+        """
+        await self.emitter.emit(
+            "agent.started", agent_id="MemoryService",
+            payload={"description": "同岗位业务记忆持久化"})
         try:
             arts = self.state.artifacts()
-            final_report = arts.get("finalReport") or {}
-
-            resume_text = self.request.resumeText or ""
-            parse_output = arts.get("parsedResume") \
-                if isinstance(arts.get("parsedResume"), dict) else {}
-            resume_facts = arts.get("resumeFacts") \
-                if isinstance(arts.get("resumeFacts"), dict) else {}
-            parsed = {**parse_output, **resume_facts}
-            # SEMANTIC: durable candidate facts extracted from the actual
-            # resume. This is deliberately not an evaluation conclusion.
-            semantic_written = False
-            if isinstance(parsed, dict):
-                candidate_skills = [
-                    str(item).strip() for item in (parsed.get("skills") or [])
-                    if str(item).strip()
-                ][:16]
-                raw_projects = parsed.get("projects") or parsed.get("projectNames") or []
-                project_names = []
-                for project in raw_projects[:8] if isinstance(raw_projects, list) else []:
-                    value = project.get("name") if isinstance(project, dict) else project
-                    if str(value or "").strip():
-                        project_names.append(str(value).strip()[:100])
-                raw_experiences = parsed.get("experiences") or []
-                experiences = []
-                for experience in (
-                        raw_experiences[:6] if isinstance(raw_experiences, list) else []):
-                    value = experience.get("raw") \
-                        if isinstance(experience, dict) else experience
-                    if str(value or "").strip():
-                        experiences.append(str(value).strip()[:140])
-                raw_education = parsed.get("education") or []
-                education = []
-                for item in raw_education[:4] if isinstance(raw_education, list) else []:
-                    value = item.get("raw") if isinstance(item, dict) else item
-                    if str(value or "").strip():
-                        education.append(str(value).strip()[:140])
-                candidate_name = str(
-                    parsed.get("name") or parsed.get("candidateName") or "").strip()
-                if candidate_name or candidate_skills or project_names \
-                        or experiences or education:
-                    fact_parts = []
-                    if candidate_name:
-                        fact_parts.append(f"候选人={candidate_name[:80]}")
-                    if candidate_skills:
-                        fact_parts.append(f"技能={', '.join(candidate_skills[:10])}")
-                    if project_names:
-                        fact_parts.append(f"项目={'; '.join(project_names[:4])}")
-                    if experiences:
-                        fact_parts.append(f"经历={'; '.join(experiences[:3])}")
-                    if education:
-                        fact_parts.append(f"教育={'; '.join(education[:2])}")
-                    await self._queue_memory_write(
-                        type_="SEMANTIC", owner_scope="CONVERSATION",
-                        content=("候选人事实: " + " | ".join(fact_parts))[:900],
-                        structured={
-                            "factKey": "candidate_profile",
-                            "memoryKind": "candidate_fact",
-                            "candidateName": candidate_name,
-                            "skills": candidate_skills,
-                            "projects": project_names,
-                            "experiences": experiences,
-                            "education": education,
-                            "sourceArtifact": (
-                                "resumeFacts" if resume_facts else "parsedResume"),
-                        },
-                        source="candidate_fact",
-                        source_id=(
-                            f"candidate_profile:{self.request.conversationId}"),
-                        confidence=float(parsed.get("confidence") or 0.85),
-                        ttl_days=90)
-                    semantic_written = True
-
-            evidence_ledger = arts.get("evidence_ledger") or arts.get("evidenceLedger") or {}
-            # EPISODIC: evidence-chain insight (NOT conclusion reiteration)
-            if isinstance(final_report, dict) and final_report.get("recommendation"):
-                rec = final_report["recommendation"]
-                dims = final_report.get("dimensions") or []
-                strengths = final_report.get("strengths") or []
-                risks = final_report.get("risks") or []
-                candidate_id = self.request.conversationId or "unknown"
-                name = ""
-                if isinstance(parsed, dict):
-                    name = parsed.get("name") or parsed.get("candidateName") or ""
-
-                # Extract key evidence from agent outputs
-                agent_outputs = arts.get("agentOutputs") or []
-                key_evidence = []
-                for ao in (agent_outputs[-8:] if isinstance(agent_outputs, list) else []):
-                    if isinstance(ao, dict) and ao.get("findings"):
-                        for f in (ao["findings"][:2] if isinstance(ao["findings"], list) else []):
-                            if isinstance(f, dict) and f.get("evidence"):
-                                key_evidence.append(
-                                    f"[{ao.get('agentId','?')}] {f.get('claim','')[:40]} "
-                                    f"\u2190 证据: {f['evidence'][:60]}")
-
-                # JD gap specifics
-                jd_reqs = arts.get("jdRequirements") or arts.get("effectiveJd") or {}
-                must_haves = (jd_reqs.get("mustHave") or jd_reqs.get("requirements") or []) \
-                    if isinstance(jd_reqs, dict) else []
-                candidate_skills = (parsed.get("skills") or []) if isinstance(parsed, dict) else []
-                missing = [req for req in must_haves[:5]
-                           if isinstance(req, str) and not any(
-                               req.lower() in s.lower() for s in candidate_skills)]
-
-                evidence_text = "\n".join(key_evidence[:4]) if key_evidence else "无具体证据链"
-                gap_text = f"JD核心缺口: {', '.join(missing[:3])}" if missing else "JD要求基本覆盖"
-
-                probes = final_report.get("interviewProbes") or []
-                probe_summary = "; ".join(
-                    p.get("question", "")[:40] for p in probes[:3]
-                    if isinstance(p, dict) and p.get("question"))
-
-                await self._queue_memory_write(
-                    type_="EPISODIC", owner_scope="CONVERSATION",
-                    content=(f"[评估洞察] {name or '候选人'} \u2192 {rec}\n"
-                             f"关键证据:\n{evidence_text}\n"
-                             f"{gap_text}\n"
-                             f"面试验证重点: {probe_summary[:80] if probe_summary else '待定'}"),
-                    structured={
-                        "factKey": f"evaluation_insight:{candidate_id}",
-                        "recommendation": rec,
-                        "keyEvidence": key_evidence[:4],
-                        "jdGaps": missing[:3],
-                        "riskCount": len(risks),
-                    },
-                    source="evaluation_insight", confidence=0.9)
-
-                # 1b) EPISODIC: cross-candidate comparison anchor
-                job_focus = self.request.jobDescription or ""
-                if job_focus and final_report.get("overallScore"):
-                    jd_score = next(
-                        (d.get("score") for d in dims
-                         if isinstance(d, dict) and "JD" in (d.get("name") or "").upper()),
-                        None)
-                    await self._queue_memory_write(
-                        type_="EPISODIC", owner_scope="USER",
-                        content=(f"[对比锚点] 岗位={job_focus[:30]} | "
-                                 f"候选人={name or '?'} | "
-                                 f"总分={final_report.get('overallScore')} | "
-                                 f"JD匹配={jd_score or '?'} | "
-                                 f"推荐={rec} | "
-                                 f"最大gap={missing[0] if missing else '无'}"),
-                        structured={
-                            "factKey": "comparison_anchor",
-                            "jobFocus": job_focus[:50],
-                            "candidateName": name,
-                            "overallScore": final_report.get("overallScore"),
-                            "recommendation": rec,
-                            "topGap": missing[0] if missing else None,
-                        },
-                        source="cross_candidate_anchor", confidence=0.9)
-
-            # 2) EPISODIC: key technical findings (for cross-candidate comparison)
-            tech_findings = arts.get("technicalFindings") or []
-            if tech_findings and isinstance(tech_findings, list):
-                tech_claims = [f.get("text", "")[:60] for f in tech_findings[:5]
-                               if isinstance(f, dict) and f.get("text")]
-                if tech_claims:
-                    await self._queue_memory_write(
-                        type_="EPISODIC", owner_scope="CONVERSATION",
-                        content=f"技术发现: {'; '.join(tech_claims)}",
-                        structured={"factKey": "tech_findings",
-                                    "claims": tech_claims},
-                        source="evaluation_result", confidence=0.85)
-
-            # 3) EPISODIC: verified risks (for re-evaluation awareness)
-            risks_found = arts.get("risks") or []
-            if risks_found and isinstance(risks_found, list):
-                verified_risks = [r for r in risks_found
-                                  if isinstance(r, dict) and r.get("severity") in ("HIGH", "MEDIUM")]
-                if verified_risks:
-                    await self._queue_memory_write(
-                        type_="EPISODIC", owner_scope="CONVERSATION",
-                        content=(f"已识别风险({len(verified_risks)}项): " +
-                                 "; ".join(r.get("claim", "")[:50] for r in verified_risks[:4])),
-                        structured={"factKey": "identified_risks",
-                                    "risks": [{"claim": r.get("claim"),
-                                               "severity": r.get("severity")}
-                                              for r in verified_risks[:4]]},
-                        source="evaluation_result", confidence=0.85)
-
-            # 4) EPISODIC: interview probes for future reference
-            probes = (final_report.get("interviewProbes") or []) if isinstance(final_report, dict) else []
-            if probes and isinstance(probes, list) and len(probes) >= 2:
-                probe_summary = "; ".join(
-                    p.get("question", "")[:50] for p in probes[:5]
-                    if isinstance(p, dict) and p.get("question"))
-                if probe_summary:
-                    await self._queue_memory_write(
-                        type_="EPISODIC", owner_scope="CONVERSATION",
-                        content=f"面试追问要点({len(probes)}条): {probe_summary}",
-                        structured={"factKey": "interview_probes",
-                                    "probeCount": len(probes),
-                                    "topProbes": [p.get("question", "") for p in probes[:5]
-                                                  if isinstance(p, dict)]},
-                        source="evaluation_result", confidence=0.85)
-
-            # 5) PROCEDURAL: a candidate-free strategy learned from this actual
-            # execution. Java stages it until terminal acceptance and validates
-            # its provenance before USER-scoped promotion.
-            agent_timings = getattr(self, "agent_timings", {})
-            agent_counters = getattr(self, "agent_counters", {})
-            selected_agents = list(dict.fromkeys(
-                self.executed or list(agent_timings.keys())))
-            strategy_written = False
-            if ((agent_timings or agent_counters)
-                    and selected_agents
-                    and isinstance(final_report, dict)
-                    and final_report.get("recommendation")
-                    and not self.report_agent_failed):
-                agent_llm_calls = {a: c.get("llmCalls", 0)
-                                   for a, c in agent_counters.items() if isinstance(c, dict)}
-                agent_tool_calls = {a: c.get("toolCalls", 0)
-                                    for a, c in agent_counters.items() if isinstance(c, dict)}
-                tool_agents = sorted(
-                    agent for agent, calls in agent_tool_calls.items()
-                    if int(calls or 0) > 0)
-                strategy_class, strategy_hint = self._runtime_strategy_class(
-                    selected_agents)
-                strategy_key = (
-                    f"execution_strategy:{self.request.runType}:{strategy_class}")
-                await self._queue_memory_write(
-                    type_="PROCEDURAL", owner_scope="USER",
-                    content=(
-                        f"简历评估执行策略[{strategy_class}]: {strategy_hint} "
-                        f"已验证路由={' -> '.join(selected_agents)}; "
-                        f"工具参与={','.join(tool_agents) or '无'}"),
-                    structured={
-                        "factKey": strategy_key,
-                        "memoryKind": "execution_strategy",
-                        "strategyClass": strategy_class,
-                        "derivedFromRunId": self.request.runId,
-                        "actualExecution": True,
-                        "candidateDataExcluded": True,
-                        "selectedAgents": selected_agents,
-                        "toolAgents": tool_agents,
-                        "agentTimings": agent_timings,
-                        "agentLlmCalls": agent_llm_calls,
-                        "agentToolCalls": agent_tool_calls,
-                        "totalLlmCalls": self.budget.llm_calls,
-                        "providerLlmCallsByScope": dict(
-                            self.budget.llm_calls_by_scope),
-                        "totalToolCalls": self.budget.tool_calls,
-                        "totalTokens": getattr(self.budget, "total_tokens", 0),
-                        "elapsedSeconds": self.budget.elapsed_seconds(),
-                        "runType": self.request.runType,
-                    },
-                    source="runtime_strategy",
-                    source_id=strategy_key,
-                    confidence=0.95,
-                    ttl_days=365)
-                strategy_written = True
-
-            # Emit memory write event
-            write_types = []
-            if semantic_written:
-                write_types.append("candidate_profile")
-            if isinstance(final_report, dict) and final_report.get("recommendation"):
-                write_types.extend(["evaluation_result", "interview_probes"])
-            if tech_findings:
-                write_types.append("tech_findings")
-            if risks_found:
-                write_types.append("risks")
-            if strategy_written:
-                write_types.append("runtime_strategy")
-            if write_types:
+            job_description = (self.request.jobDescription or "").strip()
+            job_category = (self.request.jobCategory or "").strip().upper()
+            if not job_description and not job_category:
                 await self.emitter.emit(
-                    "run.progress", agent_id="MemoryService",
-                    tool_name="memory_write",
-                    payload={
-                        "stage": "memory_write",
-                        "writes": write_types,
-                        "count": len(write_types),
-                        "message": f"写入 {len(write_types)} 条记忆: {'+'.join(write_types[:3])}",
-                    })
+                    "agent.completed", agent_id="MemoryService",
+                    payload={"durationMs": 0, "llmCalls": 0, "toolCalls": 0,
+                             "written": 0, "reason": "job_scope_missing"})
+                return
 
-            # 6) User preferences (unchanged)
-            for preference in self._explicit_preferences():
-                await self._queue_memory_write(
-                    type_="SEMANTIC", owner_scope="USER",
-                    content=f"{preference['kind']}: {preference['text']}",
-                    structured=preference,
-                    source="user_explicit", confidence=0.9)
+            normalized_jd = re.sub(r"\s+", " ", job_description).lower()
+            jd_fingerprint = hashlib.sha256(
+                normalized_jd.encode("utf-8")).hexdigest()[:20]
+            job_key = job_category or f"JD:{jd_fingerprint}"
 
-            await self.emitter.emit(
-                "agent.completed", agent_id="MemoryService",
-                payload={"durationMs": 0, "llmCalls": 0, "toolCalls": 0,
-                         "summary": f"记忆写入完成",
-                         "confidence": 1.0})
+            parsed = arts.get("resumeFacts") \
+                if isinstance(arts.get("resumeFacts"), dict) else {}
+            skills = [
+                str(value).strip()[:60]
+                for value in (parsed.get("skills") or [])
+                if str(value).strip()
+            ][:12]
+            projects = parsed.get("projects") or []
+            resume_features = {
+                "skills": skills,
+                "projectCount": len(projects) if isinstance(projects, list) else 0,
+                "hasPublicUrl": bool(re.search(
+                    r"https?://|github\.com|gitee\.com",
+                    self.request.resumeText or "", re.IGNORECASE)),
+            }
+
+            verified_matches: List[str] = []
+            unsupported_claims: List[str] = []
+            for item in (arts.get("evidence") or []):
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or item.get("claim") or "").strip()
+                if not text:
+                    continue
+                target = verified_matches if item.get("verified") is True \
+                    else unsupported_claims if item.get("verified") is False else None
+                if target is not None and text[:180] not in target:
+                    target.append(text[:180])
+            for item in (arts.get("conflicts") or []):
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("claim") or item.get("key") or "").strip()
+                if text and text[:180] not in unsupported_claims:
+                    unsupported_claims.append(text[:180])
+
+            coverage = arts.get("jdCoverage") \
+                if isinstance(arts.get("jdCoverage"), dict) else {}
+            gaps: List[str] = []
+            for item in (coverage.get("gaps") or []):
+                value = (item.get("requirement") or item.get("text") or "") \
+                    if isinstance(item, dict) else item
+                if str(value).strip():
+                    gaps.append(str(value).strip()[:160])
+
+            risk_patterns: List[str] = []
+            for item in (arts.get("risks") or []):
+                if not isinstance(item, dict):
+                    continue
+                value = item.get("type") or item.get("category") \
+                    or item.get("text") or item.get("claim")
+                if str(value or "").strip():
+                    risk_patterns.append(str(value).strip()[:120])
+
+            recent_structured = {
+                "memoryKind": "recent_job_case",
+                "jobKey": job_key,
+                "jobCategory": job_category or None,
+                "jdFingerprint": jd_fingerprint,
+                "runType": self.request.runType,
+                "resumeFeatures": resume_features,
+                "verifiedMatches": verified_matches[:6],
+                "jdGaps": gaps[:6],
+                "unsupportedClaims": unsupported_claims[:6],
+                "riskPatterns": risk_patterns[:6],
+                "evidenceSupportRatio": self.state.evidence_support_ratio(),
+                "piiExcluded": True,
+                "rawResumeExcluded": True,
+                "derivedFromRunId": self.request.runId,
+            }
+            recent_content = (
+                f"岗位={job_key}; 技能特征={', '.join(skills[:8]) or '无'}; "
+                f"已核验匹配={'; '.join(verified_matches[:3]) or '无'}; "
+                f"JD缺口={'; '.join(gaps[:3]) or '无'}; "
+                f"待核验={'; '.join(unsupported_claims[:3]) or '无'}; "
+                f"风险类型={'; '.join(risk_patterns[:3]) or '无'}")[:1200]
+            await self._queue_memory_write(
+                type_="RECENT_CASE", owner_scope="USER",
+                content=recent_content, structured=recent_structured,
+                source="recent_job_case",
+                source_id=f"recent_case:{job_key}:{self.request.runId}",
+                confidence=0.85, ttl_days=30)
+
+            requirements = arts.get("jdRequirements") \
+                if isinstance(arts.get("jdRequirements"), dict) else {}
+            stable_requirements = [
+                str(value).strip()[:160]
+                for value in (requirements.get("mustHave")
+                              or requirements.get("requirements") or [])
+                if str(value).strip()
+            ][:10]
+            profile_fact_key = f"job_profile:{job_key}:{jd_fingerprint}"
+            profile_structured = {
+                "factKey": profile_fact_key,
+                "memoryKind": "job_profile",
+                "jobKey": job_key,
+                "jobCategory": job_category or None,
+                "jdFingerprint": jd_fingerprint,
+                "sampleCount": 1,
+                "stableRequirements": stable_requirements,
+                "commonGaps": gaps[:8],
+                "commonRiskPatterns": risk_patterns[:8],
+                "unsupportedClaimPatterns": unsupported_claims[:8],
+                "piiExcluded": True,
+                "rawResumeExcluded": True,
+                "derivedFromRunIds": [self.request.runId],
+            }
+            profile_content = (
+                f"岗位画像={job_key}; 稳定要求={'; '.join(stable_requirements[:5]) or '无'}; "
+                f"常见证据缺口={'; '.join(gaps[:4]) or '待积累'}; "
+                f"常见风险={'; '.join(risk_patterns[:4]) or '待积累'}")[:1200]
+            await self._queue_memory_write(
+                type_="JOB_PROFILE", owner_scope="USER",
+                content=profile_content, structured=profile_structured,
+                source="job_profile", source_id=profile_fact_key,
+                confidence=0.8, ttl_days=180)
+
             self.state.data["memoryWriteCandidates"] = list(
                 self.pending_memory_writes)
-        except Exception as exc:  # noqa: BLE001
-            logger.info("memory write-back skipped: %s", exc)
             await self.emitter.emit(
                 "agent.completed", agent_id="MemoryService",
                 payload={"durationMs": 0, "llmCalls": 0, "toolCalls": 0,
-                         "summary": f"记忆写入跳过: {exc}",
-                         "confidence": 0.0})
+                         "written": len(self.pending_memory_writes),
+                         "types": ["RECENT_CASE", "JOB_PROFILE"]})
+        except Exception as exc:
+            logger.info("business memory write-back skipped: %s", exc)
+            await self.emitter.emit(
+                "agent.completed", agent_id="MemoryService",
+                payload={"durationMs": 0, "llmCalls": 0, "toolCalls": 0,
+                         "written": 0, "error": str(exc)[:200]})
+
 
     async def _queue_memory_write(
             self, *, type_: str, owner_scope: str, content: str,
@@ -5231,14 +4991,9 @@ class RunExecutor:
             source: str = "model_generated",
             source_id: Optional[str] = None, confidence: float = 0.5,
             ttl_days: Optional[int] = None) -> Optional[str]:
-        """Queue a long-term memory for Java to persist after terminal accept.
-
-        No RUN-scoped or Working Memory row is created. Keeping persistence at
-        the accepted terminal boundary prevents cancelled/failed runs from
-        leaking candidate conclusions into durable memory.
-        """
+        """Queue a business memory for Java to persist after terminal accept."""
         taxonomy = str(type_ or "").strip().upper()
-        if taxonomy not in {"SEMANTIC", "EPISODIC", "PROCEDURAL"}:
+        if taxonomy not in {"RECENT_CASE", "JOB_PROFILE"}:
             return None
         candidate_id = f"pending-{uuid.uuid4().hex[:16]}"
         self.pending_memory_writes.append({

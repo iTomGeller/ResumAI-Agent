@@ -215,65 +215,50 @@ class LangGraphRunExecutor(RunExecutor):
             })
 
         memory_query, memory_query_basis = self._memory_retrieval_query(request)
-        episodic_query = self._episodic_memory_query(request)
         recall_limit = self.policy.memoryRetrieval.topK
-        procedure_hits, semantic_hits, episodic_hits, failure_hits = (
+        recent_case_hits, job_profile_hits = (
             await asyncio.gather(
                 self.memory.search(
-                    self._procedural_memory_query(request),
-                    types=["PROCEDURAL"], top_k=min(2, recall_limit),
+                    memory_query, types=["RECENT_CASE"],
+                    top_k=min(2, recall_limit),
                     min_confidence=self.policy.memoryRetrieval.minConfidence,
                     consumer_agent="SpecialistAgent"),
                 self.memory.search(
-                    memory_query, types=["SEMANTIC"],
-                    top_k=min(4, recall_limit),
+                    memory_query, types=["JOB_PROFILE"], top_k=1,
                     min_confidence=self.policy.memoryRetrieval.minConfidence,
                     consumer_agent="SpecialistAgent"),
-                self.memory.search(
-                    episodic_query, types=["EPISODIC"],
-                    top_k=min(5, recall_limit),
-                    min_confidence=self.policy.memoryRetrieval.minConfidence,
-                    consumer_agent="SpecialistAgent"),
-                self.memory.search(
-                    episodic_query, types=["FAILURE"], top_k=3,
-                    min_confidence=self.policy.memoryRetrieval.minConfidence,
-                    consumer_agent="CoordinatorAgent"),
             ))
+        recent_case_hits = [
+            hit for hit in recent_case_hits
+            if self._business_memory_matches_request(hit, request)]
+        job_profile_hits = [
+            hit for hit in job_profile_hits
+            if self._business_memory_matches_request(hit, request)]
         self.memory_hits = self._merge_memory_hits(
-            procedure_hits, semantic_hits, episodic_hits,
+            recent_case_hits, job_profile_hits,
             limit=self.policy.memoryRetrieval.topK)
-        self.failure_hits = failure_hits
-        self.failure_notes = [
-            str(hit.get("content", ""))[:160]
-            for hit in self.failure_hits
-        ][:3]
+        self.failure_hits = []
+        self.failure_notes = []
 
         type_counts: Dict[str, int] = {}
-        for hit in self.memory_hits + self.failure_hits:
+        for hit in self.memory_hits:
             hit_type = str(hit.get("type") or "UNKNOWN")
             type_counts[hit_type] = type_counts.get(hit_type, 0) + 1
         observe_trace = memory_trace_entries(
             [{"used": True, "ignoredReason": None, **hit}
              for hit in self.memory_hits],
             [], "SpecialistAgent",
-        ) + memory_trace_entries(
-            [{"used": True, "ignoredReason": None, **hit}
-             for hit in self.failure_hits],
-            [], "CoordinatorAgent",
         )
         self.memory_traces.extend(observe_trace)
         await self.emitter.emit("run.progress", payload={
             "stage": "memory",
-            "message": (f"记忆命中 {len(self.memory_hits)} 条"
-                        f"（FAILURE 仅 Coordinator {len(self.failure_hits)} 条）"),
+            "message": f"岗位业务记忆命中 {len(self.memory_hits)} 条",
             "memoryHits": len(self.memory_hits),
-            "failureHits": len(self.failure_hits),
-            "queryBasis": memory_query_basis + [
-                "evaluation_history", "runtime_strategy"],
+            "failureHits": 0,
+            "queryBasis": memory_query_basis + ["same_job_business_memory"],
             "retrievedTypeCounts": {
-                "SEMANTIC": len(semantic_hits),
-                "EPISODIC": len(episodic_hits),
-                "PROCEDURAL": len(procedure_hits),
+                "RECENT_CASE": len(recent_case_hits),
+                "JOB_PROFILE": len(job_profile_hits),
             },
             "memoryTypeCounts": type_counts,
             "memoryTrace": observe_trace[:12],
@@ -298,11 +283,11 @@ class LangGraphRunExecutor(RunExecutor):
                 "full_evaluation", "jd_evaluation", "backend_eval",
                 "agent_eval", "resume_optimize", "project_rewrite")
         )
-        execution_profiles = [
+        business_memories = [
             hit for hit in self.memory_hits
             if isinstance(hit, dict)
-            and hit.get("source") in {
-                "runtime_strategy", "execution_profile"}
+            and str(hit.get("type") or "") in {
+                "RECENT_CASE", "JOB_PROFILE"}
         ]
         planned = await coordinator.plan(
             run_type=request.runType,
@@ -311,7 +296,7 @@ class LangGraphRunExecutor(RunExecutor):
             shared_digest=self.state.view_for(
                 "CoordinatorAgent", max_chars=2000),
             failure_notes=self.failure_notes,
-            memory_notes=execution_profiles or [
+            memory_notes=business_memories or [
                 str(hit.get("content", ""))[:120]
                 for hit in self.memory_hits[:3]],
             needs_parse=needs_parse,
