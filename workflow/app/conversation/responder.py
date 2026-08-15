@@ -343,7 +343,22 @@ async def _model_answer(
         raw = str(message.get("content") or "")
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end <= start:
-            return None
+            plain_answer = raw.strip()
+            if not plain_answer:
+                return None
+            citations: List[SourceRef] = []
+            if mcp_context.get("querySuccess"):
+                citations.append(SourceRef(
+                    sourceType="EXTERNAL",
+                    sourceId=str(mcp_context.get("libraryId") or "context7"),
+                    quote=_clip_text(mcp_context.get("queryResult"), 180),
+                ))
+            return CopilotAnswer(
+                turnId=request.turnId,
+                answer=_clip_text(plain_answer, 2000),
+                citations=citations,
+                suggestions=["继续查询该技术库的官方文档"],
+            )
         payload = json.loads(raw[start : end + 1])
         answer = str(payload.get("answer") or "").strip()
         if not answer:
