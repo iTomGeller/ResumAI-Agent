@@ -64,7 +64,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
                      "区分团队成果与个人贡献，并列出需要面试确认的信息。"),
         skills=("ground-project-claims", "retrieve-public-candidate-evidence"),
         tools=("locate_evidence",),
-        mcp_servers=("exa", "fetch"),
+        mcp_servers=("bing_cn", "fetch"),
         # External evidence may require preflight + two Skills + several live
         # provider calls in one model-authored action batch.
         max_iterations=2, max_tool_calls=10, timeout_seconds=240,
@@ -79,7 +79,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
                      "区分明确冲突、口径差异和信息缺失，不得把无法核验的信息写成造假。"),
         skills=("risk-pattern-detection", "audit-claim-consistency"),
         tools=("check_timeline", "timeline_validator"),
-        mcp_servers=("exa", "fetch"),
+        mcp_servers=("bing_cn", "fetch"),
         max_iterations=2, max_tool_calls=4, timeout_seconds=180,
         output_type="risks",
         requires_artifacts=("resume_facts",),
@@ -92,7 +92,7 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
                      "简历、JD、RAG上下文或真实工具证据，并记录冲突和未支持项。"),
         skills=("calibrate-evidence-confidence", "audit-evidence-provenance"),
         tools=("verify_report_evidence", "locate_evidence"),
-        mcp_servers=("exa", "fetch"),
+        mcp_servers=("bing_cn", "fetch"),
         max_iterations=2, max_tool_calls=6, timeout_seconds=210,
         output_type="evidence",
         # Soft deps via AGENT_DEPENDENCIES: only wait for specialists that are

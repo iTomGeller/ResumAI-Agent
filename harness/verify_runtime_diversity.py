@@ -593,7 +593,7 @@ def check_report(base: str, evaluations: Sequence[Evaluation]) -> Dict[str, Any]
     server_names = set(servers) if isinstance(servers, dict) else {
         str(item.get("name")) for item in servers if isinstance(item, dict)
     }
-    expected_keyless = {"exa", "fetch"}
+    expected_keyless = {"bing_cn", "fetch"}
     if server_names != expected_keyless:
         failures.append(
             "live MCP inventory is not the exact keyless set: "

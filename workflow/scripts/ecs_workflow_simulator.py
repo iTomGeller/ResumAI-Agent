@@ -354,9 +354,9 @@ async def mcp_smoke() -> dict[str, Any]:
         })
     tools.attach_mcp(registry)
     call = await tools.execute(
-        "ProjectAgent", "exa.web_fetch_exa",
-        {"url": "https://github.com/spring-projects/spring-petclinic"},
-        tool_call_id="ecs-exa-smoke")
+        "ProjectAgent", "bing_cn.web_search",
+        {"query": "spring-projects spring-petclinic", "site": "github.com", "max_results": 3},
+        tool_call_id="ecs-bing-cn-smoke")
     result = {
         "status": call.status,
         "durationMs": call.duration_ms,
@@ -385,7 +385,7 @@ if __name__ == "__main__":
         help="differentiated resume fixture")
     parser.add_argument(
         "--mcp-smoke", action="store_true",
-        help="probe and call the retained Exa fetch endpoint without an LLM")
+        help="probe and call the Bing CN search MCP without an LLM")
     args = parser.parse_args()
     if args.mcp_smoke:
         payload = asyncio.run(mcp_smoke())

@@ -1219,7 +1219,7 @@ Provider 请求里出现过的工具 schema 是“**可以调用**”，响应 `
 
 {called_lines}
 
-其中 ProjectAgent 的可用目录包含 `fetch_fetch`、`exa_web_fetch_exa`、`exa_web_search_exa`；本次 Runtime 指标记录了 `fetch.fetch` 1 次和 `exa.web_fetch_exa` 1 次成功返回。ReportAgent 只有强制结构化提交 `emit_decision`，没有公网 MCP，避免最终报告绕过 EvidenceAgent 自行搜网改写事实。
+其中 ProjectAgent 的公网可用目录包含 `fetch_fetch`、`bing_cn_web_search`；精确 URL 由 fetch 核验，Bing CN Search 只发现候选来源。ReportAgent 只有强制结构化提交 `emit_decision`，没有公网 MCP，避免最终报告绕过 EvidenceAgent 自行搜网改写事实。
 
 ## 8. Memory：项目里有，但本例没有硬塞
 

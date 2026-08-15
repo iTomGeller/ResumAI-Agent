@@ -19,9 +19,10 @@ def test_default_mcp_servers_are_real_and_enabled() -> None:
     config = _config()
     servers = config["mcpServers"]
 
-    assert set(servers) == {"exa", "fetch"}
+    assert set(servers) == {"bing_cn", "fetch"}
     assert all(server["enabled"] for server in servers.values())
-    assert servers["exa"]["url"].startswith("https://mcp.exa.ai/mcp")
+    assert servers["bing_cn"]["transport"] == "stdio"
+    assert servers["bing_cn"]["allowedTools"] == ["web_search"]
     assert servers["fetch"]["transport"] == "stdio"
     assert config["evidencePolicy"]["allowSyntheticFallback"] is False
 
@@ -47,7 +48,7 @@ def test_routes_never_reference_removed_synthetic_cn_web_tools() -> None:
 
     assert not any(tool.startswith("cn-web.") for tool in routed)
     assert "mcp_fetch_url" not in routed
-    assert "exa.web_search_exa" in routed
+    assert "bing_cn.web_search" in routed
     assert not any(tool.startswith(("context7.", "deepwiki."))
                    for tool in routed)
     assert not any(tool.endswith(("microsoft_docs_fetch",

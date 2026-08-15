@@ -22,7 +22,7 @@ def test_mcp_config_resolves_shared_file():
     path = resolve_mcp_config_path()
     assert path is not None, "config/mcp-servers.json should resolve"
     cfg = load_mcp_config()
-    assert "exa" in (cfg.get("mcpServers") or {})
+    assert "bing_cn" in (cfg.get("mcpServers") or {})
     assert "fetch" in (cfg.get("mcpServers") or {})
     assert (cfg.get("optionalMcpServers") or {}) == {}
 
@@ -133,7 +133,7 @@ def _catalog_for(resume_text: str, job_description: str, agent_id: str):
         })
     routed = {
         "ProjectAgent": [
-            "exa.web_search_exa", "exa.web_fetch_exa", "fetch.fetch",
+            "bing_cn.web_search", "fetch.fetch",
         ],
         "TechAgent": [],
     }
@@ -158,11 +158,11 @@ def test_mcp_catalog_is_signal_gated_not_coverage_rotated():
         "Java Spring Boot 项目，无外链", "Java 后端", "ProjectAgent") == set()
     assert _catalog_for(
         "项目 https://gitee.com/acme/demo", "Java 后端", "ProjectAgent") == {
-            "exa.web_search_exa", "exa.web_fetch_exa", "fetch.fetch",
+            "bing_cn.web_search", "fetch.fetch",
         }
     assert _catalog_for(
         "项目 https://github.com/acme/demo", "Java 后端", "ProjectAgent") == {
-            "exa.web_search_exa", "exa.web_fetch_exa", "fetch.fetch",
+            "bing_cn.web_search", "fetch.fetch",
         }
     assert _catalog_for(
         "Java Spring Boot Redis", "Java 后端", "TechAgent") == set()

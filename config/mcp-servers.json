@@ -7,24 +7,24 @@
     "allowSyntheticFallback": false
   },
   "mcpServers": {
-    "exa": {
+    "bing_cn": {
       "enabled": true,
       "default": true,
-      "transport": "streamable-http",
-      "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
-      "proxy": "${EXA_HTTPS_PROXY}",
-      "description": "Official Exa hosted MCP; real keyless web search and page fetch with rate limits",
-      "routingGuidance": "Fallback only after direct fetch reports network unreachability, or when the user explicitly asks to discover alternative public sources. Do not use Exa after an exact declared URL returns 404. Stop immediately on free-tier rate limiting.",
-      "timeoutSeconds": 20,
-      "maxConcurrentCalls": 1,
-      "minIntervalMs": 900,
-      "rateLimitRetries": 0,
-      "rateLimitBackoffMs": 1200,
-      "rateLimitCooldownSeconds": 180,
-      "allowedTools": ["web_search_exa", "web_fetch_exa"],
-      "toolPrefix": "exa",
+      "transport": "stdio",
+      "command": "python",
+      "args": ["-m", "app.runtime.bing_cn_mcp_server"],
+      "description": "Keyless standard MCP search server using Bing's mainland China RSS endpoint",
+      "routingGuidance": "Discovery fallback only for candidate-declared identifiers. Search hits are leads, never verified candidate facts; fetch the selected exact URL before citing it. Do not search after an exact declared URL returns 404.",
+      "timeoutSeconds": 15,
+      "maxConcurrentCalls": 2,
+      "minIntervalMs": 300,
+      "rateLimitRetries": 1,
+      "rateLimitBackoffMs": 500,
+      "rateLimitCooldownSeconds": 60,
+      "allowedTools": ["web_search"],
+      "toolPrefix": "bing_cn",
       "evidence": {
-        "provider": "exa",
+        "provider": "bing-cn-rss",
         "kind": "public-web",
         "subjectBinding": "candidate-declared-identifiers-only",
         "requiresSourceUrl": true
@@ -55,12 +55,10 @@
     "TechAgent": [],
     "ProjectAgent": [
       "fetch.fetch",
-      "exa.web_fetch_exa",
-      "exa.web_search_exa"
+      "bing_cn.web_search"
     ],
     "EvidenceAgent": [
-      "exa.web_search_exa",
-      "exa.web_fetch_exa",
+      "bing_cn.web_search",
       "fetch.fetch"
     ],
     "RiskAgent": [],

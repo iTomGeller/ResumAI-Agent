@@ -134,8 +134,8 @@ def _is_protocol_version_error(exc: Exception) -> bool:
 @dataclass
 class McpToolInfo:
     server: str
-    name: str                 # remote tool name (e.g. web_search_exa)
-    catalog_name: str         # registered name (e.g. exa.web_search_exa)
+    name: str                 # remote tool name (e.g. web_search)
+    catalog_name: str         # registered name (e.g. bing_cn.web_search)
     description: str
     input_schema: Dict[str, Any] = field(default_factory=dict)
     output_schema: Dict[str, Any] = field(default_factory=dict)
@@ -1005,7 +1005,7 @@ class McpRegistry:
 
         # Whitelist gate for fetch-like / URL scrape tools.
         url = str(arguments.get("url") or arguments.get("urls") or "")
-        if url and info.server in ("fetch", "exa"):
+        if url and info.server == "fetch":
             if "://" in url and info.server == "fetch" and not host_allowed(url):
                 return {"success": False, "status": "unavailable",
                         "text": f"域名不在白名单: {url}"}

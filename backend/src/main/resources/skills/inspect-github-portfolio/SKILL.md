@@ -1,7 +1,7 @@
 ---
 name: inspect-github-portfolio
 description: 使用免密公网 MCP 对候选人明确声明的 GitHub 公开作品集做来源核验。简历含 GitHub 链接，或用户要求分析仓库质量、贡献和岗位相关性时使用。
-allowed-tools: exa.web_search_exa exa.web_fetch_exa fetch.fetch
+allowed-tools: bing_cn.web_search fetch.fetch
 ---
 
 # Inspect GitHub Portfolio
@@ -26,7 +26,7 @@ allowed-tools: exa.web_search_exa exa.web_fetch_exa fetch.fetch
   "repositories": [{"url": "", "signals": [], "requirementIds": [], "sourceRefs": []}],
   "supportedClaims": [],
   "caveats": [],
-  "toolHealth": {"exa": "success", "fetch": "not_called"}
+  "toolHealth": {"bing_cn": "success", "fetch": "not_called"}
 }
 ```
 

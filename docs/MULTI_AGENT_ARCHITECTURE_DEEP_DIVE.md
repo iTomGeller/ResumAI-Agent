@@ -742,7 +742,7 @@ Tech、Project、Risk、Evidence 的 system 尾部会附加：
 | 历史对话 | **没有**：初次上传创建新Conversation，`recentMessages=[]`、`conversationSummary=null`、`currentGoal=null` | 为空时`ContextManager`直接不生成对应section |
 | RAG 上下文 | 有：Tech 的简历/知识库召回、Project 的简历召回 | `[RAG上下文]`，属于 `messages[1].content`；不是工具结果 |
 | 内部工具结果 | 有：例如 Tech 的 coverage、Project 的 locate_evidence | `[工具观察]`，属于 `messages[1].content` |
-| 公网MCP | **Tech没有**；Project/Evidence有fetch/Exa路由 | Provider请求顶层`tools[]`，不在任何Prompt文本中 |
+| 公网MCP | **Tech没有**；Project/Evidence有fetch/Bing CN Search路由 | Provider请求顶层`tools[]`，不在任何Prompt文本中 |
 | 结构化收口工具 | 有：Specialist 与唯一 ReportAgent 都通过强制 terminal schema 提交结构化输出 | Provider请求顶层`tools[]`与`tool_choice` |
 
 为什么这个 Case 没有历史对话：上传入口的 `ensureTaskConversation()` 新建 Session 时只写入简历和JD，不创建 `ConversationMessage`；随后 `buildRuntimePayload()` 查询消息表，首次评估得到空列表。`ContextManager.assemble()` 只有在字段非空时才追加 `[当前目标]`、`[会话摘要]` 和 `[近期消息]`。因此，**文档应该明确写“空”，但不能为了看起来完整而虚构一段历史对话。**
@@ -783,8 +783,7 @@ Tech、Project、Risk、Evidence 的 system 尾部会附加：
   ],
   "tools": [
     "fetch_fetch",
-    "exa_web_fetch_exa",
-    "exa_web_search_exa",
+    "bing_cn_web_search",
     "emit_decision"
   ],
   "tool_choice": "auto"
@@ -1101,49 +1100,26 @@ MCP不是拼进 `messages[].content` 的说明文字，而是作为 Provider 原
   {
     "type": "function",
     "function": {
-      "name": "exa_web_fetch_exa",
-      "description": "Read a webpage's full content as clean markdown. Use after web_search_exa when highlights are insufficient or to read any URL.\n\nBest for: Extracting full content from known URLs. Batch multiple URLs in one call.\nReturns: Clean text content and metadata from the page(s).",
+      "name": "bing_cn_web_search",
+      "description": "Search the public web from the mainland ECS. Search hits are discovery leads, not verified candidate facts; fetch a selected URL before citing it.",
       "parameters": {
         "type": "object",
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "required": ["urls"],
-        "properties": {
-          "urls": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "URLs to read. Batch multiple URLs in one call."
-          },
-          "maxCharacters": {
-            "type": "number",
-            "minimum": 1,
-            "description": "Maximum characters to extract per page (default: 3000)"
-          }
-        },
-        "additionalProperties": false
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "exa_web_search_exa",
-      "description": "Search the web for any topic and get clean, ready-to-use content.\n\n      Best for: Finding current information, news, facts, people, companies, or answering questions about any topic.\n      Returns: Clean text content from top search results.\n\n      Query tips:\n      describe the ideal page, not keywords. \"blog post comparing React and Vue performance\" not \"React vs Vue\".\n      Use category:people / category:company to search through Linkedin profiles / companies respectively.\n      If highlights are insufficient, follow up with web_fetch_exa on the best URLs.",
-      "parameters": {
-        "type": "object",
-        "$schema": "http://json-schema.org/draft-07/schema#",
         "required": ["query"],
         "properties": {
           "query": {
             "type": "string",
-            "minLength": 1,
-            "description": "Natural language search query. Should be a semantically rich description of the ideal page, not just keywords. Optionally include category:<type> (company, people) to focus results."
+            "description": "Focused query containing the candidate-declared identifier."
           },
-          "numResults": {
-            "type": "number",
-            "description": "Number of search results to return (default: 10)."
+          "max_results": {
+            "type": "integer",
+            "default": 5
+          },
+          "site": {
+            "type": "string",
+            "default": "",
+            "description": "Optional exact DNS domain restriction."
           }
-        },
-        "additionalProperties": false
+        }
       }
     }
   },
@@ -1184,7 +1160,7 @@ MCP不是拼进 `messages[].content` 的说明文字，而是作为 Provider 原
 ]
 ```
 
-`fetch_fetch`、`exa_web_fetch_exa`、`exa_web_search_exa` 是 provider-safe alias，运行时分别映射回 catalog 名 `fetch.fetch`、`exa.web_fetch_exa`、`exa.web_search_exa`。最后一项 `emit_decision` 不是MCP，而是Runtime自己的结构化收口函数。ReportAgent没有公网MCP，Tech/Risk当前路由也为空。
+`fetch_fetch`、`bing_cn_web_search` 是 provider-safe alias，运行时分别映射回 catalog 名 `fetch.fetch`、`bing_cn.web_search`。最后一项 `emit_decision` 不是MCP，而是Runtime自己的结构化收口函数。ReportAgent没有公网MCP，Tech/Risk当前路由也为空。
 
 这份代表简历声明了 GitHub URL，因此 ProjectAgent 会选择两个 Skill：
 
@@ -1193,16 +1169,16 @@ ground-project-claims
 retrieve-public-candidate-evidence
 ```
 
-生产 eager 配置下，这两个 `SKILL.md` 正文都进入 ProjectAgent 的 system message；Project的 user message则包含 `resumeFacts + effectiveJd + Memory + locate_evidence/resume_semantic_search结果`。模型随后只能从当轮 `tools` 数组中选择健康且被路由的 `fetch/Exa`，不能仅凭 Prompt 文本编造一个 MCP 调用。
+生产 eager 配置下，这两个 `SKILL.md` 正文都进入 ProjectAgent 的 system message；Project的 user message则包含 `resumeFacts + effectiveJd + Memory + locate_evidence/resume_semantic_search结果`。模型随后只能从当轮 `tools` 数组中选择健康且被路由的 `fetch/Bing CN Search`，不能仅凭 Prompt 文本编造一个 MCP 调用。
 
 #### 2.4.5 五个 Agent 的请求组成差异
 
 | Agent | system中实际追加的Skill正文 | user中实际候选人内容 | provider tools中的公网MCP | 代表Run终态工具 |
 |---|---|---|---|---|
 | TechAgent | `assess-technical-evidence` | `resumeFacts + effectiveJd + jdCoverage + Memory + 技术RAG/知识库结果` | 无 | pre-step成功后通常只剩`emit_decision` |
-| ProjectAgent | `ground-project-claims`；有URL时再加`retrieve-public-candidate-evidence` | `resumeFacts + effectiveJd + Memory + 项目证据定位/RAG结果` | `fetch.fetch`、Exa按健康状态过滤 | 内部未执行工具、健康MCP、`emit_decision` |
+| ProjectAgent | `ground-project-claims`；有URL时再加`retrieve-public-candidate-evidence` | `resumeFacts + effectiveJd + Memory + 项目证据定位/RAG结果` | `fetch.fetch`、`bing_cn.web_search`按健康状态过滤 | 内部未执行工具、健康MCP、`emit_decision` |
 | RiskAgent | `risk_pattern_detection v2` | `resumeFacts + timelineCheck + Memory` | 无；虽然`agents.py`残留声明，实际路由为空 | 通常只剩`emit_decision` |
-| EvidenceAgent | `calibrate-evidence-confidence` | `resumeFacts + technicalFindings + projectFindings + risks + mcpEvidence + Memory + verify结果` | fetch/Exa可路由，但仍受URL、健康状态和quota过滤 | 代表Run只进入强制`emit_decision` |
+| EvidenceAgent | `calibrate-evidence-confidence` | `resumeFacts + technicalFindings + projectFindings + risks + mcpEvidence + Memory + verify结果` | fetch/Bing CN Search可路由，但仍受URL、健康状态和quota过滤 | 代表Run只进入强制`emit_decision` |
 | ReportAgent | 无 | `resumeFacts + effectiveJd + 全部Findings/Risk/Evidence/Conflict/MCP回执 + Memory + 知识库RAG` | 明确禁止 | 单次强制 `emit_decision` 提交完整报告 |
 
 这才是“每个Agent的Prompt”在当前工程里的完整含义：**基础模板只是第一层；候选人数据在user共享状态，Skill在system附加块，MCP在provider tools字段，工具回执再进入后续user工具观察。**
@@ -1293,7 +1269,7 @@ SKILL_EAGER_IDS=assess-technical-evidence,ground-project-claims,retrieve-public-
 |---|---|---|---|---:|
 | TechAgent | `assess-technical-evidence@v1#435f01775ae0` | 未声明 | 有 JD/JD requirements 或完整评估 | 100 / 100 / 100 |
 | ProjectAgent | `ground-project-claims@v1#d74b3cff323e` | 未声明 | 有项目 | 84 / 84 / 84 |
-| ProjectAgent | `retrieve-public-candidate-evidence@v1#5cc58e640cdc` | `exa.web_search_exa exa.web_fetch_exa fetch.fetch` | 有外部 URL | 70 / 70 / 70 |
+| ProjectAgent | `retrieve-public-candidate-evidence@v1` | `bing_cn.web_search fetch.fetch` | 有外部 URL | 原100份审计为 70 / 70 / 70；切换搜索供应商不改变选择条件 |
 | RiskAgent | `risk_pattern_detection@v2#92511a9ded3d` | `check_timeline knowledge_search` | 有时间线或风险场景 | 97 / 97 / 97 |
 | EvidenceAgent | `calibrate-evidence-confidence@v1#e1eb354be104` | 未声明 | EvidenceAgent 被选中 | 100 / 100 / 100 |
 | ReportAgent | 无 | 不适用 | Report 使用严格 system + output schema | 0 |
@@ -1321,26 +1297,26 @@ allowedTools: （未声明）
 
 | Agent | 可路由公网 MCP |
 |---|---|
-| ProjectAgent | `fetch.fetch`, `exa.web_fetch_exa`, `exa.web_search_exa` |
-| EvidenceAgent | `exa.web_search_exa`, `exa.web_fetch_exa`, `fetch.fetch` |
+| ProjectAgent | `fetch.fetch`, `bing_cn.web_search` |
+| EvidenceAgent | `bing_cn.web_search`, `fetch.fetch` |
 | TechAgent | 无 |
 | RiskAgent | 无 |
 | ReportAgent | 无，代码和配置双重禁止 |
 
-一个容易误读的代码点：`AgentDefinition` 中 RiskAgent 仍声明了 `mcp_servers=("exa","fetch")`，但真正注入以 `config/mcp-servers.json` 的 `agentToolRouting` 和实时健康状态为准；该配置给 RiskAgent 的路由是空数组，所以实际没有 MCP。不能只看静态 AgentDefinition 就说 Risk 会联网。
+一个容易误读的代码点：`AgentDefinition` 中 RiskAgent 声明了 `mcp_servers=("bing_cn","fetch")`，但真正注入以 `config/mcp-servers.json` 的 `agentToolRouting` 和实时健康状态为准；该配置给 RiskAgent 的路由是空数组，所以实际没有 MCP。不能只看静态 AgentDefinition 就说 Risk 会联网。
 
 代表 Run 中：
 
-- 代表 ProjectAgent 首轮实际 `toolCatalogCount=4`：`fetch_fetch`、`exa_web_fetch_exa`、`exa_web_search_exa`、`emit_decision`。成功的内部pre-step已作为`[工具观察]`写入user message，因此不会重复出现在该轮tools目录；两个Skill已eager，也不存在`load_skill`。
+- 当前 ProjectAgent 首轮公网目录为 `fetch_fetch`、`bing_cn_web_search`，再加 `emit_decision`。成功的内部pre-step已作为`[工具观察]`写入user message，因此不会重复出现在该轮tools目录；两个Skill已eager，也不存在`load_skill`。
 - EvidenceAgent 虽然发现过 `fetch.fetch` catalog，但该轮 action quota 已收口，真正进入 LLM 请求的只有强制 `emit_decision`，所以 `toolCatalogCount=1`。
 - ReportAgent 只有一个完整报告请求，并通过强制 terminal schema 提交结果。
 
-最新100份的公网 MCP 结果必须按“工具调用完成”和“取得有效内容”分开：
+下表是替换前最新100份的历史公网 MCP 结果，保留它是为了说明为什么移除 Exa；必须按“工具调用完成”和“取得有效内容”分开：
 
 | MCP | 调用数 | 有效内容 | 404 | Rate Limited | 其他失败 | P95 |
 |---|---:|---:|---:|---:|---:|---:|
 | `fetch.fetch` | 54 | 4 | 49 | 0 | 1 | 2.82s |
-| `exa.web_fetch_exa` | 4 | 0 | 0 | 4 | 0 | 0.70s |
+| `exa.web_fetch_exa`（已下线） | 4 | 0 | 0 | 4 | 0 | 0.70s |
 
 所以不能说“fetch 成功 54 次”。运行时层面 54 次调用都返回了可解析回执，但只有 4 次真正取得内容。
 
@@ -1408,9 +1384,9 @@ TTL 由受控回放确定，不使用时间高度集中的线上压测记录：
 | Agent | SharedState 视图 | 确定性 pre-step | 首轮 Skill | 公网 MCP | full evaluation 实际模型工具倾向 |
 |---|---|---|---|---|---|
 | Tech | resume/JD/coverage | `calculate_jd_coverage`, `resume_semantic_search`, `knowledge_search` | technical evidence | 无 | pre-step 成功后移除重复工具，通常只强制 `emit_decision` |
-| Project | resume/JD | `locate_evidence`, `resume_semantic_search`（有可提取项目时） | project claims；有URL再加 public evidence | fetch→Exa fallback | 保留尚未执行的内部工具、健康MCP与 `emit_decision` |
+| Project | resume/JD | `locate_evidence`, `resume_semantic_search`（有可提取项目时） | project claims；有URL再加 public evidence | 精确URL走fetch；发现候选来源走Bing CN Search，再fetch核验 | 保留尚未执行的内部工具、健康MCP与 `emit_decision` |
 | Risk | resume/timeline | `check_timeline` | risk patterns | 无 | 通常收口到 `emit_decision` |
-| Evidence | 上游 findings、risk、MCP回执 | `verify_report_evidence` | confidence calibration | fetch/Exa，受URL和健康状态过滤 | 若 action quota 为0则只暴露 `emit_decision` |
+| Evidence | 上游 findings、risk、MCP回执 | `verify_report_evidence` | confidence calibration | fetch/Bing CN Search，受URL和健康状态过滤 | 若 action quota 为0则只暴露 `emit_decision` |
 | Report | 全部校准产物 + 生成前知识库 RAG | 无模型可调用 RAG 工具 | 无 | 明确禁止 | 单次强制 `emit_decision` 提交完整报告 |
 
 ---
@@ -2036,7 +2012,7 @@ Project 最高，是因为固定首轮消息不再被工具结果反复重写，
 | Memory | 400 read，258 returned hit，1,240 USED；P95 43.05ms |
 | Skill | 451/451 selected→loaded→applied；selected→applied P95 142.5ms |
 | MCP fetch | 54 调用，仅4次取得内容，49次404，1次其他失败 |
-| MCP Exa | 4调用，4次 free-tier rate limited |
+| MCP Exa（已下线的历史数据） | 4调用，4次 free-tier rate limited；现已由本地标准MCP `bing_cn.web_search` 替代 |
 | LangGraph | 100/100 custom事件，98并行组，2次Replan，0 agent result failure |
 
 这些数据说明 RAG、Memory、Skill 和 Graph control-plane 都是毫秒级，几十秒关键路径主要由 LLM 生成决定；公网 MCP 的主要问题是证据可用率，不是延迟总量。

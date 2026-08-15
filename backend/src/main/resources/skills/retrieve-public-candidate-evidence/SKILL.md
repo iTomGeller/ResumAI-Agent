@@ -1,6 +1,6 @@
 ---
 name: retrieve-public-candidate-evidence
-description: 集中定义免密 Exa 和 fetch 对候选人声明 URL 的绑定、超时/限流与 not_checked 契约。仅在简历含显式外链、用户要求公网核验，或项目证据核验需要外部来源时使用。
+description: 集中定义免密 Bing CN Search MCP 和 fetch 对候选人声明 URL 的绑定、超时/限流与 not_checked 契约。仅在简历含显式外链、用户要求公网核验，或项目证据核验需要外部来源时使用。
 ---
 
 # Retrieve Public Candidate Evidence
@@ -18,14 +18,14 @@ description: 集中定义免密 Exa 和 fetch 对候选人声明 URL 的绑定�
 ## 工具优先级
 
 1. **stdio fetch**（`fetch.fetch`）：对候选人声明的精确 URL 直接抓取。中国大陆 ECS 对目标可达时这是首选；其描述和参数 schema 必须来自实时 `tools/list`，不使用本地别名。
-2. **Exa**（`exa.web_search_exa` / `exa.web_fetch_exa`）：只在用户明确要求发现替代公开来源，或精确 URL 因网络不可达而非 404 失败时兜底。免费 MCP 已限流时立即记 `not_checked`，禁止继续等待或重试。
+2. **Bing CN Search MCP**（`bing_cn.web_search`）：只在用户明确要求发现替代公开来源，或精确 URL 因网络不可达而非 404 失败时兜底。搜索结果只是候选来源，必须再用 `fetch.fetch` 抓取选中的 URL 才能成为可引用证据。
 
-生产 MCP 清单只允许免 OAuth、免 API Key 的服务；公开 GitHub 页通过 Exa 或白名单 fetch 核验。
+生产 MCP 清单只允许免 OAuth、免 API Key 的服务；公开 GitHub 页通过 Bing CN Search 发现、白名单 fetch 核验。
 
 ### 中国大陆 ECS 路由
 
 - GitHub 连通性按**运行时探测结果**处理，不能因机房地域直接假定可用或不可用。
-- GitHub 先按运行时实测走白名单 fetch。明确 404 只说明候选人声明的 URL 当前不可用；网络不可达时才换到 Exa，Exa 限流则记 `not_checked`。
+- GitHub 先按运行时实测走白名单 fetch。明确 404 只说明候选人声明的 URL 当前不可用；网络不可达时才使用 `bing_cn.web_search` 发现候选来源，搜索无结果则记 `not_checked`。
 - Gitee / GitCode / CSDN / 掘金 / 知乎 / 博客园等候选人显式声明的国内链接，优先用白名单 fetch 直连；来源 URL 必须原样保留。
 - 不得把同名 Gitee 镜像自动当成 GitHub 原仓库；只有简历显式声明或页面提供可验证的 canonical / mirror 关系时才允许绑定。
 

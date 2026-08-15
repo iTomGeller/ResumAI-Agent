@@ -3333,7 +3333,7 @@ class RunExecutor:
             request_source_urls = _collect_source_urls(
                 args.get("url"), args.get("urls"))
             source_urls = list(result_source_urls)
-            if server == "fetch" or tool == "exa.web_fetch_exa":
+            if server == "fetch":
                 # For fetch calls the URL is the actual requested document.
                 # Search-query text, however, is not evidence provenance.
                 source_urls = list(dict.fromkeys(
@@ -3984,7 +3984,7 @@ class RunExecutor:
             return None
         if "fetch.fetch" in tool_results_block:
             return None
-        if "exa.web_search_exa" in tool_results_block:
+        if "bing_cn.web_search" in tool_results_block:
             return None
         summary = f"确定性核验通过：支持率 {support:.2f}，无冲突，跳过 Evidence LLM"
         return AgentOutput(

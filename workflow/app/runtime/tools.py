@@ -366,7 +366,7 @@ class ToolExecutor:
                 continue
             # URL fetchers are candidate-bound evidence tools. Do not expose
             # them when no URL was declared in the resume/JD/request.
-            if (name in {"fetch.fetch", "exa.web_fetch_exa", "exa.web_search_exa"}
+            if (name in {"fetch.fetch", "bing_cn.web_search"}
                     and not context_signals["has_external_url"]):
                 continue
             if (defn.mcp_server == "context7"
