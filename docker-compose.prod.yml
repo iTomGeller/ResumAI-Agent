@@ -4,6 +4,8 @@ services:
   ai-resume-backend:
     build:
       context: ./backend
+      args:
+        SKIP_TESTS: ${SKIP_TESTS:-0}
     container_name: ai-resume-backend
     restart: unless-stopped
     env_file:
@@ -63,6 +65,8 @@ services:
     build:
       context: .
       dockerfile: workflow/Dockerfile
+      args:
+        SKIP_TESTS: ${SKIP_TESTS:-0}
     container_name: ai-resume-workflow
     restart: unless-stopped
     env_file:

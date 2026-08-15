@@ -4,7 +4,12 @@ COPY settings.xml /root/.m2/settings.xml
 COPY pom.xml .
 RUN mvn -B -s /root/.m2/settings.xml dependency:go-offline
 COPY src ./src
-RUN mvn -B -s /root/.m2/settings.xml clean verify
+ARG SKIP_TESTS=0
+RUN if [ "$SKIP_TESTS" = "1" ]; then \
+      mvn -B -s /root/.m2/settings.xml -DskipTests clean package; \
+    else \
+      mvn -B -s /root/.m2/settings.xml clean verify; \
+    fi
 
 FROM docker.m.daocloud.io/library/eclipse-temurin:21-jre
 WORKDIR /app
