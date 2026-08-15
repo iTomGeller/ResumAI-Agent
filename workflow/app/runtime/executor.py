@@ -4845,15 +4845,24 @@ class RunExecutor:
             "memoryTrace": trace[:20],
             "decisions": decisions,
         }
+        selected = used[: self.policy.memoryRetrieval.topK]
+        profiles = [hit for hit in selected if hit.get("type") == "JOB_PROFILE"]
+        recent_cases = [hit for hit in selected if hit.get("type") == "RECENT_CASE"]
         lines = [
-            "[同岗位业务记忆]",
             "以下仅用于校准证据检查，不是当前候选人的事实或结论；必须以当前简历/JD/工具证据为准。",
         ]
-        for hit in used[: self.policy.memoryRetrieval.topK]:
-            content = str(hit.get("content", ""))[:400]
-            source = hit.get("source") or "?"
-            label = "近期脱敏案例" if hit.get("type") == "RECENT_CASE" else "岗位长期画像"
-            lines.append(f"- [{label}|src={source}] {content}")
+        if profiles:
+            lines.append("[长期岗位画像]")
+            for hit in profiles:
+                content = str(hit.get("content", ""))[:400]
+                source = hit.get("source") or "?"
+                lines.append(f"- [src={source}] {content}")
+        if recent_cases:
+            lines.append("[近期同岗位案例]")
+            for index, hit in enumerate(recent_cases, start=1):
+                content = str(hit.get("content", ""))[:400]
+                source = hit.get("source") or "?"
+                lines.append(f"{index}. [src={source}] {content}")
         block = "\n".join(lines) if used else ""
         return block, audit
 
