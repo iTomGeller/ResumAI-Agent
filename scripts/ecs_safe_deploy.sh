@@ -442,7 +442,11 @@ with open("/tmp/resumai-mcp-runtime-acceptance.json", encoding="utf-8") as fh:
 with open("/tmp/resumai-mcp-acceptance.json", encoding="utf-8") as fh:
     payload = json.load(fh)
 runtime_mcp = runtime_payload.get("mcp") or {}
-expected = {"bing_cn", "fetch"}
+expected = {"bing_cn", "fetch", "context7"}
+expected_context7_tools = {
+    "context7.resolve-library-id",
+    "context7.query-docs",
+}
 servers = payload.get("servers") or []
 names = {str(item.get("name")) for item in servers if isinstance(item, dict)}
 available = {
@@ -462,6 +466,12 @@ if available != expected:
         f"available={sorted(available)}")
 if int(payload.get("toolCount") or 0) <= 0:
     raise SystemExit(f"no live MCP tools: toolCount={payload.get('toolCount')}")
+runtime_tools = set(runtime_mcp.get("availableTools") or [])
+if not expected_context7_tools.issubset(runtime_tools):
+    raise SystemExit(
+        "Context7 tools/list incomplete: "
+        f"missing={sorted(expected_context7_tools - runtime_tools)} "
+        f"available={sorted(runtime_tools)}")
 print(
     f"MCP live: tools={payload.get('toolCount')} "
     f"available={','.join(sorted(available))}")
