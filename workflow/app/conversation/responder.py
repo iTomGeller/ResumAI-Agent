@@ -236,6 +236,16 @@ async def _model_answer(
             if live_tools:
                 request_body["tools"] = live_tools
                 request_body["tool_choice"] = "auto"
+                if (request.disposition or "").upper() == "BACKGROUND_QUERY":
+                    resolve_name = next((
+                        model_name for model_name, catalog_name in mcp_aliases.items()
+                        if catalog_name == "context7.resolve-library-id"
+                    ), "")
+                    if resolve_name:
+                        request_body["tool_choice"] = {
+                            "type": "function",
+                            "function": {"name": resolve_name},
+                        }
                 # Keep this identical to the proven Workflow provider path:
                 # the current provider rejects response_format when tools are
                 # present. JSON mode is restored for the final no-tool turn.
@@ -297,6 +307,16 @@ async def _model_answer(
                     })
                 tool_rounds += 1
                 if tool_rounds < 2:
+                    if (request.disposition or "").upper() == "BACKGROUND_QUERY":
+                        query_name = next((
+                            model_name for model_name, catalog_name in mcp_aliases.items()
+                            if catalog_name == "context7.query-docs"
+                        ), "")
+                        if query_name:
+                            request_body["tool_choice"] = {
+                                "type": "function",
+                                "function": {"name": query_name},
+                            }
                     continue
                 final_body = dict(request_body)
                 final_body["messages"] = messages
