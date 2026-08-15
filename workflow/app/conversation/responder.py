@@ -14,6 +14,8 @@ from app.conversation.models import (
     SourceRef,
 )
 from app.conversation.tools import collect_session_citations, evidence_hints
+from app.runtime.mcp_registry import get_mcp_registry
+from app.runtime.tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,7 @@ _SAFE_COPILOT_ACTIONS = {"OPEN_REPORT", "OPEN_TRACE", "VIEW_EVIDENCE"}
 _SNAPSHOT_TEXT_LIMITS = {
     "activeGoal": 600,
     "summary": 1200,
+    "conversationSummary": 1600,
     "jobDescription": 1600,
     "jdText": 1600,
     "effectiveJd": 1600,
@@ -31,7 +34,7 @@ _SNAPSHOT_TEXT_LIMITS = {
 }
 
 _SYSTEM = """你是 ResumAI 招聘决策 Copilot。只输出 JSON（不要 markdown）：
-{"answer":"针对当前问题的短答","citations":[],"actions":[],"suggestions":["可选下一步"]}
+{"answer":"针对当前问题的短答","citations":[],"actions":[],"suggestions":["可选下一步"],"conversationSummary":null}
 规则：
 1. 不要复述完整评估报告；完整报告只在决策报告页。
 2. 不要编造候选人事实、分数或风险。
@@ -41,6 +44,8 @@ _SYSTEM = """你是 ResumAI 招聘决策 Copilot。只输出 JSON（不要 markd
 6. 即使还没有完整评估报告，也必须直接回答用户当前问题；只能使用消息和给定的
    JD、简历片段、会话摘要，候选人结论不足时明确标成“待核验”。
 7. 回答控制在 300 个中文字符左右；普通问答不得建议或触发完整评估运行。
+8. contextSnapshot.messagesToCompact 非空时，把既有 conversationSummary 与这些旧消息合并成新的 conversationSummary：最多800个中文字符，只保留用户约束、已确认事实、关键结论和未解决问题；不得加入 recentMessages 或当前回答。为空时输出 null。
+9. Context7 公网 MCP 只用于技术库、框架和 API 的最新文档问题；它返回的是技术文档，不是候选人履历证据。通常先 resolve-library-id，再 query-docs。工具失败时明确说明未查到，禁止补猜。
 """
 
 
@@ -55,6 +60,16 @@ async def generate_copilot_answer(request: ConversationReplyRequest) -> CopilotA
     model_answer = await _model_answer(content, request, snapshot)
     if model_answer is not None:
         return model_answer
+
+    if request.allowTools or (request.disposition or "").upper() == "BACKGROUND_QUERY":
+        return CopilotAnswer(
+            turnId=request.turnId,
+            answer=evidence_hints(content, snapshot),
+            citations=[SourceRef(**item)
+                       for item in collect_session_citations(snapshot)],
+            actions=[CopilotAction(type="OPEN_REPORT", label="打开决策报告")],
+            suggestions=["补充具体技术库名称", "查看当前报告证据", "稍后重试公网文档查询"],
+        )
 
     return CopilotAnswer(
         turnId=request.turnId,
@@ -77,14 +92,9 @@ def _local_answer(
         )
 
     if request.allowTools or (request.disposition or "").upper() == "BACKGROUND_QUERY":
-        citations = [SourceRef(**c) for c in collect_session_citations(snapshot)]
-        return CopilotAnswer(
-            turnId=request.turnId,
-            answer=evidence_hints(content, snapshot),
-            citations=citations,
-            actions=[CopilotAction(type="OPEN_REPORT", label="打开决策报告")],
-            suggestions=["核对 must-have 缺口", "查看风险证据", "出面试追问"],
-        )
+        # Evidence-oriented turns go through the model with two bounded native
+        # tools. The deterministic hint remains the final outage fallback.
+        return None
 
     lowered = content.lower()
     is_overall_query = any(k in lowered for k in ("结论", "分数", "推荐", "进度", "到哪"))
@@ -204,28 +214,102 @@ async def _model_answer(
             ensure_ascii=False,
             default=str,
         )
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": user_payload},
+        ]
+        allow_tools = bool(request.allowTools) \
+            or (request.disposition or "").upper() == "BACKGROUND_QUERY"
+        request_body: Dict[str, Any] = {
+            "model": settings.deepseek_model,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 700,
+            "response_format": {"type": "json_object"},
+            "stream": False,
+        }
+        mcp_registry = None
+        mcp_aliases: Dict[str, str] = {}
+        if allow_tools:
+            mcp_registry, live_tools, mcp_aliases = \
+                await _live_copilot_mcp_tools()
+            if live_tools:
+                request_body["tools"] = live_tools
+                request_body["tool_choice"] = "auto"
+
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{normalized_deepseek_base_url()}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.deepseek_model,
-                    "messages": [
-                        {"role": "system", "content": _SYSTEM},
-                        {"role": "user", "content": user_payload},
-                    ],
-                    "temperature": 0.2,
-                    "max_tokens": 500,
-                    "response_format": {"type": "json_object"},
-                    "stream": False,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-        raw = str(data["choices"][0]["message"]["content"] or "")
+            message: Dict[str, Any] = {}
+            tool_rounds = 0
+            while True:
+                request_body["messages"] = messages
+                response = await client.post(
+                    f"{normalized_deepseek_base_url()}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.deepseek_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=request_body,
+                )
+                response.raise_for_status()
+                data = response.json()
+                message = dict(data["choices"][0]["message"] or {})
+                # One call per round, two rounds total: enough for
+                # resolve-library-id -> query-docs without an open-ended loop.
+                tool_calls = list(message.get("tool_calls") or [])[:1]
+                if not tool_calls or mcp_registry is None:
+                    break
+                messages.append({
+                    "role": "assistant",
+                    "content": message.get("content") or "",
+                    "tool_calls": tool_calls,
+                })
+                for call in tool_calls:
+                    function = call.get("function") or {}
+                    model_name = str(function.get("name") or "")
+                    catalog_name = mcp_aliases.get(model_name, "")
+                    try:
+                        args = json.loads(function.get("arguments") or "{}")
+                    except (TypeError, json.JSONDecodeError):
+                        args = {}
+                    result = await mcp_registry.call(catalog_name, args) \
+                        if catalog_name else {
+                            "success": False,
+                            "status": "unavailable",
+                            "text": f"MCP tool alias not found: {model_name}",
+                        }
+                    logger.info(
+                        "copilot MCP call tool=%s success=%s status=%s",
+                        catalog_name or model_name,
+                        result.get("success") if isinstance(result, dict) else None,
+                        result.get("status") if isinstance(result, dict) else None,
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": str(call.get("id") or ""),
+                        "name": model_name,
+                        "content": json.dumps(
+                            result, ensure_ascii=False, separators=(",", ":")),
+                    })
+                tool_rounds += 1
+                if tool_rounds < 2:
+                    continue
+                final_body = dict(request_body)
+                final_body["messages"] = messages
+                final_body.pop("tools", None)
+                final_body.pop("tool_choice", None)
+                response = await client.post(
+                    f"{normalized_deepseek_base_url()}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.deepseek_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=final_body,
+                )
+                response.raise_for_status()
+                data = response.json()
+                message = dict(data["choices"][0]["message"] or {})
+                break
+        raw = str(message.get("content") or "")
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end <= start:
             return None
@@ -255,16 +339,47 @@ async def _model_answer(
         suggestions = [
             str(s) for s in (payload.get("suggestions") or []) if str(s).strip()
         ]
+        conversation_summary = str(
+            payload.get("conversationSummary") or "").strip()
+        if not compact.get("messagesToCompact"):
+            conversation_summary = ""
         return CopilotAnswer(
             turnId=request.turnId,
             answer=answer,
             citations=citations,
             actions=actions,
             suggestions=suggestions,
+            conversationSummary=conversation_summary[:1600] or None,
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("copilot model reply skipped: %s", exc)
         return None
+
+
+async def _live_copilot_mcp_tools() -> tuple[Any, List[Dict[str, Any]], Dict[str, str]]:
+    """Expose only live public MCP tools discovered by the process registry."""
+    try:
+        registry = await get_mcp_registry(probe=True)
+        catalog: List[Dict[str, Any]] = []
+        for catalog_name in (
+                "context7.resolve-library-id", "context7.query-docs"):
+            info = registry.tools.get(catalog_name)
+            if info is None:
+                continue
+            health = registry.health.get(info.server)
+            if (health is None or health.status != "AVAILABLE"
+                    or not registry.has_live_client(info.server)):
+                continue
+            catalog.append({
+                "name": info.catalog_name,
+                "description": info.description,
+                "inputSchema": info.input_schema,
+            })
+        tools, aliases = ToolExecutor.openai_tools(catalog)
+        return registry, tools, aliases
+    except Exception as exc:  # noqa: BLE001
+        logger.info("copilot MCP catalog unavailable: %s", exc)
+        return None, [], {}
 
 
 def _bounded_context_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
@@ -285,6 +400,15 @@ def _bounded_context_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         if value not in (None, "", [], {}):
             compact[key] = _clip_text(value, limit)
 
+    recent_messages = _bounded_history_messages(
+        snapshot.get("recentMessages"), limit=8, item_chars=600)
+    if recent_messages:
+        compact["recentMessages"] = recent_messages
+    messages_to_compact = _bounded_history_messages(
+        snapshot.get("messagesToCompact"), limit=64, item_chars=400)
+    if messages_to_compact:
+        compact["messagesToCompact"] = messages_to_compact
+
     report = snapshot.get("structuredReport") or snapshot.get("report")
     if isinstance(report, dict) and report:
         compact_report: Dict[str, Any] = {}
@@ -303,6 +427,28 @@ def _bounded_context_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         if compact_report:
             compact["structuredReport"] = compact_report
     return compact
+
+
+def _bounded_history_messages(
+    raw: Any, *, limit: int, item_chars: int,
+) -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    bounded: List[Dict[str, Any]] = []
+    for item in raw[-limit:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().upper()
+        content = _clip_text(item.get("content"), item_chars)
+        if role not in {"USER", "ASSISTANT"} or not content:
+            continue
+        bounded.append({
+            "id": item.get("id"),
+            "role": role,
+            "content": content,
+            "intent": _clip_text(item.get("intent"), 80),
+        })
+    return bounded
 
 
 def _clip_text(value: Any, limit: int) -> str:

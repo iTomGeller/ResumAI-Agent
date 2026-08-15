@@ -175,7 +175,9 @@ public class TurnPolicyService {
 
     private boolean needsEvidenceTool(String lower) {
         return matchesAny(lower, "查一下", "检索", "证据在哪", "原文哪一行", "知识库",
-                "搜一下", "引用依据", "出处", "来源是什么");
+                "搜一下", "引用依据", "出处", "来源是什么",
+                "context7", "官方文档", "最新文档", "最新api", "最新 api",
+                "library docs", "api docs");
     }
 
     private boolean isQuestionOrChat(String lower) {

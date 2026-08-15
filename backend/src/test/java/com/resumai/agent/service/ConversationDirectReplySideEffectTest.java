@@ -96,7 +96,11 @@ class ConversationDirectReplySideEffectTest {
         lenient().when(turnMapper.selectCount(any(Wrapper.class))).thenAnswer(inv -> (long) turns.size());
 
         ConversationTurnService turnService = new ConversationTurnService(turnMapper, objectMapper);
-        ConversationReplyService replyService = new ConversationReplyService(runtimeClient, agentRunMapper, objectMapper);
+        ConversationReplyService replyService = new ConversationReplyService(
+                runtimeClient, agentRunMapper, messageMapper,
+                org.mockito.Mockito.mock(
+                        com.resumai.agent.dao.ContextSnapshotMapper.class),
+                objectMapper);
         conversationService = new ConversationService(
                 sessionMapper, messageMapper, resumeTaskMapper, evaluationService,
                 taskControlService, new ConversationIntentClassifier(), runtimeClient,

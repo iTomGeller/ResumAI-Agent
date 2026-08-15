@@ -11,6 +11,8 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.api.dto.ConversationTurnRequest;
 import com.resumai.agent.dao.AgentRunMapper;
+import com.resumai.agent.dao.ContextSnapshotMapper;
+import com.resumai.agent.dao.ConversationMessageMapper;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ConversationSession;
 import com.resumai.agent.service.run.AgentRuntimeClient;
@@ -33,13 +35,16 @@ class ConversationReplyServiceFallbackTest {
 
     @Mock AgentRuntimeClient runtimeClient;
     @Mock AgentRunMapper agentRunMapper;
+    @Mock ConversationMessageMapper conversationMessageMapper;
+    @Mock ContextSnapshotMapper contextSnapshotMapper;
 
     private ConversationReplyService service;
     private ConversationSession session;
 
     @BeforeEach
     void setUp() {
-        service = new ConversationReplyService(runtimeClient, agentRunMapper, new ObjectMapper());
+        service = new ConversationReplyService(runtimeClient, agentRunMapper,
+                conversationMessageMapper, contextSnapshotMapper, new ObjectMapper());
         session = new ConversationSession();
         session.setId("conv-fallback");
         session.setActiveRevision(3);

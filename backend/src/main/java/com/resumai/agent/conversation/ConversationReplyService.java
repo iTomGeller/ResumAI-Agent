@@ -6,9 +6,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.api.dto.ContextRefRequest;
 import com.resumai.agent.api.dto.ConversationTurnRequest;
 import com.resumai.agent.dao.AgentRunMapper;
+import com.resumai.agent.dao.ContextSnapshotMapper;
+import com.resumai.agent.dao.ConversationMessageMapper;
 import com.resumai.agent.domain.entity.AgentRun;
+import com.resumai.agent.domain.entity.ContextSnapshotRow;
+import com.resumai.agent.domain.entity.ConversationMessage;
 import com.resumai.agent.domain.entity.ConversationSession;
 import com.resumai.agent.service.run.AgentRuntimeClient;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,13 +40,19 @@ public class ConversationReplyService {
 
     private final AgentRuntimeClient runtimeClient;
     private final AgentRunMapper agentRunMapper;
+    private final ConversationMessageMapper conversationMessageMapper;
+    private final ContextSnapshotMapper contextSnapshotMapper;
     private final ObjectMapper objectMapper;
 
     public ConversationReplyService(AgentRuntimeClient runtimeClient,
                                     AgentRunMapper agentRunMapper,
+                                    ConversationMessageMapper conversationMessageMapper,
+                                    ContextSnapshotMapper contextSnapshotMapper,
                                     ObjectMapper objectMapper) {
         this.runtimeClient = runtimeClient;
         this.agentRunMapper = agentRunMapper;
+        this.conversationMessageMapper = conversationMessageMapper;
+        this.contextSnapshotMapper = contextSnapshotMapper;
         this.objectMapper = objectMapper;
     }
 
@@ -50,7 +61,20 @@ public class ConversationReplyService {
             String answer,
             List<Map<String, Object>> citations,
             List<Map<String, Object>> actions,
-            List<String> suggestions
+            List<String> suggestions,
+            String conversationSummary
+    ) {
+    }
+
+    private record HistoryContext(
+            String summary,
+            int summaryVersion,
+            List<Map<String, Object>> messagesToCompact,
+            List<Map<String, Object>> recentMessages,
+            Long sourceMessageStartId,
+            Long sourceMessageEndId,
+            Long firstKeptMessageId,
+            int beforeTokenEstimate
     ) {
     }
 
@@ -84,6 +108,17 @@ public class ConversationReplyService {
         snapshot.put("revision", session.getActiveRevision());
         snapshot.put("hasResume", StringUtils.hasText(session.getResumeText()));
         snapshot.put("hasJobDescription", StringUtils.hasText(session.getJobDescription()));
+        HistoryContext history = loadHistoryContext(
+                session.getId(), request.clientMessageId());
+        if (StringUtils.hasText(history.summary())) {
+            snapshot.put("conversationSummary", history.summary());
+        }
+        if (!history.messagesToCompact().isEmpty()) {
+            snapshot.put("messagesToCompact", history.messagesToCompact());
+        }
+        if (!history.recentMessages().isEmpty()) {
+            snapshot.put("recentMessages", history.recentMessages());
+        }
         if (StringUtils.hasText(session.getResumeText())) {
             snapshot.put("resumeText", clip(session.getResumeText(), 1800));
         }
@@ -99,7 +134,9 @@ public class ConversationReplyService {
 
         Optional<Map<String, Object>> remote = runtimeClient.replyConversation(body);
         if (remote.isPresent()) {
-            return fromPayload(turnId, remote.get());
+            CopilotReply reply = fromPayload(turnId, remote.get());
+            persistHistorySnapshot(session.getId(), history, reply.conversationSummary());
+            return reply;
         }
         log.debug("workflow reply unavailable; using local CopilotAnswer fallback");
         return localFallback(turnId, request.content(), decision, session);
@@ -117,7 +154,10 @@ public class ConversationReplyService {
         List<String> suggestions = stringList(payload.get("suggestions"));
         String remoteTurn = payload.get("turnId") != null
                 ? String.valueOf(payload.get("turnId")) : turnId;
-        return new CopilotReply(remoteTurn, answer, citations, actions, suggestions);
+        String conversationSummary = payload.get("conversationSummary") != null
+                ? clip(String.valueOf(payload.get("conversationSummary")), 1600) : null;
+        return new CopilotReply(remoteTurn, answer, citations, actions, suggestions,
+                conversationSummary);
     }
 
     private CopilotReply localFallback(String turnId, String content, TurnDecision decision,
@@ -184,7 +224,117 @@ public class ConversationReplyService {
                     + "若要重新评估，请明确说明岗位/事实变更；若要停止任务，请说“停止”。";
             suggestions = defaultSuggestions();
         }
-        return new CopilotReply(turnId, answer, List.of(), List.of(), suggestions);
+        return new CopilotReply(turnId, answer, List.of(), List.of(), suggestions, null);
+    }
+
+    private HistoryContext loadHistoryContext(String conversationId,
+                                              String currentClientMessageId) {
+        try {
+            ContextSnapshotRow latest = contextSnapshotMapper.selectOne(
+                    new LambdaQueryWrapper<ContextSnapshotRow>()
+                            .eq(ContextSnapshotRow::getConversationId, conversationId)
+                            .eq(ContextSnapshotRow::getReason,
+                                    "copilot_incremental_window_8")
+                            .orderByDesc(ContextSnapshotRow::getId)
+                            .last("limit 1"));
+            Long compactedThrough = latest != null
+                    ? latest.getSourceMessageEndId() : null;
+            LambdaQueryWrapper<ConversationMessage> query =
+                    new LambdaQueryWrapper<ConversationMessage>()
+                            .eq(ConversationMessage::getConversationId, conversationId)
+                            .orderByAsc(ConversationMessage::getId);
+            if (compactedThrough != null) {
+                query.gt(ConversationMessage::getId, compactedThrough);
+            }
+            if (StringUtils.hasText(currentClientMessageId)) {
+                query.ne(ConversationMessage::getClientMessageId,
+                        currentClientMessageId);
+            }
+            List<ConversationMessage> rows = conversationMessageMapper.selectList(query)
+                    .stream()
+                    .filter(row -> "USER".equalsIgnoreCase(row.getRole())
+                            || "ASSISTANT".equalsIgnoreCase(row.getRole()))
+                    .toList();
+            int compactCount = Math.max(0, rows.size() - 8);
+            int compactBatchCount = Math.min(compactCount, 64);
+            List<ConversationMessage> compactRows = rows.subList(0, compactBatchCount);
+            List<ConversationMessage> recentRows = rows.subList(
+                    Math.max(compactBatchCount, rows.size() - 8), rows.size());
+            List<Map<String, Object>> toCompact = compactRows.stream()
+                    .map(row -> historyMessage(row, 400)).toList();
+            List<Map<String, Object>> recent = recentRows.stream()
+                    .map(row -> historyMessage(row, 600)).toList();
+            String previousSummary = latest != null ? latest.getSummary() : null;
+            int beforeTokens = estimateTokens(previousSummary, toCompact, recent);
+            return new HistoryContext(
+                    previousSummary,
+                    latest != null && latest.getSummaryVersion() != null
+                            ? latest.getSummaryVersion() : 0,
+                    toCompact,
+                    recent,
+                    compactRows.isEmpty() ? null : compactRows.get(0).getId(),
+                    compactRows.isEmpty() ? null
+                            : compactRows.get(compactRows.size() - 1).getId(),
+                    recentRows.isEmpty() ? null : recentRows.get(0).getId(),
+                    beforeTokens);
+        } catch (Exception e) {
+            log.info("Copilot history context degraded to current turn: {}", e.getMessage());
+            return new HistoryContext(null, 0, List.of(), List.of(),
+                    null, null, null, 0);
+        }
+    }
+
+    private Map<String, Object> historyMessage(ConversationMessage row, int limit) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("id", row.getId());
+        view.put("role", row.getRole());
+        view.put("intent", row.getIntentType());
+        view.put("content", clip(row.getContent(), limit));
+        return view;
+    }
+
+    private void persistHistorySnapshot(String conversationId,
+                                        HistoryContext history,
+                                        String updatedSummary) {
+        if (!StringUtils.hasText(updatedSummary)
+                || history.messagesToCompact().isEmpty()
+                || history.sourceMessageEndId() == null) {
+            return;
+        }
+        try {
+            ContextSnapshotRow row = new ContextSnapshotRow();
+            row.setRunId(clip("copilot:" + conversationId, 64));
+            row.setConversationId(conversationId);
+            row.setSummaryVersion(history.summaryVersion() + 1);
+            row.setSourceMessageStartId(history.sourceMessageStartId());
+            row.setSourceMessageEndId(history.sourceMessageEndId());
+            row.setFirstKeptMessageId(history.firstKeptMessageId());
+            row.setBeforeTokenEstimate(history.beforeTokenEstimate());
+            row.setAfterTokenEstimate(Math.max(1,
+                    (updatedSummary.length() + history.recentMessages().stream()
+                            .mapToInt(item -> String.valueOf(
+                                    item.getOrDefault("content", "")).length())
+                            .sum()) / 2));
+            row.setReason("copilot_incremental_window_8");
+            row.setSummary(clip(updatedSummary, 1600));
+            row.setCreateTime(LocalDateTime.now());
+            contextSnapshotMapper.insert(row);
+        } catch (Exception e) {
+            log.info("Copilot context snapshot persistence skipped: {}", e.getMessage());
+        }
+    }
+
+    private int estimateTokens(String summary,
+                               List<Map<String, Object>> compact,
+                               List<Map<String, Object>> recent) {
+        int chars = summary == null ? 0 : summary.length();
+        for (Map<String, Object> item : compact) {
+            chars += String.valueOf(item.getOrDefault("content", "")).length();
+        }
+        for (Map<String, Object> item : recent) {
+            chars += String.valueOf(item.getOrDefault("content", "")).length();
+        }
+        return Math.max(1, chars / 2);
     }
 
     private List<String> defaultSuggestions() {

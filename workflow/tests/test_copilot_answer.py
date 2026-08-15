@@ -130,7 +130,7 @@ def test_no_report_side_question_uses_real_bounded_model(
     assert "证据召回不足" in answer.answer
     assert "这是对话回复" not in answer.answer
     assert answer.actions == []
-    assert captured["json"]["max_tokens"] <= 500
+    assert captured["json"]["max_tokens"] <= 700
     prompt = json.loads(captured["json"]["messages"][1]["content"])
     assert "structuredReport" not in prompt["contextSnapshot"]
     assert len(prompt["contextSnapshot"]["resumeText"]) <= 1801

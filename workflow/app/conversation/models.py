@@ -28,6 +28,9 @@ class CopilotAnswer(BaseModel):
     actions: List[CopilotAction] = Field(default_factory=list)
     suggestions: List[str] = Field(default_factory=list)
     turnId: Optional[str] = None
+    # Internal hand-off to the Java durable context owner. The public Java
+    # turn response does not expose this field to the browser.
+    conversationSummary: Optional[str] = None
 
 
 class ContextRef(BaseModel):

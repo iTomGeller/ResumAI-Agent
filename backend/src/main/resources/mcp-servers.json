@@ -50,7 +50,24 @@
       }
     }
   },
-  "optionalMcpServers": {},
+  "optionalMcpServers": {
+    "context7": {
+      "enabled": true,
+      "default": false,
+      "transport": "streamable-http",
+      "url": "https://mcp.context7.com/mcp",
+      "description": "Context7 public MCP for current library and framework documentation",
+      "routingGuidance": "Copilot-only. Use for current library/API documentation questions; never treat library docs as evidence about a candidate.",
+      "timeoutSeconds": 20,
+      "maxConcurrentCalls": 1,
+      "minIntervalMs": 300,
+      "rateLimitRetries": 1,
+      "rateLimitBackoffMs": 800,
+      "rateLimitCooldownSeconds": 120,
+      "allowedTools": ["resolve-library-id", "query-docs"],
+      "toolPrefix": "context7"
+    }
+  },
   "agentToolRouting": {
     "TechAgent": [],
     "ProjectAgent": [
