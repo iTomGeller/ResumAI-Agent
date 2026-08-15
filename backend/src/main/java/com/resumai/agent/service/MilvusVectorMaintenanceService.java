@@ -98,7 +98,8 @@ public class MilvusVectorMaintenanceService {
     }
 
     private String kbCollection() {
-        return "kb_chunks_" + embeddingProperties.resolveJdCollectionSuffix();
+        return "kb_chunks_" + embeddingProperties.resolveCollectionSuffix(
+                embeddingProperties.resolveKbDimension());
     }
 
     private void deleteByExpr(String collection, String expr) {
@@ -120,7 +121,8 @@ public class MilvusVectorMaintenanceService {
     private String resumeCollection() {
         String collection = milvusProperties.getCollection();
         if (collection == null || collection.isBlank() || "resume_chunk".equals(collection)) {
-            return "resume_chunk_" + embeddingProperties.resolveJdCollectionSuffix();
+            return "resume_chunk_" + embeddingProperties.resolveCollectionSuffix(
+                    embeddingProperties.resolveResumeDimension());
         }
         return collection;
     }
@@ -128,7 +130,8 @@ public class MilvusVectorMaintenanceService {
     private String jdCollection() {
         String jdCollection = milvusProperties.getJdCollection();
         if (jdCollection == null || jdCollection.isBlank() || "jd_library".equals(jdCollection)) {
-            return "jd_library_" + embeddingProperties.resolveJdCollectionSuffix();
+            return "jd_library_" + embeddingProperties.resolveCollectionSuffix(
+                    embeddingProperties.resolveJdDimension());
         }
         return jdCollection;
     }

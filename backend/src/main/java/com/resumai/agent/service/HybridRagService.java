@@ -43,12 +43,13 @@ public class HybridRagService {
 
     public List<JdMatchResult> retrieve(String resumeText, RagOptions opts) {
         RagOptions effective = opts != null ? opts : RagOptions.defaults();
+        String retrievalQuery = deterministicAliasRewrite(resumeText);
         List<JdMatchResult> candidates = switch (effective.strategy()) {
-            case "lexical" -> jdRagService.matchTopJdsViaLexical(resumeText, effective.topK());
-            case "vector" -> retrieveVector(resumeText, effective);
+            case "lexical" -> jdRagService.matchTopJdsViaLexical(retrievalQuery, effective.topK());
+            case "vector" -> retrieveVector(retrievalQuery, effective);
             // The Neo4j graph strategy was removed with the knowledge graph
             // (F item): unknown/legacy "graph" requests degrade to hybrid.
-            case "hybrid", "graph" -> hybridRRF(resumeText, effective);
+            case "hybrid", "graph" -> hybridRRF(retrievalQuery, effective);
             default -> throw new IllegalArgumentException("Unknown strategy: " + effective.strategy());
         };
         if (effective.rerankerEnabled() && candidates.size() > 1) {
@@ -58,6 +59,32 @@ public class HybridRagService {
             }
         }
         return candidates;
+    }
+
+    /** Held-out winner: deterministic aliases, with no hidden LLM rewrite. */
+    private String deterministicAliasRewrite(String text) {
+        if (text == null || text.isBlank()) return text == null ? "" : text;
+        String rewritten = text;
+        Map<String, String> aliases = new LinkedHashMap<>();
+        aliases.put("springboot", "Spring Boot");
+        aliases.put("spring-boot", "Spring Boot");
+        aliases.put("k8s", "Kubernetes");
+        aliases.put("大模型", "LLM");
+        aliases.put("大型语言模型", "LLM");
+        aliases.put("智能体", "Agent");
+        aliases.put("检索增强生成", "RAG");
+        aliases.put("向量数据库", "Milvus");
+        aliases.put("消息队列", "MQ");
+        aliases.put("关系型数据库", "SQL");
+        aliases.put("持续集成", "CI");
+        aliases.put("持续交付", "CD");
+        for (Map.Entry<String, String> alias : aliases.entrySet()) {
+            rewritten = rewritten.replaceAll(
+                    "(?i)(?<![a-z0-9])" + Pattern.quote(alias.getKey())
+                            + "(?![a-z0-9])",
+                    Matcher.quoteReplacement(alias.getValue()));
+        }
+        return rewritten;
     }
 
     public Map<String, Object> compare(String resumeText, List<NamedVariant> variants) {

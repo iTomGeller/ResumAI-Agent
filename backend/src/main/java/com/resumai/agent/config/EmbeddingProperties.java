@@ -13,6 +13,12 @@ public class EmbeddingProperties {
     private String baseUrl = "https://api.openai.com/v1";
     private String apiKey = "";
     private String model = "text-embedding-3-small";
+    /** Default/long-term-memory dimension. Business RAG stages override it. */
+    private int dimension;
+    /** Joint-search winner dimensions for the three isolated RAG stages. */
+    private int resumeDimension = 1024;
+    private int jdDimension = 768;
+    private int kbDimension = 768;
     private int readTimeoutMs = 60000;
 
     public boolean isEnabled() {
@@ -47,6 +53,38 @@ public class EmbeddingProperties {
         this.model = model;
     }
 
+    public int getDimension() {
+        return dimension;
+    }
+
+    public void setDimension(int dimension) {
+        this.dimension = dimension;
+    }
+
+    public int getResumeDimension() {
+        return resumeDimension;
+    }
+
+    public void setResumeDimension(int resumeDimension) {
+        this.resumeDimension = resumeDimension;
+    }
+
+    public int getJdDimension() {
+        return jdDimension;
+    }
+
+    public void setJdDimension(int jdDimension) {
+        this.jdDimension = jdDimension;
+    }
+
+    public int getKbDimension() {
+        return kbDimension;
+    }
+
+    public void setKbDimension(int kbDimension) {
+        this.kbDimension = kbDimension;
+    }
+
     public int getReadTimeoutMs() {
         return readTimeoutMs;
     }
@@ -64,6 +102,9 @@ public class EmbeddingProperties {
     }
 
     public int resolveDimension() {
+        if (dimension > 0) {
+            return dimension;
+        }
         Integer fromModel = dimensionFromModel();
         if (fromModel != null) {
             return fromModel;
@@ -77,8 +118,32 @@ public class EmbeddingProperties {
     }
 
     public String resolveJdCollectionSuffix() {
+        return resolveCollectionSuffix(resolveDimension());
+    }
+
+    public int resolveResumeDimension() {
+        if ("local".equalsIgnoreCase(provider)) {
+            return resolveDimension();
+        }
+        return resumeDimension > 0 ? resumeDimension : resolveDimension();
+    }
+
+    public int resolveJdDimension() {
+        if ("local".equalsIgnoreCase(provider)) {
+            return resolveDimension();
+        }
+        return jdDimension > 0 ? jdDimension : resolveDimension();
+    }
+
+    public int resolveKbDimension() {
+        if ("local".equalsIgnoreCase(provider)) {
+            return resolveDimension();
+        }
+        return kbDimension > 0 ? kbDimension : resolveDimension();
+    }
+
+    public String resolveCollectionSuffix(int dim) {
         String p = provider == null ? "local" : provider.toLowerCase(Locale.ROOT);
-        int dim = resolveDimension();
         // Model-aware suffix so switching OpenRouter Qwen ↔ OpenAI does not collide collections.
         String modelTag = modelCollectionTag();
         return switch (p) {

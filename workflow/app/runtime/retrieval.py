@@ -46,10 +46,10 @@ class BusinessRagRetriever:
                 raw = await gateway.java_resume_search(
                     query=query, top_k=top_k, resume_text=resume_text,
                     jd_requirements=job_description[:2000],
-                    strategy="hybrid")
+                    strategy="dense")
             elif source == "knowledge":
                 raw = await gateway.java_knowledge_search(
-                    query=query, top_k=top_k, rerank=True)
+                    query=query, top_k=top_k, rerank=False)
             else:
                 raise ValueError(f"unknown business RAG source: {source}")
             parsed = self._as_object(raw)

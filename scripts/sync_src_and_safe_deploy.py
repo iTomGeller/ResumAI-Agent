@@ -257,6 +257,14 @@ def main() -> None:
             fh.write(f"EMBEDDING_PROVIDER={provider}\n")
             fh.write(f"EMBEDDING_BASE_URL={base}\n")
             fh.write(f"EMBEDDING_MODEL={model}\n")
+            # Three-stage held-out winners. Write them explicitly so an old
+            # ECS .env cannot override the committed production defaults.
+            fh.write("EMBEDDING_DIMENSION=1024\n")
+            fh.write("RESUME_EMBEDDING_DIMENSION=1024\n")
+            fh.write("JD_EMBEDDING_DIMENSION=768\n")
+            fh.write("KB_EMBEDDING_DIMENSION=768\n")
+            fh.write("KB_CHUNK_CHARS=320\n")
+            fh.write("KB_OVERLAP_CHARS=0\n")
             fh.write("EMBEDDING_ENABLED=true\n")
             fh.write("CACHE_ENABLED=true\n")
         sftp.close()
@@ -266,7 +274,7 @@ def main() -> None:
             "  k=${line%%=*}; "
             "  grep -q \"^${k}=\" \"$ENV\" && sed -i \"s|^${k}=.*|${line}|\" \"$ENV\" || echo \"$line\" >> \"$ENV\"; "
             "done < /tmp/embed.env; rm -f /tmp/embed.env; "
-            "grep -E '^(EMBEDDING_PROVIDER|EMBEDDING_MODEL|EMBEDDING_BASE_URL|CACHE_ENABLED)=' \"$ENV\"",
+            "grep -E '^(EMBEDDING_PROVIDER|EMBEDDING_MODEL|EMBEDDING_BASE_URL|EMBEDDING_DIMENSION|RESUME_EMBEDDING_DIMENSION|JD_EMBEDDING_DIMENSION|KB_EMBEDDING_DIMENSION|KB_CHUNK_CHARS|KB_OVERLAP_CHARS|CACHE_ENABLED)=' \"$ENV\"",
             timeout=30,
         )
 

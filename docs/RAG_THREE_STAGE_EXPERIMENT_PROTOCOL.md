@@ -2,13 +2,15 @@
 
 本协议以当前代码调用点和 ECS 语料形态为准。三个阶段分别实验，不共享一个“全局最佳”配置。
 
+> 2026-08-15：联合搜索 winner 已接入生产代码。部署后必须重建 JD 与知识库的 768 维索引；只改参数、不重建索引不算上线。
+
 ## 1. 真实调用链与参数适用性
 
 | 阶段 | 真实入口 | 查询 | 语料/作用域 | 当前检索 | 当前切分 | 当前 rewrite | 当前 rerank |
 |---|---|---|---|---|---|---|---|
-| JD 岗位召回 | `BusinessRagRetriever(jd) -> /api/internal/tools/jd-search -> [RAG上下文]/SharedState` | 完整 `resumeText`；向量截前 2000 字，BM25 截前 3000 字 | MySQL `jd_library` + Milvus `jd_library_bailian_te3_1024`；124 JD / 554 live chunks | 文档级标准 BM25 + 按 JD 去重后的 dense + weighted RRF | 索引时固定 `recursive(400,80)` | 无模型 tool call | 独立 Retrieval telemetry |
-| 当前简历证据 | `BusinessRagRetriever(resume) -> /api/internal/tools/resume-search -> [RAG上下文]` | Runtime 模板 query 或 Copilot 原问题 | 仅本次请求的 `resumeText`；禁止跨候选人；未上传时 live chunks 为 0 | section 规则 + BM25-like phrase contains + RRF | 空行分块；只有一个块时退化按行；返回片段截 600 字 | 无模型 tool call | controller 固定 overlap-density + length 规则 |
-| 评估知识库 | `BusinessRagRetriever(knowledge) -> /api/rag/knowledge-base/search -> [RAG上下文]` | Runtime 模板 query 或 Copilot 原问题 | 12 文档 / 106 live chunks；Milvus `kb_chunks_bailian_te3_1024` | weighted contains + Milvus + RRF k=60 | Markdown 标题/编号条目边界；超长段按 320/60 字符窗 | 无模型 tool call | `feature_rerank_v1` |
+| JD 岗位召回 | `BusinessRagRetriever(jd) -> /api/internal/tools/jd-search -> [RAG上下文]/SharedState` | 完整 `resumeText`，先做确定性 alias rewrite | MySQL `jd_library` + Milvus `jd_library_bailian_te3_768` | CJK bigram BM25 + scoped dense + weighted RRF（semantic 0.7，k=10，threshold=0.35） | `section_prefix(400,40)` | deterministic，无模型调用 | none |
+| 当前简历证据 | `BusinessRagRetriever(resume) -> /api/internal/tools/resume-search -> [RAG上下文]` | Runtime 模板 query 或 Copilot 原问题 | 仅本次请求的 `resumeText`；向量只在当前请求内生成，禁止跨候选人 | TE3-1024 scoped dense（threshold=0.35，candidateLimit=5） | `section_prefix(400,40)` | none | none |
+| 评估知识库 | `BusinessRagRetriever(knowledge) -> /api/rag/knowledge-base/search -> [RAG上下文]` | Runtime 模板 query 或 Copilot 原问题 | 文件知识库 + Milvus `kb_chunks_bailian_te3_768` | domain max-match BM25 + dense + weighted RRF（semantic 0.5，k=10，threshold=0.3） | Markdown section `320/0` | none | none |
 
 结论：embedding 模型/维度对当前简历证据阶段的线上现状是 `N/A`。实验中可增加“仅当前候选人作用域的 dense”架构候选，但不得描述成当前实现，也不得使用全局简历 Milvus。
 

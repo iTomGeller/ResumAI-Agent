@@ -12,9 +12,7 @@ import com.resumai.agent.config.EmbeddingAvailability;
 import com.resumai.agent.dao.JdLibraryMapper;
 import com.resumai.agent.domain.entity.JdLibrary;
 import com.resumai.agent.util.HrContext;
-import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.Metadata;
-import dev.langchain4j.data.document.splitter.DocumentSplitters;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -83,6 +81,11 @@ public class JdRagService {
     /** 「必要技能」段结束于下一结构化字段 */
     private static final Pattern REQUIRED_SKILL_SECTION_END = Pattern.compile(
             "(?:经验要求|学历要求|核心职责|加分项|岗位职责|任职要求|工作职责)[：:]");
+    private static final Pattern JD_SECTION_LABEL = Pattern.compile(
+            "(?<![A-Za-z0-9_\\u3400-\\u9fff])"
+                    + "(岗位职责|工作职责|职位职责|工作内容|岗位描述|任职要求|职位要求|"
+                    + "必须技能|必要技能|技能要求|加分项|经验要求|生产场景(?:与考核题)?)\\s*[：:]",
+            Pattern.CASE_INSENSITIVE);
 
 
     private static final List<DefaultJd> DEFAULT_JDS = List.of(
@@ -99,7 +102,7 @@ public class JdRagService {
     private record DefaultJd(String jdId, String title, String category, String description) {}
 
     public JdRagService(@Qualifier("jdEmbeddingStore") @org.springframework.lang.Nullable MilvusEmbeddingStore jdEmbeddingStore,
-                        EmbeddingModel embeddingModel,
+                        @Qualifier("jdEmbeddingModel") EmbeddingModel embeddingModel,
                         JdLibraryMapper jdLibraryMapper,
                         EmbeddingAvailability embeddingAvailability,
                         MilvusVectorMaintenanceService vectorMaintenanceService) {
@@ -200,28 +203,119 @@ public class JdRagService {
         reindexVectors(jdId, title, category, jdText, newVersion);
     }
 
-    private void reindexVectors(String jdId, String title, String category, String jdText, int jdVersion) {
+    private int reindexVectors(String jdId, String title, String category, String jdText, int jdVersion) {
         try {
             if (!embeddingAvailability.isOperational()) {
                 log.info("JD '{}' persisted to DB; Milvus index skipped ({})", title, embeddingAvailability.disabledReason());
-                return;
+                return 0;
             }
             vectorMaintenanceService.deleteJdVectors(jdId);
             String fullText = "岗位: " + title + "\n类别: " + category + "\n" + jdText;
-            Document doc = Document.from(fullText, Metadata.from(Map.of(
+            Metadata metadata = Metadata.from(Map.of(
                     "jdId", jdId,
                     "title", title,
                     "category", category,
                     "jdVersion", String.valueOf(jdVersion)
-            )));
-            var splitter = DocumentSplitters.recursive(400, 80);
-            List<TextSegment> segments = splitter.split(doc);
+            ));
+            List<TextSegment> segments = sectionPrefixSegments(title, fullText, metadata);
             List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
             jdEmbeddingStore.addAll(embeddings, segments);
             log.info("Indexed JD '{}' v{} ({} chunks)", title, jdVersion, segments.size());
+            return segments.size();
         } catch (Exception e) {
             log.warn("Failed to index JD '{}': {}", title, e.getMessage());
+            return 0;
         }
+    }
+
+    /** Rebuild every persisted JD into the isolated TE3-768 winner collection. */
+    public Map<String, Object> reindexAllJds() {
+        List<JdLibrary> rows = getAllJds();
+        int chunks = 0;
+        int indexed = 0;
+        for (JdLibrary row : rows) {
+            if (row == null || !StringUtils.hasText(row.getJdId())
+                    || !StringUtils.hasText(row.getDescription())) {
+                continue;
+            }
+            int count = reindexVectors(
+                    row.getJdId(), row.getTitle(), row.getCategory(), row.getDescription(),
+                    row.getVersion() == null ? 1 : row.getVersion());
+            if (count > 0) {
+                indexed++;
+                chunks += count;
+            }
+        }
+        return Map.of(
+                "documents", rows.size(),
+                "indexedDocuments", indexed,
+                "indexedChunks", chunks,
+                "chunkStrategy", "section_prefix",
+                "chunkSize", 400,
+                "chunkOverlap", 40,
+                "embeddingDimension", 768,
+                "status", indexed == rows.size() ? "ready" : "degraded");
+    }
+
+    private List<TextSegment> sectionPrefixSegments(
+            String title, String text, Metadata metadata) {
+        record Section(String title, String body) {}
+        List<Section> sections = new ArrayList<>();
+        Matcher matcher = JD_SECTION_LABEL.matcher(text);
+        List<Integer> starts = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        while (matcher.find()) {
+            starts.add(matcher.start(1));
+            labels.add(matcher.group(1));
+        }
+        if (starts.isEmpty()) {
+            sections.add(new Section(title, text));
+        } else {
+            if (starts.get(0) > 0 && StringUtils.hasText(text.substring(0, starts.get(0)))) {
+                sections.add(new Section(title, text.substring(0, starts.get(0)).trim()));
+            }
+            for (int i = 0; i < starts.size(); i++) {
+                int end = i + 1 < starts.size() ? starts.get(i + 1) : text.length();
+                sections.add(new Section(labels.get(i), text.substring(starts.get(i), end).trim()));
+            }
+        }
+
+        List<TextSegment> segments = new ArrayList<>();
+        for (Section section : sections) {
+            if (!StringUtils.hasText(section.body())) continue;
+            String prefix = "文档：" + title + "\n章节：" + section.title() + "\n";
+            int window = Math.max(80, 400 - prefix.length());
+            for (String piece : smartWindows(section.body(), window, 40)) {
+                segments.add(TextSegment.from(prefix + piece, metadata));
+            }
+        }
+        return segments;
+    }
+
+    private List<String> smartWindows(String text, int size, int overlap) {
+        if (!StringUtils.hasText(text)) return List.of();
+        if (text.length() <= size) return List.of(text.trim());
+        List<String> windows = new ArrayList<>();
+        int start = 0;
+        String[] boundaries = {"\n\n", "\n", "。", "；", ";", "，", ",", " "};
+        while (start < text.length()) {
+            int target = Math.min(text.length(), start + size);
+            int end = target;
+            if (target < text.length()) {
+                int floor = start + Math.max(80, (int) (size * 0.55));
+                int best = -1;
+                for (String boundary : boundaries) {
+                    int found = text.lastIndexOf(boundary, target - 1);
+                    if (found >= floor) best = Math.max(best, found + boundary.length());
+                }
+                if (best > floor) end = best;
+            }
+            String piece = text.substring(start, end).trim();
+            if (StringUtils.hasText(piece)) windows.add(piece);
+            if (end >= text.length()) break;
+            start = Math.max(start + 1, end - Math.min(overlap, size - 1));
+        }
+        return windows;
     }
 
     private JdDetailResponse toDetail(JdLibrary row) {

@@ -13,6 +13,7 @@ import com.resumai.agent.rag.RagOptions;
 import com.resumai.agent.service.HybridRagService;
 import com.resumai.agent.service.AgentMemoryService;
 import com.resumai.agent.service.KnowledgeBaseDocumentService;
+import com.resumai.agent.service.JdRagService;
 import com.resumai.agent.service.RagAdvisorService;
 import com.resumai.agent.service.RagConfigService;
 import java.util.List;
@@ -43,6 +44,7 @@ public class RagController {
     private final JdLibraryMapper jdLibraryMapper;
     private final ResumeTaskMapper resumeTaskMapper;
     private final KnowledgeBaseDocumentService knowledgeBaseDocumentService;
+    private final JdRagService jdRagService;
     private final AgentMemoryService agentMemoryService;
 
     public RagController(RagConfigService ragConfigService,
@@ -54,6 +56,7 @@ public class RagController {
                          JdLibraryMapper jdLibraryMapper,
                          ResumeTaskMapper resumeTaskMapper,
                          KnowledgeBaseDocumentService knowledgeBaseDocumentService,
+                         JdRagService jdRagService,
                          AgentMemoryService agentMemoryService) {
         this.ragConfigService = ragConfigService;
         this.hybridRagService = hybridRagService;
@@ -64,6 +67,7 @@ public class RagController {
         this.jdLibraryMapper = jdLibraryMapper;
         this.resumeTaskMapper = resumeTaskMapper;
         this.knowledgeBaseDocumentService = knowledgeBaseDocumentService;
+        this.jdRagService = jdRagService;
         this.agentMemoryService = agentMemoryService;
     }
 
@@ -254,6 +258,11 @@ public class RagController {
     @PostMapping("/knowledge-base/reindex")
     public Map<String, Object> reindexKnowledgeBase() {
         return knowledgeBaseDocumentService.reindexAll();
+    }
+
+    @PostMapping("/jds/reindex")
+    public Map<String, Object> reindexJds() {
+        return jdRagService.reindexAllJds();
     }
 
     @GetMapping("/knowledge-base/documents")

@@ -64,17 +64,22 @@ resumai:
     jd-collection: ${MILVUS_JD_COLLECTION:jd_library}
     dimension: ${MILVUS_DIMENSION:0}
   embedding:
-    # EXP-1 winner: Bailian text-embedding-v3 (1024-d). Local MiniLM is offline-only.
+    # Three-stage held-out winners: resume=1024, JD/KB=768. Keep their
+    # collections and cache keys isolated; local MiniLM is offline-only.
     provider: ${EMBEDDING_PROVIDER:bailian}
     enabled: ${EMBEDDING_ENABLED:true}
     base-url: ${EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key: ${EMBEDDING_API_KEY:${DASHSCOPE_API_KEY:}}
     model: ${EMBEDDING_MODEL:text-embedding-v3}
+    dimension: ${EMBEDDING_DIMENSION:1024}
+    resume-dimension: ${RESUME_EMBEDDING_DIMENSION:1024}
+    jd-dimension: ${JD_EMBEDDING_DIMENSION:768}
+    kb-dimension: ${KB_EMBEDDING_DIMENSION:768}
     read-timeout-ms: ${EMBEDDING_READ_TIMEOUT_MS:60000}
   kb:
-    # EXP-2 chunk grid knobs (winner locked after the grid run)
+    # Three-stage joint-search winner: markdown section 320/0.
     chunk-chars: ${KB_CHUNK_CHARS:320}
-    overlap-chars: ${KB_OVERLAP_CHARS:60}
+    overlap-chars: ${KB_OVERLAP_CHARS:0}
   intent:
     # EXP-6: below this LLM confidence the turn degrades to a clarify question
     confidence-floor: ${INTENT_CONFIDENCE_FLOOR:0.7}

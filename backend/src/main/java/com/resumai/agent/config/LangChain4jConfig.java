@@ -47,6 +47,7 @@ public class LangChain4jConfig {
                 .baseUrl(embeddingProps.getBaseUrl())
                 .apiKey(embeddingProps.getApiKey())
                 .modelName(embeddingProps.getModel())
+                .dimensions(embeddingProps.resolveResumeDimension())
                 .timeout(Duration.ofMillis(embeddingProps.getReadTimeoutMs()))
                 .maxRetries(1)
                 .build();
@@ -66,6 +67,7 @@ public class LangChain4jConfig {
                 .baseUrl(StringUtils.hasText(embeddingProps.getBaseUrl()) ? embeddingProps.getBaseUrl() : "https://openrouter.ai/api/v1")
                 .apiKey(embeddingProps.getApiKey())
                 .modelName(model)
+                .dimensions(embeddingProps.resolveResumeDimension())
                 .timeout(Duration.ofMillis(embeddingProps.getReadTimeoutMs()))
                 .maxRetries(1)
                 .build();
@@ -96,6 +98,7 @@ public class LangChain4jConfig {
                         : "https://dashscope.aliyuncs.com/compatible-mode/v1")
                 .apiKey(embeddingProps.getApiKey())
                 .modelName(model)
+                .dimensions(embeddingProps.resolveResumeDimension())
                 .timeout(Duration.ofMillis(embeddingProps.getReadTimeoutMs()))
                 .maxRetries(2)
                 .build();
@@ -113,8 +116,54 @@ public class LangChain4jConfig {
                 .baseUrl(StringUtils.hasText(embeddingProps.getBaseUrl()) ? embeddingProps.getBaseUrl() : "https://open.bigmodel.cn/api/paas/v4")
                 .apiKey(embeddingProps.getApiKey())
                 .modelName(StringUtils.hasText(embeddingProps.getModel()) ? embeddingProps.getModel() : "embedding-3")
+                .dimensions(embeddingProps.resolveResumeDimension())
                 .timeout(Duration.ofMillis(embeddingProps.getReadTimeoutMs()))
                 .maxRetries(1)
                 .build();
+    }
+
+    @Bean("jdEmbeddingModel")
+    public EmbeddingModel jdEmbeddingModel(EmbeddingProperties props,
+                                            org.redisson.api.RedissonClient redisson) {
+        return stageEmbeddingModel(props, redisson, props.resolveJdDimension(), "jd");
+    }
+
+    @Bean("kbEmbeddingModel")
+    public EmbeddingModel kbEmbeddingModel(EmbeddingProperties props,
+                                            org.redisson.api.RedissonClient redisson) {
+        return stageEmbeddingModel(props, redisson, props.resolveKbDimension(), "kb");
+    }
+
+    private EmbeddingModel stageEmbeddingModel(EmbeddingProperties props,
+                                                org.redisson.api.RedissonClient redisson,
+                                                int dimension,
+                                                String stage) {
+        String provider = props.getProvider() == null
+                ? "local" : props.getProvider().trim().toLowerCase(java.util.Locale.ROOT);
+        if ("none".equals(provider) || (!"local".equals(provider)
+                && !StringUtils.hasText(props.getApiKey()))) {
+            return new NoopEmbeddingModel();
+        }
+        if ("local".equals(provider)) {
+            return new AllMiniLmL6V2EmbeddingModel();
+        }
+        String model = StringUtils.hasText(props.getModel())
+                ? props.getModel() : "text-embedding-v3";
+        String baseUrl = StringUtils.hasText(props.getBaseUrl())
+                ? props.getBaseUrl()
+                : "https://dashscope.aliyuncs.com/compatible-mode/v1";
+        EmbeddingModel remote = OpenAiEmbeddingModel.builder()
+                .baseUrl(baseUrl)
+                .apiKey(props.getApiKey())
+                .modelName(model)
+                .dimensions(dimension)
+                .timeout(Duration.ofMillis(props.getReadTimeoutMs()))
+                .maxRetries(2)
+                .build();
+        // Dimension is part of the cache namespace: TE3-768 and TE3-1024
+        // return incompatible vectors for the same text.
+        return new CachingEmbeddingModel(
+                remote, redisson,
+                provider + ":" + model + ":" + stage + ":" + dimension);
     }
 }

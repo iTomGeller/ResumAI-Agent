@@ -16,6 +16,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +32,15 @@ public class ResumeRagService {
 
     private static final Logger log = LoggerFactory.getLogger(ResumeRagService.class);
     private static final double SIMILARITY_THRESHOLD = 0.45;
+    private static final double SCOPED_DENSE_THRESHOLD = 0.35;
+    private static final int SCOPED_CHUNK_SIZE = 400;
+    private static final int SCOPED_CHUNK_OVERLAP = 40;
+    private static final int SCOPED_CANDIDATE_LIMIT = 5;
+    private static final Pattern RESUME_SECTION_LABEL = Pattern.compile(
+            "(?<![A-Za-z0-9_\\u3400-\\u9fff])"
+                    + "(个人摘要|专业技能|技能|工作经历|项目经历|核心项目|故障与复盘|"
+                    + "教育背景|教育经历|其他说明)\\s*[：:]",
+            Pattern.CASE_INSENSITIVE);
 
     private final MilvusEmbeddingStore embeddingStore;
     private final EmbeddingModel embeddingModel;
@@ -153,19 +164,153 @@ public class ResumeRagService {
             return withResumeTextFallback(List.of(), 0, 0, "empty_lexical_hits", true,
                     "lexical", "bm25_like", null, query, resumeText, topK);
         }
-        if ("embedding".equals(mode)) {
-            // A candidate-scoped dense index is not available on this API.
-            // Fail closed to current-resume text instead of querying vectors
-            // belonging to an unknown candidate.
-            return withResumeTextFallback(
-                    List.of(), 0, 0, "embedding_requires_candidate_scope", true,
-                    "current_resume", "resume_text_fallback",
-                    "candidate_scope_missing", query, resumeText, topK);
+        if ("embedding".equals(mode) || "dense".equals(mode)) {
+            return scopedDenseRetrieve(query, resumeText, topK);
         }
         return withResumeTextFallback(
                 List.of(), 0, 0, "unsupported_scoped_strategy:" + mode, true,
                 "current_resume", "resume_text_fallback",
                 "unsupported_strategy", query, resumeText, topK);
+    }
+
+    /**
+     * Joint-search winner for current-resume evidence. Chunks and vectors live
+     * only for this request, so another candidate can never leak into recall.
+     */
+    private RagRetrieveResult scopedDenseRetrieve(String query, String resumeText, int topK) {
+        if (!StringUtils.hasText(resumeText) || !StringUtils.hasText(query)) {
+            return withResumeTextFallback(
+                    List.of(), 0, 0, "empty_scoped_dense_input", true,
+                    "current_resume", "resume_text_fallback", null,
+                    query, resumeText, topK);
+        }
+        if (!embeddingAvailability.isOperational()) {
+            return withResumeTextFallback(
+                    List.of(), 0, 0, embeddingAvailability.disabledReason(), true,
+                    "current_resume", "resume_text_fallback", "embedding_unavailable",
+                    query, resumeText, topK);
+        }
+        try {
+            List<String> chunks = sectionPrefixChunks(resumeText);
+            if (chunks.isEmpty()) {
+                return withResumeTextFallback(
+                        List.of(), 0, 0, "empty_scoped_chunks", true,
+                        "current_resume", "resume_text_fallback", null,
+                        query, resumeText, topK);
+            }
+            List<TextSegment> batch = new ArrayList<>();
+            batch.add(TextSegment.from(query));
+            chunks.forEach(chunk -> batch.add(TextSegment.from(chunk)));
+            List<Embedding> vectors = embeddingModel.embedAll(batch).content();
+            if (vectors.size() != batch.size()) {
+                throw new IllegalStateException("embedding batch size mismatch");
+            }
+            float[] queryVector = vectors.get(0).vector();
+            List<ScoredChunk> ranked = new ArrayList<>();
+            for (int i = 0; i < chunks.size(); i++) {
+                double score = cosine(queryVector, vectors.get(i + 1).vector());
+                if (score >= SCOPED_DENSE_THRESHOLD) {
+                    ranked.add(new ScoredChunk(chunks.get(i), score));
+                }
+            }
+            ranked.sort((a, b) -> Double.compare(b.score(), a.score()));
+            int limit = Math.min(Math.max(1, topK), SCOPED_CANDIDATE_LIMIT);
+            List<String> selected = ranked.stream().limit(limit)
+                    .map(ScoredChunk::text).toList();
+            if (selected.isEmpty()) {
+                return withResumeTextFallback(
+                        List.of(), 0, 0, "below_scoped_dense_threshold", true,
+                        "current_resume", "resume_text_fallback", null,
+                        query, resumeText, topK);
+            }
+            return new RagRetrieveResult(
+                    selected, selected.size(), ranked.get(0).score(), null, false,
+                    "current_resume", "scoped_dense_te3_1024", null,
+                    query, false);
+        } catch (Exception e) {
+            log.warn("Scoped resume dense retrieval degraded: {}", e.getMessage());
+            return withResumeTextFallback(
+                    List.of(), 0, 0, "scoped_dense_failed", true,
+                    "current_resume", "resume_text_fallback",
+                    e.getClass().getSimpleName(), query, resumeText, topK);
+        }
+    }
+
+    private List<String> sectionPrefixChunks(String resumeText) {
+        record Section(String title, String body) {}
+        List<Section> sections = new ArrayList<>();
+        Matcher matcher = RESUME_SECTION_LABEL.matcher(resumeText);
+        List<Integer> starts = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        while (matcher.find()) {
+            starts.add(matcher.start(1));
+            labels.add(matcher.group(1));
+        }
+        if (starts.isEmpty()) {
+            for (String block : splitResumeBlocks(resumeText)) {
+                String first = block.lines().findFirst().orElse("当前简历").trim();
+                sections.add(new Section(
+                        first.length() > 40 ? first.substring(0, 40) : first,
+                        block));
+            }
+        } else {
+            if (starts.get(0) > 0 && StringUtils.hasText(resumeText.substring(0, starts.get(0)))) {
+                sections.add(new Section("个人概况", resumeText.substring(0, starts.get(0)).trim()));
+            }
+            for (int i = 0; i < starts.size(); i++) {
+                int end = i + 1 < starts.size() ? starts.get(i + 1) : resumeText.length();
+                sections.add(new Section(labels.get(i), resumeText.substring(starts.get(i), end).trim()));
+            }
+        }
+        List<String> chunks = new ArrayList<>();
+        for (Section section : sections) {
+            if (!StringUtils.hasText(section.body())) continue;
+            String prefix = "文档：当前简历\n章节：" + section.title() + "\n";
+            int window = Math.max(80, SCOPED_CHUNK_SIZE - prefix.length());
+            for (String piece : smartWindows(section.body(), window, SCOPED_CHUNK_OVERLAP)) {
+                chunks.add(prefix + piece);
+            }
+        }
+        return chunks;
+    }
+
+    private List<String> smartWindows(String text, int size, int overlap) {
+        if (!StringUtils.hasText(text)) return List.of();
+        if (text.length() <= size) return List.of(text.trim());
+        List<String> windows = new ArrayList<>();
+        int start = 0;
+        String[] boundaries = {"\n\n", "\n", "。", "；", ";", "，", ",", " "};
+        while (start < text.length()) {
+            int target = Math.min(text.length(), start + size);
+            int end = target;
+            if (target < text.length()) {
+                int floor = start + Math.max(80, (int) (size * 0.55));
+                int best = -1;
+                for (String boundary : boundaries) {
+                    int found = text.lastIndexOf(boundary, target - 1);
+                    if (found >= floor) best = Math.max(best, found + boundary.length());
+                }
+                if (best > floor) end = best;
+            }
+            String piece = text.substring(start, end).trim();
+            if (StringUtils.hasText(piece)) windows.add(piece);
+            if (end >= text.length()) break;
+            start = Math.max(start + 1, end - Math.min(overlap, size - 1));
+        }
+        return windows;
+    }
+
+    private double cosine(float[] left, float[] right) {
+        int length = Math.min(left.length, right.length);
+        double dot = 0;
+        double leftNorm = 0;
+        double rightNorm = 0;
+        for (int i = 0; i < length; i++) {
+            dot += left[i] * right[i];
+            leftNorm += left[i] * left[i];
+            rightNorm += right[i] * right[i];
+        }
+        return dot / Math.max(1e-12, Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
     }
 
     private RagRetrieveResult withResumeTextFallback(

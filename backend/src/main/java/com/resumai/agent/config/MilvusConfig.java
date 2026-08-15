@@ -16,10 +16,10 @@ public class MilvusConfig {
     @Bean
     @Primary
     public MilvusEmbeddingStore milvusEmbeddingStore(MilvusProperties props, EmbeddingProperties embeddingProps) {
-        int dimension = props.getDimension() > 0 ? props.getDimension() : embeddingProps.resolveDimension();
+        int dimension = embeddingProps.resolveResumeDimension();
         String collection = props.getCollection();
         if (collection == null || collection.isBlank() || "resume_chunk".equals(collection)) {
-            collection = "resume_chunk_" + embeddingProps.resolveJdCollectionSuffix();
+            collection = "resume_chunk_" + embeddingProps.resolveCollectionSuffix(dimension);
         }
         try {
             return MilvusEmbeddingStore.builder()
@@ -38,10 +38,10 @@ public class MilvusConfig {
     @Bean
     @Qualifier("jdEmbeddingStore")
     public MilvusEmbeddingStore jdEmbeddingStore(MilvusProperties props, EmbeddingProperties embeddingProps) {
-        int dimension = props.getDimension() > 0 ? props.getDimension() : embeddingProps.resolveDimension();
+        int dimension = embeddingProps.resolveJdDimension();
         String jdCollection = props.getJdCollection();
         if (jdCollection == null || jdCollection.isBlank() || "jd_library".equals(jdCollection)) {
-            jdCollection = "jd_library_" + embeddingProps.resolveJdCollectionSuffix();
+            jdCollection = "jd_library_" + embeddingProps.resolveCollectionSuffix(dimension);
         }
         try {
             return MilvusEmbeddingStore.builder()
@@ -81,8 +81,8 @@ public class MilvusConfig {
     public MilvusEmbeddingStore kbEmbeddingStore(MilvusProperties props, EmbeddingProperties embeddingProps) {
         // Always follow embedding provider dim — MILVUS_DIMENSION leftovers (e.g. 384 from
         // MiniLM) must not create a collection named *_1024 with the wrong vector size.
-        int dimension = embeddingProps.resolveDimension();
-        String collection = "kb_chunks_" + embeddingProps.resolveJdCollectionSuffix();
+        int dimension = embeddingProps.resolveKbDimension();
+        String collection = "kb_chunks_" + embeddingProps.resolveCollectionSuffix(dimension);
         try {
             return MilvusEmbeddingStore.builder()
                     .host(props.getHost())
