@@ -236,6 +236,11 @@ async def _model_answer(
             if live_tools:
                 request_body["tools"] = live_tools
                 request_body["tool_choice"] = "auto"
+                # Keep this identical to the proven Workflow provider path:
+                # the current provider rejects response_format when tools are
+                # present. JSON mode is restored for the final no-tool turn.
+                request_body.pop("response_format", None)
+                request_body["thinking"] = {"type": "disabled"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             message: Dict[str, Any] = {}
@@ -287,8 +292,8 @@ async def _model_answer(
                         "role": "tool",
                         "tool_call_id": str(call.get("id") or ""),
                         "name": model_name,
-                        "content": json.dumps(
-                            result, ensure_ascii=False, separators=(",", ":")),
+                        "content": _clip_text(json.dumps(
+                            result, ensure_ascii=False, separators=(",", ":")), 8000),
                     })
                 tool_rounds += 1
                 if tool_rounds < 2:
@@ -297,6 +302,7 @@ async def _model_answer(
                 final_body["messages"] = messages
                 final_body.pop("tools", None)
                 final_body.pop("tool_choice", None)
+                final_body["response_format"] = {"type": "json_object"}
                 response = await client.post(
                     f"{normalized_deepseek_base_url()}/chat/completions",
                     headers={
@@ -352,7 +358,13 @@ async def _model_answer(
             conversationSummary=conversation_summary[:1600] or None,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.debug("copilot model reply skipped: %s", exc)
+        response = getattr(exc, "response", None)
+        response_text = _clip_text(getattr(response, "text", ""), 500)
+        logger.warning(
+            "copilot model reply skipped: %s%s",
+            exc,
+            f" response={response_text}" if response_text else "",
+        )
         return None
 
 
