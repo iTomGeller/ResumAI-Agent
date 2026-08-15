@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Dict
+from typing import Any, Dict
 
 import httpx
 
@@ -50,6 +50,17 @@ async def java_jd_search(resume_text: str, top_k: int = 3) -> str:
             "total_ms": elapsed_ms,
         }
     return json.dumps(data, ensure_ascii=False)
+
+
+async def java_jd_focus(jd_text: str, job_title: str = "") -> Dict[str, Any]:
+    """Select Tech/Project JD passages with one cached embedding batch."""
+    url = f"{settings.java_backend_url}/api/internal/tools/jd-focus"
+    payload = {"jdText": jd_text, "jobTitle": job_title}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(url, json=payload, headers=_headers())
+        resp.raise_for_status()
+        data = resp.json()
+    return data if isinstance(data, dict) else {}
 
 
 async def java_knowledge_search(query: str, top_k: int = 5,

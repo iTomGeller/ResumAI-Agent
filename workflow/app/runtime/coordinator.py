@@ -99,7 +99,7 @@ PARALLELIZABLE = {"TechAgent", "ProjectAgent", "RiskAgent"}
 ARTIFACT_STATE_KEYS: Dict[str, Tuple[str, ...]] = {
     "parsed_resume": ("parsedResume",),
     "resume_facts": ("resumeFacts",),
-    "jd_requirements": ("jdRequirements", "effectiveJd", "jdMatches"),
+    "jd_requirements": ("jdRequirements", "effectiveJd", "jdMatches", "jdFocus"),
     "technical_findings": ("technicalFindings", "jdCoverage"),
     "project_findings": ("projectFindings",),
     "risks": ("risks", "timelineCheck"),

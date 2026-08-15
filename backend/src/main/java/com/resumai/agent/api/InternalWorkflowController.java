@@ -1,6 +1,7 @@
 package com.resumai.agent.api;
 
 import com.resumai.agent.api.dto.InternalJdSearchRequest;
+import com.resumai.agent.api.dto.InternalJdFocusRequest;
 import com.resumai.agent.api.dto.InternalProfileRequest;
 import com.resumai.agent.api.dto.InternalResumeSearchRequest;
 import com.resumai.agent.api.dto.InternalSkillExecuteRequest;
@@ -223,6 +224,13 @@ public class InternalWorkflowController {
         body.put("source", "internal_jd_catalog");
         body.put("candidateCount", items.size());
         return body;
+    }
+
+    @PostMapping("/tools/jd-focus")
+    public Map<String, Object> jdFocus(@RequestHeader("X-Internal-Token") String token,
+                                       @RequestBody InternalJdFocusRequest request) {
+        authorize(token);
+        return jdRagService.selectAgentFocus(request.jdText(), request.jobTitle());
     }
 
     @PostMapping("/tools/external-profile")

@@ -45,6 +45,7 @@ from app.runtime.models import (
 )
 from app.runtime.prompts import default_prompt_manager
 from app.runtime.retrieval import BusinessRagRetriever, RetrievalResult
+from app.runtime.gateway import java_jd_focus
 from app.runtime.builtin_tools import BuiltinToolRegistry
 from app.runtime.skills import default_skill_manager
 from app.runtime.state import SharedState
@@ -987,6 +988,9 @@ class RunExecutor:
                 "stage": "resume",
                 "message": f"从快照恢复：已完成 {len(self.executed)} 个 Agent",
                 "executedAgents": self.executed})
+
+        if any(agent in self.plan for agent in ("TechAgent", "ProjectAgent")):
+            await self._prepare_jd_focus()
 
         consecutive_failures = 0
         while self.next_group_index < len(self.parallel_groups):
@@ -3936,40 +3940,16 @@ class RunExecutor:
         return "软件开发项目 技术架构 实践"
 
     def _build_project_search_query(self, resume: str, artifacts: Dict[str, Any]) -> str:
-        """Build a search query for project verification using specific claims."""
-        import re as _re
-        facts = artifacts.get("resumeFacts") or {}
-        if isinstance(facts, dict):
-            projects = facts.get("projects") or []
-            if projects and isinstance(projects, list):
-                proj = projects[0] if isinstance(projects[0], dict) else {}
-                proj_name = proj.get("name") or proj.get("title") or ""
-                tech = proj.get("techStack") or proj.get("tech") or ""
-                if proj_name and len(proj_name) > 3:
-                    query = proj_name
-                    if isinstance(tech, list):
-                        query += " " + " ".join(tech[:2])
-                    elif isinstance(tech, str):
-                        query += " " + tech[:30]
-                    return query.strip()
-        proj_lines = _re.findall(
-            r"(?:项目[名称]*[:：]\s*|(?:\d+)[.、]\s*)(.{4,30}?)(?:\s*[\(（]|$)",
-            resume[:1500])
-        if proj_lines:
-            proj_name = proj_lines[0].strip()
-            techs = _re.findall(
-                r"\b(Go|Java|Python|Redis|Kafka|Flink|Spring|Vue|React|"
-                r"Kubernetes|Docker|ClickHouse|gRPC)\b",
-                resume[:800], _re.IGNORECASE)
-            if techs:
-                return f"{proj_name} {' '.join(list(dict.fromkeys(techs))[:2])} 架构"
-            return f"{proj_name} 技术架构 实现"
-        techs = _re.findall(
-            r"\b(Spring\s*Boot|Redis|Kafka|Go|Kubernetes|Docker|"
-            r"Flink|ClickHouse|gRPC|微服务)\b", resume[:1000], _re.IGNORECASE)
-        if techs:
-            return f"{' '.join(list(dict.fromkeys(techs))[:3])} 高并发 架构设计"
-        return ""
+        """Short semantic query from JD passages, never a technology whitelist."""
+        focus = self._jd_focus_text(artifacts, "projectSegments")
+        if not focus:
+            focus = self._jd_focus_fallback(
+                artifacts.get("effectiveJd") or self.request.jobDescription or "")
+        return self._bounded_rag_query([
+            "项目证据",
+            f"岗位要求：{focus}" if focus else "",
+            "关注：项目目标、个人职责、技术决策、架构难点、量化结果",
+        ])
 
     def _maybe_skip_evidence_llm(self, tool_results_block: str) -> Optional[AgentOutput]:
         """Skip Evidence LLM when deterministic verify is clean and support is high.
@@ -4017,6 +3997,51 @@ class RunExecutor:
         requirements["niceToHave"] = nice_to_have[:8]
         requirements["title"] = lines[0] if lines else ""
         self.state.put_artifact("jdRequirements", requirements)
+
+    async def _prepare_jd_focus(self) -> None:
+        """Select Agent-specific JD passages once, before specialist RAG."""
+        if self.state.artifact("jdFocus"):
+            return
+        # An explicitly supplied JD is authoritative. Only use a catalog match
+        # when this Run did not contain one.
+        jd = (self.request.jobDescription or "").strip()
+        if not jd:
+            effective = self.state.artifact("effectiveJd")
+            jd = effective.strip() if isinstance(effective, str) else ""
+        if not jd:
+            return
+        requirements = self.state.artifact("jdRequirements")
+        if (self.request.jobDescription or "").strip():
+            title = next((line.strip() for line in jd.splitlines()
+                          if line.strip()), "")[:80]
+        else:
+            title = str(requirements.get("title") or "") \
+                if isinstance(requirements, dict) else ""
+        started = time.monotonic()
+        try:
+            focus = await java_jd_focus(jd, title)
+            if not focus:
+                return
+            self.state.put_artifact("jdFocus", focus)
+            await self.emitter.emit("run.progress", payload={
+                "stage": "jd_focus",
+                "message": "JD语义选段完成",
+                "strategy": focus.get("strategy"),
+                "segmentCount": focus.get("segmentCount", 0),
+                "techSegmentCount": len(focus.get("techSegments") or []),
+                "projectSegmentCount": len(focus.get("projectSegments") or []),
+                "cacheHit": bool(focus.get("cacheHit")),
+                "fallbackUsed": bool(focus.get("fallbackUsed")),
+                "durationMs": round((time.monotonic() - started) * 1000),
+            })
+        except Exception as exc:  # retrieval degrades to bounded raw-JD fallback
+            logger.info("JD semantic focus unavailable: %s", exc)
+            await self.emitter.emit("retrieval.failed", agent_id="CoordinatorAgent",
+                                    tool_name="retrieval.jd_focus", payload={
+                "error": str(exc)[:300],
+                "durationMs": round((time.monotonic() - started) * 1000),
+                "occurredAt": _utc_now(),
+            })
 
     @staticmethod
     def render_report(report: Dict[str, Any]) -> str:
@@ -4646,34 +4671,123 @@ class RunExecutor:
     def _build_knowledge_query(self, agent_id: str, resume: str,
                                artifacts: Dict[str, Any],
                                request: Any) -> str:
-        """Build a query to retrieve relevant KB evaluation guidelines."""
-        import re as _re
-        jd = (artifacts.get("effectiveJd") or
-              getattr(request, "jobDescription", "") or "")
+        """Build a bounded KB query from semantic JD focus or verified gaps."""
         if agent_id == "TechAgent":
-            techs = _re.findall(
-                r"\b(Java|Python|Go|Spring|Redis|Kafka|Docker|K8s|"
-                r"RAG|LLM|微服务|分布式|前端|后端|AI)\b",
-                jd + " " + resume[:500], _re.IGNORECASE)
-            if techs:
-                return f"技术评估 {' '.join(list(dict.fromkeys(techs))[:3])} 标准"
-            return "技术能力评估标准 评分规范"
-        # ReportAgent: retrieve overall evaluation policy
-        return "简历评估 评分标准 录用建议 风险判断"
+            focus = self._jd_focus_text(artifacts, "techSegments")
+            if not focus:
+                focus = self._jd_focus_fallback(
+                    getattr(request, "jobDescription", "")
+                    or artifacts.get("effectiveJd") or "")
+            title = self._jd_focus_title(artifacts)
+            return self._bounded_rag_query([
+                f"{title}技术评估标准" if title else "岗位技术评估标准",
+                f"岗位要求：{focus}" if focus else "",
+                "维度：技术深度、生产工程、架构、性能、故障处理",
+            ])
+
+        # ReportAgent runs after specialist/evidence merge, so its retrieval is
+        # driven by this Run's actual risks and unsupported evidence instead of
+        # a fixed generic phrase.
+        title = self._jd_focus_title(artifacts)
+        risks = self._artifact_query_texts(
+            artifacts.get("risks"),
+            ("type", "category", "claim", "text", "detail"), limit=2)
+        gaps = self._artifact_query_texts(
+            [item for item in (artifacts.get("evidence") or [])
+             if isinstance(item, dict) and item.get("verified") is False],
+            ("claim", "text", "reason"), limit=2)
+        for value in self._artifact_query_texts(
+                artifacts.get("conflicts"),
+                ("claim", "key", "reason"), limit=2):
+            if value not in gaps:
+                gaps.append(value)
+            if len(gaps) >= 2:
+                break
+        return self._bounded_rag_query([
+            f"{title}候选人评估规则" if title else "候选人评估规则",
+            f"风险：{'；'.join(risks)}" if risks else "",
+            f"证据缺口：{'；'.join(gaps)}" if gaps else "",
+            "规则：评分、证据不足处理、风险定级、录用建议",
+        ])
 
     def _build_tech_search_query(self, resume: str, jd: str,
                                  artifacts: Dict[str, Any]) -> str:
-        """Build one evidence-oriented Tech query without naming MCP/Skills."""
-        import re as _re
-        source = f"{jd} {resume[:1200]}"
-        techs = _re.findall(
-            r"\b(Java|Python|Go|Spring(?:\s*Boot)?|Redis|Kafka|MySQL|"
-            r"Docker|Kubernetes|K8s|RAG|LLM|Agent|JVM|"
-            r"微服务|分布式|后端|前端|可观测性)\b",
-            source, _re.IGNORECASE)
-        unique = list(dict.fromkeys(value.strip() for value in techs))[:8]
-        focus = " ".join(unique) if unique else "核心技术栈"
-        return f"{focus} 项目实践 性能优化 故障排查 量化成果"
+        """Short semantic query from JD passages, never a technology whitelist."""
+        focus = self._jd_focus_text(artifacts, "techSegments")
+        if not focus:
+            focus = self._jd_focus_fallback(jd)
+        return self._bounded_rag_query([
+            "技术实践证据",
+            f"岗位要求：{focus}" if focus else "",
+            "关注：个人职责、技术方案、生产实践、性能、故障、量化结果",
+        ])
+
+    @staticmethod
+    def _bounded_rag_query(parts: List[str], limit: int = 420) -> str:
+        normalized = [re.sub(r"\s+", " ", str(part)).strip()
+                      for part in parts if str(part or "").strip()]
+        query = "｜".join(normalized)
+        return query if len(query) <= limit else query[:limit].rstrip("；｜,， ")
+
+    @staticmethod
+    def _jd_focus_text(artifacts: Dict[str, Any], key: str,
+                       limit: int = 300) -> str:
+        focus = artifacts.get("jdFocus") or {}
+        values = focus.get(key) if isinstance(focus, dict) else []
+        selected: List[str] = []
+        used = 0
+        for raw in values or []:
+            value = re.sub(r"\s+", " ", str(raw)).strip()
+            if not value or value in selected:
+                continue
+            remaining = limit - used - (1 if selected else 0)
+            if remaining <= 0:
+                break
+            selected.append(value[:remaining])
+            used += len(selected[-1]) + (1 if len(selected) > 1 else 0)
+        return "；".join(selected)
+
+    @staticmethod
+    def _jd_focus_fallback(jd: Any, limit: int = 300) -> str:
+        """Only used when semantic selection is unavailable, never primary."""
+        value = re.sub(r"\s+", " ", str(jd or "")).strip()
+        if len(value) <= limit:
+            return value
+        window = limit // 3
+        middle = max(0, len(value) // 2 - window // 2)
+        return "…".join((
+            value[:window],
+            value[middle:middle + window],
+            value[-window:],
+        ))[:limit]
+
+    @staticmethod
+    def _jd_focus_title(artifacts: Dict[str, Any]) -> str:
+        focus = artifacts.get("jdFocus") or {}
+        if isinstance(focus, dict) and str(focus.get("jobTitle") or "").strip():
+            return re.sub(r"\s+", " ", str(focus["jobTitle"])).strip()[:60]
+        requirements = artifacts.get("jdRequirements") or {}
+        if isinstance(requirements, dict):
+            return re.sub(r"\s+", " ", str(requirements.get("title") or "")).strip()[:60]
+        return ""
+
+    @staticmethod
+    def _artifact_query_texts(raw: Any, keys: Tuple[str, ...],
+                              *, limit: int) -> List[str]:
+        values = raw if isinstance(raw, list) else []
+        out: List[str] = []
+        for item in values:
+            if isinstance(item, dict):
+                text = next((str(item.get(key) or "").strip()
+                             for key in keys if str(item.get(key) or "").strip()), "")
+            else:
+                text = str(item or "").strip()
+            text = re.sub(r"\s+", " ", text)[:80]
+            if text and text not in out:
+                out.append(text)
+            if len(out) >= limit:
+                break
+        return out
 
     def _apply_verification(self, result: Any) -> None:
         if not isinstance(result, dict):

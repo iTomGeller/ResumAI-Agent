@@ -9,10 +9,21 @@
 | 阶段 | 真实入口 | 查询 | 语料/作用域 | 当前检索 | 当前切分 | 当前 rewrite | 当前 rerank |
 |---|---|---|---|---|---|---|---|
 | JD 岗位召回 | `BusinessRagRetriever(jd) -> /api/internal/tools/jd-search -> [RAG上下文]/SharedState` | 完整 `resumeText`，先做确定性 alias rewrite | MySQL `jd_library` + Milvus `jd_library_bailian_te3_768` | CJK bigram BM25 + scoped dense + weighted RRF（semantic 0.7，k=10，threshold=0.35） | `section_prefix(400,40)` | deterministic，无模型调用 | none |
-| 当前简历证据 | `BusinessRagRetriever(resume) -> /api/internal/tools/resume-search -> [RAG上下文]` | Runtime 模板 query 或 Copilot 原问题 | 仅本次请求的 `resumeText`；向量只在当前请求内生成，禁止跨候选人 | TE3-1024 scoped dense（threshold=0.35，candidateLimit=5） | `section_prefix(400,40)` | none | none |
-| 评估知识库 | `BusinessRagRetriever(knowledge) -> /api/rag/knowledge-base/search -> [RAG上下文]` | Runtime 模板 query 或 Copilot 原问题 | 文件知识库 + Milvus `kb_chunks_bailian_te3_768` | domain max-match BM25 + dense + weighted RRF（semantic 0.5，k=10，threshold=0.3） | Markdown section `320/0` | none | none |
+| 当前简历证据 | `jd-focus -> BusinessRagRetriever(resume) -> /api/internal/tools/resume-search -> [RAG上下文]` | Tech/Project 使用语义选出的 JD 原文段落拼短 query；Copilot 使用原问题 | 仅本次请求的 `resumeText`；向量只在当前请求内生成，禁止跨候选人 | TE3-1024 scoped dense（threshold=0.35，candidateLimit=5） | `section_prefix(400,40)` | none | none |
+| 评估知识库 | `jd-focus -> BusinessRagRetriever(knowledge) -> /api/rag/knowledge-base/search -> [RAG上下文]` | Tech 使用 JD 技术段；Report 使用本次真实 risks/unsupported evidence；Copilot 使用原问题 | 文件知识库 + Milvus `kb_chunks_bailian_te3_768` | domain max-match BM25 + dense + weighted RRF（semantic 0.5，k=10，threshold=0.3） | Markdown section `320/0` | none | none |
 
-结论：embedding 模型/维度对当前简历证据阶段的线上现状是 `N/A`。实验中可增加“仅当前候选人作用域的 dense”架构候选，但不得描述成当前实现，也不得使用全局简历 Milvus。
+全量评估在 Specialist RAG 前调用一次 `/api/internal/tools/jd-focus`：JD 按换行/项目符号/中文标点切成不重叠的最多 180 字片段；`Tech intent + Project intent + 全部片段` 通过 JD 的 TE3-768 模型一次 `embedAll`，本地 cosine 各取 Top-3。Embedding 文本沿用 Redis 30 天内容哈希缓存，Run 内结果写入 `jdFocus` artifact，过程中不调用 LLM，也不写或修改持久化索引。
+
+Runtime query 的实际模板和上限为：
+
+```text
+Tech简历：技术实践证据｜岗位要求：{jdFocus.techSegments}｜关注：个人职责、技术方案、生产实践、性能、故障、量化结果
+Project简历：项目证据｜岗位要求：{jdFocus.projectSegments}｜关注：项目目标、个人职责、技术决策、架构难点、量化结果
+Tech知识库：{jobTitle}技术评估标准｜岗位要求：{jdFocus.techSegments}｜维度：技术深度、生产工程、架构、性能、故障处理
+Report知识库：{jobTitle}候选人评估规则｜风险：{本次Top2 risks}｜证据缺口：{本次Top2 unsupported/conflicts}｜规则：评分、证据不足处理、风险定级、录用建议
+```
+
+每条 query 统一限制为 420 字；JD 段落合计先限制为 300 字。语义选段服务不可用时才退化为 JD 的首/中/尾小窗，并在事件中标记 `fallbackUsed=true`。
 
 ## 2. 冻结语料、划分与原文证据
 

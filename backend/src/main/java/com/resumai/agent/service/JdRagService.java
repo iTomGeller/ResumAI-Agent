@@ -27,6 +27,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.ArrayList;
@@ -53,6 +55,12 @@ public class JdRagService {
     private final MilvusVectorMaintenanceService vectorMaintenanceService;
 
     private final Map<String, JdMeta> jdMetaCache = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Object>> jdFocusCache = new ConcurrentHashMap<>();
+
+    private static final int JD_FOCUS_SEGMENT_CHARS = 180;
+    private static final int JD_FOCUS_MAX_SEGMENTS = 64;
+    private static final int JD_FOCUS_TOP_K = 3;
+    private static final String JD_FOCUS_VERSION = "jd_focus_semantic_v1";
 
     private static final Map<String, List<String>> SKILL_SYNONYMS = Map.ofEntries(
             Map.entry("java", List.of("java", "jdk", "jvm")),
@@ -129,6 +137,222 @@ public class JdRagService {
         }
         return seeded;
     }
+
+    /**
+     * Select the JD passages needed by TechAgent and ProjectAgent without an
+     * LLM or a hard-coded technology vocabulary. The two intent strings and
+     * every JD passage are embedded in one batch; ranking is local cosine
+     * similarity. CachingEmbeddingModel already keeps every text vector in
+     * Redis, while this small process cache avoids repeating local ranking.
+     */
+    public Map<String, Object> selectAgentFocus(String jdText, String suppliedTitle) {
+        String normalized = normalizeFocusText(jdText);
+        if (!StringUtils.hasText(normalized)) {
+            return Map.of(
+                    "techSegments", List.of(),
+                    "projectSegments", List.of(),
+                    "segmentCount", 0,
+                    "strategy", "empty_jd",
+                    "fallbackUsed", true,
+                    "version", JD_FOCUS_VERSION);
+        }
+        String title = StringUtils.hasText(suppliedTitle)
+                ? compactFocusText(suppliedTitle, 80)
+                : firstFocusLine(normalized);
+        String fingerprint = sha256Focus(normalized);
+        String cacheKey = JD_FOCUS_VERSION + ":" + fingerprint + ":" + title;
+        Map<String, Object> cached = jdFocusCache.get(cacheKey);
+        if (cached != null) {
+            Map<String, Object> hit = new LinkedHashMap<>(cached);
+            hit.put("cacheHit", true);
+            return hit;
+        }
+
+        List<String> segments = splitJdFocusSegments(normalized);
+        List<String> tech = fallbackFocusSegments(segments);
+        List<String> project = fallbackFocusSegments(segments);
+        String strategy = "structural_fallback";
+        boolean fallbackUsed = true;
+        if (embeddingAvailability.isOperational() && !segments.isEmpty()) {
+            try {
+                String techIntent = title
+                        + " 核心技术要求 生产工程 架构设计 性能优化 故障处理";
+                String projectIntent = title
+                        + " 项目职责 技术决策 业务复杂度 个人贡献 交付结果";
+                List<TextSegment> batch = new ArrayList<>();
+                batch.add(TextSegment.from(techIntent));
+                batch.add(TextSegment.from(projectIntent));
+                segments.forEach(value -> batch.add(TextSegment.from(value)));
+                List<Embedding> vectors = embeddingModel.embedAll(batch).content();
+                if (vectors.size() != batch.size()) {
+                    throw new IllegalStateException("JD focus embedding batch size mismatch");
+                }
+                List<Embedding> segmentVectors = vectors.subList(2, vectors.size());
+                tech = selectFocusTopK(vectors.get(0), segments, segmentVectors);
+                project = selectFocusTopK(vectors.get(1), segments, segmentVectors);
+                strategy = "batch_embedding_cosine_top3";
+                fallbackUsed = false;
+            } catch (Exception e) {
+                log.warn("JD semantic focus fallback: {}", e.getMessage());
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("jobTitle", title);
+        result.put("jdFingerprint", fingerprint);
+        result.put("techSegments", List.copyOf(tech));
+        result.put("projectSegments", List.copyOf(project));
+        result.put("segmentCount", segments.size());
+        result.put("strategy", strategy);
+        result.put("fallbackUsed", fallbackUsed);
+        result.put("cacheHit", false);
+        result.put("version", JD_FOCUS_VERSION);
+        Map<String, Object> immutable = Map.copyOf(result);
+        if (jdFocusCache.size() >= 512) {
+            jdFocusCache.clear();
+        }
+        jdFocusCache.put(cacheKey, immutable);
+        return result;
+    }
+
+    private List<String> splitJdFocusSegments(String text) {
+        List<String> pieces = new ArrayList<>();
+        for (String rawLine : text.split("\\R")) {
+            String line = rawLine.trim().replaceFirst(
+                    "^(?:[-*•·]|\\d+[.)、])\\s*", "");
+            if (!StringUtils.hasText(line)) {
+                continue;
+            }
+            for (String sentence : line.split("(?<=[。！？!?；;])")) {
+                String value = sentence.trim();
+                if (StringUtils.hasText(value)) {
+                    pieces.add(value);
+                }
+            }
+        }
+        if (pieces.isEmpty()) {
+            pieces.add(text);
+        }
+
+        List<String> segments = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String piece : pieces) {
+            if (piece.length() > JD_FOCUS_SEGMENT_CHARS) {
+                flushFocusSegment(current, segments);
+                for (int start = 0; start < piece.length()
+                        && segments.size() < JD_FOCUS_MAX_SEGMENTS;
+                     start += JD_FOCUS_SEGMENT_CHARS) {
+                    segments.add(piece.substring(
+                            start, Math.min(piece.length(), start + JD_FOCUS_SEGMENT_CHARS)));
+                }
+                continue;
+            }
+            int appendedLength = current.length() == 0
+                    ? piece.length() : current.length() + 1 + piece.length();
+            if (appendedLength > JD_FOCUS_SEGMENT_CHARS) {
+                flushFocusSegment(current, segments);
+            }
+            if (current.length() > 0) {
+                current.append(' ');
+            }
+            current.append(piece);
+            if (segments.size() >= JD_FOCUS_MAX_SEGMENTS) {
+                break;
+            }
+        }
+        flushFocusSegment(current, segments);
+        return segments.stream().limit(JD_FOCUS_MAX_SEGMENTS).toList();
+    }
+
+    private void flushFocusSegment(StringBuilder current, List<String> segments) {
+        if (current.length() > 0 && segments.size() < JD_FOCUS_MAX_SEGMENTS) {
+            segments.add(current.toString().trim());
+            current.setLength(0);
+        }
+    }
+
+    private List<String> selectFocusTopK(Embedding intent, List<String> segments,
+                                         List<Embedding> segmentVectors) {
+        List<FocusScore> scores = new ArrayList<>();
+        for (int i = 0; i < segments.size() && i < segmentVectors.size(); i++) {
+            scores.add(new FocusScore(i, cosine(intent.vector(), segmentVectors.get(i).vector())));
+        }
+        scores.sort(Comparator.comparingDouble(FocusScore::score).reversed());
+        return scores.stream()
+                .limit(JD_FOCUS_TOP_K)
+                .map(item -> segments.get(item.index()))
+                .toList();
+    }
+
+    private List<String> fallbackFocusSegments(List<String> segments) {
+        if (segments.size() <= JD_FOCUS_TOP_K) {
+            return List.copyOf(segments);
+        }
+        return List.of(
+                segments.get(0),
+                segments.get(segments.size() / 2),
+                segments.get(segments.size() - 1));
+    }
+
+    private double cosine(float[] left, float[] right) {
+        if (left == null || right == null || left.length != right.length || left.length == 0) {
+            return 0D;
+        }
+        double dot = 0D;
+        double leftNorm = 0D;
+        double rightNorm = 0D;
+        for (int i = 0; i < left.length; i++) {
+            dot += left[i] * right[i];
+            leftNorm += left[i] * left[i];
+            rightNorm += right[i] * right[i];
+        }
+        if (leftNorm == 0D || rightNorm == 0D) {
+            return 0D;
+        }
+        return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
+    }
+
+    private String normalizeFocusText(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.replace('\u0000', ' ')
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .replaceAll("[\\t ]+", " ")
+                .replaceAll("\\n{3,}", "\n\n")
+                .trim();
+    }
+
+    private String firstFocusLine(String text) {
+        for (String line : text.split("\\R")) {
+            if (StringUtils.hasText(line)) {
+                return compactFocusText(line, 80);
+            }
+        }
+        return "目标岗位";
+    }
+
+    private String compactFocusText(String text, int limit) {
+        String value = text == null ? "" : text.replaceAll("\\s+", " ").trim();
+        return value.length() <= limit ? value : value.substring(0, limit);
+    }
+
+    private String sha256Focus(String text) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(text.getBytes(StandardCharsets.UTF_8));
+            StringBuilder out = new StringBuilder();
+            for (int i = 0; i < 12; i++) {
+                out.append(String.format("%02x", digest[i]));
+            }
+            return out.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(text.hashCode());
+        }
+    }
+
+    private record FocusScore(int index, double score) {}
 
     public void indexJd(String jdId, String title, String category, String jdText) {
         upsertJdInternal(jdId, title, category, jdText, null, HrContext.getHrId(), true);
