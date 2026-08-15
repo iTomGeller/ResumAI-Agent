@@ -204,12 +204,15 @@ async def _model_answer(
         # resume/JD/session context is still enough for a useful short answer.
         # Candidate-specific conclusions remain evidence-gated by _SYSTEM.
         compact = _bounded_context_snapshot(snapshot)
+        background_query = (request.disposition or "").upper() == "BACKGROUND_QUERY"
+        mcp_context = await _context7_lookup(content) if background_query else {}
         user_payload = json.dumps(
             {
                 "content": content,
                 "disposition": request.disposition,
                 "contextRefs": [r.model_dump() for r in request.contextRefs],
                 "contextSnapshot": compact,
+                "mcpContext": mcp_context,
             },
             ensure_ascii=False,
             default=str,
@@ -218,8 +221,10 @@ async def _model_answer(
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": user_payload},
         ]
-        allow_tools = bool(request.allowTools) \
-            or (request.disposition or "").upper() == "BACKGROUND_QUERY"
+        # Context7 background lookup is deterministic above because the current
+        # provider compatibility layer ignores forced tool_choice. Keep native
+        # model tool selection only for any future explicit non-background use.
+        allow_tools = bool(request.allowTools) and not background_query
         request_body: Dict[str, Any] = {
             "model": settings.deepseek_model,
             "messages": messages,
@@ -350,6 +355,12 @@ async def _model_answer(
                     citations.append(SourceRef(**item))
                 except Exception:
                     continue
+        if mcp_context.get("querySuccess") and not citations:
+            citations.append(SourceRef(
+                sourceType="EXTERNAL",
+                sourceId=str(mcp_context.get("libraryId") or "context7"),
+                quote=_clip_text(mcp_context.get("queryResult"), 180),
+            ))
         actions: List[CopilotAction] = []
         for item in payload.get("actions") or []:
             action_type = str(item.get("type") or "").strip().upper() \
@@ -386,6 +397,65 @@ async def _model_answer(
             f" response={response_text}" if response_text else "",
         )
         return None
+
+
+async def _context7_lookup(content: str) -> Dict[str, Any]:
+    """Execute the two bounded public MCP calls for a technical-doc query."""
+    registry, live_tools, aliases = await _live_copilot_mcp_tools()
+    available = set(aliases.values()) if live_tools else set()
+    if registry is None or "context7.resolve-library-id" not in available:
+        return {"success": False, "status": "context7_unavailable"}
+
+    resolve_result = await registry.call("context7.resolve-library-id", {
+        "libraryName": _clip_text(content, 300),
+        "query": _clip_text(content, 600),
+    })
+    logger.info(
+        "copilot MCP call tool=context7.resolve-library-id success=%s status=%s",
+        resolve_result.get("success") if isinstance(resolve_result, dict) else None,
+        resolve_result.get("status") if isinstance(resolve_result, dict) else None,
+    )
+    resolve_text = str(resolve_result.get("text") or "") \
+        if isinstance(resolve_result, dict) else ""
+    resolve_success = bool(resolve_result.get("success")) \
+        if isinstance(resolve_result, dict) else False
+    library_match = re.search(
+        r"Context7-compatible library ID:\s*([^\s]+)", resolve_text)
+    library_id = library_match.group(1).strip() if library_match else ""
+    if not resolve_success or not library_id:
+        return {
+            "success": False,
+            "status": "library_not_resolved",
+            "resolveResult": _clip_text(resolve_text, 3000),
+        }
+    if "context7.query-docs" not in available:
+        return {
+            "success": False,
+            "status": "query_tool_unavailable",
+            "libraryId": library_id,
+        }
+
+    query_result = await registry.call("context7.query-docs", {
+        "libraryId": library_id,
+        "query": _clip_text(content, 600),
+    })
+    logger.info(
+        "copilot MCP call tool=context7.query-docs success=%s status=%s",
+        query_result.get("success") if isinstance(query_result, dict) else None,
+        query_result.get("status") if isinstance(query_result, dict) else None,
+    )
+    query_text = str(query_result.get("text") or "") \
+        if isinstance(query_result, dict) else ""
+    query_success = bool(query_result.get("success")) \
+        if isinstance(query_result, dict) else False
+    return {
+        "success": query_success,
+        "querySuccess": query_success,
+        "status": str(query_result.get("status") or "")
+        if isinstance(query_result, dict) else "tool_error",
+        "libraryId": library_id,
+        "queryResult": _clip_text(query_text, 8000),
+    }
 
 
 async def _live_copilot_mcp_tools() -> tuple[Any, List[Dict[str, Any]], Dict[str, str]]:
