@@ -232,31 +232,28 @@ Tech 不需要等待另一个 JD Agent。它在组开始前读取 preflight 已�
 - Agent 输出 schema；
 - Agent 允许的 Skill/Tool 基础清单。
 
-所有 Specialist 仍接收同一个 Run 级：
+所有 Specialist 保留同一个 Run 级原始请求，同时接收由
+`AgentDefinition.task_prompt` 确定的独立任务：
 
 ```text
-[当前请求]
+[原始请求]
+[本Agent任务]
 [当前目标]
 ```
 
-它们之所以做不同工作，主要依赖各自 system prompt、`AgentDefinition`、Skill、工具面和受限 SharedState view。当前没有：
+例如：
 
 ```text
-[本 Agent 当前任务]
+[原始请求]
+请完整评估这份简历。
+
+[本Agent任务]
+根据当前简历、目标JD和技术知识库，判断技术主张是否有可定位证据；
+重点评估技术深度、生产工程经验和JD技术缺口。
 ```
 
-或：
-
-```json
-{
-  "agentTasks": {
-    "TechAgent": "……",
-    "RiskAgent": "……"
-  }
-}
-```
-
-因此，面试时不要声称“Coordinator 会为每个 Agent 生成不同任务”。当前代码没有做到。
+任务不是 Coordinator 临时生成的自然语言，也不额外消耗一次 LLM；它由受版本控制的
+Agent 定义确定。Coordinator 只选择 Agent 和预算，Runtime 在组装 Prompt 时注入对应任务。
 
 ---
 

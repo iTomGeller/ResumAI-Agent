@@ -297,6 +297,7 @@ def test_context_assembly_and_budget_cap():
         policy_instructions="策略",
         skill_instructions="技能",
         user_request="用户问题：技术栈匹配怎么样？",
+        agent_task="核验技术深度和JD技术缺口",
         current_goal="技术栈匹配",
         shared_state_digest="{}",
         recent_messages=[{"role": "USER", "content": "第一条"},
@@ -309,7 +310,8 @@ def test_context_assembly_and_budget_cap():
     assert "超出预算已截断" in messages[0]["content"]
     assert "[输出要求]\nJSON" in messages[0]["content"]
     assert "用户问题" in messages[1]["content"]
-    assert messages[1]["content"].startswith("[当前请求]\n用户问题")
+    assert messages[1]["content"].startswith("[原始请求]\n用户问题")
+    assert "[本Agent任务]\n核验技术深度和JD技术缺口" in messages[1]["content"]
 
 
 def test_context_places_candidate_independent_content_in_reusable_prefix():
@@ -319,6 +321,7 @@ def test_context_places_candidate_independent_content_in_reusable_prefix():
         policy_instructions="固定策略",
         skill_instructions="固定技能",
         user_request="请评估当前简历",
+        agent_task="固定的Agent任务",
         current_goal="完整评估",
         recent_messages=[],
         conversation_summary="",
@@ -334,7 +337,9 @@ def test_context_places_candidate_independent_content_in_reusable_prefix():
     assert first[0] == second[0]
     assert first[0]["content"].endswith(
         "[输出要求]\n固定 JSON SCHEMA")
-    stable_user_prefix = "[当前请求]\n请评估当前简历\n\n[当前目标]\n完整评估"
+    stable_user_prefix = ("[原始请求]\n请评估当前简历\n\n"
+                          "[本Agent任务]\n固定的Agent任务\n\n"
+                          "[当前目标]\n完整评估")
     assert first[1]["content"].startswith(stable_user_prefix)
     assert second[1]["content"].startswith(stable_user_prefix)
     assert first[1]["content"] != second[1]["content"]
@@ -359,6 +364,7 @@ def test_compaction_preserves_protected_sections():
         policy_instructions="",
         skill_instructions="",
         user_request="请评估这份简历的技术栈匹配",
+        agent_task="核验技术深度和JD技术缺口",
         current_goal="技术栈匹配",
         shared_state_digest="{}" * 200,
         recent_messages=[],
@@ -369,12 +375,14 @@ def test_compaction_preserves_protected_sections():
     assert manager.needs_compaction(messages)
     compacted = run(manager.compact(
         messages, reason="test",
-        protected_markers=["[当前请求]", "[当前目标]", "[输出要求]"]))
+        protected_markers=["[原始请求]", "[本Agent任务]",
+                           "[当前目标]", "[输出要求]"]))
     joined = "\n".join(m["content"] for m in compacted)
     assert "请评估这份简历的技术栈匹配" in joined, "最新请求不可丢失"
     assert "技术栈匹配" in joined
     violations = manager.consistency_check(
-        compacted, user_request="请评估这份简历的技术栈匹配", current_goal="技术栈匹配")
+        compacted, user_request="请评估这份简历的技术栈匹配",
+        current_goal="技术栈匹配", agent_task="核验技术深度和JD技术缺口")
     assert violations == []
     assert manager.estimate(compacted) < manager.estimate(messages)
     assert manager.compactions and manager.compactions[0].summary_version == 1

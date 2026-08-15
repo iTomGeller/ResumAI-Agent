@@ -66,7 +66,7 @@ class ContextManager:
     """Token-budgeted context assembly with structured compaction.
 
     Assembly order keeps the reusable prompt prefix first: system → policy →
-    skills → output contract → current request → goal → conversation summary
+    skills → output contract → original request → agent task → goal → conversation summary
     → recent messages → memory → shared state → tool results. DeepSeek's
     automatic cache matches an exact prefix, so stable instructions must not
     sit behind resume-specific state. Compaction triggers when the estimate crosses
@@ -121,7 +121,7 @@ class ContextManager:
                  shared_state_digest: str, recent_messages: List[Dict[str, Any]],
                  conversation_summary: str, memory_block: str,
                  rag_context_block: str, tool_results_block: str,
-                 output_schema: str) -> List[Dict[str, str]]:
+                 output_schema: str, agent_task: str = "") -> List[Dict[str, str]]:
         prepared = self.prepare_messages(recent_messages, conversation_summary)
 
         system_block = self._cap(system_prompt, self.budget.systemBudget)
@@ -141,7 +141,9 @@ class ContextManager:
         # Put the usually stable evaluation intent before candidate-specific
         # context. Section labels preserve semantics; the ordering only
         # increases the reusable exact prefix.
-        user_block_sections = ["[当前请求]\n" + user_request]
+        user_block_sections = ["[原始请求]\n" + user_request]
+        if agent_task:
+            user_block_sections.append("[本Agent任务]\n" + agent_task)
         if current_goal:
             user_block_sections.append("[当前目标]\n" + current_goal)
         if prepared["summary"]:
@@ -243,13 +245,16 @@ class ContextManager:
 
     @staticmethod
     def consistency_check(messages: List[Dict[str, str]], *, user_request: str,
-                          current_goal: str) -> List[str]:
+                          current_goal: str,
+                          agent_task: str = "") -> List[str]:
         """Post-compaction invariants. Tool calls and results are matched
         per toolCallId, not by count."""
         violations = []
         joined = "\n".join(m["content"] for m in messages)
         if user_request and user_request[:80] not in joined:
             violations.append("latest_user_request_lost")
+        if agent_task and agent_task[:80] not in joined:
+            violations.append("agent_task_lost")
         if current_goal and current_goal[:60] and current_goal[:60] not in joined:
             violations.append("current_goal_lost")
         call_ids = set(_TOOL_CALL_ID.findall(joined))

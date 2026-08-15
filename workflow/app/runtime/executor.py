@@ -1895,6 +1895,7 @@ class RunExecutor:
                 policy_instructions=self._policy_instructions(),
                 skill_instructions=skill_text,
                 user_request=request.userMessage or "（对当前简历执行你的职责）",
+                agent_task=definition.task_prompt or definition.description,
                 current_goal=request.currentGoal or "",
                 shared_state_digest=self.state.view_for(agent_id),
                 recent_messages=request.recentMessages,
@@ -1909,11 +1910,14 @@ class RunExecutor:
             if self.context.needs_compaction(messages):
                 messages = await self.context.compact(
                     messages, reason="context_over_threshold",
-                    protected_markers=["[当前请求]", "[当前目标]", "[输出要求]"],
+                    protected_markers=["[原始请求]", "[本Agent任务]",
+                                       "[当前目标]", "[输出要求]"],
                     recent_messages=request.recentMessages)
                 violations = self.context.consistency_check(
                     messages, user_request=(request.userMessage or "")[:80],
-                    current_goal=(request.currentGoal or "")[:60])
+                    current_goal=(request.currentGoal or "")[:60],
+                    agent_task=(definition.task_prompt
+                                or definition.description)[:80])
                 if violations:
                     logger.warning("compaction consistency violations: %s", violations)
 

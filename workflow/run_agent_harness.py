@@ -169,7 +169,8 @@ def scenario_context_compaction() -> None:
                       + "x" * 4000)
         messages = manager.assemble(
             system_prompt="系统", policy_instructions="", skill_instructions="",
-            user_request="请评估这份简历的技术栈匹配", current_goal="技术栈匹配",
+            user_request="请评估这份简历的技术栈匹配",
+            agent_task="核验技术深度和JD技术缺口", current_goal="技术栈匹配",
             shared_state_digest="{}" + "y" * 3000,
             recent_messages=[{"id": 10, "role": "USER", "content": "m" * 1200},
                              {"id": 11, "role": "USER", "content": "最新问题"}],
@@ -178,12 +179,13 @@ def scenario_context_compaction() -> None:
         check("compaction_triggers", manager.needs_compaction(messages))
         compacted = await manager.compact(
             messages, reason="gate",
-            protected_markers=["[当前请求]", "[当前目标]", "[输出要求]"],
+            protected_markers=["[原始请求]", "[本Agent任务]",
+                               "[当前目标]", "[输出要求]"],
             recent_messages=[{"id": 10, "role": "USER", "content": "m" * 1200},
                              {"id": 11, "role": "USER", "content": "最新问题"}])
         violations = manager.consistency_check(
             compacted, user_request="请评估这份简历的技术栈匹配",
-            current_goal="技术栈匹配")
+            current_goal="技术栈匹配", agent_task="核验技术深度和JD技术缺口")
         check("compaction_keeps_goal_and_pairs", not violations,
               detail=str(violations))
         record = manager.compactions[-1]
