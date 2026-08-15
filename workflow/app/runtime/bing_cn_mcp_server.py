@@ -38,6 +38,13 @@ def _valid_result_url(value: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def _matches_site(value: str, site: str) -> bool:
+    if not site:
+        return True
+    hostname = (urlparse(value).hostname or "").lower().rstrip(".")
+    return hostname == site or hostname.endswith(f".{site}")
+
+
 @mcp.tool()
 async def web_search(query: str, max_results: int = 5, site: str = "") -> dict[str, Any]:
     """Search the public web from the mainland ECS.
@@ -88,7 +95,7 @@ async def web_search(query: str, max_results: int = 5, site: str = "") -> dict[s
         title = _plain_text(item.findtext("title") or "")
         url = (item.findtext("link") or "").strip()
         snippet = _plain_text(item.findtext("description") or "")
-        if not _valid_result_url(url) or url in seen:
+        if not _valid_result_url(url) or not _matches_site(url, normalized_site) or url in seen:
             continue
         seen.add(url)
         results.append({
