@@ -927,11 +927,10 @@ TechAgent 实际收到的 user message 按下面结构组装。以下值来自�
 
 [相关记忆]
 以下仅用于校准证据检查，不是当前候选人的事实或结论；必须以当前简历/JD/工具证据为准。
-[长期岗位画像]
-- [src=job_profile] 岗位画像=JAVA_BACKEND；稳定要求=Java、Spring Boot、MySQL、Redis；常见证据缺口=性能数字缺少测试基线
-[近期同岗位案例]
-1. [src=recent_job_case] 技能特征=Java、Spring Boot、Redis；JD缺口=没有生产故障处理证据；待核验=接口性能提升60%
-2. [src=recent_job_case] 技能特征=Java、Kafka、MySQL；JD缺口=缺少容量规划证据；待核验=支撑百万级请求
+[长期岗位画像|JSON]
+{"jobKey":"JAVA_BACKEND","jobCategory":"JAVA_BACKEND","sampleCount":7,"stableRequirements":["Java","Spring Boot","MySQL","Redis"],"commonGaps":["性能数字缺少测试基线"],"commonRiskPatterns":["个人职责边界不清"],"unsupportedClaimPatterns":[]}
+[近期同岗位案例|JSON]
+[{"jobKey":"JAVA_BACKEND","jobCategory":"JAVA_BACKEND","runType":"FULL_EVALUATION","resumeFeatures":{"skills":["Java","Spring Boot","Redis"],"projectCount":2,"hasPublicUrl":false},"verifiedMatches":["订单系统重构"],"jdGaps":["没有生产故障处理证据"],"unsupportedClaims":["接口性能提升60%"],"riskPatterns":["量化结果缺少基线"],"evidenceSupportRatio":0.74},{"jobKey":"JAVA_BACKEND","jobCategory":"JAVA_BACKEND","runType":"FULL_EVALUATION","resumeFeatures":{"skills":["Java","Kafka","MySQL"],"projectCount":1,"hasPublicUrl":false},"verifiedMatches":[],"jdGaps":["缺少容量规划证据"],"unsupportedClaims":["支撑百万级请求"],"riskPatterns":[],"evidenceSupportRatio":0.61}]
 
 [共享状态]
 {
@@ -1222,7 +1221,7 @@ Python Workflow 的调用没有把 `prompt_full` 写入 Java 的 `llm_invocation
 
 这张表用于标明物理边界，不再重复一份带尖括号占位符的“伪Prompt”。第2.4.2和2.4.3才是本Case的脱敏重建正文。
 
-`ContextManager.assemble()` 只生成一次外层 `[相关记忆]`；内部再按 `[长期岗位画像]` 和 `[近期同岗位案例]` 分组。这里的“两层”表示两种 Memory 类型，不表示只召回两条记录：当前上限仍是1条画像和2条案例。
+`ContextManager.assemble()` 只生成一次外层 `[相关记忆]`；内部再按 `[长期岗位画像|JSON]` 和 `[近期同岗位案例|JSON]` 分组，直接消费检索结果中的 `structuredContent` 受控投影，而不是把 `content` 自然语言摘要冒充结构化 Memory。这里的“两层”表示两种 Memory 类型，不表示只召回两条记录：当前上限仍是1条画像和2条案例。
 
 代表 Run 的 Specialist 请求如下：
 

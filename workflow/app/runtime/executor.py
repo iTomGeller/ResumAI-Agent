@@ -4848,21 +4848,88 @@ class RunExecutor:
         selected = used[: self.policy.memoryRetrieval.topK]
         profiles = [hit for hit in selected if hit.get("type") == "JOB_PROFILE"]
         recent_cases = [hit for hit in selected if hit.get("type") == "RECENT_CASE"]
+
+        def bounded_list(
+                structured: Dict[str, Any], key: str, *, limit: int,
+                item_chars: int) -> List[str]:
+            values = structured.get(key)
+            if not isinstance(values, list):
+                return []
+            return [
+                str(value).strip()[:item_chars]
+                for value in values[:limit]
+                if str(value).strip()
+            ]
+
+        def prompt_view(hit: Dict[str, Any]) -> Dict[str, Any]:
+            structured = hit.get("structuredContent") \
+                or hit.get("structured") or {}
+            if not isinstance(structured, dict) or not structured:
+                # Compatibility for legacy rows written before structuredContent.
+                return {"summary": str(hit.get("content") or "")[:400]}
+            if hit.get("type") == "JOB_PROFILE":
+                sample_count = structured.get("sampleCount")
+                return {
+                    "jobKey": structured.get("jobKey"),
+                    "jobCategory": structured.get("jobCategory"),
+                    "sampleCount": sample_count
+                    if isinstance(sample_count, int) else None,
+                    "stableRequirements": bounded_list(
+                        structured, "stableRequirements", limit=5,
+                        item_chars=120),
+                    "commonGaps": bounded_list(
+                        structured, "commonGaps", limit=4, item_chars=120),
+                    "commonRiskPatterns": bounded_list(
+                        structured, "commonRiskPatterns", limit=4,
+                        item_chars=100),
+                    "unsupportedClaimPatterns": bounded_list(
+                        structured, "unsupportedClaimPatterns", limit=4,
+                        item_chars=120),
+                }
+
+            features = structured.get("resumeFeatures")
+            features = features if isinstance(features, dict) else {}
+            project_count = features.get("projectCount")
+            support_ratio = structured.get("evidenceSupportRatio")
+            return {
+                "jobKey": structured.get("jobKey"),
+                "jobCategory": structured.get("jobCategory"),
+                "runType": structured.get("runType"),
+                "resumeFeatures": {
+                    "skills": bounded_list(
+                        features, "skills", limit=8, item_chars=60),
+                    "projectCount": project_count
+                    if isinstance(project_count, int) else None,
+                    "hasPublicUrl": bool(features.get("hasPublicUrl")),
+                },
+                "verifiedMatches": bounded_list(
+                    structured, "verifiedMatches", limit=3, item_chars=120),
+                "jdGaps": bounded_list(
+                    structured, "jdGaps", limit=3, item_chars=120),
+                "unsupportedClaims": bounded_list(
+                    structured, "unsupportedClaims", limit=3,
+                    item_chars=120),
+                "riskPatterns": bounded_list(
+                    structured, "riskPatterns", limit=3, item_chars=100),
+                "evidenceSupportRatio": support_ratio
+                if isinstance(support_ratio, (int, float)) else None,
+            }
+
         lines = [
             "以下仅用于校准证据检查，不是当前候选人的事实或结论；必须以当前简历/JD/工具证据为准。",
         ]
         if profiles:
-            lines.append("[长期岗位画像]")
-            for hit in profiles:
-                content = str(hit.get("content", ""))[:400]
-                source = hit.get("source") or "?"
-                lines.append(f"- [src={source}] {content}")
+            lines.extend([
+                "[长期岗位画像|JSON]",
+                json.dumps(prompt_view(profiles[0]), ensure_ascii=False,
+                           separators=(",", ":")),
+            ])
         if recent_cases:
-            lines.append("[近期同岗位案例]")
-            for index, hit in enumerate(recent_cases, start=1):
-                content = str(hit.get("content", ""))[:400]
-                source = hit.get("source") or "?"
-                lines.append(f"{index}. [src={source}] {content}")
+            lines.extend([
+                "[近期同岗位案例|JSON]",
+                json.dumps([prompt_view(hit) for hit in recent_cases],
+                           ensure_ascii=False, separators=(",", ":")),
+            ])
         block = "\n".join(lines) if used else ""
         return block, audit
 
