@@ -57,10 +57,8 @@ public class JdRagService {
     private final Map<String, JdMeta> jdMetaCache = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Object>> jdFocusCache = new ConcurrentHashMap<>();
 
-    private static final int JD_FOCUS_SEGMENT_CHARS = 180;
-    private static final int JD_FOCUS_MAX_SEGMENTS = 64;
     private static final int JD_FOCUS_TOP_K = 3;
-    private static final String JD_FOCUS_VERSION = "jd_focus_semantic_v1";
+    private static final String JD_FOCUS_VERSION = "jd_focus_existing_chunks_v2";
 
     private static final Map<String, List<String>> SKILL_SYNONYMS = Map.ofEntries(
             Map.entry("java", List.of("java", "jdk", "jvm")),
@@ -145,7 +143,8 @@ public class JdRagService {
      * similarity. CachingEmbeddingModel already keeps every text vector in
      * Redis, while this small process cache avoids repeating local ranking.
      */
-    public Map<String, Object> selectAgentFocus(String jdText, String suppliedTitle) {
+    public Map<String, Object> selectAgentFocus(String jdText, String suppliedTitle,
+                                                 String suppliedCategory) {
         String normalized = normalizeFocusText(jdText);
         if (!StringUtils.hasText(normalized)) {
             return Map.of(
@@ -159,8 +158,10 @@ public class JdRagService {
         String title = StringUtils.hasText(suppliedTitle)
                 ? compactFocusText(suppliedTitle, 80)
                 : firstFocusLine(normalized);
+        String category = StringUtils.hasText(suppliedCategory)
+                ? compactFocusText(suppliedCategory, 40) : "";
         String fingerprint = sha256Focus(normalized);
-        String cacheKey = JD_FOCUS_VERSION + ":" + fingerprint + ":" + title;
+        String cacheKey = JD_FOCUS_VERSION + ":" + fingerprint + ":" + title + ":" + category;
         Map<String, Object> cached = jdFocusCache.get(cacheKey);
         if (cached != null) {
             Map<String, Object> hit = new LinkedHashMap<>(cached);
@@ -168,7 +169,15 @@ public class JdRagService {
             return hit;
         }
 
-        List<String> segments = splitJdFocusSegments(normalized);
+        Metadata scopeMetadata = Metadata.from(Map.of(
+                "jdId", "current-run",
+                "title", title,
+                "category", category,
+                "jdVersion", "0"));
+        List<String> segments = buildJdSegments(
+                title, category, normalized, scopeMetadata).stream()
+                .map(TextSegment::text)
+                .toList();
         List<String> tech = fallbackFocusSegments(segments);
         List<String> project = fallbackFocusSegments(segments);
         String strategy = "structural_fallback";
@@ -190,7 +199,7 @@ public class JdRagService {
                 List<Embedding> segmentVectors = vectors.subList(2, vectors.size());
                 tech = selectFocusTopK(vectors.get(0), segments, segmentVectors);
                 project = selectFocusTopK(vectors.get(1), segments, segmentVectors);
-                strategy = "batch_embedding_cosine_top3";
+                strategy = "existing_jd_chunks_cosine_top3";
                 fallbackUsed = false;
             } catch (Exception e) {
                 log.warn("JD semantic focus fallback: {}", e.getMessage());
@@ -213,62 +222,6 @@ public class JdRagService {
         }
         jdFocusCache.put(cacheKey, immutable);
         return result;
-    }
-
-    private List<String> splitJdFocusSegments(String text) {
-        List<String> pieces = new ArrayList<>();
-        for (String rawLine : text.split("\\R")) {
-            String line = rawLine.trim().replaceFirst(
-                    "^(?:[-*•·]|\\d+[.)、])\\s*", "");
-            if (!StringUtils.hasText(line)) {
-                continue;
-            }
-            for (String sentence : line.split("(?<=[。！？!?；;])")) {
-                String value = sentence.trim();
-                if (StringUtils.hasText(value)) {
-                    pieces.add(value);
-                }
-            }
-        }
-        if (pieces.isEmpty()) {
-            pieces.add(text);
-        }
-
-        List<String> segments = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        for (String piece : pieces) {
-            if (piece.length() > JD_FOCUS_SEGMENT_CHARS) {
-                flushFocusSegment(current, segments);
-                for (int start = 0; start < piece.length()
-                        && segments.size() < JD_FOCUS_MAX_SEGMENTS;
-                     start += JD_FOCUS_SEGMENT_CHARS) {
-                    segments.add(piece.substring(
-                            start, Math.min(piece.length(), start + JD_FOCUS_SEGMENT_CHARS)));
-                }
-                continue;
-            }
-            int appendedLength = current.length() == 0
-                    ? piece.length() : current.length() + 1 + piece.length();
-            if (appendedLength > JD_FOCUS_SEGMENT_CHARS) {
-                flushFocusSegment(current, segments);
-            }
-            if (current.length() > 0) {
-                current.append(' ');
-            }
-            current.append(piece);
-            if (segments.size() >= JD_FOCUS_MAX_SEGMENTS) {
-                break;
-            }
-        }
-        flushFocusSegment(current, segments);
-        return segments.stream().limit(JD_FOCUS_MAX_SEGMENTS).toList();
-    }
-
-    private void flushFocusSegment(StringBuilder current, List<String> segments) {
-        if (current.length() > 0 && segments.size() < JD_FOCUS_MAX_SEGMENTS) {
-            segments.add(current.toString().trim());
-            current.setLength(0);
-        }
     }
 
     private List<String> selectFocusTopK(Embedding intent, List<String> segments,
@@ -434,14 +387,14 @@ public class JdRagService {
                 return 0;
             }
             vectorMaintenanceService.deleteJdVectors(jdId);
-            String fullText = "岗位: " + title + "\n类别: " + category + "\n" + jdText;
             Metadata metadata = Metadata.from(Map.of(
                     "jdId", jdId,
                     "title", title,
                     "category", category,
                     "jdVersion", String.valueOf(jdVersion)
             ));
-            List<TextSegment> segments = sectionPrefixSegments(title, fullText, metadata);
+            List<TextSegment> segments = buildJdSegments(
+                    title, category, jdText, metadata);
             List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
             jdEmbeddingStore.addAll(embeddings, segments);
             log.info("Indexed JD '{}' v{} ({} chunks)", title, jdVersion, segments.size());
@@ -514,6 +467,14 @@ public class JdRagService {
             }
         }
         return segments;
+    }
+
+    private List<TextSegment> buildJdSegments(
+            String title, String category, String jdText, Metadata metadata) {
+        String fullText = "岗位: " + (title == null ? "" : title)
+                + "\n类别: " + (category == null ? "" : category)
+                + "\n" + (jdText == null ? "" : jdText);
+        return sectionPrefixSegments(title, fullText, metadata);
     }
 
     private List<String> smartWindows(String text, int size, int overlap) {

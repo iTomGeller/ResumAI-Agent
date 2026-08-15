@@ -12,7 +12,7 @@
 | 当前简历证据 | `jd-focus -> BusinessRagRetriever(resume) -> /api/internal/tools/resume-search -> [RAG上下文]` | Tech/Project 使用语义选出的 JD 原文段落拼短 query；Copilot 使用原问题 | 仅本次请求的 `resumeText`；向量只在当前请求内生成，禁止跨候选人 | TE3-1024 scoped dense（threshold=0.35，candidateLimit=5） | `section_prefix(400,40)` | none | none |
 | 评估知识库 | `jd-focus -> BusinessRagRetriever(knowledge) -> /api/rag/knowledge-base/search -> [RAG上下文]` | Tech 使用 JD 技术段；Report 使用本次真实 risks/unsupported evidence；Copilot 使用原问题 | 文件知识库 + Milvus `kb_chunks_bailian_te3_768` | domain max-match BM25 + dense + weighted RRF（semantic 0.5，k=10，threshold=0.3） | Markdown section `320/0` | none | none |
 
-全量评估在 Specialist RAG 前调用一次 `/api/internal/tools/jd-focus`：JD 按换行/项目符号/中文标点切成不重叠的最多 180 字片段；`Tech intent + Project intent + 全部片段` 通过 JD 的 TE3-768 模型一次 `embedAll`，本地 cosine 各取 Top-3。Embedding 文本沿用 Redis 30 天内容哈希缓存，Run 内结果写入 `jdFocus` artifact，过程中不调用 LLM，也不写或修改持久化索引。
+全量评估在 Specialist RAG 前调用一次 `/api/internal/tools/jd-focus`。这里**不再新建第二套 JD 切分**：直接调用 JD 索引已有的同一个 `sectionPrefixSegments(400,40)`，得到与建索引一致的 section-prefix chunks；`Tech intent + Project intent + 当前 JD chunks` 使用 JD 的 TE3-768 模型批量向量化，本地 cosine 各取 Top-3。Embedding 文本沿用 Redis 30 天内容哈希缓存，Run 内结果写入 `jdFocus` artifact。该步骤只对当前 JD 做 scoped ranking，不调用 LLM、不新增索引，也不改写已有 JD 索引。
 
 Runtime query 的实际模板和上限为：
 
@@ -23,7 +23,7 @@ Tech知识库：{jobTitle}技术评估标准｜岗位要求：{jdFocus.techSegme
 Report知识库：{jobTitle}候选人评估规则｜风险：{本次Top2 risks}｜证据缺口：{本次Top2 unsupported/conflicts}｜规则：评分、证据不足处理、风险定级、录用建议
 ```
 
-每条 query 统一限制为 420 字；JD 段落合计先限制为 300 字。语义选段服务不可用时才退化为 JD 的首/中/尾小窗，并在事件中标记 `fallbackUsed=true`。
+每条 query 统一限制为 420 字；选中的 JD chunks 合计先限制为 300 字。向量服务不可用时才退化为现有 JD chunks 的首/中/尾三段，并在事件中标记 `fallbackUsed=true`。
 
 ## 2. 冻结语料、划分与原文证据
 

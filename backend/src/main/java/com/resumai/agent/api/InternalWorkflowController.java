@@ -230,7 +230,8 @@ public class InternalWorkflowController {
     public Map<String, Object> jdFocus(@RequestHeader("X-Internal-Token") String token,
                                        @RequestBody InternalJdFocusRequest request) {
         authorize(token);
-        return jdRagService.selectAgentFocus(request.jdText(), request.jobTitle());
+        return jdRagService.selectAgentFocus(
+                request.jdText(), request.jobTitle(), request.jobCategory());
     }
 
     @PostMapping("/tools/external-profile")

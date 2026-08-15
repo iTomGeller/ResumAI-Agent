@@ -52,10 +52,12 @@ async def java_jd_search(resume_text: str, top_k: int = 3) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
-async def java_jd_focus(jd_text: str, job_title: str = "") -> Dict[str, Any]:
-    """Select Tech/Project JD passages with one cached embedding batch."""
+async def java_jd_focus(jd_text: str, job_title: str = "",
+                        job_category: str = "") -> Dict[str, Any]:
+    """Rank existing JD-RAG chunks for Tech/Project scoped queries."""
     url = f"{settings.java_backend_url}/api/internal/tools/jd-focus"
-    payload = {"jdText": jd_text, "jobTitle": job_title}
+    payload = {"jdText": jd_text, "jobTitle": job_title,
+               "jobCategory": job_category}
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(url, json=payload, headers=_headers())
         resp.raise_for_status()

@@ -4019,7 +4019,8 @@ class RunExecutor:
                 if isinstance(requirements, dict) else ""
         started = time.monotonic()
         try:
-            focus = await java_jd_focus(jd, title)
+            focus = await java_jd_focus(
+                jd, title, (self.request.jobCategory or "")[:40])
             if not focus:
                 return
             self.state.put_artifact("jdFocus", focus)
