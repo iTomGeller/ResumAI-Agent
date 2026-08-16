@@ -45,7 +45,7 @@ _SYSTEM = """你是 ResumAI 招聘决策 Copilot。只输出 JSON（不要 markd
    JD、简历片段、会话摘要，候选人结论不足时明确标成“待核验”。
 7. 回答控制在 300 个中文字符左右；普通问答不得建议或触发完整评估运行。
 8. contextSnapshot.messagesToCompact 非空时，把既有 conversationSummary 与这些旧消息合并成新的 conversationSummary：最多800个中文字符，只保留用户约束、已确认事实、关键结论和未解决问题；不得加入 recentMessages 或当前回答。为空时输出 null。
-9. Context7 公网 MCP 只用于技术库、框架和 API 的最新文档问题；它返回的是技术文档，不是候选人履历证据。通常先 resolve-library-id，再 query-docs。工具失败时明确说明未查到，禁止补猜。
+9. BACKGROUND_QUERY 有可用 MCP 工具时，必须先根据实时工具描述自主选择并调用工具，再基于工具结果回答；不得预设工具名或调用顺序。公网技术文档不是候选人履历证据，工具失败时明确说明未查到，禁止补猜。
 """
 
 
@@ -205,14 +205,12 @@ async def _model_answer(
         # Candidate-specific conclusions remain evidence-gated by _SYSTEM.
         compact = _bounded_context_snapshot(snapshot)
         background_query = (request.disposition or "").upper() == "BACKGROUND_QUERY"
-        mcp_context = await _context7_lookup(content) if background_query else {}
         user_payload = json.dumps(
             {
                 "content": content,
                 "disposition": request.disposition,
                 "contextRefs": [r.model_dump() for r in request.contextRefs],
                 "contextSnapshot": compact,
-                "mcpContext": mcp_context,
             },
             ensure_ascii=False,
             default=str,
@@ -221,36 +219,27 @@ async def _model_answer(
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": user_payload},
         ]
-        # Context7 background lookup is deterministic above because the current
-        # provider compatibility layer ignores forced tool_choice. Keep native
-        # model tool selection only for any future explicit non-background use.
-        allow_tools = bool(request.allowTools) and not background_query
+        allow_tools = bool(request.allowTools) or background_query
         request_body: Dict[str, Any] = {
             "model": settings.deepseek_model,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": 700,
+            "max_tokens": 1000,
             "response_format": {"type": "json_object"},
             "stream": False,
         }
         mcp_registry = None
         mcp_aliases: Dict[str, str] = {}
+        tool_evidence: List[tuple[str, Dict[str, Any]]] = []
         if allow_tools:
             mcp_registry, live_tools, mcp_aliases = \
                 await _live_copilot_mcp_tools()
             if live_tools:
                 request_body["tools"] = live_tools
-                request_body["tool_choice"] = "auto"
-                if (request.disposition or "").upper() == "BACKGROUND_QUERY":
-                    resolve_name = next((
-                        model_name for model_name, catalog_name in mcp_aliases.items()
-                        if catalog_name == "context7.resolve-library-id"
-                    ), "")
-                    if resolve_name:
-                        request_body["tool_choice"] = {
-                            "type": "function",
-                            "function": {"name": resolve_name},
-                        }
+                # Require a tool for evidence-oriented turns, but let the model
+                # choose the tool, arguments and order from live tools/list.
+                request_body["tool_choice"] = \
+                    "required" if background_query else "auto"
                 # Keep this identical to the proven Workflow provider path:
                 # the current provider rejects response_format when tools are
                 # present. JSON mode is restored for the final no-tool turn.
@@ -272,10 +261,19 @@ async def _model_answer(
                 )
                 response.raise_for_status()
                 data = response.json()
-                message = dict(data["choices"][0]["message"] or {})
-                # One call per round, two rounds total: enough for
-                # resolve-library-id -> query-docs without an open-ended loop.
+                choice = dict(data["choices"][0] or {})
+                message = dict(choice.get("message") or {})
+                # One call per round and at most two rounds prevent an
+                # open-ended agent loop without prescribing a tool sequence.
                 tool_calls = list(message.get("tool_calls") or [])[:1]
+                logger.info(
+                    "copilot provider turn round=%s finish=%s nativeToolCalls=%s names=%s",
+                    tool_rounds + 1,
+                    choice.get("finish_reason"),
+                    len(tool_calls),
+                    [str((call.get("function") or {}).get("name") or "")
+                     for call in tool_calls],
+                )
                 if not tool_calls or mcp_registry is None:
                     break
                 messages.append({
@@ -303,6 +301,8 @@ async def _model_answer(
                         result.get("success") if isinstance(result, dict) else None,
                         result.get("status") if isinstance(result, dict) else None,
                     )
+                    if isinstance(result, dict):
+                        tool_evidence.append((catalog_name or model_name, result))
                     messages.append({
                         "role": "tool",
                         "tool_call_id": str(call.get("id") or ""),
@@ -312,16 +312,7 @@ async def _model_answer(
                     })
                 tool_rounds += 1
                 if tool_rounds < 2:
-                    if (request.disposition or "").upper() == "BACKGROUND_QUERY":
-                        query_name = next((
-                            model_name for model_name, catalog_name in mcp_aliases.items()
-                            if catalog_name == "context7.query-docs"
-                        ), "")
-                        if query_name:
-                            request_body["tool_choice"] = {
-                                "type": "function",
-                                "function": {"name": query_name},
-                            }
+                    request_body["tool_choice"] = "auto"
                     continue
                 final_body = dict(request_body)
                 final_body["messages"] = messages
@@ -343,16 +334,10 @@ async def _model_answer(
         raw = str(message.get("content") or "")
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end <= start:
-            plain_answer = raw.strip()
+            plain_answer = _recover_answer_text(raw)
             if not plain_answer:
                 return None
-            citations: List[SourceRef] = []
-            if mcp_context.get("querySuccess"):
-                citations.append(SourceRef(
-                    sourceType="EXTERNAL",
-                    sourceId=str(mcp_context.get("libraryId") or "context7"),
-                    quote=_clip_text(mcp_context.get("queryResult"), 180),
-                ))
+            citations = _tool_evidence_citations(tool_evidence)
             return CopilotAnswer(
                 turnId=request.turnId,
                 answer=_clip_text(plain_answer, 2000),
@@ -370,12 +355,8 @@ async def _model_answer(
                     citations.append(SourceRef(**item))
                 except Exception:
                     continue
-        if mcp_context.get("querySuccess") and not citations:
-            citations.append(SourceRef(
-                sourceType="EXTERNAL",
-                sourceId=str(mcp_context.get("libraryId") or "context7"),
-                quote=_clip_text(mcp_context.get("queryResult"), 180),
-            ))
+        if not citations:
+            citations.extend(_tool_evidence_citations(tool_evidence))
         actions: List[CopilotAction] = []
         for item in payload.get("actions") or []:
             action_type = str(item.get("type") or "").strip().upper() \
@@ -414,72 +395,12 @@ async def _model_answer(
         return None
 
 
-async def _context7_lookup(content: str) -> Dict[str, Any]:
-    """Execute the two bounded public MCP calls for a technical-doc query."""
-    registry, live_tools, aliases = await _live_copilot_mcp_tools()
-    available = set(aliases.values()) if live_tools else set()
-    if registry is None or "context7.resolve-library-id" not in available:
-        return {"success": False, "status": "context7_unavailable"}
-
-    resolve_result = await registry.call("context7.resolve-library-id", {
-        "libraryName": _clip_text(content, 300),
-        "query": _clip_text(content, 600),
-    })
-    logger.info(
-        "copilot MCP call tool=context7.resolve-library-id success=%s status=%s",
-        resolve_result.get("success") if isinstance(resolve_result, dict) else None,
-        resolve_result.get("status") if isinstance(resolve_result, dict) else None,
-    )
-    resolve_text = str(resolve_result.get("text") or "") \
-        if isinstance(resolve_result, dict) else ""
-    resolve_success = bool(resolve_result.get("success")) \
-        if isinstance(resolve_result, dict) else False
-    library_match = re.search(
-        r"Context7-compatible library ID:\s*([^\s]+)", resolve_text)
-    library_id = library_match.group(1).strip() if library_match else ""
-    if not resolve_success or not library_id:
-        return {
-            "success": False,
-            "status": "library_not_resolved",
-            "resolveResult": _clip_text(resolve_text, 3000),
-        }
-    if "context7.query-docs" not in available:
-        return {
-            "success": False,
-            "status": "query_tool_unavailable",
-            "libraryId": library_id,
-        }
-
-    query_result = await registry.call("context7.query-docs", {
-        "libraryId": library_id,
-        "query": _clip_text(content, 600),
-    })
-    logger.info(
-        "copilot MCP call tool=context7.query-docs success=%s status=%s",
-        query_result.get("success") if isinstance(query_result, dict) else None,
-        query_result.get("status") if isinstance(query_result, dict) else None,
-    )
-    query_text = str(query_result.get("text") or "") \
-        if isinstance(query_result, dict) else ""
-    query_success = bool(query_result.get("success")) \
-        if isinstance(query_result, dict) else False
-    return {
-        "success": query_success,
-        "querySuccess": query_success,
-        "status": str(query_result.get("status") or "")
-        if isinstance(query_result, dict) else "tool_error",
-        "libraryId": library_id,
-        "queryResult": _clip_text(query_text, 8000),
-    }
-
-
 async def _live_copilot_mcp_tools() -> tuple[Any, List[Dict[str, Any]], Dict[str, str]]:
     """Expose only live public MCP tools discovered by the process registry."""
     try:
         registry = await get_mcp_registry(probe=True)
         catalog: List[Dict[str, Any]] = []
-        for catalog_name in (
-                "context7.resolve-library-id", "context7.query-docs"):
+        for catalog_name in registry.tools_for_agent("Copilot"):
             info = registry.tools.get(catalog_name)
             if info is None:
                 continue
@@ -497,6 +418,45 @@ async def _live_copilot_mcp_tools() -> tuple[Any, List[Dict[str, Any]], Dict[str
     except Exception as exc:  # noqa: BLE001
         logger.info("copilot MCP catalog unavailable: %s", exc)
         return None, [], {}
+
+
+def _tool_evidence_citations(
+    evidence: List[tuple[str, Dict[str, Any]]],
+) -> List[SourceRef]:
+    for tool_name, result in reversed(evidence):
+        if result.get("success") and str(result.get("text") or "").strip():
+            return [SourceRef(
+                sourceType="EXTERNAL",
+                sourceId=str(result.get("tool") or tool_name),
+                quote=_clip_text(result.get("text"), 180),
+            )]
+    return []
+
+
+def _recover_answer_text(raw: str) -> str:
+    """Recover the answer field when a provider truncates otherwise valid JSON."""
+    text = str(raw or "").strip()
+    match = re.search(r'"answer"\s*:\s*"', text)
+    if not match:
+        return text
+    fragment = text[match.end():]
+    escaped = False
+    out: List[str] = []
+    for char in fragment:
+        if char == '"' and not escaped:
+            break
+        out.append(char)
+        if char == "\\" and not escaped:
+            escaped = True
+        else:
+            escaped = False
+    value = "".join(out)
+    if value.endswith("\\"):
+        value = value[:-1]
+    try:
+        return str(json.loads(f'"{value}"')).strip()
+    except json.JSONDecodeError:
+        return value.replace("\\n", "\n").replace('\\"', '"').strip()
 
 
 def _bounded_context_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:

@@ -79,6 +79,10 @@
       "fetch.fetch"
     ],
     "RiskAgent": [],
-    "ReportAgent": []
+    "ReportAgent": [],
+    "Copilot": [
+      "context7.resolve-library-id",
+      "context7.query-docs"
+    ]
   }
 }

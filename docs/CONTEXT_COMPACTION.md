@@ -47,6 +47,7 @@ Copilot 从进程级 MCP Registry 获取 Context7 公网 MCP 的实时 `tools/li
 - `context7.resolve-library-id`
 - `context7.query-docs`
 
-模型通过原生 function call 选择工具，运行时经 MCP `tools/call` 执行；最多两轮，
-支持先解析 library id 再查文档。Context7 文档只能回答技术/API问题，不能作为
+`Copilot` 的允许工具只在配置中声明；代码从实时目录生成 Provider `tools[]`，模型
+通过原生 function call 自主选择工具、参数和顺序，运行时按返回的 `tool_calls`
+经 MCP `tools/call` 执行，最多两轮。Context7 文档只能回答技术/API问题，不能作为
 候选人履历证据。配置来自 `config/mcp-servers.json`，schema 不在本地手写。
