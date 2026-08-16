@@ -202,7 +202,7 @@ public class CopilotLlmClient {
     }
 
     private HttpRequest request(Map<String, Object> body) throws IOException {
-        return HttpRequest.newBuilder(URI.create(properties.getApiUrl()))
+        return HttpRequest.newBuilder(chatCompletionsUri(properties.getApiUrl()))
                 .timeout(Duration.ofMillis(Math.max(5000, properties.getReadTimeoutMs())))
                 .header("Authorization", "Bearer " + properties.getApiKey())
                 .header("Content-Type", "application/json; charset=UTF-8")
@@ -211,6 +211,26 @@ public class CopilotLlmClient {
                 .POST(HttpRequest.BodyPublishers.ofString(
                         objectMapper.writeValueAsString(body)))
                 .build();
+    }
+
+    /**
+     * Deployments historically configure DeepSeek with the OpenAI-compatible
+     * API base URL, while application.yml also accepts a complete endpoint.
+     * Keep both forms valid so the standalone Copilot behaves like the
+     * LangChain4j client it replaced.
+     */
+    private URI chatCompletionsUri(String configuredUrl) {
+        String url = configuredUrl == null ? "" : configuredUrl.trim();
+        if (url.isEmpty()) {
+            throw new IllegalStateException("DeepSeek API URL is not configured");
+        }
+        while (url.endsWith("/")) {
+            url = url.substring(0, url.length() - 1);
+        }
+        if (!url.endsWith("/chat/completions")) {
+            url += "/chat/completions";
+        }
+        return URI.create(url);
     }
 
     private Map<String, Object> parsePayload(String raw,
