@@ -289,108 +289,6 @@ def locate_evidence(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def verify_report_evidence(args: Dict[str, Any]) -> Dict[str, Any]:
-    resume = args.get("resumeText") or ""
-    jd_text = args.get("jdText") or ""
-    claims = args.get("claims") or []
-    external_evidence = args.get("externalEvidence") or []
-    successful_sources: List[str] = []
-    for item in external_evidence:
-        if not isinstance(item, dict):
-            continue
-        result = item.get("result") if isinstance(item.get("result"), dict) else {}
-        status = str(item.get("status") or "").upper()
-        success = result.get("success") is True or status == "SUCCEEDED"
-        if not success:
-            continue
-        for source_url in item.get("sourceUrls") or []:
-            url = str(source_url or "").strip()
-            if url and url not in successful_sources:
-                successful_sources.append(url)
-    normalized: List[Dict[str, str]] = []
-    for claim in claims[:40]:
-        if isinstance(claim, dict):
-            normalized.append({"text": str(claim.get("text") or claim.get("claim") or ""),
-                               "evidence": str(claim.get("evidence") or "")})
-        else:
-            normalized.append({"text": str(claim), "evidence": ""})
-    normalized = [c for c in normalized if c["text"].strip()]
-    if not normalized:
-        return {"success": False, "error": "no_claims"}
-    corpus = (resume + "\n" + jd_text).lower()
-    lines = _lines(resume)
-    supported, unsupported = [], []
-    for claim in normalized:
-        claim_text = claim["text"]
-        claim_lower = claim_text.lower()
-        matched_sources = [
-            url for url in successful_sources
-            if url.lower() in claim_lower
-            or any(host in claim_lower and host in url.lower()
-                   for host in ("csdn", "gitee", "github", "gitcode",
-                                "cnblogs", "juejin", "zhihu"))
-        ]
-        fetch_failure_markers = (
-            "无法抓取", "抓取失败", "无法访问", "链接失效", "需登录",
-            "未成功抓取", "fetch failed", "unavailable",
-        )
-        fetch_success_markers = (
-            "成功抓取", "已成功抓取", "页面内容已取回", "内容已取回",
-            "fetch succeeded",
-        )
-        if matched_sources and any(marker in claim_lower
-                                   for marker in fetch_failure_markers):
-            unsupported.append({
-                "claim": claim_text[:200],
-                "matchRatio": 0.0,
-                "location": {"sourceUrl": matched_sources[0]},
-                "reason": "contradicted_by_successful_external_fetch",
-            })
-            continue
-        if matched_sources and any(marker in claim_lower
-                                   for marker in fetch_success_markers):
-            supported.append({
-                "claim": claim_text[:200],
-                "matchRatio": 1.0,
-                "location": {"sourceUrl": matched_sources[0]},
-            })
-            continue
-        basis = claim["evidence"] or claim["text"]
-        terms = _key_terms(basis)
-        hits = [t for t in terms if t in corpus]
-        ratio = len(hits) / max(1, len(terms))
-        located = None
-        for lineno, line in enumerate(lines, start=1):
-            lower = line.lower()
-            if hits and sum(1 for t in hits if t in lower) >= max(1, len(hits) // 2):
-                located = {"line": lineno, "snippet": line.strip()[:160]}
-                break
-        entry = {"claim": claim["text"][:200], "matchRatio": round(ratio, 3),
-                 "location": located}
-        # 数字型断言必须在原文找到同样的数字，防止编造指标
-        numbers = re.findall(r"\d+(?:\.\d+)?", claim["text"])
-        fabricated_number = any(
-            len(n) >= 2 and n not in resume for n in numbers)
-        if ratio >= 0.4 and located and not fabricated_number:
-            supported.append(entry)
-        else:
-            if fabricated_number:
-                entry["reason"] = "numeric_claim_not_in_source"
-            elif not located:
-                entry["reason"] = "no_source_line"
-            else:
-                entry["reason"] = "weak_term_overlap"
-            unsupported.append(entry)
-    total = len(supported) + len(unsupported)
-    return {
-        "success": True,
-        "supported": supported,
-        "unsupported": unsupported,
-        "supportRatio": round(len(supported) / total, 3) if total else 0.0,
-        "unsupportedCount": len(unsupported),
-    }
-
-
 def resume_lint(args: Dict[str, Any]) -> Dict[str, Any]:
     text = args.get("resumeText") or args.get("rewrittenText") or ""
     if not text.strip():
@@ -579,7 +477,6 @@ TOOL_IMPLS = {
     "check_timeline": check_timeline,
     "calculate_jd_coverage": calculate_jd_coverage,
     "locate_evidence": locate_evidence,
-    "verify_report_evidence": verify_report_evidence,
     "resume_lint": resume_lint,
     "validate_report_schema": validate_report_schema,
     "evaluate_report_quality": evaluate_report_quality,

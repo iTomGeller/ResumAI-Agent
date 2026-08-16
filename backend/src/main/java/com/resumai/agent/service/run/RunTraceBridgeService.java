@@ -1256,7 +1256,7 @@ public class RunTraceBridgeService {
             return "skill";
         }
         if (Set.of("parse_resume", "check_timeline", "calculate_jd_coverage",
-                "locate_evidence", "verify_report_evidence", "resume_lint",
+                "locate_evidence", "resume_lint",
                 "validate_report_schema").contains(toolName)) {
             return "builtin";
         }

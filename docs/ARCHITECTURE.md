@@ -9,7 +9,7 @@ Vue Frontend（对话 / 运行进度 / 停止・暂停・恢复）
   → Python Agent Runtime（唯一执行入口 /agent/runs）
       Coordinator（规则优先 + 能力目录 LLM 精化 + 依赖拓扑 + 并行分组）
       LangGraph StateGraph（PostgreSQL Checkpointer, thread_id=runId）
-      Send Parallel Specialists（Tech ∥ Project ∥ Risk）→ Reducer → Evidence → Report
+      Send Parallel Specialists（Tech ∥ Project ∥ Risk）→ Reducer → Report
       merge 持久化后继续 dispatch（预算 / LoopGuard / 降级）
       Tool Gateway / Memory / Context（toolCallId 配对压缩）
   → Runtime Events + 最终结果回调 Java → SSE 推送前端（断线回放）
@@ -31,5 +31,5 @@ POST /conversation/turns/resolve
 
 ## 业务 Agent
 ResumeParser（确定性内置工具解析）、JDAnalysis、Tech、Project、Risk、
-Evidence（核验+冲突）、Report（显式终点）、ResumeOptimize、InterviewQuestion、
+Report（证据约束+显式终点）、ResumeOptimize、InterviewQuestion、
 Coordinator（规划专用，不占执行位）。

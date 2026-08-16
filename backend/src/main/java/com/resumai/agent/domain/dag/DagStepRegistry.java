@@ -69,7 +69,7 @@ public final class DagStepRegistry {
             StepDefinition.of("historical_match",
                     List.of("rag_index"),
                     "历史候选人已匹配", "evidence", 10,
-                    "检索相似候选人", "EvidenceAgent / MilvusSearch", "DEV"),
+                    "检索相似候选人", "MemoryRetrieval / MilvusSearch", "DEV"),
             StepDefinition.of("jd_requirements",
                     List.of("historical_match"),
                     "JD 需求已结构化", "evidence", 11,
@@ -81,7 +81,7 @@ public final class DagStepRegistry {
             StepDefinition.of("llm_complete", List.of("rag_retrieve"), "AI 已评估", "evaluate", 13,
                     "AI生成评估报告", "DeepSeekChatModel / ChatCompletion", "BOTH"),
             StepDefinition.of("quality_check", List.of("llm_complete"), "质量已校验", "quality", 14,
-                    "可信度校验", "EvidenceAgent / QualityAssurance", "DEV"),
+                    "报告结构校验", "ReportAgent / SchemaValidation", "DEV"),
             StepDefinition.of("report_generate", List.of("quality_check"), "报告已生成", "report", 15,
                     "生成评估报告", "ReportAgent / ReportAssembly", "BOTH")
     );

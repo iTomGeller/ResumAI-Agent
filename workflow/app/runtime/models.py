@@ -72,12 +72,6 @@ class MemoryRetrieval(BaseModel):
     minConfidence: float = 0.12
 
 
-class EvidenceVerification(BaseModel):
-    enabled: bool = True
-    strict: bool = False
-    minSupportRatio: float = 0.5
-
-
 class TimeoutPolicy(BaseModel):
     runTimeoutSeconds: int = 900
     llmTimeoutSeconds: int = 120
@@ -95,7 +89,7 @@ class PolicyBundle(BaseModel):
     policyId: str = "balanced"
     agentOrder: List[str] = Field(default_factory=lambda: [
         "TechAgent", "ProjectAgent",
-        "RiskAgent", "EvidenceAgent", "ReportAgent"])
+        "RiskAgent", "ReportAgent"])
     # Empty = eligible for any runType. Explicit list is an allowlist
     # (e.g. low_cost must NOT include full_evaluation).
     supportedRunTypes: List[str] = Field(default_factory=list)
@@ -122,7 +116,6 @@ class PolicyBundle(BaseModel):
     toolBudget: ToolBudget = Field(default_factory=ToolBudget)
     contextBudget: ContextBudget = Field(default_factory=ContextBudget)
     memoryRetrieval: MemoryRetrieval = Field(default_factory=MemoryRetrieval)
-    evidenceVerification: EvidenceVerification = Field(default_factory=EvidenceVerification)
     rewriteRounds: int = 1
     parallelSpecialists: bool = True
     timeoutPolicy: TimeoutPolicy = Field(default_factory=TimeoutPolicy)

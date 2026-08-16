@@ -603,8 +603,6 @@ class RunExecutor:
         self._regroup_needed = False
         self.plan_meta: Dict[str, Any] = {}
         self.revision_reuse: Dict[str, Any] = {}
-        # conflict arbitration runs exactly once (ruling is final)
-        self._arbitrated = False
         # populated by _restore_snapshot on resume
         self.plan: List[str] = []
         self.parallel_groups: List[List[str]] = []
@@ -1004,12 +1002,6 @@ class RunExecutor:
                 self.degraded_reasons.append("consecutive_failures")
                 self._ensure_terminal_tail()
 
-            # Debate-style conflict arbitration (single round, final): after
-            # EvidenceAgent flagged conflicts, one LLM call adjudicates each
-            # claim as keep/reject/uncertain — no ping-pong re-litigation.
-            if any(d.agent_id == "EvidenceAgent" for d in runnable):
-                await self._arbitrate_conflicts()
-
             # Group-boundary checkpoint: persist before advancing so the
             # per-run emitter connection can be closed without racing a
             # detached HTTP task, and a later retry never loses this boundary.
@@ -1172,69 +1164,6 @@ class RunExecutor:
             if "ReportAgent" not in self.plan:
                 self.plan.append("ReportAgent")
 
-    async def _arbitrate_conflicts(self) -> None:
-        """One-round conflict adjudication: unresolved conflicts get a
-        keep / reject / uncertain ruling with a reason. The ruling is final
-        (written back onto the conflict), the ReportAgent cites it."""
-        conflicts = [c for c in (self.state.artifact("conflicts") or [])
-                     if isinstance(c, dict) and not c.get("resolution")]
-        if not conflicts or self._arbitrated:
-            return
-        self._arbitrated = True
-        if self.budget.available_llm_calls_for_scope(
-                self.policy.maxLlmCalls, "control") <= 0:
-            # Full evaluation releases the unused control-plane reservation
-            # after deterministic planning. Do not emit a guaranteed red
-            # llm.failed node for best-effort arbitration; conservatively mark
-            # unresolved conflicts as uncertain for ReportAgent disclosure.
-            for conflict in conflicts:
-                conflict["resolution"] = "uncertain"
-                conflict["resolutionReason"] = (
-                    "证据不足，保留为面试核验项")
-            await self.emitter.emit("run.progress", payload={
-                "stage": "arbitration",
-                "mode": "deterministic_no_control_budget",
-                "message": f"冲突保守标记：{len(conflicts)} 条待面试核验",
-                "resolved": len(conflicts),
-                "total": len(conflicts),
-            })
-            return
-        items = [{"claim": str(c.get("claim", c.get("key", "")))[:200],
-                  "reason": str(c.get("reason", c.get("type", "")))[:200]}
-                 for c in conflicts[:6]]
-        prompt_user = (
-            "以下是评估过程中被证据核验标记的冲突结论。请逐条裁决，输出 json：\n"
-            "{\"rulings\": [{\"claim\": \"...\", \"verdict\": \"keep|reject|uncertain\","
-            " \"reason\": \"一句依据\"}]}\n"
-            "裁决标准：简历原文/工具结果能支撑=keep；明确矛盾或无来源=reject；"
-            "证据不足以定夺=uncertain（报告中如实标注）。\n"
-            f"冲突列表: {json.dumps(items, ensure_ascii=False)}")
-        try:
-            async with workflow_agent_execution(self.workflow_execution):
-                raw = await self.llm.chat(
-                    [{"role": "system",
-                      "content": "你是评估冲突仲裁者，只依据给定材料裁决，不新增事实。"},
-                     {"role": "user", "content": prompt_user}],
-                    agent_id="EvidenceAgent", purpose="arbitration",
-                    max_tokens=600)
-            parsed = extract_json_object(raw)
-            rulings = {str(r.get("claim", ""))[:200]: r
-                       for r in parsed.get("rulings", []) if isinstance(r, dict)}
-            resolved = 0
-            for conflict in conflicts:
-                key = str(conflict.get("claim", conflict.get("key", "")))[:200]
-                ruling = rulings.get(key)
-                if ruling and ruling.get("verdict") in ("keep", "reject", "uncertain"):
-                    conflict["resolution"] = ruling["verdict"]
-                    conflict["resolutionReason"] = str(ruling.get("reason", ""))[:200]
-                    resolved += 1
-            await self.emitter.emit("run.progress", payload={
-                "stage": "arbitration",
-                "message": f"冲突仲裁完成：{resolved}/{len(conflicts)} 条已裁决",
-                "resolved": resolved, "total": len(conflicts)})
-        except Exception as exc:  # noqa: BLE001 - arbitration is best-effort
-            logger.info("conflict arbitration skipped: %s", exc)
-
     def _has_hard_degradation(self) -> bool:
         hard = {"run_timeout", "consecutive_failures", "no_terminal_answer",
                 "report_contract_failed"}
@@ -1249,7 +1178,7 @@ class RunExecutor:
         
         An artifact is NOT considered missing if its designated producer Agent
         was executed (even if output was empty) — this avoids false PARTIAL_SUCCESS
-        when e.g. EvidenceAgent fast-path finds no conflicts."""
+        when a specialist ran successfully but produced an empty list."""
         goals = list((self.plan_meta or {}).get("goalArtifacts") or [])
         if not goals:
             return []
@@ -1260,7 +1189,6 @@ class RunExecutor:
         # Agents that ran count their artifacts as "attempted" even if empty.
         _AGENT_PRODUCES = {
             "ProjectAgent": {"project_findings"},
-            "EvidenceAgent": {"evidence_ledger"},
             "TechAgent": {"technical_findings"},
             "RiskAgent": {"risks"},
             "ReportAgent": {"final_report"},
@@ -1370,7 +1298,6 @@ class RunExecutor:
             "memoryHits": list(self.memory_hits)[:20],
             "failureHits": list(self.failure_hits)[:10],
             "memoryTraces": list(self.memory_traces)[-40:],
-            "arbitrated": self._arbitrated,
             "reportAgentFailed": self.report_agent_failed,
             "agentCounters": dict(self.agent_counters),
             "createdAt": time.time(),
@@ -1404,7 +1331,6 @@ class RunExecutor:
             self.memory_hits = list(snapshot.get("memoryHits") or [])
             self.failure_hits = list(snapshot.get("failureHits") or [])
             self.memory_traces = list(snapshot.get("memoryTraces") or [])
-            self._arbitrated = bool(snapshot.get("arbitrated", False))
             self.report_agent_failed = bool(
                 snapshot.get("reportAgentFailed", False))
             counters = snapshot.get("agentCounters")
@@ -1550,16 +1476,6 @@ class RunExecutor:
         # same observations duplicated at its tail destroys DeepSeek's exact
         # prefix reuse and wastes prompt tokens on every Project action turn.
         initial_tool_results_block = tool_results_block
-
-        # Performance fast-path: Evidence verify clean → skip arbitration LLM.
-        if definition.agent_id == "EvidenceAgent":
-            fast = self._maybe_skip_evidence_llm(tool_results_block)
-            if fast is not None:
-                self.skill_selections[agent_id] = []
-                self.agent_counters[definition.agent_id] = {
-                    "iterations": 0, "llmCalls": 0, "toolCalls": agent_tool_calls,
-                    "fastPath": 1}
-                return fast
 
         # From this point onward the model really receives the progressive
         # Skill metadata and live MCP tools/list schemas.
@@ -1905,8 +1821,6 @@ class RunExecutor:
                 })
             turn_max_tokens = (
                 8192 if is_report
-                else 6144 if definition.agent_id == "EvidenceAgent"
-                and single_pass_evaluation
                 else 3600 if definition.agent_id in TERMINAL_AGENTS
                 else 4096)
             was_json_repair_turn = json_repair_pending
@@ -3126,8 +3040,6 @@ class RunExecutor:
             self.state.put_artifact("jdCoverage", result)
         elif tool == "check_timeline":
             self.state.put_artifact("timelineCheck", result)
-        elif tool == "verify_report_evidence":
-            self._apply_verification(result)
         elif tool == "parse_resume":
             self.state.put_artifact("parsedResume", result)
             facts = self._resume_facts_from_parse(result)
@@ -3325,8 +3237,7 @@ class RunExecutor:
                 if isinstance(report, dict):
                     if summary and not report.get("summary"):
                         report = {**report, "summary": summary}
-                    validated = self._apply_evidence_gate(
-                        self._validate_structured_report(report))
+                    validated = self._validate_structured_report(report)
                     if validated:
                         self.state.put_artifact("finalReport", validated)
                         self.final_answer = self.render_report(validated)
@@ -3339,8 +3250,7 @@ class RunExecutor:
                 return output
             report = raw_output.get("report")
             if isinstance(report, dict):
-                validated = self._apply_evidence_gate(
-                    self._validate_structured_report(report))
+                validated = self._validate_structured_report(report)
                 if validated:
                     self.state.put_artifact("finalReport", validated)
             answer = raw_output.get("answer") or raw_output.get("markdown") or summary
@@ -3746,34 +3656,6 @@ class RunExecutor:
             "关注：项目目标、个人职责、技术决策、架构难点、量化结果",
         ])
 
-    def _maybe_skip_evidence_llm(self, tool_results_block: str) -> Optional[AgentOutput]:
-        """Skip Evidence LLM when deterministic verify is clean and support is high.
-        Never skip when MCP tools produced results (external verification happened)."""
-        support = self.state.evidence_support_ratio()
-        conflicts = self.state.artifact("conflicts") or []
-        if conflicts:
-            return None
-        if support is None or support < 0.85:
-            return None
-        if "verify_report_evidence" not in tool_results_block:
-            return None
-        if "fetch.fetch" in tool_results_block:
-            return None
-        if "bing_cn.web_search" in tool_results_block:
-            return None
-        summary = f"确定性核验通过：支持率 {support:.2f}，无冲突，跳过 Evidence LLM"
-        return AgentOutput(
-            agentId="EvidenceAgent",
-            type="evidence",
-            claims=[],
-            artifacts={"evidence": [{"text": summary, "verified": True,
-                                     "byAgent": "EvidenceAgent", "fastPath": True}]},
-            evidence=[{"text": summary, "verified": True,
-                       "byAgent": "EvidenceAgent"}],
-            source="tools",
-            dependencies=[],
-            summary=summary[:500])
-
     def _prepare_jd_requirements(self) -> None:
         """Deterministically normalize the one effective JD during preflight."""
         jd = (self.request.jobDescription or "").strip()
@@ -4008,60 +3890,6 @@ class RunExecutor:
             "START_STUCK", "WORKER", "QUEUE_STUCK", "控制面",
         )
         return any(m in upper or m in text for m in markers)
-
-    def _apply_evidence_gate(
-            self, report: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Enforce EvidenceAgent results on the terminal report.
-
-        Missing source evidence is a reporting constraint, not a reason to
-        rebuild the already executed plan.  Keep the model's report shape, but
-        deterministically cap data quality and surface unsupported claims.
-        """
-        if not report or "EvidenceAgent" not in self.executed:
-            return report
-
-        out = dict(report)
-        artifacts = self.state.artifacts()
-        checked = [
-            item for item in (artifacts.get("evidence") or [])
-            if isinstance(item, dict) and item.get("verified") is not None
-        ]
-        unsupported = [item for item in checked if item.get("verified") is False]
-        conflicts = [
-            item for item in (artifacts.get("conflicts") or [])
-            if isinstance(item, dict)
-            and str(item.get("resolution") or "").lower() != "keep"
-        ]
-        support_ratio = self.state.evidence_support_ratio()
-
-        ceiling: Optional[str] = None
-        if not checked:
-            ceiling = "INSUFFICIENT"
-        elif unsupported or conflicts or support_ratio is None or support_ratio < 0.85:
-            ceiling = "PARTIAL"
-
-        if ceiling:
-            rank = {"INSUFFICIENT": 0, "PARTIAL": 1, "SUFFICIENT": 2}
-            current = str(out.get("dataQuality") or "SUFFICIENT").upper()
-            if current not in rank or rank[current] > rank[ceiling]:
-                out["dataQuality"] = ceiling
-            if out.get("dataQuality") == "INSUFFICIENT":
-                out.pop("overallScore", None)
-
-        missing = [
-            str(item)[:300] for item in (out.get("missingEvidence") or [])
-            if str(item).strip()
-        ]
-        for item in unsupported + conflicts:
-            text = str(
-                item.get("text") or item.get("claim") or item.get("finding")
-                or item.get("detail") or ""
-            ).strip()
-            if text and text not in missing:
-                missing.append(text[:300])
-        if missing:
-            out["missingEvidence"] = missing[:12]
-        return out
 
     @staticmethod
     def _validate_structured_report(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -4413,16 +4241,6 @@ class RunExecutor:
             if effective_jd and "jdCoverage" not in artifacts:
                 steps.append(("calculate_jd_coverage",
                               {"resumeText": resume, "jdText": effective_jd}))
-        elif definition.agent_id == "EvidenceAgent" and resume:
-            claims = self.state.claims_for_verification()
-            if claims:
-                steps.append(("verify_report_evidence",
-                              {"resumeText": resume,
-                               "jdText": (artifacts.get("effectiveJd")
-                                          or request.jobDescription or ""),
-                               "claims": claims,
-                               "externalEvidence": list(
-                                   artifacts.get("mcpEvidence") or [])}))
         return steps
 
     def _rag_steps(self, definition: AgentDefinition) -> List[Dict[str, Any]]:
@@ -4637,35 +4455,9 @@ class RunExecutor:
                 break
         return out
 
-    def _apply_verification(self, result: Any) -> None:
-        if not isinstance(result, dict):
-            return
-        supported = []
-        unsupported = []
-        for entry in result.get("supported", []) or []:
-            if not isinstance(entry, dict):
-                continue
-            supported.append({
-                "text": entry.get("claim", ""), "verified": True,
-                "location": entry.get("location"), "byAgent": "EvidenceAgent"})
-        for entry in result.get("unsupported", []) or []:
-            if not isinstance(entry, dict):
-                continue
-            unsupported.append({
-                "text": entry.get("claim", ""), "verified": False,
-                "reason": entry.get("reason"), "byAgent": "EvidenceAgent"})
-            self.state.add_conflict({
-                "type": "unsupported_claim", "claim": entry.get("claim", ""),
-                "reason": entry.get("reason", ""), "byAgent": "EvidenceAgent"})
-        if supported or unsupported:
-            self.state.apply_artifacts({"evidence": supported + unsupported})
-
     def _policy_instructions(self) -> str:
-        ev = self.policy.evidenceVerification
         lines = [
             f"当前策略: {self.policy.policyId}",
-            f"证据核验: {'严格' if ev.strict else '启用' if ev.enabled else '关闭'}"
-            f"（最低支持率 {ev.minSupportRatio}）",
             f"预算: LLM≤{self.policy.maxLlmCalls} 次, 工具≤{self.policy.toolBudget.maxToolCallsPerRun} 次",
         ]
         if self.policy.jobFocus:
@@ -4849,15 +4641,15 @@ class RunExecutor:
     @staticmethod
     def _runtime_strategy_class(selected_agents: List[str]) -> Tuple[str, str]:
         selected = set(selected_agents)
-        if {"ProjectAgent", "EvidenceAgent"} <= selected:
+        if "ProjectAgent" in selected:
             return (
-                "PROJECT_EVIDENCE",
-                "项目或外部链接场景保留 ProjectAgent 与 EvidenceAgent，并为证据工具调用预留 action turn。",
+                "PROJECT_DEPTH",
+                "项目或外部链接场景保留 ProjectAgent，由 ReportAgent 依据原始材料收口。",
             )
         if "RiskAgent" in selected:
             return (
                 "RISK_TIMELINE",
-                "履历风险场景保留 RiskAgent，并将时间线结论交给 EvidenceAgent 或 ReportAgent 复核。",
+                "履历风险场景保留 RiskAgent，并由 ReportAgent 结合原始材料收口。",
             )
         if "TechAgent" in selected:
             return (
@@ -4960,7 +4752,6 @@ class RunExecutor:
                 "jdGaps": gaps[:6],
                 "unsupportedClaims": unsupported_claims[:6],
                 "riskPatterns": risk_patterns[:6],
-                "evidenceSupportRatio": self.state.evidence_support_ratio(),
                 "piiExcluded": True,
                 "rawResumeExcluded": True,
                 "derivedFromRunId": self.request.runId,
@@ -5057,7 +4848,6 @@ class RunExecutor:
                 snapshot: Optional[Dict[str, Any]] = None,
                 missing_goal_artifacts: Optional[List[str]] = None) -> Dict[str, Any]:
         executed_agents = [o.get("agentId") for o in self.state.data["agentOutputs"]]
-        support_ratio = self.state.evidence_support_ratio()
         coverage = None
         artifact = self.state.data["artifacts"].get("jdCoverage")
         if isinstance(artifact, dict):
@@ -5082,7 +4872,6 @@ class RunExecutor:
             "loopGuardTrips": self.guard.summary(),
             "contextCompactions": len(self.context.compactions),
             "degradedReasons": self.degraded_reasons,
-            "evidenceSupportRatio": support_ratio,
             "jdCoverage": coverage,
             "missingGoalArtifacts": missing_goals,
             **self.tools.metrics(),

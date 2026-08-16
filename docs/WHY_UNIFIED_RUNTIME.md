@@ -35,7 +35,7 @@
 
 - Coordinator 在开始时根据 artifact 依赖、输入信号和预算生成计划与并行分组。
 - 运行期间不 Replan、不 handoff、不插入 Agent；LLM/工具调用有限重试，Agent 最终失败则降级。
-- Evidence Gate 只限制最终报告的证据边界，不修改执行拓扑。
+- ReportAgent 直接结合原始材料限制最终报告的证据边界，不修改执行拓扑。
 
 ### 2.4 排队/打断/合并语义是产品核心，不是框架附属品
 

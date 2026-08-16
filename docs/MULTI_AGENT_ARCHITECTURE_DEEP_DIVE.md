@@ -35,7 +35,9 @@
 
 ## 1. 当前到底有哪些 Agent
 
-### 1.1 最新 100 份主链路中的五个 Agent
+> 2026-08-16 架构更新：生产链路已删除 EvidenceAgent。第 1～3 章保留的 EvidenceAgent 数据仅用于说明删除前的压测与演进过程；当前实现以第 4 章为准。
+
+### 1.1 删除前 100 份主链路中的五个 Agent（历史数据）
 
 | Agent | 核心职责 | 读取的关键共享产物 | 写出的产物 | 100份使用次数 | P50 / P95 / Max |
 |---|---|---|---|---:|---:|
@@ -1398,9 +1400,6 @@ START
      Send(ProjectAgent) ├→ merge
      Send(RiskAgent) ┘
   → dispatch
-  → EvidenceAgent
-  → merge（证据仲裁和检查点）
-  → dispatch
   → ReportAgent
   → merge
   → dispatch
@@ -1408,7 +1407,7 @@ START
   → END
 ```
 
-没有 Dynamic Replan、Agent handoff 或运行中插入 Agent。临时 LLM、工具和网络失败由调用层有限重试处理，Agent 最终失败则降级；证据不足由 Evidence Gate 限制最终报告，不重新运行 Specialist。
+没有 Dynamic Replan、EvidenceAgent、Agent handoff 或运行中插入 Agent。临时 LLM、工具和网络失败由调用层有限重试处理，Agent 最终失败则降级；ReportAgent 直接依据原始简历、JD、RAG和真实工具回执约束证据边界。
 
 ### 4.2 RuntimeGraphState 保存什么
 
@@ -1450,11 +1449,10 @@ LangGraph 不恢复 Python 调用栈。恢复时重新进入持久化节点边�
 
 ### 4.5 merge 后走哪里
 
-每个并行组 merge 后执行三件事：
+每个并行组 merge 后执行两件事：
 
 1. 按计划顺序合并 AgentOutput；
-2. EvidenceAgent 运行过时完成冲突仲裁；
-3. 将最新 `execution_snapshot` 镜像到 MySQL，并由 LangGraph 同步提交 PostgreSQL checkpoint。
+2. 将最新 `execution_snapshot` 镜像到 MySQL，并由 LangGraph 同步提交 PostgreSQL checkpoint。
 
 随后直接 `Command(goto="dispatch")`。dispatch 取下一组；没有下一组时进入 finalize。
 
@@ -1466,36 +1464,15 @@ merge
       └─ 没有组：finalize
 ```
 
-### 4.6 Evidence Gate 代替 Replan
+### 4.6 删除 EvidenceAgent 后的证据约束
 
-EvidenceAgent 核验的对象来自 `technicalFindings`、`projectFindings`、`risks` 和 `recommendations`。提取时兼容 `text/finding/claim/detail`，RiskAgent 的 `claim` 不会再被漏掉。
+Tech、Project、Risk 生成结论时必须附原始来源；ReportAgent 同时读取 `resumeFacts`、`effectiveJd`、RAG上下文、真实 `mcpEvidence` 和三个 Specialist 的结果，只采纳能在当前 Run 材料中找到支撑的内容。
 
-Report 通过运行时后处理直接消费：
-
-- `evidence[].verified`；
-- `evidenceSupportRatio`；
-- `conflicts[].resolution`。
-
-规则如下：
-
-```text
-EvidenceAgent没有产生可核验项
-→ dataQuality最多为INSUFFICIENT
-→ 不生成overallScore
-
-存在unsupported、非keep冲突或supportRatio < 0.85
-→ dataQuality最多为PARTIAL
-→ 将相关主张加入missingEvidence
-
-证据支持率达标且无未解决冲突
-→ 保留ReportAgent给出的正常质量等级
-```
-
-这是确定性输出门禁，不依赖 Agent 自报 confidence，也不会因为简历缺少证据而重新运行前置 Agent。
+无法支撑的结论写入 `missingEvidence`、风险或面试追问，不得包装成确定事实。这里没有额外串行审核节点，也没有依据 Agent 自报 confidence 进行路由。
 
 ### 4.7 为什么删除 Dynamic Replan
 
-单次 Run 内简历和 JD 不变化，产品也没有中途用户补充。Evidence 发现“原文没有证据”后，重跑 Specialist 无法创造新证据，只会增加延迟、预算和产物覆盖复杂度。
+单次 Run 内简历和 JD 不变化，产品也没有中途用户补充。发现“原文没有证据”后，重跑 Specialist 无法创造新证据，只会增加延迟、预算和产物覆盖复杂度。
 
 因此当前职责边界是：
 
@@ -1504,7 +1481,7 @@ EvidenceAgent没有产生可核验项
 | 临时网络、LLM、工具错误 | LLM/工具调用层有限重试 |
 | 结构化输出错误 | 当前 Agent 的 JSON/Schema 修复 |
 | Specialist 最终失败 | 保留其他结果并降级 |
-| 主张不受简历证据支持 | Evidence Gate + missingEvidence |
+| 主张不受简历证据支持 | ReportAgent 写入 missingEvidence、风险或面试追问 |
 | 进程宕机 | LangGraph checkpoint + execution_snapshot 恢复 |
 
 ## 5. 为什么选择当前交互形式，而不是 CrewAI / Swarm / AutoGen
@@ -1530,7 +1507,6 @@ artifact-driven Coordinator
   + durable DAG
   + parallel fan-out/fan-in
   + structured shared blackboard
-  + Evidence quality gate
   + single Report terminal
 ```
 
@@ -1594,7 +1570,7 @@ AutoGen 非常适合 Agent 轮流发言、Selector 选下一位、主 Agent 与 
 | 技术、项目、风险必须能并行 | `Send("agent")` |
 | 并行结果必须确定性汇聚 | `agent_results` Reducer + `merge` |
 | 每个 Agent 只能看到必要数据 | `_SECTION_READ_MAP` |
-| 无证据结论必须被发现 | EvidenceAgent 硬审计节点 |
+| 无证据结论不能成为确定事实 | ReportAgent 对照原始材料并写入 missingEvidence/追问 |
 | 最终报告不能临时引入公网事实 | ReportAgent 禁止公网 MCP |
 | LLM/工具调用失败 | 调用层有限重试，耗尽后保留已有结果并降级 |
 | 进程重启不能重做已完成并行兄弟节点 | PostgreSQL Checkpointer + pending writes |
@@ -1670,15 +1646,15 @@ Project 最高，是因为固定首轮消息不再被工具结果反复重写，
 
 一个准确、不吹过头的版本：
 
-> 我们不是让 Agent 自由群聊，而是用 LangGraph 实现一次规划、并行专家和确定性收口的 durable workflow。Coordinator 根据目标 artifact、简历信号和预算生成初始计划；Tech、Project、Risk 通过 Send 并行执行，结果经 Reducer 合入类型化 SharedState；Evidence 做独立证据审计，运行时据此限制 dataQuality 和 missingEvidence，单个 ReportAgent 是唯一 terminal。每个 Run 以 runId 作为 LangGraph thread_id，AsyncPostgresSaver 同步 checkpoint；MySQL 保存业务结果和控制面快照副本。MCP 通过启动期 tools/list 和 per-Agent route 注入 provider-native tool schema，Skill 采用元数据目录加按需 load_skill。我们删除了收益不足的 Dynamic Replan 和 Agent 自报 confidence，把临时故障交给 LLM/工具有限重试，把证据缺失交给 Evidence Gate。
+> 我们不是让 Agent 自由群聊，而是用 LangGraph 实现一次规划、并行专家和确定性收口的 durable workflow。Coordinator 根据目标 artifact、简历信号和预算生成初始计划；Tech、Project、Risk 通过 Send 并行执行，结果经 Reducer 合入类型化 SharedState；单个 ReportAgent 直接结合原始简历、JD、RAG和真实工具回执完成唯一 terminal 收口。每个 Run 以 runId 作为 LangGraph thread_id，AsyncPostgresSaver 同步 checkpoint；MySQL 保存业务结果和控制面快照副本。MCP 通过启动期 tools/list 和 per-Agent route 注入 provider-native tool schema，Skill 采用元数据目录加按需 load_skill。我们删除了收益不足的 Dynamic Replan、EvidenceAgent 和 Agent 自报 confidence，把临时故障交给 LLM/工具有限重试，把证据缺失降级为 missingEvidence 或面试追问。
 
 如果面试官追问为什么不用 CrewAI/AutoGen/Swarm：
 
-> 这些框架都能实现其中一部分，选择不是“能不能”，而是当前业务要求强 artifact closure、独立 Evidence gate、fan-out/fan-in、PostgreSQL durable checkpoint 和 Java 控制面兼容。LangGraph 的 State/Reducer/Send/Command 直接表达这些不变量。CrewAI 更适合角色任务式团队和快速业务 Flow，Agents SDK/Swarm handoff 更适合客服路由和专家接管会话，AutoGen 更适合多 Agent 对话、反思和代码执行。迁移框架不会解决我们的主要瓶颈——DeepSeek 生成长尾和公网证据成功率。
+> 这些框架都能实现其中一部分，选择不是“能不能”，而是当前业务要求强 artifact closure、fan-out/fan-in、PostgreSQL durable checkpoint 和 Java 控制面兼容。LangGraph 的 State/Reducer/Send/Command 直接表达这些不变量。CrewAI 更适合角色任务式团队和快速业务 Flow，Agents SDK/Swarm handoff 更适合客服路由和专家接管会话，AutoGen 更适合多 Agent 对话、反思和代码执行。迁移框架不会解决我们的主要瓶颈——DeepSeek 生成长尾和公网证据成功率。
 
 ### 不应该说的内容
 
-- 不要说“一份简历固定跑十个 Agent”；当前业务定义只有六个 Agent，完整评估通常是 Coordinator 确定性控制面加五个 LLM 执行 Agent，parse/JD 是 preflight。
+- 不要说“一份简历固定跑十个 Agent”；当前业务定义是 Coordinator 确定性控制面加 Tech、Project、Risk、Report 四个 LLM Agent，parse/JD 是 preflight。
 - 不要说“Coordinator 每次都用 LLM 规划”；完整评估现在是确定性 artifact planner。
 - 不要说“54次 fetch 全部成功”；只有4次取得内容。
 - 不要说“Memory 命中率 100%”；read hit rate 是39.5%，1,240是多 Agent 消费记录。

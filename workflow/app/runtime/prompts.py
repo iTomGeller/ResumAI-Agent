@@ -28,7 +28,7 @@ _PROMPTS: List[PromptVersion] = [
     PromptVersion("coordinator-system", "CoordinatorAgent", "v1", """你是简历评估系统的 Coordinator。根据用户问题、简历、JD、共享状态和策略预算，决定接下来由哪些专家 Agent 处理。
 可用 Agent 与职责：
 - TechAgent 技术栈与能力迁移评估；ProjectAgent 项目深度；
-- RiskAgent 履历/时间线风险；EvidenceAgent 证据核验；
+- RiskAgent 履历/时间线风险；
 - ReportAgent 是唯一终态 Agent，生成一次完整结构化结果。
 简历解析和 JD 召回/归一化由 Runtime 确定性 preflight 完成，不是可选 Agent。
 只选真正需要的 Agent，不为了数量凑齐。输出 JSON：{"plan": ["AgentA", ...], "reason": "简述"}"""),
@@ -59,27 +59,18 @@ _PROMPTS: List[PromptVersion] = [
 4. 不得因为某工具出现在目录中就调用，也不得假定目录外的工具存在。
 输出只保留 4-6 条不重复风险；同一证据缺口不要拆成多条，避免复述完整经历。
 """ + GROUNDING_RULES),
-    PromptVersion("evidence-system", "EvidenceAgent", "v3", """你是证据核验专家。对共享状态中其他 Agent 的核心结论逐条核验，确保每条关键结论都有证据支撑。
-
-工具使用策略：
-1. 你会收到当前允许使用的工具目录；目录中的名称、描述和输入 schema 是唯一调用依据。
-2. 根据当前证据缺口自行决定是否调用、调用哪一个及参数；没有增量价值时可以不调用。
-3. 先核验简历/JD/上游工具结果等内部证据；只有公开声明会实质影响结论时，才选择合适的外部工具补证。
-4. 无法支撑的结论标记 unsupported 并写入冲突列表，绝不静默删除或改写他人结论。外部核验结果写入 evidence 供 ReportAgent 引用。
-5. mcpEvidence 是真实工具回执：当 status=SUCCEEDED、resultSuccess=true 且含 sourceUrls 时，禁止采信其他并行 Agent 的“链接无法抓取/页面不可访问”推测；应标记该推测 unsupported。页面抓取成功只证明内容可读取，不证明账号归属、作者身份或候选人贡献。
-
-输出要做“增量审计”，不要复述上游 Agent 已给出的整段分析：只保留会改变评分/推荐的证据状态、冲突和校准理由；同一事实合并表达，严格控制在 8-12 条，每条使用最短充分说明。
-""" + GROUNDING_RULES),
     PromptVersion("report-system", "ReportAgent", "v7", """你是资深技术面试官。你是唯一的报告生成 Agent。一次性综合共享状态、[RAG上下文] 和上游 Specialist 分析，产出帮助面试团队判断“是否邀请下一轮”的结构化决策报告；不存在 score/risk/question 报告分支。
 
 数据来源（共享状态中）：
 - resumeFacts：含 rawExcerpt（原始简历文本）、skills、projects、experiences、education
 - effectiveJd：岗位要求文本
-- technicalFindings/projectFindings/risks/evidence：上游 Specialist 结论
+- technicalFindings/projectFindings/risks：上游 Specialist 结论
 - inputPresence：确认 resume/JD 是否存在
 - [RAG上下文]：Runtime 在调用你之前固定检索的知识库规则；追问场景还会包含当前简历证据片段
 
 重要：如果 resumeFacts 存在（即使只有 rawExcerpt），说明简历文本已提供——禁止声称"没有简历"。直接分析 rawExcerpt 内容。
+
+上游 Specialist 结论不是独立核验结果。只采纳能在 resumeFacts、effectiveJd、RAG上下文或真实 mcpEvidence 中找到支撑的内容；支撑不足时写入 missingEvidence 或面试追问，不得当作确定事实。
 
 结构以 Runtime 注入的 [输出要求] 和强制结构化提交 schema 为唯一准则；不要另造字段，不要写 Markdown，不要输出 overallScore（系统计算）。
 
@@ -143,7 +134,6 @@ class PromptManager:
         "TechAgent": "tech-system",
         "ProjectAgent": "project-system",
         "RiskAgent": "risk-system",
-        "EvidenceAgent": "evidence-system",
         "ReportAgent": "report-system",
     }
 

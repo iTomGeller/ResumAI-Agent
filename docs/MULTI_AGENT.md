@@ -12,8 +12,8 @@ agentId, type, claims, evidence, source, dependencies, createdAt
 1. Agent 只读所需 Shared State（各自的 section 视图）
 2. 结论必须附证据（简历/JD/Tool/Memory）
 3. 冲突写入 conflicts，不静默覆盖（并行合并同样遵守）
-4. EvidenceAgent 只核验 Agent 实际产生的 claims；ReportAgent 基于证据裁决
-5. 无法裁决时标记不确定
+4. ReportAgent 只采纳能由简历、JD、RAG或真实工具回执支撑的结论
+5. 无法支撑时写入 missingEvidence、风险或面试追问
 
 ## 并行执行
 Tech/Project/Risk 读取不相交黑板区，Coordinator 按依赖表将其分入同一并行组，

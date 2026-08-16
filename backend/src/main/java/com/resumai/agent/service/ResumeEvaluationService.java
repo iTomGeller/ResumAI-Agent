@@ -1300,7 +1300,7 @@ public class ResumeEvaluationService {
         Map<String, List<AgentExecutionTrace>> groupedByNode = new LinkedHashMap<>();
         Set<String> allowedAgents = Set.of(
                 "CoordinatorAgent", "TechAgent", "ProjectAgent",
-                "RiskAgent", "EvidenceAgent", "ReportAgent");
+                "RiskAgent", "ReportAgent");
         for (AgentExecutionTrace t : deduped) {
             if (!allowedAgents.contains(t.getAgentRole())) {
                 continue;

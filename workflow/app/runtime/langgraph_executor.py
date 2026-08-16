@@ -568,7 +568,6 @@ class LangGraphRunExecutor(RunExecutor):
             self._restore_worker_snapshot(ordered)
 
         any_success = False
-        evidence_ran = False
         for result in ordered:
             agent_id = str(result.get("agentId"))
             definition = self.registry.get(agent_id)
@@ -582,7 +581,6 @@ class LangGraphRunExecutor(RunExecutor):
                     definition, output, conflicts, synthetic_started,
                     fire_started=False)
                 any_success = True
-                evidence_ran = evidence_ran or agent_id == "EvidenceAgent"
                 continue
 
             message = str(result.get("errorMessage") or "agent failed")
@@ -608,9 +606,6 @@ class LangGraphRunExecutor(RunExecutor):
         if consecutive >= 2:
             self.degraded_reasons.append("consecutive_failures")
             self._ensure_terminal_tail()
-        if evidence_ran:
-            await self._arbitrate_conflicts()
-
         self._write_custom(
             "langgraph.reducer_merge",
             groupToken=token,

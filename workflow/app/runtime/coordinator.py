@@ -12,23 +12,19 @@ logger = logging.getLogger(__name__)
 
 # Safety fallback only — used when artifact planner AND LLM refinement both fail.
 TASK_PIPELINES: Dict[str, List[str]] = {
-    "full_evaluation": ["TechAgent", "ProjectAgent",
-                        "RiskAgent", "EvidenceAgent", "ReportAgent"],
-    "jd_evaluation": ["TechAgent", "ProjectAgent",
-                      "RiskAgent", "EvidenceAgent", "ReportAgent"],
-    "tech_match": ["TechAgent", "EvidenceAgent", "ReportAgent"],
-    "project_analysis": ["ProjectAgent", "EvidenceAgent", "ReportAgent"],
-    "risk_check": ["RiskAgent", "EvidenceAgent", "ReportAgent"],
-    "timeline_check": ["RiskAgent", "EvidenceAgent", "ReportAgent"],
-    "evidence_check": ["EvidenceAgent", "ReportAgent"],
-    "jd_gap": ["TechAgent", "EvidenceAgent", "ReportAgent"],
+    "full_evaluation": ["TechAgent", "ProjectAgent", "RiskAgent", "ReportAgent"],
+    "jd_evaluation": ["TechAgent", "ProjectAgent", "RiskAgent", "ReportAgent"],
+    "tech_match": ["TechAgent", "ReportAgent"],
+    "project_analysis": ["ProjectAgent", "ReportAgent"],
+    "risk_check": ["RiskAgent", "ReportAgent"],
+    "timeline_check": ["RiskAgent", "ReportAgent"],
+    "evidence_check": ["ReportAgent"],
+    "jd_gap": ["TechAgent", "ReportAgent"],
     "project_rewrite": ["ProjectAgent", "ReportAgent"],
     "resume_optimize": ["ProjectAgent", "ReportAgent"],
     "interview_questions": ["RiskAgent", "ReportAgent"],
-    "backend_eval": ["TechAgent", "ProjectAgent",
-                     "RiskAgent", "EvidenceAgent", "ReportAgent"],
-    "agent_eval": ["TechAgent", "ProjectAgent",
-                   "RiskAgent", "EvidenceAgent", "ReportAgent"],
+    "backend_eval": ["TechAgent", "ProjectAgent", "RiskAgent", "ReportAgent"],
+    "agent_eval": ["TechAgent", "ProjectAgent", "RiskAgent", "ReportAgent"],
     # followup remains a lightweight evaluation refinement — chat uses
     # /conversation/reply (CopilotAnswer), never this pipeline.
     "followup": ["ReportAgent"],
@@ -38,27 +34,27 @@ TASK_PIPELINES: Dict[str, List[str]] = {
 GOAL_ARTIFACTS: Dict[str, List[str]] = {
     "full_evaluation": [
         "resume_facts", "jd_requirements", "technical_findings",
-        "project_findings", "risks", "evidence_ledger", "final_report"],
+        "project_findings", "risks", "final_report"],
     "jd_evaluation": [
         "resume_facts", "jd_requirements", "technical_findings",
-        "project_findings", "risks", "evidence_ledger", "final_report"],
+        "project_findings", "risks", "final_report"],
     "backend_eval": [
         "resume_facts", "jd_requirements", "technical_findings",
-        "project_findings", "risks", "evidence_ledger", "final_report"],
+        "project_findings", "risks", "final_report"],
     "agent_eval": [
         "resume_facts", "jd_requirements", "technical_findings",
-        "project_findings", "risks", "evidence_ledger", "final_report"],
+        "project_findings", "risks", "final_report"],
     "tech_match": [
         "resume_facts", "jd_requirements", "technical_findings",
-        "evidence_ledger", "final_report"],
+        "final_report"],
     "project_analysis": [
-        "resume_facts", "project_findings", "evidence_ledger", "final_report"],
-    "risk_check": ["resume_facts", "risks", "evidence_ledger", "final_report"],
-    "timeline_check": ["resume_facts", "risks", "evidence_ledger", "final_report"],
-    "evidence_check": ["evidence_ledger", "final_report"],
+        "resume_facts", "project_findings", "final_report"],
+    "risk_check": ["resume_facts", "risks", "final_report"],
+    "timeline_check": ["resume_facts", "risks", "final_report"],
+    "evidence_check": ["final_report"],
     "jd_gap": [
         "resume_facts", "jd_requirements", "technical_findings",
-        "evidence_ledger", "final_report"],
+        "final_report"],
     "project_rewrite": ["resume_facts", "project_findings", "final_report"],
     "resume_optimize": ["resume_facts", "project_findings", "final_report"],
     "interview_questions": ["resume_facts", "risks", "final_report"],
@@ -83,8 +79,7 @@ AGENT_DEPENDENCIES: Dict[str, List[str]] = {
     "TechAgent": [],
     "ProjectAgent": [],
     "RiskAgent": [],
-    "EvidenceAgent": ["TechAgent", "ProjectAgent", "RiskAgent"],
-    "ReportAgent": ["EvidenceAgent"],
+    "ReportAgent": ["TechAgent", "ProjectAgent", "RiskAgent"],
 }
 
 PARALLELIZABLE = {"TechAgent", "ProjectAgent", "RiskAgent"}
@@ -98,7 +93,6 @@ ARTIFACT_STATE_KEYS: Dict[str, Tuple[str, ...]] = {
     "technical_findings": ("technicalFindings", "jdCoverage"),
     "project_findings": ("projectFindings",),
     "risks": ("risks", "timelineCheck"),
-    "evidence_ledger": ("evidence", "conflicts", "recommendations"),
     "final_report": ("finalReport",),
     "rewrite": ("rewrite",),
     "interview_questions": ("interviewQuestions",),
@@ -116,16 +110,14 @@ ARTIFACT_INVALIDATION_GRAPH: Dict[str, Tuple[str, ...]] = {
     "parsed_resume": ("resume_facts",),
     "resume_facts": (
         "jd_requirements", "technical_findings", "project_findings", "risks",
-        "evidence_ledger", "final_report", "rewrite", "interview_questions",
+        "final_report", "rewrite", "interview_questions",
     ),
     "jd_requirements": (
-        "technical_findings", "project_findings", "evidence_ledger",
-        "final_report",
+        "technical_findings", "project_findings", "final_report",
     ),
-    "technical_findings": ("evidence_ledger", "final_report"),
-    "project_findings": ("evidence_ledger", "final_report", "rewrite"),
-    "risks": ("evidence_ledger", "final_report", "interview_questions"),
-    "evidence_ledger": ("final_report",),
+    "technical_findings": ("final_report",),
+    "project_findings": ("final_report", "rewrite"),
+    "risks": ("final_report", "interview_questions"),
 }
 
 _PROJECT_HINT = re.compile(
@@ -167,8 +159,6 @@ class Coordinator:
                   needs_parse: bool) -> List[str]:
         """Safety-fallback pipeline (TASK_PIPELINES). Prefer plan_from_artifacts."""
         plan = list(TASK_PIPELINES.get(run_type, TASK_PIPELINES["full_evaluation"]))
-        if not self.policy.evidenceVerification.enabled:
-            plan = [a for a in plan if a != "EvidenceAgent"]
         # agentOrder only affects ordering preference — never strips required producers.
         plan = [a for a in plan if self.registry.known(a)]
         plan = plan[: max(1, self.policy.maxAgentCount)]
@@ -198,11 +188,6 @@ class Coordinator:
             required = [a for a in required if a != "jd_requirements"]
             if "jd_requirements" not in optional:
                 optional.append("jd_requirements")
-        if not self.policy.evidenceVerification.enabled:
-            if "evidence_ledger" in required:
-                required = [a for a in required if a != "evidence_ledger"]
-            if "evidence_ledger" not in optional:
-                optional.append("evidence_ledger")
         # Force required when gates demand producers.
         if (run_type in FULL_EVAL_TYPES
                 and signals.get("has_projects")
@@ -210,12 +195,6 @@ class Coordinator:
             if "project_findings" not in required:
                 required.append("project_findings")
             optional = [a for a in optional if a != "project_findings"]
-        if (self.policy.evidenceVerification.enabled
-                and "evidence_ledger" in defaults
-                and not signals.get("is_sparse_resume")):
-            if "evidence_ledger" not in required:
-                required.append("evidence_ledger")
-            optional = [a for a in optional if a != "evidence_ledger"]
         if signals.get("is_sparse_resume") and run_type in FULL_EVAL_TYPES:
             # Keep the multi-agent review surface even for a short resume, but
             # only activate dimensions supported by input signals. Latency is
@@ -229,8 +208,6 @@ class Coordinator:
                 core.add("project_findings")
             if signals.get("has_timeline"):
                 core.add("risks")
-            if self.policy.evidenceVerification.enabled:
-                core.add("evidence_ledger")
             dropped = [artifact for artifact in required if artifact not in core]
             required = [artifact for artifact in required if artifact in core]
             optional.extend(dropped)
@@ -370,7 +347,6 @@ class Coordinator:
             "has_certifications": has_certifications,
             "is_fresh_grad": is_fresh_grad,
             "resume_language": resume_lang,
-            "evidence_enabled": bool(self.policy.evidenceVerification.enabled),
             "needs_parse": "resume_facts" not in present and bool(text.strip()),
         }
 
@@ -467,20 +443,6 @@ class Coordinator:
                         artifact_edges.append({
                             "from": "*", "artifact": req, "to": chosen.agent_id})
 
-        # Evidence soft-requires: when evidence is off, drop EvidenceAgent.
-        if not self.policy.evidenceVerification.enabled:
-            selected = [a for a in selected if a != "EvidenceAgent"]
-            skipped_because.setdefault(
-                "EvidenceAgent", "策略关闭证据核验")
-        else:
-            # Evidence enabled → force EvidenceAgent for goals that need ledger.
-            if ("evidence_ledger" in goal
-                    and "evidence_ledger" not in initially_present
-                    and "EvidenceAgent" not in selected):
-                selected.append("EvidenceAgent")
-                selected_because["EvidenceAgent"] = "证据核验启用，强制 EvidenceAgent"
-                skipped_because.pop("EvidenceAgent", None)
-
         # Project-bearing full evaluations and project-focused runs must keep
         # ProjectAgent. This is a hard goal constraint, not an LLM/budget hint:
         # a user who explicitly asks for project depth must not get a plan that
@@ -495,7 +457,7 @@ class Coordinator:
 
         # agentOrder is ordering preference only — never an allowlist that
         # strips required producers (e.g. low_cost agentOrder must not remove
-        # ProjectAgent / EvidenceAgent when they are required for the goal).
+        # ProjectAgent when it is required for the goal).
         selected = [a for a in selected if self.registry.known(a)]
         if not selected:
             # Absolute last resort.
@@ -725,7 +687,6 @@ class Coordinator:
                 remaining -= terminal_turns
             priority = [
                 "TechAgent", "ProjectAgent", "RiskAgent",
-                "EvidenceAgent",
             ]
             for agent in priority:
                 if remaining <= 0:
@@ -750,14 +711,12 @@ class Coordinator:
             # Give the other reasoning specialists room to activate one Skill
             # from metadata. They keep the turn when no activation is useful.
             memory_priority = []
-            if sig.get("memory_evidence_gaps"):
-                memory_priority.append("EvidenceAgent")
             if sig.get("memory_project_gaps"):
                 memory_priority.append("ProjectAgent")
             if sig.get("memory_risk_patterns"):
                 memory_priority.append("RiskAgent")
             memory_priority.extend(
-                ["TechAgent", "ProjectAgent", "RiskAgent", "EvidenceAgent"])
+                ["TechAgent", "ProjectAgent", "RiskAgent"])
             for agent in dict.fromkeys(memory_priority):
                 if remaining <= 0:
                     break
@@ -817,7 +776,6 @@ class Coordinator:
             "TechAgent": 2.5,
             "ProjectAgent": 3.0,
             "RiskAgent": 2.0,
-            "EvidenceAgent": 2.25,
             "ReportAgent": 4.0,
         }
         weights = {
@@ -826,7 +784,6 @@ class Coordinator:
             weights["ProjectAgent"] = weights.get("ProjectAgent", 3.0) + 3.0
         if sig.get("has_external_urls"):
             weights["ProjectAgent"] = weights.get("ProjectAgent", 3.0) + 5.0
-            weights["EvidenceAgent"] = weights.get("EvidenceAgent", 2.25) + 2.0
         if sig.get("has_jd") or sig.get("has_jd_requirements"):
             weights["TechAgent"] = weights.get("TechAgent", 2.5) + 2.0
         if sig.get("has_timeline"):
@@ -867,7 +824,6 @@ class Coordinator:
         action_floors = {
             # local evidence -> Skill -> MCP -> final is four LLM turns.
             "ProjectAgent": 4 if sig.get("has_external_urls") else 2,
-            "EvidenceAgent": 2,
         }
         for tool_agent, floor in action_floors.items():
             while (
@@ -1137,10 +1093,6 @@ class Coordinator:
                 and not signals.get("is_sparse_resume") \
                 and "project_findings" in goal:
             forced.add("ProjectAgent")
-        if (signals.get("evidence_enabled")
-                and not signals.get("is_sparse_resume")
-                and "evidence_ledger" in goal):
-            forced.add("EvidenceAgent")
         return forced
 
     def _producible_artifacts(self, plan: List[str]) -> Set[str]:
@@ -1186,7 +1138,6 @@ class Coordinator:
             "technicalFindings": "technical_findings",
             "projectFindings": "project_findings",
             "risks": "risks",
-            "evidence": "evidence_ledger",
             "finalReport": "final_report",
         }
         for key, artifact in mapping.items():
@@ -1213,8 +1164,6 @@ class Coordinator:
             return "无简历可匹配，跳过 JDAnalysis"
         if gate == "has_jd_requirements" and not signals.get("has_jd_requirements"):
             return "无岗位要求，跳过 TechAgent"
-        if gate == "evidence_enabled" and not signals.get("evidence_enabled"):
-            return "策略关闭证据核验"
         return ""
 
 

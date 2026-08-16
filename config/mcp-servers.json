@@ -74,10 +74,6 @@
       "fetch.fetch",
       "bing_cn.web_search"
     ],
-    "EvidenceAgent": [
-      "bing_cn.web_search",
-      "fetch.fetch"
-    ],
     "RiskAgent": [],
     "ReportAgent": [],
     "Copilot": [

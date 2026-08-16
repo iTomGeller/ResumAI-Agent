@@ -10,7 +10,7 @@
 Spring Boot（队列/许可/状态机/恢复）
   → POST /agent/runs        启动（幂等 by runId）
   → POST /agent/runs/{id}/cancel|pause|resume
-  → Python RunExecutor（Coordinator → 并行 Specialist → Evidence → Report）
+  → Python RunExecutor（Coordinator → 并行 Specialist → Report）
   → 事件与最终结果回调 /api/internal/agent-runs/*
 ```
 
@@ -49,7 +49,7 @@ PAUSED 释放全局并发额度但保留会话许可（同会话串行不被破�
 Coordinator 规则优先：简单请求（时间线/改写/追问等）直接映射流水线，0 次规划 LLM。复杂请求（完整评估等）在能力目录（capabilities/requires/terminal）上做一次预算内 LLM 精化，输出经过依赖拓扑排序并分组：
 
 ```text
-[ResumeParser] → [JDAnalysis] → [Tech ∥ Project ∥ Risk] → [Evidence] → [Report]
+[ResumeParser] → [JDAnalysis] → [Tech ∥ Project ∥ Risk] → [Report]
 ```
 
 并行组内每个 Agent 只读 SharedState 快照视图，输出串行合并；同键冲突写入 `conflicts` 而非覆盖。ReportAgent 是分析链显式终点：它失败时结果只能是标注过的 `PARTIAL_SUCCESS` 降级输出。
@@ -76,4 +76,4 @@ Coordinator 规则优先：简单请求（时间线/改写/追问等）直接映
 
 ## 7. 证据政策
 
-结论必须携带证据（简历行/JD/工具结果/记忆）；EvidenceAgent 只核验 Agent 实际产生的 claims（Benchmark 期望标签从不进入执行链）；无法核验的结论标记不确定并进 conflicts；DeepSeek 不可用时失败关闭，不返回预制评估。
+结论必须携带证据（简历行/JD/工具结果/记忆）；ReportAgent 只采纳能由当前 Run 原始材料支撑的内容，无法支撑的结论写入 missingEvidence、风险或面试追问；Benchmark 期望标签从不进入执行链；DeepSeek 不可用时失败关闭，不返回预制评估。

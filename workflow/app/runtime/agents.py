@@ -85,26 +85,12 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         requires_artifacts=("resume_facts",),
         produces_artifacts=("risks",),
         cost_hint="low", optional_when="has_timeline"),
-    "EvidenceAgent": AgentDefinition(
-        "EvidenceAgent", "证据核验", "对结论逐条核验并记录冲突",
-        ("evidence_verification",),
-        task_prompt=("逐条核验Tech、Project和Risk产出的核心主张，确认其是否能定位到"
-                     "简历、JD、RAG上下文或真实工具证据，并记录冲突和未支持项。"),
-        skills=("calibrate-evidence-confidence", "audit-evidence-provenance"),
-        tools=("verify_report_evidence", "locate_evidence"),
-        mcp_servers=("bing_cn", "fetch"),
-        max_iterations=2, max_tool_calls=6, timeout_seconds=210,
-        output_type="evidence",
-        # Soft deps via AGENT_DEPENDENCIES: only wait for specialists that are
-        # actually in the plan (skipped Project/Risk must not block Evidence).
-        requires_artifacts=("resume_facts",),
-        produces_artifacts=("evidence_ledger",),
-        cost_hint="medium", optional_when="evidence_enabled"),
     "ReportAgent": AgentDefinition(
         "ReportAgent", "报告生成", "汇总证据生成最终回答",
         ("report_generation",),
-        task_prompt=("综合已经核验的技术、项目、风险和证据结果，生成唯一的最终候选人评估报告；"
-                     "不得引入新的未经核验事实。"),
+        task_prompt=("综合技术、项目和风险专家结果，生成唯一的最终候选人评估报告；"
+                     "只采纳能由简历、JD、RAG上下文或真实工具结果支撑的内容，"
+                     "证据不足的结论必须降级为待核验项。"),
         skills=(),
         # Full evaluation and Copilot follow-up both use deterministic
         # pre-generation RAG injected into the user prompt. ReportAgent has no
@@ -112,8 +98,6 @@ AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
         tools=(),
         max_iterations=2, max_tool_calls=4, timeout_seconds=240,
         failure_policy="abort", output_type="report",
-        # evidence_ledger is preferred when present; followup/quick_answer may
-        # produce final_report directly without a full evidence pass.
         requires_artifacts=(),
         produces_artifacts=("final_report",),
         cost_hint="medium"),

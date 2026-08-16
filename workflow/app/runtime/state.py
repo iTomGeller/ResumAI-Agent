@@ -42,14 +42,10 @@ _SECTION_READ_MAP: Dict[str, List[str]] = {
                   "inputPresence"],
     "ProjectAgent": ["resumeFacts", "jdRequirements", "effectiveJd", "inputPresence"],
     "RiskAgent": ["resumeFacts", "timelineCheck", "inputPresence"],
-    "EvidenceAgent": ["resumeFacts", "jdRequirements", "mcpEvidence",
-                      "projectFindings", "technicalFindings", "risks",
-                      "inputPresence"],
     "ReportAgent": ["resumeFacts", "jdRequirements", "mcpEvidence",
-                    "technicalFindings",                     "projectFindings", "risks", "evidence", "conflicts",
-                    "projectFindings", "risks", "evidence", "conflicts",
-                    "recommendations", "jdCoverage", "timelineCheck",
-                    "effectiveJd", "inputPresence"],
+                    "technicalFindings", "projectFindings", "risks",
+                    "jdCoverage", "timelineCheck", "effectiveJd",
+                    "inputPresence"],
     "CoordinatorAgent": CANONICAL_ARTIFACT_KEYS,
 }
 
@@ -399,32 +395,6 @@ class SharedState:
                 "contentPreview": str(result.get("text") or "")[:1600],
             })
         return compact
-
-    def claims_for_verification(self, limit: int = 30) -> List[Dict[str, Any]]:
-        store = self.data.get("artifacts") or {}
-        claims: List[Dict[str, Any]] = []
-        for section in ("technicalFindings", "projectFindings", "risks", "recommendations"):
-            for entry in store.get(section, []) or []:
-                if isinstance(entry, dict):
-                    text = str(entry.get("text") or entry.get("finding")
-                               or entry.get("claim") or entry.get("detail") or "")
-                    if text:
-                        claims.append({
-                            "text": text[:300],
-                            "evidence": str(entry.get("evidence") or "")[:300],
-                            "section": section,
-                            "byAgent": entry.get("byAgent", "unknown"),
-                        })
-        return claims[:limit]
-
-    def evidence_support_ratio(self) -> Optional[float]:
-        store = self.data.get("artifacts") or {}
-        verified = [e for e in (store.get("evidence") or [])
-                    if isinstance(e, dict) and e.get("verified") is not None]
-        if not verified:
-            return None
-        supported = sum(1 for e in verified if e.get("verified"))
-        return round(supported / len(verified), 3)
 
     def snapshot(self) -> Dict[str, Any]:
         return json.loads(json.dumps(self.data, ensure_ascii=False, default=str))
