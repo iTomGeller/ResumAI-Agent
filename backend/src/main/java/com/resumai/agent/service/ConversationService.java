@@ -37,6 +37,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import org.redisson.api.RMapCache;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
@@ -44,6 +45,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 @Service
@@ -268,6 +271,19 @@ public class ConversationService {
 
     @Transactional
     public ConversationTurnResponse sendTurn(String idOrTraceId, ConversationTurnRequest request) {
+        return sendTurnInternal(idOrTraceId, request, null);
+    }
+
+    @Transactional
+    public ConversationTurnResponse sendTurn(String idOrTraceId,
+                                             ConversationTurnRequest request,
+                                             Consumer<String> onDelta) {
+        return sendTurnInternal(idOrTraceId, request, onDelta);
+    }
+
+    private ConversationTurnResponse sendTurnInternal(
+            String idOrTraceId, ConversationTurnRequest request,
+            Consumer<String> onDelta) {
         ConversationSession session = lockSession(ensureSession(idOrTraceId).getId());
         // Re-check idempotency while holding the conversation row lock. Two
         // retries with the same clientMessageId can arrive before either one
@@ -284,7 +300,7 @@ public class ConversationService {
         ConversationIntentClassifier.Decision decision = classifier.classify(request.content());
         boolean agentRuntimeConversation = StringUtils.hasText(session.getResumeText());
         if (agentRuntimeConversation) {
-            return handleRuntimeTurn(session, request, activeRevision);
+            return handleRuntimeTurn(session, request, activeRevision, onDelta);
         }
         return handleLegacyTurn(session, request, decision, activeRevision);
     }
@@ -295,7 +311,8 @@ public class ConversationService {
      */
     private ConversationTurnResponse handleRuntimeTurn(ConversationSession session,
                                                        ConversationTurnRequest request,
-                                                       int activeRevision) {
+                                                       int activeRevision,
+                                                       Consumer<String> onDelta) {
         AgentRun active = runQueueService.findActiveRun(session.getId());
         if (active == null) {
             // A paused run is still the active immutable revision. Evaluation-
@@ -308,8 +325,10 @@ public class ConversationService {
 
         return switch (decision.disposition()) {
             case CONTROL -> handleControlDisposition(session, request, decision, activeRevision);
-            case DIRECT_REPLY -> handleDirectReply(session, request, decision, activeRevision, false);
-            case BACKGROUND_QUERY -> handleDirectReply(session, request, decision, activeRevision, true);
+            case DIRECT_REPLY -> handleDirectReply(
+                    session, request, decision, activeRevision, false, onDelta);
+            case BACKGROUND_QUERY -> handleDirectReply(
+                    session, request, decision, activeRevision, true, onDelta);
             case MERGE_CONTEXT -> handleMergeContext(session, request, decision, activeRevision, pending);
             case CREATE_REVISION -> handleEvaluationRevision(session, request, decision,
                     activeRevision, false);
@@ -386,7 +405,8 @@ public class ConversationService {
                                                        ConversationTurnRequest request,
                                                        TurnDecision decision,
                                                        int activeRevision,
-                                                       boolean allowTools) {
+                                                       boolean allowTools,
+                                                       Consumer<String> onDelta) {
         // DIRECT_REPLY / BACKGROUND_QUERY always persist conversation_turn and
         // never create agent_run (runId stays null).
         var persistedTurn = conversationTurnService.start(
@@ -422,7 +442,8 @@ public class ConversationService {
         ConversationReplyService.CopilotReply reply;
         try {
             reply = conversationReplyService.reply(
-                    session, request, decision, allowTools, persistedTurn.getTurnId());
+                    session, request, decision, allowTools,
+                    persistedTurn.getTurnId(), onDelta);
             conversationTurnService.complete(
                     persistedTurn.getTurnId(), reply.answer(), reply.citations(), reply.actions());
         } catch (RuntimeException ex) {
@@ -903,7 +924,25 @@ public class ConversationService {
         message.setCreateTime(LocalDateTime.now());
         message.setDeleted(0);
         messageMapper.insert(message);
+        if ("ASSISTANT".equalsIgnoreCase(role)) {
+            refreshCopilotCacheAfterCommit(conversationId);
+        }
         return message;
+    }
+
+    private void refreshCopilotCacheAfterCommit(String conversationId) {
+        Runnable refresh = () -> conversationReplyService.refreshHistoryCache(conversationId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            refresh.run();
+                        }
+                    });
+        } else {
+            refresh.run();
+        }
     }
 
     private String writeJson(Object value) {

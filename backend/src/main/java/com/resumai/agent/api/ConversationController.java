@@ -1,6 +1,7 @@
 package com.resumai.agent.api;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumai.agent.api.dto.ConversationSnapshotResponse;
 import com.resumai.agent.api.dto.ConversationTurnRequest;
 import com.resumai.agent.api.dto.ConversationTurnResponse;
@@ -13,6 +14,9 @@ import com.resumai.agent.service.ConversationService;
 import com.resumai.agent.service.TaskControlService;
 import com.resumai.agent.util.HrContext;
 import jakarta.validation.Valid;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -21,6 +25,9 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.util.StringUtils;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,6 +36,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 @RestController
 @RequestMapping("/api")
@@ -37,13 +45,16 @@ public class ConversationController {
     private final ConversationService conversationService;
     private final TaskControlService taskControlService;
     private final AgentRunMapper agentRunMapper;
+    private final ObjectMapper objectMapper;
 
     public ConversationController(ConversationService conversationService,
                                   TaskControlService taskControlService,
-                                  AgentRunMapper agentRunMapper) {
+                                  AgentRunMapper agentRunMapper,
+                                  ObjectMapper objectMapper) {
         this.conversationService = conversationService;
         this.taskControlService = taskControlService;
         this.agentRunMapper = agentRunMapper;
+        this.objectMapper = objectMapper;
     }
 
     public record CreateConversationBody(String title, String resumeText, String jobDescription,
@@ -112,6 +123,55 @@ public class ConversationController {
             @PathVariable String conversationId,
             @Valid @RequestBody ConversationTurnRequest request) {
         return conversationService.sendTurn(conversationId, request);
+    }
+
+    /**
+     * Standalone Copilot SSE. Non-Copilot dispositions still return one done
+     * event, while direct replies additionally emit model answer deltas.
+     */
+    @PostMapping(value = "/conversations/{conversationId}/messages/stream",
+            produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public ResponseEntity<StreamingResponseBody> streamMessage(
+            @PathVariable String conversationId,
+            @Valid @RequestBody ConversationTurnRequest request) {
+        StreamingResponseBody body = output -> {
+            try {
+                ConversationTurnResponse response = conversationService.sendTurn(
+                        conversationId, request,
+                        text -> {
+                            try {
+                                writeSse(output, "delta", Map.of("text", text));
+                            } catch (IOException e) {
+                                throw new UncheckedIOException(e);
+                            }
+                        });
+                writeSse(output, "done", response);
+            } catch (Exception e) {
+                Throwable cause = e instanceof UncheckedIOException && e.getCause() != null
+                        ? e.getCause() : e;
+                try {
+                    writeSse(output, "error", Map.of(
+                            "message", StringUtils.hasText(cause.getMessage())
+                                    ? cause.getMessage() : "生成中断，请重试"));
+                } catch (IOException ignored) {
+                    // The browser disconnected; the servlet container closes
+                    // the streaming response.
+                }
+            }
+        };
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .cacheControl(CacheControl.noStore())
+                .header("X-Accel-Buffering", "no")
+                .body(body);
+    }
+
+    private void writeSse(OutputStream output, String event, Object payload)
+            throws IOException {
+        String frame = "event: " + event + "\n"
+                + "data: " + objectMapper.writeValueAsString(payload) + "\n\n";
+        output.write(frame.getBytes(StandardCharsets.UTF_8));
+        output.flush();
     }
 
     public record IntentPreviewBody(String content) {

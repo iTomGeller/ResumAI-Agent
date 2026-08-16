@@ -97,10 +97,12 @@ class ConversationDirectReplySideEffectTest {
 
         ConversationTurnService turnService = new ConversationTurnService(turnMapper, objectMapper);
         ConversationReplyService replyService = new ConversationReplyService(
-                runtimeClient, agentRunMapper, messageMapper,
+                org.mockito.Mockito.mock(
+                        com.resumai.agent.conversation.CopilotLlmClient.class),
+                agentRunMapper, messageMapper,
                 org.mockito.Mockito.mock(
                         com.resumai.agent.dao.ContextSnapshotMapper.class),
-                objectMapper);
+                objectMapper, redisson);
         conversationService = new ConversationService(
                 sessionMapper, messageMapper, resumeTaskMapper, evaluationService,
                 taskControlService, new ConversationIntentClassifier(), runtimeClient,

@@ -12,7 +12,7 @@ import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ContextSnapshotRow;
 import com.resumai.agent.domain.entity.ConversationMessage;
 import com.resumai.agent.domain.entity.ConversationSession;
-import com.resumai.agent.service.run.AgentRuntimeClient;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -20,16 +20,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.redisson.api.RMapCache;
+import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * Short Copilot replies via workflow ConversationalAgent. Never produces
- * StructuredReport / ReportAgent output.
+ * Standalone Java Copilot. It never enters the Python workflow, creates an
+ * AgentRun, or produces ReportAgent output.
  */
 @Service
 public class ConversationReplyService {
@@ -38,22 +42,27 @@ public class ConversationReplyService {
     private static final Pattern SIMPLE_ARITH =
             Pattern.compile("^\\s*(\\d+)\\s*([+\\-*/x×])\\s*(\\d+)\\s*$");
 
-    private final AgentRuntimeClient runtimeClient;
+    private static final Duration HISTORY_CACHE_TTL = Duration.ofHours(2);
+
+    private final CopilotLlmClient llmClient;
     private final AgentRunMapper agentRunMapper;
     private final ConversationMessageMapper conversationMessageMapper;
     private final ContextSnapshotMapper contextSnapshotMapper;
     private final ObjectMapper objectMapper;
+    private final RedissonClient redisson;
 
-    public ConversationReplyService(AgentRuntimeClient runtimeClient,
+    public ConversationReplyService(CopilotLlmClient llmClient,
                                     AgentRunMapper agentRunMapper,
                                     ConversationMessageMapper conversationMessageMapper,
                                     ContextSnapshotMapper contextSnapshotMapper,
-                                    ObjectMapper objectMapper) {
-        this.runtimeClient = runtimeClient;
+                                    ObjectMapper objectMapper,
+                                    RedissonClient redisson) {
+        this.llmClient = llmClient;
         this.agentRunMapper = agentRunMapper;
         this.conversationMessageMapper = conversationMessageMapper;
         this.contextSnapshotMapper = contextSnapshotMapper;
         this.objectMapper = objectMapper;
+        this.redisson = redisson;
     }
 
     public record CopilotReply(
@@ -90,6 +99,15 @@ public class ConversationReplyService {
                               TurnDecision decision,
                               boolean allowTools,
                               String preferredTurnId) {
+        return reply(session, request, decision, allowTools, preferredTurnId, null);
+    }
+
+    public CopilotReply reply(ConversationSession session,
+                              ConversationTurnRequest request,
+                              TurnDecision decision,
+                              boolean allowTools,
+                              String preferredTurnId,
+                              Consumer<String> onDelta) {
         String turnId = StringUtils.hasText(preferredTurnId)
                 ? preferredTurnId
                 : "turn-" + UUID.randomUUID();
@@ -132,14 +150,18 @@ public class ConversationReplyService {
         }
         body.put("contextSnapshot", snapshot);
 
-        Optional<Map<String, Object>> remote = runtimeClient.replyConversation(body);
+        Optional<Map<String, Object>> remote = llmClient.reply(body, onDelta);
         if (remote.isPresent()) {
             CopilotReply reply = fromPayload(turnId, remote.get());
             persistHistorySnapshot(session.getId(), history, reply.conversationSummary());
             return reply;
         }
-        log.debug("workflow reply unavailable; using local CopilotAnswer fallback");
+        log.debug("Java Copilot model unavailable; using local fallback");
         return localFallback(turnId, request.content(), decision, session);
+    }
+
+    private RMapCache<String, String> historyCache() {
+        return redisson.getMapCache("resumai:copilot:context");
     }
 
     @SuppressWarnings("unchecked")
@@ -230,6 +252,15 @@ public class ConversationReplyService {
     private HistoryContext loadHistoryContext(String conversationId,
                                               String currentClientMessageId) {
         try {
+            String cached = historyCache().get(conversationId);
+            if (StringUtils.hasText(cached)) {
+                return objectMapper.readValue(cached, HistoryContext.class);
+            }
+        } catch (Exception e) {
+            log.debug("Copilot history cache miss {}: {}",
+                    conversationId, e.getMessage());
+        }
+        try {
             ContextSnapshotRow latest = contextSnapshotMapper.selectOne(
                     new LambdaQueryWrapper<ContextSnapshotRow>()
                             .eq(ContextSnapshotRow::getConversationId, conversationId)
@@ -266,7 +297,7 @@ public class ConversationReplyService {
                     .map(row -> historyMessage(row, 600)).toList();
             String previousSummary = latest != null ? latest.getSummary() : null;
             int beforeTokens = estimateTokens(previousSummary, toCompact, recent);
-            return new HistoryContext(
+            HistoryContext context = new HistoryContext(
                     previousSummary,
                     latest != null && latest.getSummaryVersion() != null
                             ? latest.getSummaryVersion() : 0,
@@ -277,10 +308,30 @@ public class ConversationReplyService {
                             : compactRows.get(compactRows.size() - 1).getId(),
                     recentRows.isEmpty() ? null : recentRows.get(0).getId(),
                     beforeTokens);
+            try {
+                historyCache().fastPut(conversationId,
+                        objectMapper.writeValueAsString(context),
+                        HISTORY_CACHE_TTL.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                log.debug("Copilot history cache write skipped {}: {}",
+                        conversationId, e.getMessage());
+            }
+            return context;
         } catch (Exception e) {
             log.info("Copilot history context degraded to current turn: {}", e.getMessage());
             return new HistoryContext(null, 0, List.of(), List.of(),
                     null, null, null, 0);
+        }
+    }
+
+    /** Rebuild the prompt-ready short memory after a completed turn commits. */
+    public void refreshHistoryCache(String conversationId) {
+        try {
+            historyCache().fastRemove(conversationId);
+            loadHistoryContext(conversationId, null);
+        } catch (Exception e) {
+            log.debug("Copilot history cache refresh skipped {}: {}",
+                    conversationId, e.getMessage());
         }
     }
 

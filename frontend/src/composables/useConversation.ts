@@ -377,9 +377,12 @@ export function useConversation() {
     error.value = '';
 
     try {
-      const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId.value)}/messages`, {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId.value)}/messages/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
         body: JSON.stringify({
           clientMessageId: messageId,
           content: trimmed,
@@ -388,7 +391,64 @@ export function useConversation() {
         }),
       });
       if (!response.ok) throw new Error(await responseError(response));
-      const turn = await response.json() as ConversationTurnResponse;
+      if (!response.body) throw new Error('浏览器未收到流式响应');
+
+      const assistantId = optimisticId - 1;
+      let assistantCreated = false;
+      const streamResult: { turn?: ConversationTurnResponse } = {};
+      const ensureAssistant = () => {
+        if (assistantCreated) return;
+        messages.value.push({
+          id: assistantId,
+          clientMessageId: `${messageId}:assistant`,
+          role: 'ASSISTANT',
+          content: '',
+          revision,
+          createdAt: new Date().toISOString(),
+        });
+        assistantCreated = true;
+      };
+      const appendDelta = (text: string) => {
+        if (!text) return;
+        ensureAssistant();
+        const message = messages.value.find(item => item.id === assistantId);
+        if (message) message.content += text;
+      };
+      const handleFrame = (frame: string) => {
+        let event = 'message';
+        const data: string[] = [];
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+        }
+        if (!data.length) return;
+        const payload = JSON.parse(data.join('\n')) as Record<string, unknown>;
+        if (event === 'delta') appendDelta(String(payload.text || ''));
+        else if (event === 'done') {
+          streamResult.turn = payload as unknown as ConversationTurnResponse;
+        }
+        else if (event === 'error') throw new Error(String(payload.message || '生成中断，请重试'));
+      };
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        pending += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
+        let boundary = pending.indexOf('\n\n');
+        while (boundary >= 0) {
+          const frame = pending.slice(0, boundary);
+          pending = pending.slice(boundary + 2);
+          if (frame.trim()) handleFrame(frame);
+          boundary = pending.indexOf('\n\n');
+        }
+        if (done) break;
+      }
+      if (pending.trim()) handleFrame(pending);
+      const turn = streamResult.turn;
+      if (!turn) throw new Error('流式响应未正常结束');
+
       lastTurn.value = turn;
       if (turn.runId) {
         watchRun(turn.runId);
@@ -403,15 +463,13 @@ export function useConversation() {
         }
       }
 
-      messages.value.push({
-        id: optimisticId - 1,
-        clientMessageId: `${messageId}:assistant`,
-        role: 'ASSISTANT',
-        intent: turn.intent,
-        content: turn.assistantMessage,
-        revision: turn.activeRevision,
-        createdAt: new Date().toISOString(),
-      });
+      ensureAssistant();
+      const completedAssistant = messages.value.find(item => item.id === assistantId);
+      if (completedAssistant) {
+        completedAssistant.intent = turn.intent;
+        completedAssistant.content = turn.assistantMessage;
+        completedAssistant.revision = turn.activeRevision;
+      }
 
       // A side question may echo the existing trace. Only an explicit revision
       // creation is allowed to advance the conversation's active trace here.
@@ -422,7 +480,8 @@ export function useConversation() {
       await loadConversation(turn.conversationId || conversationId.value, true);
       return turn;
     } catch (caught) {
-      messages.value = messages.value.filter((message) => message.id !== optimisticId);
+      messages.value = messages.value.filter((message) =>
+        message.id !== optimisticId && message.id !== optimisticId - 1);
       error.value = caught instanceof Error ? caught.message : '消息发送失败';
       if (error.value.includes('revision 已从')) {
         await loadConversation(conversationId.value, true);

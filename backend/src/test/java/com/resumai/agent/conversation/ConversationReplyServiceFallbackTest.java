@@ -15,7 +15,6 @@ import com.resumai.agent.dao.ContextSnapshotMapper;
 import com.resumai.agent.dao.ConversationMessageMapper;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ConversationSession;
-import com.resumai.agent.service.run.AgentRuntimeClient;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -29,11 +28,13 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.redisson.api.RedissonClient;
 
 @ExtendWith(MockitoExtension.class)
 class ConversationReplyServiceFallbackTest {
 
-    @Mock AgentRuntimeClient runtimeClient;
+    @Mock CopilotLlmClient llmClient;
+    @Mock RedissonClient redisson;
     @Mock AgentRunMapper agentRunMapper;
     @Mock ConversationMessageMapper conversationMessageMapper;
     @Mock ContextSnapshotMapper contextSnapshotMapper;
@@ -43,12 +44,13 @@ class ConversationReplyServiceFallbackTest {
 
     @BeforeEach
     void setUp() {
-        service = new ConversationReplyService(runtimeClient, agentRunMapper,
-                conversationMessageMapper, contextSnapshotMapper, new ObjectMapper());
+        service = new ConversationReplyService(llmClient, agentRunMapper,
+                conversationMessageMapper, contextSnapshotMapper,
+                new ObjectMapper(), redisson);
         session = new ConversationSession();
         session.setId("conv-fallback");
         session.setActiveRevision(3);
-        when(runtimeClient.replyConversation(any())).thenReturn(Optional.empty());
+        when(llmClient.reply(any(), any())).thenReturn(Optional.empty());
     }
 
     @ParameterizedTest
@@ -105,7 +107,7 @@ class ConversationReplyServiceFallbackTest {
                 "turn-context");
 
         ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(runtimeClient).replyConversation(bodyCaptor.capture());
+        verify(llmClient).reply(bodyCaptor.capture(), any());
         Map<String, Object> snapshot =
                 (Map<String, Object>) bodyCaptor.getValue().get("contextSnapshot");
 
