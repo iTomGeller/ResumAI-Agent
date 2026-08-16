@@ -1222,6 +1222,16 @@ public class MemoryService {
         // EvidenceAgent was removed; do not carry its legacy claim patterns
         // into the simplified job-profile schema on subsequent upserts.
         merged.remove("unsupportedClaimPatterns");
+        Object legacyGaps = merged.remove("commonGaps");
+        Object legacyRisks = merged.remove("commonRiskPatterns");
+        if (legacyGaps != null) {
+            merged.put("observedJdGaps", mergeUniqueValues(
+                    merged.get("observedJdGaps"), legacyGaps, 20));
+        }
+        if (legacyRisks != null) {
+            merged.put("observedRiskPatterns", mergeUniqueValues(
+                    merged.get("observedRiskPatterns"), legacyRisks, 20));
+        }
         for (String field : List.of(
                 "factKey", "memoryKind", "jobKey", "jobCategory",
                 "jdFingerprint", "piiExcluded", "rawResumeExcluded",
@@ -1231,10 +1241,17 @@ public class MemoryService {
             }
         }
         for (String field : List.of(
-                "stableRequirements", "commonGaps", "commonRiskPatterns",
+                "stableRequirements", "observedJdGaps", "observedRiskPatterns",
                 "derivedFromRunIds")) {
+            Object incomingValue = incoming.get(field);
+            if (incomingValue == null && "observedJdGaps".equals(field)) {
+                incomingValue = incoming.get("commonGaps");
+            }
+            if (incomingValue == null && "observedRiskPatterns".equals(field)) {
+                incomingValue = incoming.get("commonRiskPatterns");
+            }
             merged.put(field, mergeUniqueValues(
-                    merged.get(field), incoming.get(field),
+                    merged.get(field), incomingValue,
                     "derivedFromRunIds".equals(field) ? 12 : 20));
         }
         int previousSamples = previous == null ? 0 : numberValue(
@@ -1245,8 +1262,8 @@ public class MemoryService {
         String content = "岗位画像=" + textValue(merged.get("jobKey"), "UNKNOWN")
                 + "; 样本数=" + merged.get("sampleCount")
                 + "; 稳定要求=" + joinValues(merged.get("stableRequirements"), 5)
-                + "; 常见证据缺口=" + joinValues(merged.get("commonGaps"), 4)
-                + "; 常见风险=" + joinValues(merged.get("commonRiskPatterns"), 4);
+                + "; 历史出现的JD缺口=" + joinValues(merged.get("observedJdGaps"), 4)
+                + "; 历史出现的风险=" + joinValues(merged.get("observedRiskPatterns"), 4);
         return new WriteRequest(
                 request.type(), request.ownerScope(), request.userId(),
                 request.conversationId(), request.runId(), content, merged,

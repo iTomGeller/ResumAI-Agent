@@ -507,9 +507,12 @@ class Coordinator:
             structured = note.get("structuredContent") or note.get("structured") or {}
             if not isinstance(structured, dict):
                 continue
-            if structured.get("commonGaps") or structured.get("jdGaps"):
+            if structured.get("observedJdGaps") \
+                    or structured.get("commonGaps") \
+                    or structured.get("jdGaps"):
                 signals["memory_project_gaps"] = True
             if structured.get("riskPatterns") \
+                    or structured.get("observedRiskPatterns") \
                     or structured.get("commonRiskPatterns"):
                 signals["memory_risk_patterns"] = True
 

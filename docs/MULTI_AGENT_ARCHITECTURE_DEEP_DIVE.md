@@ -930,7 +930,7 @@ TechAgent 实际收到的 user message 按下面结构组装。以下值来自�
 [相关记忆]
 以下仅用于校准证据检查，不是当前候选人的事实或结论；必须以当前简历/JD/工具证据为准。
 [长期岗位画像|JSON]
-{"sampleCount":7,"commonJdGaps":["性能数字缺少测试基线"],"commonRiskPatterns":["个人职责边界不清"]}
+{"sampleCount":7,"observedJdGaps":["性能数字缺少测试基线"],"observedRiskPatterns":["个人职责边界不清"]}
 [近期同岗位案例|JSON]
 [{"jdGaps":["没有生产故障处理证据"],"riskPatterns":["量化结果缺少基线"]},{"jdGaps":["缺少容量规划证据"],"riskPatterns":[]}]
 
@@ -1356,7 +1356,8 @@ JOB_PROFILE：当前 jobCategory + JD fingerprint 的聚合画像，最多1条
     "structuredContent": {
       "sampleCount": 12,
       "stableRequirements": ["Spring Boot生产经验"],
-      "commonGaps": ["性能指标缺少基线"]
+      "observedJdGaps": ["性能指标缺少基线"],
+      "observedRiskPatterns": ["量化结果缺少基线"]
     },
     "used": true
   }

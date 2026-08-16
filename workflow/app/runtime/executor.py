@@ -4510,11 +4510,16 @@ class RunExecutor:
                 return {
                     "sampleCount": sample_count
                     if isinstance(sample_count, int) else None,
-                    "commonJdGaps": bounded_list(
-                        structured, "commonGaps", limit=4, item_chars=120),
-                    "commonRiskPatterns": bounded_list(
-                        structured, "commonRiskPatterns", limit=4,
-                        item_chars=100),
+                    "observedJdGaps": bounded_list(
+                        structured, "observedJdGaps", limit=4,
+                        item_chars=120) or bounded_list(
+                            structured, "commonGaps", limit=4,
+                            item_chars=120),
+                    "observedRiskPatterns": bounded_list(
+                        structured, "observedRiskPatterns", limit=4,
+                        item_chars=100) or bounded_list(
+                            structured, "commonRiskPatterns", limit=4,
+                            item_chars=100),
                 }
 
             return {
@@ -4529,8 +4534,8 @@ class RunExecutor:
         ]
         if profiles:
             profile_view = prompt_view(profiles[0])
-            if profile_view.get("commonJdGaps") \
-                    or profile_view.get("commonRiskPatterns"):
+            if profile_view.get("observedJdGaps") \
+                    or profile_view.get("observedRiskPatterns"):
                 lines.extend([
                     "[长期岗位画像|JSON]",
                     json.dumps(profile_view, ensure_ascii=False,
@@ -4727,16 +4732,16 @@ class RunExecutor:
                 "jdFingerprint": jd_fingerprint,
                 "sampleCount": 1,
                 "stableRequirements": stable_requirements,
-                "commonGaps": gaps[:8],
-                "commonRiskPatterns": risk_patterns[:8],
+                "observedJdGaps": gaps[:8],
+                "observedRiskPatterns": risk_patterns[:8],
                 "piiExcluded": True,
                 "rawResumeExcluded": True,
                 "derivedFromRunIds": [self.request.runId],
             }
             profile_content = (
                 f"岗位画像={job_key}; 稳定要求={'; '.join(stable_requirements[:5]) or '无'}; "
-                f"常见证据缺口={'; '.join(gaps[:4]) or '待积累'}; "
-                f"常见风险={'; '.join(risk_patterns[:4]) or '待积累'}")[:1200]
+                f"历史出现的JD缺口={'; '.join(gaps[:4]) or '待积累'}; "
+                f"历史出现的风险={'; '.join(risk_patterns[:4]) or '待积累'}")[:1200]
             await self._queue_memory_write(
                 type_="JOB_PROFILE", owner_scope="USER",
                 content=profile_content, structured=profile_structured,
