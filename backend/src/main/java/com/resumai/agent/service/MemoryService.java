@@ -1219,6 +1219,9 @@ public class MemoryService {
         }
         Map<String, Object> incoming = request.structuredContent() == null
                 ? Map.of() : request.structuredContent();
+        // EvidenceAgent was removed; do not carry its legacy claim patterns
+        // into the simplified job-profile schema on subsequent upserts.
+        merged.remove("unsupportedClaimPatterns");
         for (String field : List.of(
                 "factKey", "memoryKind", "jobKey", "jobCategory",
                 "jdFingerprint", "piiExcluded", "rawResumeExcluded",
@@ -1229,7 +1232,7 @@ public class MemoryService {
         }
         for (String field : List.of(
                 "stableRequirements", "commonGaps", "commonRiskPatterns",
-                "unsupportedClaimPatterns", "derivedFromRunIds")) {
+                "derivedFromRunIds")) {
             merged.put(field, mergeUniqueValues(
                     merged.get(field), incoming.get(field),
                     "derivedFromRunIds".equals(field) ? 12 : 20));

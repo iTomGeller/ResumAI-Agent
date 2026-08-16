@@ -930,9 +930,9 @@ TechAgent 实际收到的 user message 按下面结构组装。以下值来自�
 [相关记忆]
 以下仅用于校准证据检查，不是当前候选人的事实或结论；必须以当前简历/JD/工具证据为准。
 [长期岗位画像|JSON]
-{"jobKey":"JAVA_BACKEND","jobCategory":"JAVA_BACKEND","sampleCount":7,"stableRequirements":["Java","Spring Boot","MySQL","Redis"],"commonGaps":["性能数字缺少测试基线"],"commonRiskPatterns":["个人职责边界不清"],"unsupportedClaimPatterns":[]}
+{"sampleCount":7,"commonJdGaps":["性能数字缺少测试基线"],"commonRiskPatterns":["个人职责边界不清"]}
 [近期同岗位案例|JSON]
-[{"jobKey":"JAVA_BACKEND","jobCategory":"JAVA_BACKEND","runType":"FULL_EVALUATION","resumeFeatures":{"skills":["Java","Spring Boot","Redis"],"projectCount":2,"hasPublicUrl":false},"verifiedMatches":["订单系统重构"],"jdGaps":["没有生产故障处理证据"],"unsupportedClaims":["接口性能提升60%"],"riskPatterns":["量化结果缺少基线"],"evidenceSupportRatio":0.74},{"jobKey":"JAVA_BACKEND","jobCategory":"JAVA_BACKEND","runType":"FULL_EVALUATION","resumeFeatures":{"skills":["Java","Kafka","MySQL"],"projectCount":1,"hasPublicUrl":false},"verifiedMatches":[],"jdGaps":["缺少容量规划证据"],"unsupportedClaims":["支撑百万级请求"],"riskPatterns":[],"evidenceSupportRatio":0.61}]
+[{"jdGaps":["没有生产故障处理证据"],"riskPatterns":["量化结果缺少基线"]},{"jdGaps":["缺少容量规划证据"],"riskPatterns":[]}]
 
 [共享状态]
 {
@@ -1326,7 +1326,7 @@ JOB_PROFILE：当前 jobCategory + JD fingerprint 的聚合画像，最多1条
 
 `_merge_memory_hits()` 为岗位画像保留一个位置，再补最多两条近期案例；`filter_hits_for_consumer()` 按 Agent 做二次隔离：
 
-- Coordinator、Tech、Project、Risk、Evidence 可读取两层业务 Memory。
+- Coordinator、Tech、Project、Risk 可读取两层业务 Memory。
 - Report 只读取 `JOB_PROFILE`，不把上一位候选人的案例当作当前推荐依据。
 - `jobCategory` 不同直接拒绝；`JOB_PROFILE` 的 JD fingerprint 不同也直接拒绝。
 - GLOBAL/RUN Memory 不进入评估 Prompt。
@@ -1344,8 +1344,8 @@ JOB_PROFILE：当前 jobCategory + JD fingerprint 的聚合画像，最多1条
       "jobCategory": "BACKEND",
       "jdFingerprint": "...",
       "piiExcluded": true,
-      "verifiedMatches": ["Spring Boot生产经验"],
-      "jdGaps": ["高并发压测证据不足"]
+      "jdGaps": ["高并发压测证据不足"],
+      "riskPatterns": ["量化结果缺少基线"]
     },
     "used": true
   },

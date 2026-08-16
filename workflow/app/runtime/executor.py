@@ -4504,72 +4504,51 @@ class RunExecutor:
             structured = hit.get("structuredContent") \
                 or hit.get("structured") or {}
             if not isinstance(structured, dict) or not structured:
-                # Compatibility for legacy rows written before structuredContent.
-                return {"summary": str(hit.get("content") or "")[:400]}
+                return {}
             if hit.get("type") == "JOB_PROFILE":
                 sample_count = structured.get("sampleCount")
                 return {
-                    "jobKey": structured.get("jobKey"),
-                    "jobCategory": structured.get("jobCategory"),
                     "sampleCount": sample_count
                     if isinstance(sample_count, int) else None,
-                    "stableRequirements": bounded_list(
-                        structured, "stableRequirements", limit=5,
-                        item_chars=120),
-                    "commonGaps": bounded_list(
+                    "commonJdGaps": bounded_list(
                         structured, "commonGaps", limit=4, item_chars=120),
                     "commonRiskPatterns": bounded_list(
                         structured, "commonRiskPatterns", limit=4,
                         item_chars=100),
-                    "unsupportedClaimPatterns": bounded_list(
-                        structured, "unsupportedClaimPatterns", limit=4,
-                        item_chars=120),
                 }
 
-            features = structured.get("resumeFeatures")
-            features = features if isinstance(features, dict) else {}
-            project_count = features.get("projectCount")
-            support_ratio = structured.get("evidenceSupportRatio")
             return {
-                "jobKey": structured.get("jobKey"),
-                "jobCategory": structured.get("jobCategory"),
-                "runType": structured.get("runType"),
-                "resumeFeatures": {
-                    "skills": bounded_list(
-                        features, "skills", limit=8, item_chars=60),
-                    "projectCount": project_count
-                    if isinstance(project_count, int) else None,
-                    "hasPublicUrl": bool(features.get("hasPublicUrl")),
-                },
-                "verifiedMatches": bounded_list(
-                    structured, "verifiedMatches", limit=3, item_chars=120),
                 "jdGaps": bounded_list(
                     structured, "jdGaps", limit=3, item_chars=120),
-                "unsupportedClaims": bounded_list(
-                    structured, "unsupportedClaims", limit=3,
-                    item_chars=120),
                 "riskPatterns": bounded_list(
                     structured, "riskPatterns", limit=3, item_chars=100),
-                "evidenceSupportRatio": support_ratio
-                if isinstance(support_ratio, (int, float)) else None,
             }
 
         lines = [
             "以下仅用于校准证据检查，不是当前候选人的事实或结论；必须以当前简历/JD/工具证据为准。",
         ]
         if profiles:
-            lines.extend([
-                "[长期岗位画像|JSON]",
-                json.dumps(prompt_view(profiles[0]), ensure_ascii=False,
-                           separators=(",", ":")),
-            ])
+            profile_view = prompt_view(profiles[0])
+            if profile_view.get("commonJdGaps") \
+                    or profile_view.get("commonRiskPatterns"):
+                lines.extend([
+                    "[长期岗位画像|JSON]",
+                    json.dumps(profile_view, ensure_ascii=False,
+                               separators=(",", ":")),
+                ])
         if recent_cases:
-            lines.extend([
-                "[近期同岗位案例|JSON]",
-                json.dumps([prompt_view(hit) for hit in recent_cases],
-                           ensure_ascii=False, separators=(",", ":")),
-            ])
-        block = "\n".join(lines) if used else ""
+            recent_views = [prompt_view(hit) for hit in recent_cases]
+            recent_views = [
+                view for view in recent_views
+                if view.get("jdGaps") or view.get("riskPatterns")
+            ]
+            if recent_views:
+                lines.extend([
+                    "[近期同岗位案例|JSON]",
+                    json.dumps(recent_views, ensure_ascii=False,
+                               separators=(",", ":")),
+                ])
+        block = "\n".join(lines) if len(lines) > 1 else ""
         return block, audit
 
     @staticmethod
@@ -4688,41 +4667,6 @@ class RunExecutor:
                 normalized_jd.encode("utf-8")).hexdigest()[:20]
             job_key = job_category or f"JD:{jd_fingerprint}"
 
-            parsed = arts.get("resumeFacts") \
-                if isinstance(arts.get("resumeFacts"), dict) else {}
-            skills = [
-                str(value).strip()[:60]
-                for value in (parsed.get("skills") or [])
-                if str(value).strip()
-            ][:12]
-            projects = parsed.get("projects") or []
-            resume_features = {
-                "skills": skills,
-                "projectCount": len(projects) if isinstance(projects, list) else 0,
-                "hasPublicUrl": bool(re.search(
-                    r"https?://|github\.com|gitee\.com",
-                    self.request.resumeText or "", re.IGNORECASE)),
-            }
-
-            verified_matches: List[str] = []
-            unsupported_claims: List[str] = []
-            for item in (arts.get("evidence") or []):
-                if not isinstance(item, dict):
-                    continue
-                text = str(item.get("text") or item.get("claim") or "").strip()
-                if not text:
-                    continue
-                target = verified_matches if item.get("verified") is True \
-                    else unsupported_claims if item.get("verified") is False else None
-                if target is not None and text[:180] not in target:
-                    target.append(text[:180])
-            for item in (arts.get("conflicts") or []):
-                if not isinstance(item, dict):
-                    continue
-                text = str(item.get("claim") or item.get("key") or "").strip()
-                if text and text[:180] not in unsupported_claims:
-                    unsupported_claims.append(text[:180])
-
             coverage = arts.get("jdCoverage") \
                 if isinstance(arts.get("jdCoverage"), dict) else {}
             gaps: List[str] = []
@@ -4741,33 +4685,30 @@ class RunExecutor:
                 if str(value or "").strip():
                     risk_patterns.append(str(value).strip()[:120])
 
-            recent_structured = {
-                "memoryKind": "recent_job_case",
-                "jobKey": job_key,
-                "jobCategory": job_category or None,
-                "jdFingerprint": jd_fingerprint,
-                "runType": self.request.runType,
-                "resumeFeatures": resume_features,
-                "verifiedMatches": verified_matches[:6],
-                "jdGaps": gaps[:6],
-                "unsupportedClaims": unsupported_claims[:6],
-                "riskPatterns": risk_patterns[:6],
-                "piiExcluded": True,
-                "rawResumeExcluded": True,
-                "derivedFromRunId": self.request.runId,
-            }
-            recent_content = (
-                f"岗位={job_key}; 技能特征={', '.join(skills[:8]) or '无'}; "
-                f"已核验匹配={'; '.join(verified_matches[:3]) or '无'}; "
-                f"JD缺口={'; '.join(gaps[:3]) or '无'}; "
-                f"待核验={'; '.join(unsupported_claims[:3]) or '无'}; "
-                f"风险类型={'; '.join(risk_patterns[:3]) or '无'}")[:1200]
-            await self._queue_memory_write(
-                type_="RECENT_CASE", owner_scope="USER",
-                content=recent_content, structured=recent_structured,
-                source="recent_job_case",
-                source_id=f"recent_case:{job_key}:{self.request.runId}",
-                confidence=0.85, ttl_days=30)
+            # A recent case with neither a JD gap nor a risk signal has no
+            # reusable business information and would only add empty context.
+            if gaps or risk_patterns:
+                recent_structured = {
+                    "memoryKind": "recent_job_case",
+                    "jobKey": job_key,
+                    "jobCategory": job_category or None,
+                    "jdFingerprint": jd_fingerprint,
+                    "jdGaps": gaps[:6],
+                    "riskPatterns": risk_patterns[:6],
+                    "piiExcluded": True,
+                    "rawResumeExcluded": True,
+                    "derivedFromRunId": self.request.runId,
+                }
+                recent_content = (
+                    f"岗位={job_key}; "
+                    f"JD缺口={'; '.join(gaps[:3]) or '无'}; "
+                    f"风险类型={'; '.join(risk_patterns[:3]) or '无'}")[:1200]
+                await self._queue_memory_write(
+                    type_="RECENT_CASE", owner_scope="USER",
+                    content=recent_content, structured=recent_structured,
+                    source="recent_job_case",
+                    source_id=f"recent_case:{job_key}:{self.request.runId}",
+                    confidence=0.85, ttl_days=30)
 
             requirements = arts.get("jdRequirements") \
                 if isinstance(arts.get("jdRequirements"), dict) else {}
@@ -4788,7 +4729,6 @@ class RunExecutor:
                 "stableRequirements": stable_requirements,
                 "commonGaps": gaps[:8],
                 "commonRiskPatterns": risk_patterns[:8],
-                "unsupportedClaimPatterns": unsupported_claims[:8],
                 "piiExcluded": True,
                 "rawResumeExcluded": True,
                 "derivedFromRunIds": [self.request.runId],
@@ -4809,7 +4749,11 @@ class RunExecutor:
                 "agent.completed", agent_id="MemoryService",
                 payload={"durationMs": 0, "llmCalls": 0, "toolCalls": 0,
                          "written": len(self.pending_memory_writes),
-                         "types": ["RECENT_CASE", "JOB_PROFILE"]})
+                         "types": sorted({
+                             str(item.get("type") or "")
+                             for item in self.pending_memory_writes
+                             if item.get("type")
+                         })})
         except Exception as exc:
             logger.info("business memory write-back skipped: %s", exc)
             await self.emitter.emit(
