@@ -352,7 +352,9 @@ async def _model_answer(
         for item in payload.get("citations") or []:
             if isinstance(item, dict):
                 try:
-                    citations.append(SourceRef(**item))
+                    citation = SourceRef(**item)
+                    if citation.sourceId or citation.quote or citation.uri:
+                        citations.append(citation)
                 except Exception:
                     continue
         if not citations:
