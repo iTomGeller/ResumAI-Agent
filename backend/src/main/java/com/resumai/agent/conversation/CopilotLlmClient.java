@@ -127,6 +127,10 @@ public class CopilotLlmClient {
         body.put("temperature", 0.2);
         body.put("max_tokens", 1000);
         body.put("response_format", Map.of("type", "json_object"));
+        // DeepSeek thinking mode rejects required native tool selection and
+        // is unnecessary for this short JSON Copilot path. Keep this aligned
+        // with workflow/app/runtime/llm.py's provider compatibility rule.
+        body.put("thinking", Map.of("type", "disabled"));
         body.put("stream", stream);
         if (stream) {
             body.put("stream_options", Map.of("include_usage", true));
