@@ -79,16 +79,28 @@ public class CopilotLlmClient {
             List<Map<String, Object>> evidence = new ArrayList<>();
 
             if (!tools.isEmpty()) {
-                Map<String, Object> firstBody = requestBody(messages, false);
-                firstBody.put("tools", tools);
-                firstBody.put("tool_choice", "BACKGROUND_QUERY".equalsIgnoreCase(
-                        String.valueOf(input.get("disposition"))) ? "required" : "auto");
-                // Several OpenAI-compatible providers reject response_format
-                // while native tools are present.
-                firstBody.remove("response_format");
-                Map<String, Object> assistant = complete(firstBody);
-                List<Map<String, Object>> toolCalls = mapList(assistant.get("tool_calls"));
-                if (!toolCalls.isEmpty()) {
+                // A documentation lookup commonly needs discovery followed by
+                // retrieval. Allow two generic model-selected ReAct rounds;
+                // no server or tool name is encoded in this loop.
+                for (int round = 0; round < 2; round++) {
+                    Map<String, Object> toolBody = requestBody(messages, false);
+                    toolBody.put("tools", tools);
+                    toolBody.put("parallel_tool_calls", false);
+                    toolBody.put("tool_choice", round == 0
+                            && "BACKGROUND_QUERY".equalsIgnoreCase(
+                            String.valueOf(input.get("disposition")))
+                            ? "required" : "auto");
+                    // Several OpenAI-compatible providers reject response_format
+                    // while native tools are present.
+                    toolBody.remove("response_format");
+                    Map<String, Object> assistant = complete(toolBody);
+                    List<Map<String, Object>> toolCalls = mapList(assistant.get("tool_calls"));
+                    if (toolCalls.isEmpty()) {
+                        Map<String, Object> payload = parsePayload(
+                                String.valueOf(assistant.getOrDefault("content", "")), evidence);
+                        emitWholeAnswer(payload, sink);
+                        return Optional.of(payload);
+                    }
                     messages.add(assistantMessage(assistant, toolCalls));
                     Map<String, Object> call = toolCalls.getFirst();
                     Map<String, Object> function = mapValue(call.get("function"));
@@ -101,11 +113,6 @@ public class CopilotLlmClient {
                             "tool_call_id", String.valueOf(call.getOrDefault("id", "")),
                             "name", name,
                             "content", clip(objectMapper.writeValueAsString(result), 8000)));
-                } else {
-                    Map<String, Object> payload = parsePayload(
-                            String.valueOf(assistant.getOrDefault("content", "")), evidence);
-                    emitWholeAnswer(payload, sink);
-                    return Optional.of(payload);
                 }
             }
 
