@@ -451,7 +451,7 @@ ReportAgent 与前面的 Specialist 不同：provider function schema 先约束�
 
 | Agent | 作用 | 最新100份中的实际情况 |
 |---|---|---|
-| CoordinatorAgent | 根据 runType、目标产物、现有产物和简历信号生成计划；执行后可动态 Replan | 全量评估走确定性的 artifact backward-chain，不额外花一次 Coordinator LLM；真实 `agent.selected` 事件仍由它产生 |
+| CoordinatorAgent | 根据目标产物、现有产物和简历信号生成一次初始计划与预算 | 全量评估走确定性的 artifact backward-chain；运行期间不重新规划；真实 `agent.selected` 事件仍由它产生 |
 | deterministic preflight（不是 Agent） | `parse_resume` 生成 `resumeFacts/parsedResume`；JD 召回与归一化生成 `jdMatches/effectiveJd/jdRequirements` | 在 Agent dispatch 前完成，不产生额外 Agent 身份或 Agent LLM 调用 |
 
 因此，当前系统只有六个业务 Agent：一个 Coordinator 控制面、四个 Specialist/校准 Agent和一个唯一 Report terminal。一份完整评估通常执行后五个 LLM Agent，Coordinator 的确定性规划不等于 Provider 调用。最新批次的常见路由只有四种：
@@ -1384,474 +1384,128 @@ TTL 由受控回放确定，不使用时间高度集中的线上压测记录：
 
 ---
 
-## 4. LangGraph 如何实现这套多 Agent 编排
+## 4. LangGraph 如何实现当前多 Agent 编排
 
-### 4.1 图结构
+### 4.1 生产执行路径
 
-代码不是用 LangGraph 预置的“聊天团队”，而是自己定义 `StateGraph(RuntimeGraphState)`：
-
-![LangGraph控制流：Send并行、Reducer汇聚、Command Replan与checkpoint恢复](assets/multi-agent/langgraph-flow.svg)
-
-图中的 `observe_plan/dispatch/merge/replan/finalize` 都是 **LangGraph 控制节点名，不是新增的 Agent**。项目只有一套 Coordinator 规划逻辑：`_observe_plan_node()` 内部创建 `Coordinator`，由它生成 `plan`、`parallelGroups` 和 `budgetPlan`，然后进入 `dispatch`。
+当前产品只有完整简历评估入口。Coordinator 在 Run 开始时完成一次初始规划，运行期间不再修改计划：
 
 ```text
-Coordinator 规划（代码节点名 observe_plan）
-        ↓
-dispatch 并行派发 Specialist
+START
+  → observe_plan（Coordinator：初始计划、并行组、预算）
+  → dispatch
+  → Send(TechAgent) ┐
+     Send(ProjectAgent) ├→ merge
+     Send(RiskAgent) ┘
+  → dispatch
+  → EvidenceAgent
+  → merge（证据仲裁和检查点）
+  → dispatch
+  → ReportAgent
+  → merge
+  → dispatch
+  → finalize
+  → END
 ```
 
-### 4.2 StateGraph：图控制状态与业务状态如何分工
+没有 Dynamic Replan、Agent handoff 或运行中插入 Agent。临时 LLM、工具和网络失败由调用层有限重试处理，Agent 最终失败则降级；证据不足由 Evidence Gate 限制最终报告，不重新运行 Specialist。
 
-先不看字段定义，直接看 2026-08-05 在新 ECS `8.134.237.153` 上跑出的 `senior_backend_004.pdf`。这次 Run 的 ID 是 `run-00391a62-629d-47e6-a759-70e65648877b`，最终 67 分、`INTERVIEW_RECOMMEND`，Runtime 48.900s。完整事件和 Context Audit 回放见 [新 ECS 单份简历：LangGraph 真实编排回放](../reports/langgraph_concrete_run_20260805/LANGGRAPH_CONCRETE_RUN.md)。
+### 4.2 RuntimeGraphState 保存什么
 
-```text
-Coordinator 预处理并规划（没有 Coordinator LLM 调用）
-    parse_resume + jd_match_search
-    计划：[Tech, Project, Risk] → [Evidence] → [Report]
-        ↓
-group 1 / token=1：Tech、Project、Risk 同时开始
-    实际返回顺序：Risk 10.534s → Project 15.612s → Tech 19.373s
-        ↓
-Reducer 收齐，merge 按 Tech → Project → Risk 的计划顺序写 artifacts
-        ↓
-Replan 检查：replanned=false，nextGroupIndex=1
-        ↓
-group 2 / token=2：Evidence 9.377s → merge → Replan=false
-        ↓
-group 3 / token=3：唯一 ReportAgent 生成完整结构化报告
-        ↓
-merge → Replan=false → MemoryService → finalize
-```
+`RuntimeGraphState` 只保存 LangGraph 跨节点需要的控制状态：
 
-这里容易混淆三种状态：
-
-1. `RuntimeGraphState` 是 LangGraph 的流程控制表，记录当前走到哪个并行组、下一步去 `merge`、`replan` 还是 `finalize`。
-2. `execution_snapshot` 是嵌在图状态里的 `RunExecutor` 恢复包，保存计划、预算、工具账本和 SharedState 等原 Runtime 数据。
-3. `execution_snapshot.sharedState.artifacts` 才是 Tech、Project、Risk、Evidence、Report 共同生产和消费的业务产物库。
-
-项目里的 `RuntimeGraphState` 实际字段及其使用位置如下：
-
-| 字段 | 由哪个节点写入 | 在本项目中的真实含义 |
-|---|---|---|
-| `run_id` | 初始输入 | Java 控制面生成的 Run ID；同时用作 LangGraph `thread_id` |
-| `execution_snapshot` | `observe_plan`、`dispatch`、`merge`、`replan`、`finalize` | `RunExecutor.export_snapshot()` 的结果；进程替换或故障恢复时由 `_restore_snapshot()` 还原 |
-| `dispatch_agents` | `dispatch` | 本次要 fan-out 的 Agent ID，例如 `['TechAgent', 'ProjectAgent', 'RiskAgent']` |
-| `group_token` | `dispatch` | 当前并行组编号；`merge` 用它从累计的 `agent_results` 中筛出本组结果 |
-| `conflicts_before` | `dispatch` | 本组开始前 `artifacts.conflicts` 的条数；Replan 用执行前后差值判断是否产生新冲突 |
-| `agent_results` | 每个 `agent` 节点，经 Reducer 追加 | 所有 `Send` 子任务的运行回执；既含成功的 `AgentOutput`，也含异常类型、预算异常和耗时 |
-| `group_ok` | `merge` | 代码取值是 `any_success`：本组至少一个 Agent 有有效输出即为 `true`，并不表示本组所有 Agent 都成功 |
-| `consecutive_failures` | `merge` | 只有整组没有任何成功输出才加 1；只要本组至少一个成功就清零；连续两组全失败时追加 `consecutive_failures` 降级原因并补终结 Agent |
-| `replanned` | `replan` | 本次进入 `replan` 节点后是否真的改写了剩余计划；累计次数不在这里，而在快照的 `replanCount` |
-| `done` | `dispatch`、`finalize` | 已没有未执行并行组时为 `true`，路由进入 `finalize` |
-| `result` | `finalize` | 最终返回 Java 控制面的 Run 结果，包括 `status`、`answer`、`sharedState`、预算/耗时指标、版本信息和可选 `structuredReport` |
-
-`execution_snapshot` 最直接的定义是：**重新创建一个 `RunExecutor` 对象时，把它恢复到中断前所需的全部数据。**
-
-LangGraph checkpoint 和 `execution_snapshot` 解决的是两个不同问题：
-
-| 恢复数据 | 回答的问题 | 本项目中的例子 |
-|---|---|---|
-| LangGraph checkpoint | 流程接下来执行哪个图节点？ | 下一节点是 `replan`、`dispatch` 还是 `finalize` |
-| `execution_snapshot` | 新创建的 RunExecutor 应恢复成什么状态？ | 已跑完哪些 Agent、下一组下标、已合并产物、剩余预算、工具调用账本元数据 |
-
-这里的“恢复包”不等于“把所有会话和所有工具返回值复制一份”。本项目把这三类数据分开保存：
-
-| 数据 | 真正的数据源 | 恢复时怎么用 |
-|---|---|---|
-| 完整会话消息 | MySQL `conversation_message` | Java 每次创建或恢复 Runtime 请求时重新读取最近 12 条 |
-| 当前简历、JD、会话摘要、目标 | MySQL `conversation_session` | Java 重新组装 `resumeText/jobDescription/conversationSummary/currentGoal` |
-| 本次执行进度 | `execution_snapshot` + LangGraph checkpoint | 恢复已执行 Agent、下一组、artifacts、预算、Guard 和工具账本 |
-
-`export_snapshot()` 虽然额外写了 `contextSummary` 和最后 8 条 `recentMessages`，但当前 `_restore_snapshot()` 并不靠这两个字段重建会话；真正恢复时，Java 的 `buildRuntimePayload()` 会从 MySQL 重新发送会话摘要和最近 12 条消息。它们在 snapshot 中只是冗余的现场记录，不是完整聊天档案。这样可以避免快照与会话表形成两套互相过期的事实源。
-
-`toolCallLedger` 也不保存 Tool 原始结果。当前每条只有：
-
-```text
-toolCallId / tool / status / durationMs / retries
-```
-
-`restore_ledger()` 恢复时明确把 `result=None`。这个账本主要用于恢复调用次数、失败统计和 Trace 对账；“已完成 Agent 不再执行”主要由 `executedAgents`、LangGraph 已完成的 `Send` 结果和 checkpoint 保证，不是靠 ledger 缓存结果。
-
-真正会影响后续 Agent 的 Tool 结果，会在成功后转成 SharedState artifact：例如 `parse_resume → resumeFacts`、`calculate_jd_coverage → jdCoverage`、`check_timeline → timelineCheck`、候选人外链 MCP → `mcpEvidence`。只服务当前 Agent 推理的临时检索结果进入该 Agent 的工具观察，最后由 AgentOutput 浓缩成 findings；没有必要把整段原始返回永久塞进恢复包。完整 Tool 调用审计则由 `run_event` 和 Context Audit 负责。
-
-之所以不能只保存 LangGraph 节点，是因为 `plan`、`parallel_groups`、`executed`、`state`、`budget`、`guard`、`tools` 等数据仍然是 `RunExecutor` 对象里的可变成员，并不是 LangGraph 自动认识的字段。`export_snapshot()` 把这些成员序列化成一个 dict，恢复时 `_hydrate()` 调用 `_restore_snapshot()`，再分别还原回这些成员。
-
-当前代码主要保存：
-
-```text
-plan / parallelGroups / nextPlanIndex / executedAgents
-budgetPlan / budget / agentCounters
-sharedState / finalAnswer / degradedReasons / failureNotes
-loopGuardState / toolCallLedger（只含调用元数据，不含 Tool result）
-promptVersions / skillVersions / policyId
-memoryHits / failureHits / memoryTraces
-contextSummary / recentMessages / planMeta / revisionReuse
-replanCount / agentTimings / arbitrated / reportAgentFailed / createdAt
-```
-
-这不是设想值。本次 Run 结束后，MySQL 里的最后一份 `execution_snapshot` 实测为 96,202 个 JSON 字符，其中 `nextPlanIndex=3`、`executedAgents` 有 5 个、`sharedState.artifacts` 有 15 个顶层键、`toolCallLedger` 有 9 条调用元数据、`replanCount=0`，并且已经带有 `finalAnswer`。PostgreSQL 同一个 `thread_id` 上有 17 个 LangGraph checkpoint、74 条 checkpoint writes 和 28 个 channel blobs。
-
-例如一次完整评估的计划是：
-
-```text
-第 1 组：[TechAgent, ProjectAgent, RiskAgent]
-第 2 组：[EvidenceAgent]
-第 3 组：[ReportAgent]
-```
-
-第 1 组 merge 完成、进入下一次 dispatch 前，如果 Python 进程退出，checkpoint 中的 `execution_snapshot` 大致会包含：
-
-```python
-{
-    "nextPlanIndex": 1,
-    "executedAgents": ["TechAgent", "ProjectAgent", "RiskAgent"],
-    "sharedState": {
-        "artifacts": {
-            "technicalFindings": [...],
-            "projectFindings": [...],
-            "risks": [...],
-        }
-    },
-    "budget": {
-        "llmCalls": "已消耗次数",
-        "toolCalls": "已消耗次数",
-    },
-    "toolCallLedger": ["三个专家已完成工具调用的 ID/名称/状态/耗时；不含结果"],
-    "replanCount": 0,
-}
-```
-
-进程重启后会发生：
-
-```text
-PostgreSQL checkpoint 告诉 LangGraph：从 dispatch 继续
-        ↓
-_hydrate() 读取 execution_snapshot
-        ↓
-恢复 executedAgents、SharedState、预算、Loop Guard 和 Tool ledger
-        ↓
-dispatch 读取 nextPlanIndex=1，只派发 EvidenceAgent
-```
-
-#### 4.2.1 恢复不是恢复 Python 调用栈
-
-进程崩溃后，旧的 coroutine、HTTP 连接、模型流式响应和函数局部变量都不存在了。当前实现采用的是“重建对象 + 从持久化节点重新调用”：
-
-```text
-Java 启动恢复扫描
-  ↓
-从 conversation_session 读取简历、JD、摘要、目标
-从 conversation_message 读取最近 12 条消息
-从 agent_run.execution_snapshot 读取最近一次组边界恢复包
-  ↓
-重新创建 AgentRunRequest 和 LangGraphRunExecutor
-  ↓
-LangGraph 按 runId/thread_id 从 PostgreSQL 读取 graph state、next task、pending writes
-  ↓
-_hydrate() 优先读取 PostgreSQL graph state 内的 execution_snapshot；
-没有时才使用 Java 传来的 MySQL resumeSnapshot
-  ↓
-_restore_snapshot() 把数据写回新 RunExecutor 的成员变量
-  ↓
-LangGraph 重新调用下一个未完成节点的 Python 函数
-```
-
-因此它不是从某一行 Python 代码继续，而是从 `dispatch/agent/merge/replan/finalize` 这样的节点边界重新进入。
-
-#### 4.2.2 例一：第 1 组已经 merge，准备跑 Evidence 时崩溃
-
-此时 MySQL 组边界 snapshot 和 PostgreSQL graph checkpoint 都已经存在：
-
-```text
-nextPlanIndex = 1
-executedAgents = [TechAgent, ProjectAgent, RiskAgent]
-artifacts = technicalFindings + projectFindings + risks + 前置简历/JD产物
-budget = 已发生的 LLM/tool/token/cost 计数
-loopGuardState = 已访问 Agent、Tool signature、已完成 Agent
-toolCallLedger = 调用 ID/名称/状态/耗时/重试次数，不含 result
-replanCount = 0
-```
-
-新进程恢复后，`dispatch` 读取第 2 组，只启动 EvidenceAgent。前三个 Agent 不会再跑，它们的 Tool 也不会再跑；Evidence 直接读取已经合并的三个 findings/risk artifacts。
-
-#### 4.2.3 例二：EvidenceAgent 已经返回，但还没 merge 时崩溃
-
-`_agent_node` 完成时会把两样东西作为 LangGraph pending write 同步写入 PostgreSQL：
-
-```text
-AgentOutput：Evidence 的结构化业务输出
-runtimeSnapshot：该 Agent 完成时看到的预算、Tool ledger、Guard 等 RunExecutor 状态
-```
-
-如果进程在随后 `merge` 前崩溃，Java 仍可用上一组的 MySQL snapshot 发起恢复；LangGraph PostgreSQL 知道 Evidence 的 `agent` task 已经成功，不会重跑 Evidence，而是继续进入 `merge`。`merge` 从 pending write 取回 `AgentOutput`，再正式写入 `evidence/conflicts/recommendations` artifacts。
-
-这解释了两种“已完成”状态的区别：
-
-- Agent 节点已完成、尚未 merge：结果在 PostgreSQL `agent_results` pending write 中。
-- merge 已完成：结果已经进入 `execution_snapshot.sharedState.artifacts`，并在 `replan` 边界同步镜像到 MySQL。
-
-#### 4.2.4 例三：Agent 内部 Tool 或 LLM 调到一半时崩溃
-
-这是当前实现最重要的粒度边界。`_run_agent()` 内部的 pre-step、`load_skill`、MCP、Provider 多轮调用都不是独立 LangGraph 节点。只要整个 `_agent_node` 还没有返回，就没有可复用的 Agent pending write。
-
-例如唯一 ReportAgent 已发出 Provider 请求、但 `_agent_node` 尚未返回时 Python 进程崩溃，LangGraph 只知道“ReportAgent 节点未完成”，不会从模型调用内部继续，而会重新进入整个 ReportAgent 节点。先前 Provider attempt 仍可能留在 Context Audit 中，但不等于可恢复的执行状态。
-
-Tool 也是同样粒度：
-
-- Tool 属于已经完成的 Agent：整个 Agent 节点被复用，因此 Tool 不会重跑。
-- Tool 已返回但所在 Agent 尚未完成：Tool 原始 result 没有独立 checkpoint，该 Agent 重跑时 Tool 可能再次执行。
-- 确定性只读 Tool 可以依靠内容哈希缓存减少重复；公网 MCP/LLM 仍可能产生第二次真实调用。
-
-所以当前系统是 **Agent 节点级恢复 + 并行 pending-write 复用**，不是 Tool-call 级恢复，更不是 token/call-stack 级恢复。若未来加入发送邮件、修改外部记录等有副作用 Tool，就必须把该 Tool 拆成独立持久化节点，或按 idempotency key 持久化完整执行回执；当前只含元数据的 `toolCallLedger` 不足以保证这种副作用 exactly-once。
-
-#### 4.2.5 当前自动恢复还有一个前置条件
-
-Java 的 `recoverAfterRestart()` 只有在 `agent_run.execution_snapshot` 非空时才自动调用 `resumeAfterRestart()`。MySQL snapshot 是在每组 `merge → replan` 安全边界写入的。因此：
-
-- 至少完成过一个组边界：Java 有 MySQL snapshot，可自动重挂；PostgreSQL 再提供更细的 graph task/pending-write 状态。
-- 第一组尚未 merge，整个 Python Runtime 就崩溃：PostgreSQL 可能已有图 checkpoint 或部分 Send pending writes，但 Java 还没有 MySQL 组边界 snapshot，超过启动宽限期后当前代码会将 Run 标为 `ORPHANED_ON_RESTART`，不能宣称自动无损恢复。
-
-这也是部署脚本要求等到所有活跃 Run 都 `hasCheckpoint=true` 才认为 `readyToRestart` 的原因。
-
-#### 4.2.6 `_restore_snapshot()` 真正恢复了什么
-
-| 类别 | 实际恢复字段 |
+| 字段 | 当前用途 |
 |---|---|
-| 计划进度 | `plan`、`parallelGroups`、`budgetPlan`、`nextPlanIndex`、`executedAgents` |
-| 业务状态 | `sharedState`，包括 artifacts、Agent outputs、冲突等 |
-| 预算 | LLM总次数、分 scope 次数/保留额、Tool次数、tokens、cache tokens、cost |
-| 防循环 | Tool/plan/error signatures、Agent访问次数、completed Agents、结论hash |
-| Tool账本 | ID、名称、状态、耗时、重试次数；`result=None` |
-| 运行判定 | `finalAnswer`、`degradedReasons`、`failureNotes`、`replanCount`、`arbitrated`、`reportAgentFailed` |
-| 运行统计 | `agentTimings`、`agentCounters`、Memory hits/failure hits/traces |
-| 计划元数据与跨 revision 复用 | `planMeta`、`revisionReuse` |
+| `run_id` | 当前 Run 标识，也是 LangGraph `thread_id` |
+| `execution_snapshot` | RunExecutor 可序列化快照，用于新进程恢复执行器内部状态 |
+| `group_token` | 标识本次并行派发组，防止合并其他组结果 |
+| `dispatch_agents` | 当前组实际派发的 Agent 顺序 |
+| `agent_results` | `Send` 分支返回、等待 merge 的临时结果 |
+| `consecutive_failures` | 连续整组失败计数，达到上限后降级收口 |
+| `done` | 是否已经没有下一组 |
+| `result` | finalize 写入的最终 Run 结果 |
 
-`runId/contextSummary/recentMessages/promptVersions/skillVersions/policyId/createdAt` 虽然也被导出到 snapshot，但当前 `_restore_snapshot()` 不读取它们；它们是审计元数据，不是恢复驱动字段。尤其 Prompt/Skill 版本目前没有被恢复时强制锁定，部署后未完成 Agent 可能使用新进程中的当前版本，这一点不能包装成严格的 byte-for-byte replay。
+已经删除 `replanned`、`replanCount`、低 confidence 信号和 Replan 节点。
 
-所以它不是最终报告，也不是当前并行组的返回列表：
+### 4.3 LangGraph checkpoint 与 execution_snapshot 的分工
 
-- `agent_results` 是 `Send` 子节点交给 `merge` 的原始运行回执。
-- `execution_snapshot.sharedState.artifacts` 是已经由 `merge` 校验并写入的正式业务产物。
-- `result` 是所有组结束后 `finalize` 生成的最终 Run 返回值。
+```text
+LangGraph checkpoint
+回答：下一个图节点是什么？
+例如：dispatch、agent、merge 或 finalize
 
-没有 `execution_snapshot`，LangGraph 虽然知道下一步应该进入 `dispatch`，但新 `RunExecutor` 不知道前三个 Agent 已经完成，也不知道它们留下的产物和已经消耗的预算，只能丢状态或从头执行。这一层恢复包正是“保留原 RunExecutor、只给外层加 LangGraph 编排”的关键。
-
-以这次真实 Run 的第一组 dispatch 为例，图状态可以简化为：
-
-```python
-{
-    "run_id": "run-00391a62-629d-47e6-a759-70e65648877b",
-    "group_token": 1,
-    "dispatch_agents": ["TechAgent", "ProjectAgent", "RiskAgent"],
-    "conflicts_before": 0,
-    "done": False,
-    "execution_snapshot": {
-        "parallelGroups": [
-            ["TechAgent", "ProjectAgent", "RiskAgent"],
-            ["EvidenceAgent"],
-            ["ReportAgent"],
-        ],
-        "nextPlanIndex": 1,
-        "executedAgents": [],
-        "sharedState": {"artifacts": {"resumeFacts": {...}, "effectiveJd": {...}}},
-        "budget": {...},
-        "toolCallLedger": [],
-        "replanCount": 0,
-    },
-}
+execution_snapshot
+回答：重新创建 RunExecutor 后，内部成员恢复成什么？
+例如：plan、parallelGroups、nextGroupIndex、executedAgents、
+SharedState artifacts、预算消耗、工具账本和最终答案
 ```
 
-LangGraph 只接管 `Coordinator 规划（observe_plan 节点）→ dispatch → agent/merge → replan → finalize` 这些可持久化节点边界。单个 Agent 内部如何拼 Prompt、调用 LLM/工具、执行 Skill、读 Memory、扣预算、校验 `AgentOutput`，仍由原 `RunExecutor` 实现。因此这是给现有 Runtime 加一层可恢复编排，不是重写 Agent 执行内核。
+LangGraph 不恢复 Python 调用栈。恢复时重新进入持久化节点边界，再通过 `execution_snapshot` 还原 RunExecutor 的可变成员。已完成的并行分支结果由 checkpointer 保存，不需要重新调用已经成功的 Agent。
 
-### 4.3 Send：并行 Agent 节点
+### 4.4 Send 与 Reducer
 
-`dispatch` 先从 `parallel_groups[next_group_index]` 取出尚未执行且通过 Loop Guard 的 Agent，记录本组开始前的冲突数，然后返回：
+`dispatch` 对当前组返回多个 `Send("agent", ...)`。Tech、Project、Risk 在同一个 super-step 并行运行，各自读取受限 SharedState 视图。
 
-```python
-return [
-    Send("agent", {
-        "agent_id": agent_id,
-        "group_token": token,
-        "execution_snapshot": snapshot,
-    })
-    for agent_id in dispatch_agents
-]
+`agent_results` 使用 reducer 做列表拼接。merge 再按 `dispatch_agents` 的原始顺序应用 `AgentOutput`，保证并发完成顺序不会改变 canonical artifact store 的写入顺序。
+
+### 4.5 merge 后走哪里
+
+每个并行组 merge 后执行三件事：
+
+1. 按计划顺序合并 AgentOutput；
+2. EvidenceAgent 运行过时完成冲突仲裁；
+3. 将最新 `execution_snapshot` 镜像到 MySQL，并由 LangGraph 同步提交 PostgreSQL checkpoint。
+
+随后直接 `Command(goto="dispatch")`。dispatch 取下一组；没有下一组时进入 finalize。
+
+```text
+merge
+  → 保存 checkpoint
+  → dispatch
+      ├─ 还有组：继续 Send
+      └─ 没有组：finalize
 ```
 
-如果当前组是 Tech、Project、Risk，LangGraph 会在同一个 super-step 创建三个 `_agent_node`。每个节点都调用现有的 `_run_agent(definition)`，并用该 Agent 的 `timeout_seconds` 包一层 `asyncio.wait_for`。三者不按 Tech→Project→Risk 串行等待，也不互发自然语言消息。
+### 4.6 Evidence Gate 代替 Replan
 
-它们读取的不是整个 SharedState，而是 `SharedState.view_for(agent_id)` 生成的白名单视图：
+EvidenceAgent 核验的对象来自 `technicalFindings`、`projectFindings`、`risks` 和 `recommendations`。提取时兼容 `text/finding/claim/detail`，RiskAgent 的 `claim` 不会再被漏掉。
 
-| Agent | 实际可见的 canonical artifacts |
+Report 通过运行时后处理直接消费：
+
+- `evidence[].verified`；
+- `evidenceSupportRatio`；
+- `conflicts[].resolution`。
+
+规则如下：
+
+```text
+EvidenceAgent没有产生可核验项
+→ dataQuality最多为INSUFFICIENT
+→ 不生成overallScore
+
+存在unsupported、非keep冲突或supportRatio < 0.85
+→ dataQuality最多为PARTIAL
+→ 将相关主张加入missingEvidence
+
+证据支持率达标且无未解决冲突
+→ 保留ReportAgent给出的正常质量等级
+```
+
+这是确定性输出门禁，不依赖 Agent 自报 confidence，也不会因为简历缺少证据而重新运行前置 Agent。
+
+### 4.7 为什么删除 Dynamic Replan
+
+单次 Run 内简历和 JD 不变化，产品也没有中途用户补充。Evidence 发现“原文没有证据”后，重跑 Specialist 无法创造新证据，只会增加延迟、预算和产物覆盖复杂度。
+
+因此当前职责边界是：
+
+| 问题 | 处理方式 |
 |---|---|
-| Tech | `resumeFacts`、`jdRequirements`、`effectiveJd`、`jdCoverage`、`inputPresence` |
-| Project | `resumeFacts`、`jdRequirements`、`effectiveJd`、`inputPresence` |
-| Risk | `resumeFacts`、`timelineCheck`、`inputPresence` |
-| Evidence | 上述专家产出的 `technicalFindings`、`projectFindings`、`risks`，以及简历/JD/MCP证据 |
-| Report | 已合并的 findings、risk、evidence、conflicts、recommendations、coverage 等最终报告输入 |
-
-每个 `_agent_node` 无论成功或失败都会返回一条结构化运行回执：
-
-```python
-{
-    "groupToken": 1,
-    "agentId": "TechAgent",
-    "output": AgentOutput.model_dump() or None,
-    "errorType": None,
-    "errorMessage": None,
-    "budgetKind": None,
-    "durationMs": 18342,
-    "runtimeSnapshot": {...},
-}
-```
-
-其中 `output` 才是业务结论；`runtimeSnapshot` 用于进程故障恢复时恢复预算计数和 Tool ledger。本次 Run 的三个回执按 Risk → Project → Tech 到达，但第一组墙钟时间只取决于最慢的 Tech，约 19.4s；若串行相加则为 45.519s，这一段实际约 2.35 倍加速。
-
-### 4.4 Reducer：并行结果合并
-
-State 中的 `agent_results` 声明为：
-
-```python
-agent_results: Annotated[
-    list[dict],
-    _reduce_agent_results
-]
-```
-
-`_reduce_agent_results(left, right)` 本身只做 `left + right`，不解析业务内容，也不解决冲突。由于该列表会跨组累计，`merge` 首先用当前 `group_token` 过滤结果，再按 `dispatch_agents` 的原顺序重排。这样即使 Risk 比 Tech 先返回，正式落库顺序仍由本组 dispatch 顺序决定。
-
-随后 `merge` 对本组每一条回执执行：
-
-1. `output` 是 dict：先用 `AgentOutput.model_validate()` 做结构校验，再调用 `SharedState.apply_output()` 写入 `sharedState.artifacts`。
-2. `output` 是 `None`：根据 `budgetKind/errorType/errorMessage` 进入原 RunExecutor 的失败处理；普通 Agent 失败不会让整个 LangGraph super-step 直接崩掉。
-3. 只要至少一条有效输出，`group_ok=true` 且 `consecutive_failures=0`；整组零成功才令连续失败计数加 1。
-4. EvidenceAgent 本组执行过时，merge 后调用一次冲突仲裁。
-
-canonical artifact store 对形状和来源有明确规则：
-
-- `technicalFindings/projectFindings/risks/evidence/conflicts/recommendations` 始终按 list 语义追加，并给条目补 `byAgent`。
-- `resumeFacts/jdRequirements/parsedResume/finalReport/jdCoverage/timelineCheck` 必须保持 dict 形状。
-- 两个 dict 的同名字段值不一致时，不静默覆盖，而是把 `existing/incoming/byAgent` 写入 `artifacts.conflicts`。
-- 如果 Specialist 试图用 list 或 scalar 覆盖已有的 dict 型 `resumeFacts`，保留原 dict，并记录 `dict_shaped_artifact_type_clash`。这条保护来自项目里曾真实出现过的 ProjectAgent 把 `resumeFacts` 写成列表、导致 Evidence/Report 调用 `.get()` 失败的问题。
-
-最后 `merge` 返回 `Command(goto="replan")`，同时更新 `group_ok`、`consecutive_failures` 和新的 `execution_snapshot`。
-
-本次第一组的事件正好展示了 Reducer 与 merge 的区别：`langgraph.agent_result` 先后收到 Risk、Project、Tech，Reducer 只是追加；`merge` 再按最初 `dispatch_agents=[Tech, Project, Risk]` 的顺序校验和落 artifact。因此“谁先返回”不会改变正式产物的合并顺序。
-
-### 4.5 Command：状态更新和动态跳转
-
-项目实际评估链中的 `Command` 都是节点级控制流，不是 Agent 之间的消息：
-
-| 发生位置 | 实际 Command | 更新的关键状态 |
-|---|---|---|
-| `merge` 完成本组结果合并后 | `goto="replan"` | 写入 `group_ok`、`consecutive_failures` 和快照 |
-| `replan` 完成检查后 | `goto="dispatch"` | 写入本次 `replanned` 和快照，开始取下一并行组 |
-
-所以 `Command` 的作用可以直接读成：“把这些字段写进 checkpoint，然后从指定节点继续”。
-
-### 4.6 Dynamic Replan
-
-每个并行组 merge 后都会经过 `_replan_node`，但“进入 replan 节点”和“实际修改计划”不是一回事。实际修改前先满足三个前提：
-
-```text
-当前 runType 不是 SIMPLE_RULE_TYPES
-并且 replanCount < 2
-并且后面仍有非终结 Agent（不只剩 Report/Optimize/Interview）
-```
-
-满足前提后，`_maybe_replan()` 按以下优先级只选择第一个命中的原因：
-
-1. `handoff_requested:<Agent>`：当前 Agent 请求转交另一个尚未执行的 Agent；已执行目标会被 Loop Guard 拒绝，避免委派环。
-2. `missing_required_artifact`：根据剩余 Agent 的 `requires_artifacts` 检查 `resume_facts/jd_requirements/technical_findings/project_findings/risks/evidence_ledger` 是否存在。
-3. `tool_failed`：本组任一确定性 pre-step 或模型工具调用返回失败。
-4. `group_failure`：本组所有 Agent 都没有有效输出；注意单个 Agent 失败而同组其他 Agent 成功不会命中这一项。
-5. `new_conflict:<n>`：当前冲突条数减去 `conflicts_before` 大于 0。
-6. `low_confidence:<avg>`：最近三个 `sharedState.agentOutputs` 的平均 confidence 低于 `REPLAN_CONFIDENCE_THRESHOLD`，生产默认值为 0.55。
-
-对 `full_evaluation/jd_evaluation/backend_eval/agent_eval`，代码会创建没有 LLM Client 的 Coordinator。因此完整评估中只有两类确定性修复会真正改计划：
-
-- 缺 artifact：找到该 artifact 的尚未执行、且不在剩余计划中的 producer，插到 terminal Agent 之前，再重新计算依赖分组和预算。
-- handoff：把尚未执行的目标 Agent 插到 terminal Agent 之前，并拒绝把已执行 Agent 插回来。
-
-`tool_failed/group_failure/new_conflict/low_confidence` 仍参与条件判断，但在完整评估中不会单独触发一次 Coordinator LLM 调用；如果无法归结为缺 artifact 或 handoff，`adaptive_replan()` 返回 `None`，计划不变。只有返回了不同的剩余计划，才执行：
-
-```python
-self.replan_count += 1
-self.parallel_groups = completed_groups + adjusted["parallelGroups"]
-self.plan = self.executed + adjusted["plan"]
-```
-
-最新 100 份报告把“检查次数”和“实际改计划次数”分开统计：
-
-| 指标 | 实测值 | 含义 |
-|---|---:|---|
-| `langgraph.dispatch` | 300 | 100 个 Run 共派发 300 个组 |
-| `langgraph.reducer_merge` | 300 | 每组都完成一次结果汇聚 |
-| `langgraph.replan` | 300 | 每组 merge 后都进入一次 replan 节点 |
-| `replannedEvents` | 2 | 300 次检查中只有 2 次真的改写剩余计划 |
-| `replannedRuns` | 2/100 | 触发率 2% |
-| 单 Run 实测最大 Replan 次数 | 1 | 代码上限为 2，但这批数据最多只发生 1 次 |
-| `agent_result` | 481 | 所有 `Send` 子节点产生的回执总数 |
-| `failedAgentResults` | 0 | 481 条回执的 `output` 均非空；不是说没有业务风险或 artifact 冲突 |
-
-新 ECS 单份 Run 也验证了这个区别：三个组后分别产生一次 `langgraph.replan`，事件依次给出 `nextGroupIndex=1/2/3`，但三次都是 `replanned=false`、`replanCount=0`。Evidence 把无法核验的量化与个人贡献标为待面试核验，并不等于需要改写执行计划。
-
-### 4.7 PostgreSQL Checkpointer 与 thread_id
-
-```python
-config = {
-    "configurable": {"thread_id": request.runId},
-    "recursion_limit": 100,
-}
-
-graph.astream(
-    graph_input,
-    config,
-    stream_mode=["updates", "custom"],
-    durability="sync",
-)
-```
-
-- `thread_id = runId`：每个业务 Run 对应一个独立 LangGraph thread。
-- `AsyncPostgresSaver`：真实图 checkpoint 存 PostgreSQL。
-- `durability="sync"`：super-step 边界同步持久化后再继续。
-- PostgreSQL 不可用时 fail closed，启用 LangGraph 的 Runtime 不会静默退化到内存 saver。
-- MySQL 的 `execution_snapshot` 是 Java 控制面的审计/兼容副本，不是 LangGraph 的真实 checkpointer。
-
-最新100份 Checkpointer 数据：
-
-| 指标 | 真实值 |
-|---|---:|
-| thread 覆盖 | 100 / 100 |
-| checkpoints | 1,700 |
-| 每 Run | 17 |
-| checkpoint state P50 / P95 / Max | 1,066 / 1,596 / 1,616 bytes |
-| writes | 7,343 |
-| blobs | 2,800 |
-| channel blob 总量 | 约 210.6 MiB |
-| 孤儿父 checkpoint | 0 |
-| MySQL / PostgreSQL Run mismatch | 0 |
-
-本次单份 Run 的独立现场值是 17 个 checkpoint、74 条 writes、28 个 blobs、父链无断点；与压测中的“每 Run 17 个 checkpoint”一致。这里的 17 是 START、plan、三个 `Send` 子任务、merge、replan、后续 dispatch 和 finalize 等 super-step 边界，不是 17 个 Agent。
-
-![LangGraph与Checkpointer](../reports/project_cache100_20260803/charts/12_langgraph_runtime.svg)
-
-### 4.8 custom 流式事件
-
-图节点通过 `get_stream_writer()` 发出：
-
-```text
-langgraph.plan
-langgraph.dispatch
-langgraph.agent_result
-langgraph.reducer_merge
-langgraph.replan
-langgraph.finalize
-```
-
-`astream(..., stream_mode=["updates", "custom"])` 再转为统一 `run.progress` SSE 事件。最新100份 custom 事件覆盖 100/100；Graph 边界 `lastResult → nextDispatch` P50/P95 只有 66/119.05ms，说明 LangGraph 本身不是当前几十秒延迟的来源，主要时间仍在 LLM。
-
----
+| 临时网络、LLM、工具错误 | LLM/工具调用层有限重试 |
+| 结构化输出错误 | 当前 Agent 的 JSON/Schema 修复 |
+| Specialist 最终失败 | 保留其他结果并降级 |
+| 主张不受简历证据支持 | Evidence Gate + missingEvidence |
+| 进程宕机 | LangGraph checkpoint + execution_snapshot 恢复 |
 
 ## 5. 为什么选择当前交互形式，而不是 CrewAI / Swarm / AutoGen
 
@@ -1942,13 +1596,13 @@ AutoGen 非常适合 Agent 轮流发言、Selector 选下一位、主 Agent 与 
 | 每个 Agent 只能看到必要数据 | `_SECTION_READ_MAP` |
 | 无证据结论必须被发现 | EvidenceAgent 硬审计节点 |
 | 最终报告不能临时引入公网事实 | ReportAgent 禁止公网 MCP |
-| 缺产物、工具失败或冲突要改计划 | bounded Dynamic Replan |
+| LLM/工具调用失败 | 调用层有限重试，耗尽后保留已有结果并降级 |
 | 进程重启不能重做已完成并行兄弟节点 | PostgreSQL Checkpointer + pending writes |
 | Java 控制面仍要拥有业务状态 | MySQL 审计副本 + LangGraph PG checkpoint 分工 |
 
 LangGraph 官方持久化文档明确说明：checkpointer 在每步保存线程状态，可支持 memory、time travel 和 fault tolerance；同一 super-step 中已成功节点的 pending writes 可在其他节点失败后复用，不必重跑。[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
 
-`Send` 用于 map-reduce/fan-out，`Command` 用于同时更新状态并跳转节点，也正好对应本项目的并行 Specialist 与 Replan 控制。[LangGraph Graph API](https://docs.langchain.com/oss/python/langgraph/use-graph-api)
+`Send` 用于 map-reduce/fan-out，`Command` 用于同时更新状态并跳转节点，对应本项目的并行 Specialist、merge 后继续 dispatch 以及最终收口。[LangGraph Graph API](https://docs.langchain.com/oss/python/langgraph/use-graph-api)
 
 ---
 
@@ -2006,7 +1660,7 @@ Project 最高，是因为固定首轮消息不再被工具结果反复重写，
 | Skill | 451/451 selected→loaded→applied；selected→applied P95 142.5ms |
 | MCP fetch | 54 调用，仅4次取得内容，49次404，1次其他失败 |
 | MCP Exa（已下线的历史数据） | 4调用，4次 free-tier rate limited；现已由本地标准MCP `bing_cn.web_search` 替代 |
-| LangGraph | 100/100 custom事件，98并行组，2次Replan，0 agent result failure |
+| LangGraph（历史删除前基线） | 100/100 custom事件，98并行组；旧版曾记录2次Replan，当前版本已删除该机制 |
 
 这些数据说明 RAG、Memory、Skill 和 Graph control-plane 都是毫秒级，几十秒关键路径主要由 LLM 生成决定；公网 MCP 的主要问题是证据可用率，不是延迟总量。
 
@@ -2016,7 +1670,7 @@ Project 最高，是因为固定首轮消息不再被工具结果反复重写，
 
 一个准确、不吹过头的版本：
 
-> 我们不是让 Agent 自由群聊，而是用 LangGraph 做中心规划加并行专家的 durable workflow。Coordinator 根据目标 artifact 和简历信号确定路由，Tech、Project、Risk 通过 Send 并行执行，结果经 Reducer 合入类型化 SharedState；Evidence 做独立证据审计，Report 是唯一 terminal，并拆成 score、risk、question 三个并行 section。每个 Run 以 runId 作为 LangGraph thread_id，AsyncPostgresSaver 同步 checkpoint；MySQL 只保留业务结果和控制面审计副本。MCP 通过实时 tools/list 和 per-Agent route 注入 provider-native tool schema，Skill 在这轮压测采用 signal selection + eager body injection，Memory 则在 Run 开始时分类型召回、再按 consumer 过滤后放入 user context。100份压测里并行组 P50 相比串行求和加速 2.29 倍，100/100 checkpoint thread 一致，Replan 触发率 2%。
+> 我们不是让 Agent 自由群聊，而是用 LangGraph 实现一次规划、并行专家和确定性收口的 durable workflow。Coordinator 根据目标 artifact、简历信号和预算生成初始计划；Tech、Project、Risk 通过 Send 并行执行，结果经 Reducer 合入类型化 SharedState；Evidence 做独立证据审计，运行时据此限制 dataQuality 和 missingEvidence，单个 ReportAgent 是唯一 terminal。每个 Run 以 runId 作为 LangGraph thread_id，AsyncPostgresSaver 同步 checkpoint；MySQL 保存业务结果和控制面快照副本。MCP 通过启动期 tools/list 和 per-Agent route 注入 provider-native tool schema，Skill 采用元数据目录加按需 load_skill。我们删除了收益不足的 Dynamic Replan 和 Agent 自报 confidence，把临时故障交给 LLM/工具有限重试，把证据缺失交给 Evidence Gate。
 
 如果面试官追问为什么不用 CrewAI/AutoGen/Swarm：
 

@@ -33,7 +33,7 @@ class AgentDefinition:
 AGENT_DEFINITIONS: Dict[str, AgentDefinition] = {
     "CoordinatorAgent": AgentDefinition(
         "CoordinatorAgent", "协调者", "分析用户目标并动态选择 Agent 流水线",
-        ("planning", "routing", "replanning"),
+        ("planning", "routing"),
         task_prompt=("根据原始评估请求、简历、JD和当前共享状态选择必要的专家Agent，"
                      "分配受预算约束的执行计划；只负责控制流，不代替专家产出业务结论。"),
         skills=(),

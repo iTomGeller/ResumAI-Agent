@@ -6,8 +6,7 @@ evidence / conflicts / recommendations / agentOutputs / completedTasks /
 pendingTasks / artifacts
 
 ## Agent 输出契约
-agentId, type, claims, evidence, confidence, source, dependencies,
-requestedNextAction, createdAt
+agentId, type, claims, evidence, source, dependencies, createdAt
 
 ## 协作原则
 1. Agent 只读所需 Shared State（各自的 section 视图）
@@ -18,7 +17,7 @@ requestedNextAction, createdAt
 
 ## 并行执行
 Tech/Project/Risk 读取不相交黑板区，Coordinator 按依赖表将其分入同一并行组，
-组内 asyncio.gather 并发执行（各自只读视图），组后串行合并输出；
-requestedNextAction 委派受 LoopGuard 环检测约束。
+LangGraph 使用 Send 并发执行（各自只读视图），组后按原计划顺序串行合并输出。
+运行期间不接受 Agent handoff，也不修改初始计划。
 
 实现：`workflow/app/runtime/state.py`、`coordinator.py`、`executor.py`

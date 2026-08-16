@@ -11,7 +11,7 @@ class GuardDecision:
     triggered: bool
     kind: str = ""
     detail: str = ""
-    action: str = "continue"  # continue / replan / switch_agent / skip_step / degrade
+    action: str = "continue"  # continue / switch_agent / skip_step / degrade
 
 
 class LoopGuard:
@@ -20,7 +20,7 @@ class LoopGuard:
     Watches: duplicate tool signatures, semantically-repeated plans,
     observations with no new information, re-execution of completed agents,
     delegation cycles, repeated conclusions and repeated identical errors.
-    Escalation: replan -> switch/skip -> degrade (never infinite looping).
+    Escalation: switch/skip -> degrade (never infinite looping).
     """
 
     def __init__(self, *, max_duplicate_tool_calls: int = 2,
@@ -63,7 +63,7 @@ class LoopGuard:
         reverse = (to_agent, from_agent)
         if reverse in self._delegation_edges and edge in self._delegation_edges:
             return self._trip("delegation_cycle",
-                              f"{from_agent} <-> {to_agent} 互相委派", "replan")
+                              f"{from_agent} <-> {to_agent} 互相委派", "skip_step")
         self._delegation_edges.add(edge)
         return GuardDecision(False)
 
@@ -95,7 +95,7 @@ class LoopGuard:
                 self._observation_hashes.pop(0)
         if self._no_new_info_streak >= self.max_no_new_info:
             return self._trip("no_new_information",
-                              f"连续 {self._no_new_info_streak} 次观察无新增信息", "replan")
+                              f"连续 {self._no_new_info_streak} 次观察无新增信息", "skip_step")
         return GuardDecision(False)
 
     def check_conclusion(self, conclusion_text: str) -> GuardDecision:

@@ -98,11 +98,7 @@ def _collect_source_urls(*values: Any, limit: int = 12) -> List[str]:
     return found
 
 
-# EXP-7: adaptive replan fires when a group's average confidence drops below
-# this. Sweepable per deployment without an image rebuild.
 import os as _os
-
-REPLAN_CONFIDENCE_THRESHOLD = float(_os.getenv("REPLAN_CONFIDENCE_THRESHOLD", "0.55"))
 
 
 def _configured_eager_skill_ids() -> set[str]:
@@ -127,8 +123,6 @@ AGENT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容）：
     "claims": [{"section": "technical_findings|project_findings|risks|evidence|recommendations|resume_facts|jd_requirements",
                  "value": [...] 或 {...}}],
     "evidence": [{"text": "证据描述", "sourceLine": 行号或null, "source": "resume|jd|tool|memory", "verified": true/false/null}],
-    "confidence": 0.0-1.0,
-    "requestedNextAction": "可选，建议下一步"
   },
   "done": true/false
 }
@@ -139,7 +133,6 @@ REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；精简表达�
   "thought": "简要计划",
   "output": {
     "summary": "面试官视角的一句话结论",
-    "confidence": 0.0-1.0,
     "report": {
       "recommendation": "HIRE|INTERVIEW_RECOMMEND|NEED_MANUAL_REVIEW|NOT_RECOMMEND",
       "dimensions": [{"name":"技术能力|项目深度|JD匹配|履历可信度","score":"0-100整数（依据证据合理评分）","status":"ASSESSED|PARTIAL|UNASSESSED","rationale":"判断理由","evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"原文≤30字"}]}],
@@ -180,17 +173,6 @@ EMIT_DECISION_TOOL = {
                         "evidence": {
                             "type": "array", "maxItems": 12,
                             "items": {"type": "object"}},
-                        "confidence": {"type": "number"},
-                        "requestedNextAction": {"type": "string"},
-                    },
-                },
-                "handoff": {
-                    "type": "object",
-                    "description": "需要移交任务给其它 Agent 时填写",
-                    "properties": {
-                        "to": {"type": "string"},
-                        "reason": {"type": "string"},
-                        "task": {"type": "string"},
                     },
                 },
                 "done": {"type": "boolean"},
@@ -293,7 +275,6 @@ EMIT_REPORT_TOOL = {
                     "type": "object",
                     "properties": {
                         "summary": {"type": "string"},
-                        "confidence": {"type": "number"},
                         "report": {
                             "type": "object",
                             "properties": {
@@ -620,12 +601,6 @@ class RunExecutor:
         self.budget_plan: Dict[str, Dict[str, int]] = {}
         # set by _restore_snapshot when an approved plan needs regrouping
         self._regroup_needed = False
-        # adaptive replan budget: at most 2 mid-run plan adjustments
-        self.replan_count = 0
-        # pending mid-run replan hints set by agent loops
-        self._pending_handoff: Optional[str] = None
-        self._tool_failed_this_group = False
-        self._missing_artifacts: List[str] = []
         self.plan_meta: Dict[str, Any] = {}
         self.revision_reuse: Dict[str, Any] = {}
         # conflict arbitration runs exactly once (ruling is final)
@@ -1018,10 +993,6 @@ class RunExecutor:
             if not runnable:
                 continue
 
-            conflicts_before = len(self.state.artifact("conflicts") or [])
-            self._tool_failed_this_group = False
-            self._pending_handoff = None
-            self._missing_artifacts = []
             if len(runnable) == 1:
                 ok = await self._run_single(runnable[0], coordinator)
                 consecutive_failures = 0 if ok else consecutive_failures + 1
@@ -1038,10 +1009,6 @@ class RunExecutor:
             # claim as keep/reject/uncertain — no ping-pong re-litigation.
             if any(d.agent_id == "EvidenceAgent" for d in runnable):
                 await self._arbitrate_conflicts()
-
-            # Bounded mid-run dynamism: missing artifact / tool failure /
-            # new conflict / handoff / group failure / low confidence.
-            await self._maybe_replan(coordinator, ok, conflicts_before)
 
             # Group-boundary checkpoint: persist before advancing so the
             # per-run emitter connection can be closed without racing a
@@ -1174,24 +1141,11 @@ class RunExecutor:
                 "iterations": counters.get("iterations", 1),
                 "llmCalls": counters.get("llmCalls", 0),
                 "toolCalls": counters.get("toolCalls", 0),
-                "confidence": output.confidence,
                 "summary": output.summary[:300],
                 "conflicts": conflicts,
                 "durationMs": duration_ms,
                 "output": {"type": output.type, "claims": len(output.claims),
                            "evidence": len(output.evidence)}}))
-        if output.requestedNextAction:
-            requested = output.requestedNextAction
-            delegation = self.guard.check_delegation(agent_id, requested)
-            flat_remaining = [a for g in self.parallel_groups[self.next_group_index:]
-                              for a in g]
-            if not delegation.triggered and self.registry.known(requested) \
-                    and requested not in flat_remaining \
-                    and requested not in self.executed \
-                    and len(self.executed) + len(flat_remaining) < self.policy.maxAgentCount + 2:
-                self.parallel_groups.insert(self.next_group_index, [requested])
-                self.plan.append(requested)
-
     async def _after_agent_failure(self, definition: AgentDefinition, exc: Exception,
                                    agent_started: float) -> None:
         agent_id = definition.agent_id
@@ -1281,127 +1235,6 @@ class RunExecutor:
         except Exception as exc:  # noqa: BLE001 - arbitration is best-effort
             logger.info("conflict arbitration skipped: %s", exc)
 
-    async def _maybe_replan(self, coordinator: Coordinator, group_ok: bool,
-                            conflicts_before: int) -> None:
-        """Adaptive replan trigger after each group. Bounded: <=2 per run.
-        Triggers: missing_required_artifact / tool_failed / new_conflict /
-        handoff_requested / group_failure / low_confidence."""
-        if coordinator.is_simple(self.request.runType):
-            return
-        remaining = [a for g in self.parallel_groups[self.next_group_index:] for a in g]
-        non_terminal_remaining = [a for a in remaining if a not in TERMINAL_AGENTS]
-        if self.replan_count >= 2 or not non_terminal_remaining:
-            return
-        new_conflicts = len(self.state.artifact("conflicts") or []) - conflicts_before
-        recent_outputs = self.state.data["agentOutputs"][-3:]
-        confidences = [float(o.get("confidence", 1.0)) for o in recent_outputs
-                       if isinstance(o, dict)]
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 1.0
-
-        # Detect missing required artifacts for remaining agents.
-        missing: List[str] = list(self._missing_artifacts)
-        present = set()
-        arts = self.state.artifacts()
-        if arts.get("parsedResume") or arts.get("resumeFacts"):
-            present.add("resume_facts")
-        if arts.get("effectiveJd") or arts.get("jdRequirements"):
-            present.add("jd_requirements")
-        if arts.get("technicalFindings"):
-            present.add("technical_findings")
-        if arts.get("projectFindings"):
-            present.add("project_findings")
-        if arts.get("risks") or arts.get("timelineCheck"):
-            present.add("risks")
-        if arts.get("evidence"):
-            present.add("evidence_ledger")
-        for agent_id in remaining:
-            if not self.registry.known(agent_id):
-                continue
-            try:
-                definition = self.registry.get(agent_id)
-            except KeyError:
-                continue
-            for req in definition.requires_artifacts:
-                if req not in present and req not in missing:
-                    missing.append(req)
-
-        trigger = None
-        handoff_to = self._pending_handoff
-        if handoff_to:
-            # Handoff 去环：目标已执行则忽略。
-            if handoff_to in self.executed:
-                handoff_to = None
-            else:
-                trigger = f"handoff_requested:{handoff_to}"
-        elif missing:
-            trigger = "missing_required_artifact"
-        elif self._tool_failed_this_group:
-            trigger = "tool_failed"
-        elif not group_ok:
-            trigger = "group_failure"
-        elif new_conflicts > 0:
-            trigger = f"new_conflict:{new_conflicts}"
-        elif avg_confidence < REPLAN_CONFIDENCE_THRESHOLD:
-            trigger = f"low_confidence:{avg_confidence:.2f}"
-        if trigger is None:
-            return
-        arts = self.state.artifacts()
-        shared_digest = json.dumps({
-            "technicalFindings": len(arts.get("technicalFindings") or []),
-            "projectFindings": len(arts.get("projectFindings") or []),
-            "risks": len(arts.get("risks") or []),
-            "conflicts": [str(c.get("claim", c.get("key", "")))[:80]
-                          for c in (arts.get("conflicts") or [])[-3:]
-                          if isinstance(c, dict)],
-            "missingArtifacts": missing[:6],
-            "inputPresence": arts.get("inputPresence") or {},
-        }, ensure_ascii=False)
-        replan_coordinator = coordinator
-        if self.request.runType in FULL_EVAL_TYPES:
-            # Preserve deterministic artifact/handoff repair without spending
-            # or re-reserving a provider call in the single-pass workflow.
-            replan_coordinator = Coordinator(
-                self.registry, self.policy, None)
-        async with workflow_agent_execution(self.workflow_execution):
-            adjusted = await replan_coordinator.adaptive_replan(
-                remaining=remaining, executed=self.executed,
-                shared_digest=shared_digest, trigger=trigger,
-                failure_notes=self.failure_notes,
-                missing_artifacts=missing,
-                handoff_to=handoff_to)
-        if adjusted is None:
-            return
-        self.replan_count += 1
-        self._pending_handoff = None
-        self._tool_failed_this_group = False
-        self._missing_artifacts = []
-        self.parallel_groups = self.parallel_groups[: self.next_group_index] \
-            + adjusted["parallelGroups"]
-        self.plan = self.executed + adjusted["plan"]
-        for agent_id, quota in (adjusted.get("budgetPlan") or {}).items():
-            self.budget_plan[agent_id] = quota
-        self.plan_meta = {
-            "selectedBecause": adjusted.get("selectedBecause") or {},
-            "skippedBecause": adjusted.get("skippedBecause") or {},
-            "artifactEdges": adjusted.get("artifactEdges") or [],
-            "goalArtifacts": adjusted.get("goalArtifacts") or missing,
-            "budget": self.budget_plan,
-        }
-        await self.emitter.emit("agent.selected", agent_id="CoordinatorAgent", payload={
-            "plan": self.plan, "reason": adjusted["reason"],
-            "parallelGroups": self.parallel_groups,
-            "requiredTerminalAgent": adjusted["requiredTerminalAgent"],
-            "policyId": self.policy.policyId,
-            "budgetPlan": self.budget_plan,
-            "budget": self.budget_plan,
-            "selectedBecause": self.plan_meta["selectedBecause"],
-            "skippedBecause": self.plan_meta["skippedBecause"],
-            "artifactEdges": self.plan_meta["artifactEdges"],
-            "replanned": True, "trigger": trigger,
-            "replanCount": self.replan_count,
-            "llmBudget": self.budget.llm_audit(
-                self.policy.maxLlmCalls)})
-
     def _has_hard_degradation(self) -> bool:
         hard = {"run_timeout", "consecutive_failures", "no_terminal_answer",
                 "report_contract_failed"}
@@ -1445,21 +1278,24 @@ class RunExecutor:
         report = self.state.data.get("artifacts", {}).get("finalReport")
         if not isinstance(report, dict) or not report:
             return "structuredReport 为空"
+        quality = str(report.get("dataQuality") or "").upper()
         # If overallScore is missing but we have dimensions with scores,
         # compute a fallback average so the report isn't rejected.
         if not isinstance(report.get("overallScore"), int):
-            dims = report.get("dimensions") or []
-            scored = [d for d in dims if isinstance(d, dict)
-                      and isinstance(d.get("score"), int)]
-            if scored:
-                avg = int(round(sum(d["score"] for d in scored) / len(scored)))
-                report["overallScore"] = avg
+            if quality == "INSUFFICIENT":
+                report.pop("overallScore", None)
                 self.final_answer = self.render_report(report)
             else:
-                quality = str(report.get("dataQuality") or "").upper()
-                if quality == "INSUFFICIENT":
-                    return "简历证据不足，无法给出数值分"
-                return "overallScore 为空且无可用维度分数"
+                dims = report.get("dimensions") or []
+                scored = [d for d in dims if isinstance(d, dict)
+                          and isinstance(d.get("score"), int)]
+                if scored:
+                    avg = int(round(
+                        sum(d["score"] for d in scored) / len(scored)))
+                    report["overallScore"] = avg
+                    self.final_answer = self.render_report(report)
+                else:
+                    return "overallScore 为空且无可用维度分数"
         if len(self.final_answer or "") < MIN_REPORT_ANSWER_CHARS:
             return f"报告正文过短（<{MIN_REPORT_ANSWER_CHARS} 字）"
         return None
@@ -1534,7 +1370,6 @@ class RunExecutor:
             "memoryHits": list(self.memory_hits)[:20],
             "failureHits": list(self.failure_hits)[:10],
             "memoryTraces": list(self.memory_traces)[-40:],
-            "replanCount": self.replan_count,
             "arbitrated": self._arbitrated,
             "reportAgentFailed": self.report_agent_failed,
             "agentCounters": dict(self.agent_counters),
@@ -1569,7 +1404,6 @@ class RunExecutor:
             self.memory_hits = list(snapshot.get("memoryHits") or [])
             self.failure_hits = list(snapshot.get("failureHits") or [])
             self.memory_traces = list(snapshot.get("memoryTraces") or [])
-            self.replan_count = int(snapshot.get("replanCount", 0))
             self._arbitrated = bool(snapshot.get("arbitrated", False))
             self.report_agent_failed = bool(
                 snapshot.get("reportAgentFailed", False))
@@ -1613,7 +1447,7 @@ class RunExecutor:
         agent_id = definition.agent_id
         if agent_id in TERMINAL_AGENTS:
             # No control-plane work is legal after the terminal stage starts.
-            # Release unused plan/replan/arbitration capacity to the terminal.
+            # Release unused planning/arbitration capacity to the terminal.
             self.budget.release_llm_reservation("control")
         prompt = default_prompt_manager.system_for_agent(
             agent_id, self.policy.promptVersions.get(agent_id))
@@ -1702,8 +1536,6 @@ class RunExecutor:
                     error=f"{type(_tool_exc).__name__}: {_tool_exc}"[:200])
             agent_tool_calls += 1
             pre_llm_tool_call_ids.append(call.tool_call_id)
-            if call.status == "FAILED":
-                self._tool_failed_this_group = True
             tool_results_block += self._format_tool_result(call)
             if call.status == "SUCCEEDED":
                 pre_llm_succeeded_tools.add(tool)
@@ -2309,8 +2141,6 @@ class RunExecutor:
                                     tool_call_id=proposed.tool_call_id,
                                     trace_context=trace_context)
                                 agent_tool_calls += 1
-                                if call.status != "SUCCEEDED":
-                                    self._tool_failed_this_group = True
                                 observations += self._format_tool_result(call)
                                 if call.status == "SUCCEEDED":
                                     await self._record_tool_success(
@@ -2486,32 +2316,6 @@ class RunExecutor:
                         "\n[NATIVE_TOOL_REQUIRED] JSON 内嵌 toolCalls 已拒绝；"
                         "请使用已提供的原生 function tools。")
                     continue
-
-            # First-class handoff: reuse the requestedNextAction insertion
-            # path (dependency + delegation-cycle + budget checks live there),
-            # but emit an explicit edge for the trace view.
-            handoff = decision.get("handoff") or {}
-            if isinstance(handoff, dict) and handoff.get("to"):
-                target = str(handoff["to"])
-                # Handoff 去环：拒绝已完成目标；LoopGuard 另检双向委派。
-                if target not in self.executed:
-                    delegation = self.guard.check_delegation(agent_id, target)
-                    if delegation.triggered:
-                        await self._emit_guard(delegation, agent_id)
-                    else:
-                        self._pending_handoff = target
-                        raw_candidate = decision.get("output")
-                        if not isinstance(raw_candidate, dict):
-                            decision["output"] = raw_candidate = {}
-                        raw_candidate.setdefault("requestedNextAction", target)
-                        await self.emitter.emit("agent.progress", agent_id=agent_id, payload={
-                            "handoff": {"to": target,
-                                        "reason": str(handoff.get("reason", ""))[:200],
-                                        "task": str(handoff.get("task", ""))[:200]}})
-                else:
-                    await self.emitter.emit("agent.progress", agent_id=agent_id, payload={
-                        "handoffRejected": True, "to": target,
-                        "reason": "handoff 去环：目标 Agent 已执行"})
 
             raw_output = decision.get("output")
             if (raw_output or decision.get("done")
@@ -3084,7 +2888,6 @@ class RunExecutor:
             })
         return {
             "summary": str(validated.get("summary") or ""),
-            "confidence": 0.85,
             "report": validated,
         }, call_count
 
@@ -3454,8 +3257,6 @@ class RunExecutor:
         decision["toolCalls"] = [
             {"tool": c["tool"], "arguments": c["arguments"]}
             for c in decision.get("toolCalls", [])]
-        if decision.get("handoff") is not None and not decision["handoff"].get("to"):
-            decision["handoff"] = None
         return decision, ""
 
     def _report_decision_schema_error(
@@ -3508,23 +3309,15 @@ class RunExecutor:
                       tool_results_block: str) -> AgentOutput:
         raw_output = raw_output if isinstance(raw_output, dict) else {}
         summary = str(raw_output.get("summary") or "")
-        guard = self.guard.check_conclusion(f"{definition.agent_id}:{summary}")
         claims = [c for c in (raw_output.get("claims") or []) if isinstance(c, dict)]
         evidence = [e for e in (raw_output.get("evidence") or []) if isinstance(e, dict)]
-        try:
-            confidence = float(raw_output.get("confidence", 0.5))
-        except (TypeError, ValueError):
-            confidence = 0.5
-        requested = raw_output.get("requestedNextAction")
         output = AgentOutput(
             agentId=definition.agent_id,
             type=definition.output_type,
             claims=claims,
             evidence=evidence,
-            confidence=max(0.0, min(1.0, confidence)),
             source="llm+tools" if tool_results_block else "llm",
             dependencies=[],
-            requestedNextAction=str(requested) if requested and not guard.triggered else None,
             summary=summary[:500])
         if definition.agent_id in TERMINAL_AGENTS:
             if definition.agent_id == "ReportAgent":
@@ -3532,7 +3325,8 @@ class RunExecutor:
                 if isinstance(report, dict):
                     if summary and not report.get("summary"):
                         report = {**report, "summary": summary}
-                    validated = self._validate_structured_report(report)
+                    validated = self._apply_evidence_gate(
+                        self._validate_structured_report(report))
                     if validated:
                         self.state.put_artifact("finalReport", validated)
                         self.final_answer = self.render_report(validated)
@@ -3545,7 +3339,8 @@ class RunExecutor:
                 return output
             report = raw_output.get("report")
             if isinstance(report, dict):
-                validated = self._validate_structured_report(report)
+                validated = self._apply_evidence_gate(
+                    self._validate_structured_report(report))
                 if validated:
                     self.state.put_artifact("finalReport", validated)
             answer = raw_output.get("answer") or raw_output.get("markdown") or summary
@@ -3975,10 +3770,8 @@ class RunExecutor:
                                      "byAgent": "EvidenceAgent", "fastPath": True}]},
             evidence=[{"text": summary, "verified": True,
                        "byAgent": "EvidenceAgent"}],
-            confidence=max(0.7, float(support)),
             source="tools",
             dependencies=[],
-            requestedNextAction=None,
             summary=summary[:500])
 
     def _prepare_jd_requirements(self) -> None:
@@ -4215,6 +4008,60 @@ class RunExecutor:
             "START_STUCK", "WORKER", "QUEUE_STUCK", "控制面",
         )
         return any(m in upper or m in text for m in markers)
+
+    def _apply_evidence_gate(
+            self, report: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Enforce EvidenceAgent results on the terminal report.
+
+        Missing source evidence is a reporting constraint, not a reason to
+        rebuild the already executed plan.  Keep the model's report shape, but
+        deterministically cap data quality and surface unsupported claims.
+        """
+        if not report or "EvidenceAgent" not in self.executed:
+            return report
+
+        out = dict(report)
+        artifacts = self.state.artifacts()
+        checked = [
+            item for item in (artifacts.get("evidence") or [])
+            if isinstance(item, dict) and item.get("verified") is not None
+        ]
+        unsupported = [item for item in checked if item.get("verified") is False]
+        conflicts = [
+            item for item in (artifacts.get("conflicts") or [])
+            if isinstance(item, dict)
+            and str(item.get("resolution") or "").lower() != "keep"
+        ]
+        support_ratio = self.state.evidence_support_ratio()
+
+        ceiling: Optional[str] = None
+        if not checked:
+            ceiling = "INSUFFICIENT"
+        elif unsupported or conflicts or support_ratio is None or support_ratio < 0.85:
+            ceiling = "PARTIAL"
+
+        if ceiling:
+            rank = {"INSUFFICIENT": 0, "PARTIAL": 1, "SUFFICIENT": 2}
+            current = str(out.get("dataQuality") or "SUFFICIENT").upper()
+            if current not in rank or rank[current] > rank[ceiling]:
+                out["dataQuality"] = ceiling
+            if out.get("dataQuality") == "INSUFFICIENT":
+                out.pop("overallScore", None)
+
+        missing = [
+            str(item)[:300] for item in (out.get("missingEvidence") or [])
+            if str(item).strip()
+        ]
+        for item in unsupported + conflicts:
+            text = str(
+                item.get("text") or item.get("claim") or item.get("finding")
+                or item.get("detail") or ""
+            ).strip()
+            if text and text not in missing:
+                missing.append(text[:300])
+        if missing:
+            out["missingEvidence"] = missing[:12]
+        return out
 
     @staticmethod
     def _validate_structured_report(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:

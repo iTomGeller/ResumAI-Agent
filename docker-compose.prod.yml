@@ -102,8 +102,6 @@ services:
       # an explicit benchmark/debug override only.
       SKILL_EAGER_IDS: ${SKILL_EAGER_IDS:-}
       LLM_STREAM_REPORT_SECTIONS: ${LLM_STREAM_REPORT_SECTIONS:-1}
-      # EXP-7 replan sensitivity knob (default matches executor fallback)
-      REPLAN_CONFIDENCE_THRESHOLD: ${REPLAN_CONFIDENCE_THRESHOLD:-0.55}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
     expose:
       - "8090"

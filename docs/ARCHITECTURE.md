@@ -10,7 +10,7 @@ Vue Frontend（对话 / 运行进度 / 停止・暂停・恢复）
       Coordinator（规则优先 + 能力目录 LLM 精化 + 依赖拓扑 + 并行分组）
       LangGraph StateGraph（PostgreSQL Checkpointer, thread_id=runId）
       Send Parallel Specialists（Tech ∥ Project ∥ Risk）→ Reducer → Evidence → Report
-      Command 动态 Replan（预算 / LoopGuard / 降级）
+      merge 持久化后继续 dispatch（预算 / LoopGuard / 降级）
       Tool Gateway / Memory / Context（toolCallId 配对压缩）
   → Runtime Events + 最终结果回调 Java → SSE 推送前端（断线回放）
 ```

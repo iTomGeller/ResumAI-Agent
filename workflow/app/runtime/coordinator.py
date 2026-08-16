@@ -69,11 +69,6 @@ TERMINAL_AGENTS = {"ReportAgent"}
 FULL_EVAL_TYPES = {
     "full_evaluation", "jd_evaluation", "backend_eval", "agent_eval",
 }
-REPLAN_TRIGGERS = {
-    "missing_required_artifact", "tool_failed", "new_conflict",
-    "handoff_requested", "group_failure", "low_confidence",
-}
-
 # Soft preference for simple runTypes: still artifact-planned, but skip LLM refine.
 # Full evaluations use LLM-based planning to produce dynamic agent selection.
 SIMPLE_RULE_TYPES = {
@@ -153,8 +148,9 @@ class Coordinator:
     TASK_PIPELINES is only the safety fallback when both the artifact planner
     and the (optional) LLM refine produce an empty / invalid plan.
 
-    Contracts: at most one terminal agent; max 2 replans (enforced by executor);
-    handoff cycles are rejected by LoopGuard + replan trigger.
+    Contract: the initial plan contains at most one terminal agent and remains
+    immutable for the run. Runtime failures are handled by bounded LLM/tool
+    retries and evidence-aware report degradation, not mid-run replanning.
     """
 
     def __init__(self, registry: AgentRegistry, policy: PolicyBundle,
@@ -1167,98 +1163,6 @@ class Coordinator:
             producers = self.registry.producers_of(artifact)
             missing[artifact] = producers[0].agent_id if producers else ""
         return missing
-
-    def replan_after_failure(self, remaining: List[str], failed_agent: str) -> List[str]:
-        """Failure handling: keep partial results, drop the failed step,
-        guarantee a terminal agent still closes the run."""
-        plan = [a for a in remaining if a != failed_agent]
-        return self._ensure_unique_terminal(plan)
-
-    async def adaptive_replan(self, *, remaining: List[str], executed: List[str],
-                              shared_digest: str, trigger: str,
-                              failure_notes: List[str],
-                              missing_artifacts: Optional[List[str]] = None,
-                              handoff_to: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Mid-run replanning. Triggers include missing_required_artifact /
-        tool_failed / new_conflict / handoff_requested (not only confidence)."""
-        trigger_kind = trigger.split(":", 1)[0]
-        if trigger_kind not in REPLAN_TRIGGERS and not trigger.startswith("new_conflict"):
-            # Accept namespaced forms like new_conflicts:2 / low_confidence:0.4
-            if not any(trigger.startswith(t) for t in REPLAN_TRIGGERS):
-                logger.info("adaptive replan ignored unknown trigger=%s", trigger)
-                return None
-        if self.llm is None or not remaining:
-            # Deterministic handoff insertion without LLM.
-            if handoff_to and handoff_to not in executed and self.registry.known(handoff_to):
-                if handoff_to in executed:
-                    return None  # handoff 去环：已执行过的目标拒绝
-                new_plan = [a for a in remaining if a != handoff_to]
-                # Insert handoff before terminal.
-                terminals = [a for a in new_plan if a in TERMINAL_AGENTS]
-                body = [a for a in new_plan if a not in TERMINAL_AGENTS]
-                body.append(handoff_to)
-                body.extend(terminals)
-                return self._finalize(
-                    body, f"replan({trigger})",
-                    selected_because={handoff_to: f"handoff_requested:{trigger}"},
-                    skipped_because={},
-                    artifact_edges=[],
-                    goal_artifacts=missing_artifacts or [])
-            if trigger_kind == "missing_required_artifact" and missing_artifacts:
-                patched = list(remaining)
-                for artifact in missing_artifacts:
-                    for producer in self.registry.producers_of(artifact):
-                        if producer.agent_id not in executed and producer.agent_id not in patched:
-                            # Insert before terminal
-                            if patched and patched[-1] in TERMINAL_AGENTS:
-                                patched.insert(-1, producer.agent_id)
-                            else:
-                                patched.append(producer.agent_id)
-                            break
-                if patched != remaining:
-                    return self._finalize(
-                        patched, f"replan({trigger})",
-                        selected_because={a: f"补齐产物 {missing_artifacts}"
-                                          for a in patched if a not in remaining},
-                        skipped_because={}, artifact_edges=[],
-                        goal_artifacts=missing_artifacts)
-            return None
-
-        prompt_user = (
-            f"运行中触发重规划，原因: {trigger}\n"
-            f"已完成 Agent: {executed}\n"
-            f"剩余计划: {remaining}\n"
-            f"缺失产物: {missing_artifacts or []}\n"
-            f"handoff 目标: {handoff_to or '无'}\n"
-            f"共享状态摘要: {shared_digest[:800]}\n"
-            f"失败记录: {'; '.join(failure_notes[-3:]) or '无'}\n"
-            f"可用 Agent 能力目录:\n{self.capability_catalog()}\n"
-            "只允许调整剩余部分（不得包含已完成 Agent，handoff 不得形成环），"
-            "必须满足 requires_artifacts，最后一个必须是唯一 terminal Agent。"
-            "若当前剩余计划已合理，原样返回。"
-            "输出 json {\"plan\": [...], \"reason\": \"...\"}")
-        try:
-            from app.runtime.prompts import default_prompt_manager
-
-            system = default_prompt_manager.system_for_agent("CoordinatorAgent").content
-            raw = await self.llm.chat(
-                [{"role": "system", "content": system},
-                 {"role": "user", "content": prompt_user}],
-                agent_id="CoordinatorAgent", purpose="replan", max_tokens=300)
-            parsed = extract_json_object(raw)
-            plan = [str(a) for a in parsed.get("plan", [])
-                    if self.registry.known(str(a)) and str(a) not in executed]
-            # Handoff 去环：拒绝把已执行 Agent 再插回。
-            if handoff_to and handoff_to in executed:
-                plan = [a for a in plan if a != handoff_to]
-            if not plan or plan == remaining:
-                return None
-            finalized = self._finalize(plan, f"replan({trigger})")
-            finalized["reason"] = str(parsed.get("reason", finalized["reason"]))[:200]
-            return finalized
-        except Exception as exc:  # noqa: BLE001 - replanning must not kill the run
-            logger.info("adaptive replan skipped (%s): %s", trigger, exc)
-            return None
 
     # ------------------------------------------------------------------
     # helpers

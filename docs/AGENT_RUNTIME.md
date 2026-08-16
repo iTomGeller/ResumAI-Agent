@@ -64,7 +64,7 @@ Coordinator 规则优先：简单请求（时间线/改写/追问等）直接映
 
 - 预算：Run 级 LLM/Tool/Token/超时 + Agent 级迭代/工具/超时。
 - LLM：connect/read/total 超时、≤2 次安全重试、指数退避+jitter、熔断、可选 fallback 模型；4xx 类确定性错误不重试。
-- Loop Guard：重复工具签名、语义重复计划、无新信息观察、重复已完成 Agent、委派环、重复结论/错误 → replan/skip/degrade，状态可随快照迁移。
+- Loop Guard：重复工具签名、无新信息观察、重复已完成 Agent、委派环、重复结论/错误 → skip/degrade，状态可随快照迁移。
 - 单 Agent 失败：记录 → 保证终端 Agent 仍收尾 → 结果 `PARTIAL_SUCCESS`。
 
 ## 6. Context 与 Memory

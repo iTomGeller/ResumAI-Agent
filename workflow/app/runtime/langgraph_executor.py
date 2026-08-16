@@ -36,10 +36,7 @@ class RuntimeGraphState(TypedDict, total=False):
     done: bool
     group_token: int
     dispatch_agents: List[str]
-    conflicts_before: int
     consecutive_failures: int
-    group_ok: bool
-    replanned: bool
     agent_results: Annotated[List[Dict[str, Any]], _reduce_agent_results]
     result: Dict[str, Any]
 
@@ -49,8 +46,8 @@ class LangGraphRunExecutor(RunExecutor):
 
     The existing Agent loop, tools, MCP, Skills, memory, budgets and report
     validation remain the execution primitives. LangGraph owns the durable
-    orchestration boundaries: plan, ``Send`` fan-out, reducer merge, bounded
-    replan and finalization.
+    orchestration boundaries: initial planning, ``Send`` fan-out, reducer
+    merge, checkpointing and finalization.
     """
 
     def _hydrate(self, state: RuntimeGraphState) -> bool:
@@ -81,7 +78,6 @@ class LangGraphRunExecutor(RunExecutor):
         builder.add_node("dispatch", self._dispatch_node)
         builder.add_node("agent", self._agent_node)
         builder.add_node("merge", self._merge_node)
-        builder.add_node("replan", self._replan_node)
         builder.add_node("pause_gate", self._pause_gate_node)
         builder.add_node("finalize", self._finalize_node)
 
@@ -439,10 +435,6 @@ class LangGraphRunExecutor(RunExecutor):
             if not runnable:
                 continue
 
-            conflicts_before = len(self.state.artifact("conflicts") or [])
-            self._tool_failed_this_group = False
-            self._pending_handoff = None
-            self._missing_artifacts = []
             base_position = len(self.executed)
             agent_ids = [definition.agent_id for definition in runnable]
             for offset, definition in enumerate(runnable):
@@ -466,7 +458,6 @@ class LangGraphRunExecutor(RunExecutor):
                 "pause_requested": False,
                 "group_token": token,
                 "dispatch_agents": agent_ids,
-                "conflicts_before": conflicts_before,
                 "execution_snapshot": self.export_snapshot(),
             }
 
@@ -626,41 +617,21 @@ class LangGraphRunExecutor(RunExecutor):
             agents=[result.get("agentId") for result in ordered],
             groupOk=any_success,
         )
-        return Command(
-            goto="replan",
-            update={
-                "group_ok": any_success,
-                "consecutive_failures": consecutive,
-                "execution_snapshot": self.export_snapshot(),
-            },
-        )
-
-    async def _replan_node(self, state: RuntimeGraphState) -> Command:
-        self._hydrate(state)
-        before = self.replan_count
-        coordinator = Coordinator(self.registry, self.policy, self.llm)
-        await self._maybe_replan(
-            coordinator,
-            bool(state.get("group_ok")),
-            int(state.get("conflicts_before") or 0),
-        )
-        replanned = self.replan_count > before
         snapshot = self.export_snapshot()
         # MySQL remains the Java control-plane snapshot/audit copy. PostgreSQL
         # is the actual graph checkpointer and is committed by LangGraph with
         # durability="sync" at this super-step boundary.
         await self.emitter.save_checkpoint(snapshot)
         self._write_custom(
-            "langgraph.replan",
-            replanned=replanned,
-            replanCount=self.replan_count,
+            "langgraph.group_checkpoint",
+            groupToken=token,
             nextGroupIndex=self.next_group_index,
         )
         if self.pause_event is not None and self.pause_event.is_set():
             return Command(
                 goto="pause_gate",
                 update={
-                    "replanned": replanned,
+                    "consecutive_failures": consecutive,
                     "pause_requested": True,
                     "pause_reason": "USER_PAUSED",
                     "execution_snapshot": snapshot,
@@ -669,7 +640,7 @@ class LangGraphRunExecutor(RunExecutor):
         return Command(
             goto="dispatch",
             update={
-                "replanned": replanned,
+                "consecutive_failures": consecutive,
                 "pause_requested": False,
                 "execution_snapshot": snapshot,
             },

@@ -410,7 +410,7 @@ class ResilientLlmClient:
     def _budget_scope(agent_id: str, purpose: str) -> str:
         purpose_key = str(purpose or "").strip().lower()
         if agent_id == "CoordinatorAgent" or purpose_key in {
-                "plan", "replan", "arbitration"}:
+                "plan", "arbitration"}:
             return "control"
         if agent_id == "ReportAgent":
             return "terminal"

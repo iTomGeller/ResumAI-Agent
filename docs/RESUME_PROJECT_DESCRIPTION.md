@@ -8,7 +8,7 @@
 
 使用 LangGraph StateGraph 编排核心执行链：Coordinator 规则优先 + 能力目录约束
 的 LLM 精化动态规划，通过 Send并行技术/项目/风险 Specialist，Reducer统一收集，
-Command完成动态 Replan，证据 Agent 核验、报告 Agent 显式收尾；
+Command完成组间 dispatch，证据 Agent 核验并限制报告证据边界，报告 Agent 显式收尾；
 完整评估 LLM 调用从 18 次降至 8 次、时延从约 140 秒降至约 46 秒（真实指标）。
 
 实现 Policy Optimization Lab（无 GPU）：将 Agent 组合、并行开关、Prompt/

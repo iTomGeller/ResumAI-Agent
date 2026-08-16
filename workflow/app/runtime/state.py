@@ -407,7 +407,7 @@ class SharedState:
             for entry in store.get(section, []) or []:
                 if isinstance(entry, dict):
                     text = str(entry.get("text") or entry.get("finding")
-                               or entry.get("detail") or "")
+                               or entry.get("claim") or entry.get("detail") or "")
                     if text:
                         claims.append({
                             "text": text[:300],
