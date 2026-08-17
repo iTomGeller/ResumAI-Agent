@@ -265,6 +265,7 @@ def main() -> None:
             fh.write("KB_EMBEDDING_DIMENSION=768\n")
             fh.write("KB_CHUNK_CHARS=320\n")
             fh.write("KB_OVERLAP_CHARS=0\n")
+            fh.write("RUN_MAX_GLOBAL_CONCURRENT=24\n")
             fh.write("EMBEDDING_ENABLED=true\n")
             fh.write("CACHE_ENABLED=true\n")
         sftp.close()
