@@ -26,7 +26,7 @@ import org.springframework.util.StringUtils;
  * Dispatcher + watchdog for conversational runs.
  *
  * <p>Dispatch: pull QUEUED runs (FIFO per conversation), acquire the global
- * workflow execution permit (max 24 by default) and conversation permit (1),
+ * workflow execution permit (max 16 by default) and conversation permit (1),
  * CAS QUEUED→STARTING, then hand off to the lifecycle service. Watchdog:
  * renew permit leases for healthy runs, time out overdue runs, force-close
  * stuck CANCELLING/STARTING runs, and recover orphans after restart.</p>

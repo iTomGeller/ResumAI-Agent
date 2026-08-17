@@ -149,8 +149,13 @@ def upload_one(rec: Dict[str, Any], slot: Dict[str, Any], started: float,
             break
         except Exception as exc:  # noqa: BLE001 - load result
             row["uploadError"] = str(exc)[:500]
-            if attempt < 2:
+            # A curl timeout is ambiguous: the server may already have
+            # created the task but the response body was too slow. Retrying
+            # would create a duplicate task and corrupt the offered load.
+            if attempt < 2 and "curl rc=28" not in str(exc):
                 time.sleep(0.2)
+            elif "curl rc=28" in str(exc):
+                break
     row["uploadMs"] = int((time.monotonic() - upload_started) * 1000)
     row["uploadFinishedAt"] = time.time()
     append_jsonl(arrivals_path, row, write_lock)

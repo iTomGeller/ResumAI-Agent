@@ -112,7 +112,6 @@ public class ResumeEvaluationService {
     private final DynamicSkillPromptMapper skillPromptMapper;
     private final ExternalProfileService externalProfileService;
     private final JdRagService jdRagService;
-    private final HybridRagService hybridRagService;
     private final RagConfigService ragConfigService;
     private final ResumeFileService resumeFileService;
     private final TaskQueryService taskQueryService;
@@ -134,7 +133,6 @@ public class ResumeEvaluationService {
                                 DynamicSkillPromptMapper skillPromptMapper,
                                 ExternalProfileService externalProfileService,
                                 JdRagService jdRagService,
-                                HybridRagService hybridRagService,
                                 RagConfigService ragConfigService,
                                 ResumeFileService resumeFileService,
                                 TaskQueryService taskQueryService,
@@ -156,7 +154,6 @@ public class ResumeEvaluationService {
         this.skillPromptMapper = skillPromptMapper;
         this.externalProfileService = externalProfileService;
         this.jdRagService = jdRagService;
-        this.hybridRagService = hybridRagService;
         this.ragConfigService = ragConfigService;
         this.resumeFileService = resumeFileService;
         this.taskQueryService = taskQueryService;
@@ -853,15 +850,12 @@ public class ResumeEvaluationService {
                 "",
                 resumeText
         );
-        // Hybrid-RRF 预匹配：创建时写入 matched_jd / topJdMatches，与 runtime jd-search 同源。
-        List<JdMatchResult> matches = List.of();
-        try {
-            matches = hybridRagService.retrieve(resumeText, ragConfigService.getDefaultOptions());
-        } catch (Exception e) {
-            log.warn("[eval] hybrid JD pre-match skipped: {}", e.getMessage());
-        }
+        // Do not run JD RAG synchronously in the HTTP upload path. The
+        // Coordinator performs the same JD retrieval inside the queued
+        // workflow; doing it here duplicated embedding work and made uploads
+        // block for tens of seconds under burst load.
         TaskResponse created = createTaskInternal(request, traceId, saved.localPath(), null,
-                fileType, matches.isEmpty() ? null : matches);
+                fileType, null);
         markPlanMode(traceId, planMode);
         return created;
     }

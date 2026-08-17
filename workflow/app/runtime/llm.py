@@ -132,9 +132,9 @@ async def workflow_agent_execution(
 def _provider_concurrency_gate() -> tuple[asyncio.Semaphore, int]:
     global _provider_gate, _provider_gate_loop, _provider_gate_limit
     try:
-        limit = max(1, int(os.getenv("LLM_MAX_CONCURRENT", "64")))
+        limit = max(1, int(os.getenv("LLM_MAX_CONCURRENT", "48")))
     except ValueError:
-        limit = 64
+        limit = 48
     loop = asyncio.get_running_loop()
     if (_provider_gate is None or _provider_gate_loop is not loop
             or _provider_gate_limit != limit):
@@ -376,9 +376,9 @@ class ResilientLlmClient:
         if cls._shared_client is None or cls._shared_client.is_closed:
             try:
                 provider_limit = max(
-                    1, int(os.getenv("LLM_MAX_CONCURRENT", "64")))
+                    1, int(os.getenv("LLM_MAX_CONCURRENT", "48")))
             except ValueError:
-                provider_limit = 64
+                provider_limit = 48
             try:
                 max_connections = max(
                     provider_limit,
