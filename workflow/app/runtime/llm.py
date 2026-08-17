@@ -666,6 +666,7 @@ class ResilientLlmClient:
                      or str(purpose or "").startswith("report_")))
             audit_finalized = False
             provider_cancelled = False
+            provider_duration_ms = 0
             try:
                 try:
                     if stream_response:
@@ -682,6 +683,8 @@ class ResilientLlmClient:
                             messages, model, effective_max_tokens, temperature,
                             json_mode and not tools, tools=tools,
                             tool_choice=tool_choice)
+                    provider_duration_ms = int(
+                        (time.monotonic() - started) * 1000)
                 except asyncio.CancelledError:
                     provider_cancelled = True
                     raise
@@ -769,6 +772,7 @@ class ResilientLlmClient:
                     "callIndex": call_index,
                     "budgetScope": scope,
                     "durationMs": int((time.monotonic() - started) * 1000),
+                    "providerDurationMs": provider_duration_ms,
                     "queueWaitMs": queue_wait_ms,
                     "concurrencyLimit": concurrency_limit,
                     "agentExecutionReacquireWaitMs": (

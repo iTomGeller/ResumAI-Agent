@@ -3443,6 +3443,7 @@ class RunExecutor:
             "fallback": result.get("fallback")
             if isinstance(result.get("fallback"), bool) else None,
             "fallbackStage": result.get("fallbackStage"),
+            "fallbackReason": result.get("fallbackReason"),
             "fallbackChain": result.get("fallbackChain")
             if isinstance(result.get("fallbackChain"), list) else None,
             "degraded": result.get("degraded")

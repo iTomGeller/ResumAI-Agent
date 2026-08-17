@@ -46,6 +46,7 @@ RAW_RESULTS = OUTDIR / "raw_results.json"
 
 BASE = ""
 AUTH_TOKEN = ""
+HR_ID = ""
 POLL_INTERVAL_S = 5
 TASK_TIMEOUT_S = 180
 UPLOAD_RETRIES = 3
@@ -65,6 +66,8 @@ def http_json(url: str, timeout: int = 60) -> dict:
     headers = {"Accept": "application/json"}
     if AUTH_TOKEN:
         headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
+    if HR_ID:
+        headers["X-HR-Id"] = HR_ID
     response = httpx.get(url, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
@@ -88,6 +91,8 @@ def upload_resume(abs_path: Path, file_type: str) -> dict:
     ]
     if AUTH_TOKEN:
         cmd[1:1] = ["-H", f"Authorization: Bearer {AUTH_TOKEN}"]
+    if HR_ID:
+        cmd[1:1] = ["-H", f"X-HR-Id: {HR_ID}"]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise RuntimeError(f"curl rc={proc.returncode} stderr={proc.stderr.strip()[:200]}")
@@ -391,7 +396,7 @@ def save_checkpoint(state: dict) -> None:
 
 
 def main() -> None:
-    global BASE, AUTH_TOKEN, OUTDIR, CHECKPOINT, RAW_RESULTS, TASK_TIMEOUT_S
+    global BASE, AUTH_TOKEN, HR_ID, OUTDIR, CHECKPOINT, RAW_RESULTS, TASK_TIMEOUT_S
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--base-url",
@@ -424,6 +429,7 @@ def main() -> None:
     if parsed_base.scheme == "http" and not is_loopback and not args.allow_insecure_http:
         ap.error("refusing non-loopback plain HTTP; use HTTPS or explicitly pass --allow-insecure-http")
     AUTH_TOKEN = os.environ.get("RESUMAI_API_TOKEN", "").strip()
+    HR_ID = os.environ.get("RESUMAI_HR_ID", "").strip()
     OUTDIR = args.outdir.resolve()
     CHECKPOINT = OUTDIR / "checkpoint.json"
     RAW_RESULTS = OUTDIR / "raw_results.json"

@@ -46,7 +46,7 @@ class BusinessRagRetriever:
                 raw = await gateway.java_resume_search(
                     query=query, top_k=top_k, resume_text=resume_text,
                     jd_requirements=job_description[:2000],
-                    strategy="dense")
+                    strategy="hybrid")
             elif source == "knowledge":
                 raw = await gateway.java_knowledge_search(
                     query=query, top_k=top_k, rerank=False)

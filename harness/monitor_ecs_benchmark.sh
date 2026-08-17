@@ -7,7 +7,7 @@ INTERVAL_SECONDS="${3:-5}"
 
 mkdir -p "$(dirname "$OUT_FILE")"
 rm -f "$STOP_FILE"
-printf '%s\n' 'timestamp|docker_stats|container_state|backend_proc|workflow_proc|workflow_health|task_queue|run_queue|mysql|redis|postgres|postgres_checkpoints|disk' > "$OUT_FILE"
+printf '%s\n' 'timestamp|docker_stats|container_state|backend_proc|workflow_proc|workflow_health|task_queue|run_queue|run_permits|mysql|redis|postgres|postgres_checkpoints|disk' > "$OUT_FILE"
 
 one_line() {
   tr '\r\n|' ',,;' | sed 's/,,*/,/g; s/,$//'
@@ -61,6 +61,16 @@ while [ ! -f "$STOP_FILE" ]; do
       'curl -fsS --max-time 3 http://127.0.0.1:8080/api/runs/queue/status' \
       2>/dev/null | one_line
   )"
+  run_permits="$(
+    docker exec resumai-mysql sh -lc '
+      mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "
+        SELECT COUNT(*),
+               SUM(global_permit_id IS NOT NULL),
+               SUM(global_permit_id IS NULL)
+        FROM agent_run
+        WHERE status IN ('\''STARTING'\'', '\''RUNNING'\'', '\''PAUSING'\'', '\''CANCELLING'\'');"
+    ' 2>/dev/null | one_line
+  )"
   mysql_status="$(
     docker exec resumai-mysql sh -lc '
       mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
@@ -97,10 +107,10 @@ while [ ! -f "$STOP_FILE" ]; do
     ' 2>/dev/null | one_line
   )"
   disk_status="$(df -P / /data 2>/dev/null | tail -n +2 | one_line)"
-  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "$timestamp" "$docker_stats" "$container_state" "$backend_proc" \
     "$workflow_proc" "$workflow_health" "$task_queue" "$run_queue" \
-    "$mysql_status" "$redis_status" "$postgres_status" \
+    "$run_permits" "$mysql_status" "$redis_status" "$postgres_status" \
     "$postgres_checkpoints" "$disk_status" >> "$OUT_FILE"
   cycle_elapsed="$(( $(date +%s) - cycle_started ))"
   cycle_remaining="$(( INTERVAL_SECONDS - cycle_elapsed ))"

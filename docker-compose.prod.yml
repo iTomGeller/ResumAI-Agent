@@ -21,7 +21,7 @@ services:
       WORKFLOW_BASE_URL: http://ai-resume-workflow:8090
       WORKFLOW_INTERNAL_TOKEN: ${WORKFLOW_INTERNAL_TOKEN:?WORKFLOW_INTERNAL_TOKEN must be set}
       WORKFLOW_MODE: python
-      RUN_MAX_GLOBAL_CONCURRENT: ${RUN_MAX_GLOBAL_CONCURRENT:-12}
+      RUN_MAX_GLOBAL_CONCURRENT: ${RUN_MAX_GLOBAL_CONCURRENT:-24}
       # Keep uploaded resumes, KB manifests/chunks and file-backed Memory on
       # the named volume below. Relying on the application default (/app/uploads)
       # loses these files whenever the backend container is recreated.

@@ -99,9 +99,9 @@ resumai:
     internal-token: ${WORKFLOW_INTERNAL_TOKEN:change-me}
   agent-run:
     enabled: ${AGENT_RUN_ENABLED:true}
-    # Workflows share 12 execution slots. Python releases one only when every
+    # Workflows share 24 execution slots. Python releases one only when every
     # parallel branch is waiting on LLM, then reacquires it before continuation.
-    max-global-concurrent: ${RUN_MAX_GLOBAL_CONCURRENT:12}
+    max-global-concurrent: ${RUN_MAX_GLOBAL_CONCURRENT:24}
     run-timeout-seconds: ${RUN_TIMEOUT_SECONDS:900}
     dispatch-interval-ms: ${RUN_DISPATCH_INTERVAL_MS:500}
     watchdog-interval-ms: ${RUN_WATCHDOG_INTERVAL_MS:15000}

@@ -293,8 +293,17 @@ def collect_runtime_metrics(
     agent_runs: Counter = Counter()
     route_signatures: Counter = Counter()
     llm_durations: List[float] = []
+    llm_provider_durations: List[float] = []
+    llm_gate_wait_ms: List[float] = []
+    permit_reacquire_wait_ms: List[float] = []
+    llm_ttft_ms: List[float] = []
+    llm_intervals: List[Tuple[float, float]] = []
+    llm_model_durations: Dict[str, List[float]] = defaultdict(list)
+    llm_model_provider_durations: Dict[str, List[float]] = defaultdict(list)
     llm_calls = 0
     llm_failures = 0
+    llm_queued = 0
+    streamed_calls = 0
     prompt_tokens = 0
     completion_tokens = 0
     cache_hit_tokens = 0
@@ -303,7 +312,19 @@ def collect_runtime_metrics(
     mcp_durations: Dict[str, List[float]] = defaultdict(list)
     skill_stats: Dict[str, Counter] = defaultdict(Counter)
     memory_types: Counter = Counter()
+    memory_retrieved_types: Counter = Counter()
+    memory_write_types: Counter = Counter()
+    memory_hits = 0
+    memory_reads = 0
+    memory_misses = 0
+    memory_write_candidates = 0
     retrieval_stats: Counter = Counter()
+    retrieval_by_name: Dict[str, Counter] = defaultdict(Counter)
+    retrieval_strategies: Dict[str, Counter] = defaultdict(Counter)
+    retrieval_fallback_stages: Dict[str, Counter] = defaultdict(Counter)
+    retrieval_durations: Dict[str, List[float]] = defaultdict(list)
+    report_section_durations: List[float] = []
+    orchestration_stages: Counter = Counter()
     repair_stats: Counter = Counter()
     degraded_reasons: Counter = Counter()
     total_cost_cny = 0.0
@@ -340,11 +361,46 @@ def collect_runtime_metrics(
             if event_type == "llm.completed":
                 llm_calls += 1
                 duration = float(payload.get("durationMs") or 0)
+                reacquire_wait = float(
+                    payload.get("agentExecutionReacquireWaitMs") or 0)
+                provider_duration = (
+                    float(payload.get("providerDurationMs") or 0)
+                    if payload.get("providerDurationMs") is not None
+                    else max(0.0, duration - reacquire_wait))
+                post_provider_duration = max(
+                    0.0, duration - provider_duration)
                 llm_durations.append(duration)
+                llm_provider_durations.append(provider_duration)
+                model_name = str(payload.get("model") or "unknown")
+                llm_model_durations[model_name].append(duration)
+                llm_model_provider_durations[model_name].append(
+                    provider_duration)
+                occurred_at = payload.get("occurredAt")
+                if occurred_at:
+                    try:
+                        ended_ms = datetime.fromisoformat(
+                            str(occurred_at).replace("Z", "+00:00")
+                        ).timestamp() * 1000.0
+                        provider_ended_ms = ended_ms - post_provider_duration
+                        llm_intervals.append((
+                            provider_ended_ms - provider_duration,
+                            provider_ended_ms,
+                        ))
+                    except (TypeError, ValueError):
+                        pass
+                llm_gate_wait_ms.append(float(payload.get("queueWaitMs") or 0))
+                permit_reacquire_wait_ms.append(float(
+                    payload.get("agentExecutionReacquireWaitMs") or 0))
+                if payload.get("ttftMs") is not None:
+                    llm_ttft_ms.append(float(payload.get("ttftMs") or 0))
+                if payload.get("streamed"):
+                    streamed_calls += 1
                 prompt_tokens += int(payload.get("promptTokens") or 0)
                 completion_tokens += int(payload.get("completionTokens") or 0)
                 cache_hit_tokens += int(payload.get("promptCacheHitTokens") or 0)
-                model_calls[str(payload.get("model") or "unknown")] += 1
+                model_calls[model_name] += 1
+            elif event_type == "llm.queued":
+                llm_queued += 1
             elif event_type == "llm.failed":
                 llm_failures += 1
             elif event_type == "agent.completed" and agent_id:
@@ -359,6 +415,36 @@ def collect_runtime_metrics(
                 memory_types[str(
                     payload.get("memoryType") or payload.get("type")
                     or "UNKNOWN")] += 1
+            elif event_type == "memory.read":
+                memory_reads += 1
+                hit_count = int(payload.get("hitCount") or 0)
+                memory_hits += hit_count
+                memory_type = str(
+                    payload.get("memoryType") or payload.get("type")
+                    or "UNKNOWN")
+                if hit_count:
+                    memory_retrieved_types[memory_type] += hit_count
+            elif event_type == "memory.missed":
+                memory_misses += 1
+            elif event_type == "memory.written":
+                memory_write_candidates += 1
+                memory_type = str(
+                    payload.get("memoryType") or payload.get("type")
+                    or "UNKNOWN")
+                memory_write_types[memory_type] += 1
+            elif event_type == "run.progress" and str(
+                    payload.get("stage") or "") == "memory":
+                memory_hits += int(payload.get("memoryHits") or 0)
+                counts = payload.get("retrievedTypeCounts")
+                if isinstance(counts, dict):
+                    for memory_type, count in counts.items():
+                        memory_retrieved_types[str(memory_type)] += int(count or 0)
+            elif event_type == "agent.completed" and agent_id == "MemoryService":
+                memory_write_candidates += int(payload.get("written") or 0)
+            elif event_type == "report.section.completed":
+                if payload.get("durationMs") is not None:
+                    report_section_durations.append(float(
+                        payload.get("durationMs") or 0))
 
             source = str(payload.get("source") or "").lower()
             server = str(payload.get("mcpServer") or "")
@@ -366,7 +452,11 @@ def collect_runtime_metrics(
             if event_type in {"tool.completed", "tool.failed"} and (
                     source == "mcp" or server):
                 endpoint = tool_name or f"{server}.unknown"
-                outcome = "success" if event_type == "tool.completed" else "failed"
+                raw_outcome = str(payload.get("outcome") or "").lower()
+                outcome = (
+                    "success" if event_type == "tool.completed"
+                    and raw_outcome not in {"unavailable", "rate_limited"}
+                    else raw_outcome or "failed")
                 mcp_stats[endpoint][outcome] += 1
                 if payload.get("durationMs") is not None:
                     mcp_durations[endpoint].append(
@@ -377,6 +467,34 @@ def collect_runtime_metrics(
                 retrieval_stats[
                     "success" if event_type == "tool.completed" else "failed"] += 1
             stage = str(payload.get("stage") or "")
+            if stage.startswith("langgraph."):
+                orchestration_stages[stage] += 1
+            if event_type in {"retrieval.completed", "retrieval.failed"}:
+                name = str(payload.get("retrievalName") or tool_name
+                           or "unknown")
+                if name.startswith("retrieval."):
+                    name = name[len("retrieval."):]
+                outcome = "success" if event_type == "retrieval.completed" else "failed"
+                retrieval_stats[outcome] += 1
+                retrieval_by_name[name][outcome] += 1
+                returned_k = int(payload.get("returnedK") or 0)
+                if returned_k == 0:
+                    retrieval_by_name[name]["zeroHit"] += 1
+                if payload.get("fallback") or payload.get("fallbackStage"):
+                    retrieval_by_name[name]["fallback"] += 1
+                strategy = str(payload.get("strategy") or "")
+                if strategy:
+                    retrieval_strategies[name][strategy] += 1
+                fallback_stage = str(payload.get("fallbackStage") or "")
+                if fallback_stage:
+                    retrieval_fallback_stages[name][fallback_stage] += 1
+                stages = payload.get("stages") if isinstance(
+                    payload.get("stages"), dict) else {}
+                measured = stages.get("totalMs")
+                if measured is None:
+                    measured = stages.get("retrievalMs")
+                if measured is not None:
+                    retrieval_durations[name].append(float(measured or 0))
             if stage in {
                     "budget_reallocated", "parallel_report_retry",
                     "parallel_report_fallback",
@@ -419,6 +537,18 @@ def collect_runtime_metrics(
             "max": max(values) if values else None,
         }
 
+    def max_concurrency(intervals: List[Tuple[float, float]]) -> int:
+        points: List[Tuple[float, int]] = []
+        for started_at, ended_at in intervals:
+            points.append((started_at, 1))
+            points.append((ended_at, -1))
+        active = 0
+        peak = 0
+        for _, delta in sorted(points, key=lambda item: (item[0], item[1])):
+            active += delta
+            peak = max(peak, active)
+        return peak
+
     return {
         "runsCollected": len(rows),
         "runMetricErrors": sum(
@@ -437,7 +567,24 @@ def collect_runtime_metrics(
             "calls": llm_calls,
             "failures": llm_failures,
             "latencyMs": latency_summary(llm_durations),
+            "estimatedProviderLatencyMs": latency_summary(
+                llm_provider_durations),
+            "gateQueueWaitMs": latency_summary(llm_gate_wait_ms),
+            "permitReacquireWaitMs": latency_summary(
+                permit_reacquire_wait_ms),
+            "ttftMs": latency_summary(llm_ttft_ms),
+            "queuedCalls": llm_queued,
+            "streamedCalls": streamed_calls,
+            "observedMaxConcurrent": max_concurrency(llm_intervals),
             "modelCalls": dict(model_calls),
+            "modelLatencyMs": {
+                model_name: {
+                    "total": latency_summary(values),
+                    "estimatedProvider": latency_summary(
+                        llm_model_provider_durations[model_name]),
+                }
+                for model_name, values in llm_model_durations.items()
+            },
             "promptTokens": prompt_tokens,
             "completionTokens": completion_tokens,
             "cacheHitTokens": cache_hit_tokens,
@@ -453,7 +600,29 @@ def collect_runtime_metrics(
             for endpoint, counts in mcp_stats.items()},
         "skills": {skill: dict(counts) for skill, counts in skill_stats.items()},
         "memoryUsageByType": dict(memory_types),
+        "memory": {
+            "reads": memory_reads,
+            "misses": memory_misses,
+            "hits": memory_hits,
+            "retrievedTypeCounts": dict(memory_retrieved_types),
+            "writeCandidates": memory_write_candidates,
+            "writtenTypeCounts": dict(memory_write_types),
+        },
         "retrieval": dict(retrieval_stats),
+        "retrievalByName": {
+            name: {
+                **dict(counts),
+                "strategies": dict(retrieval_strategies[name]),
+                "fallbackStages": dict(retrieval_fallback_stages[name]),
+                "latencyMs": latency_summary(retrieval_durations[name]),
+            }
+            for name, counts in retrieval_by_name.items()
+        },
+        "reportSections": {
+            "completed": len(report_section_durations),
+            "latencyMs": latency_summary(report_section_durations),
+        },
+        "orchestrationStages": dict(orchestration_stages),
         "repairsAndFailures": dict(repair_stats),
         "degradedReasons": dict(degraded_reasons),
         "evidenceSupportRatio": latency_summary(evidence_ratios),
@@ -591,6 +760,10 @@ def main() -> int:
     parser.add_argument("--poll-interval", type=float, default=5.0)
     parser.add_argument("--sample-interval", type=float, default=5.0)
     parser.add_argument("--drain-timeout", type=float, default=3600.0)
+    parser.add_argument(
+        "--hr-id", default=None,
+        help="isolated X-HR-Id namespace for benchmark tasks and memory",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -626,8 +799,11 @@ def main() -> int:
     outdir.mkdir(parents=True, exist_ok=False)
     stress.BASE = args.base_url.rstrip("/")
     stress.AUTH_TOKEN = os.getenv("RESUMAI_AUTH_TOKEN", "")
+    stress.HR_ID = args.hr_id or (
+        "loadtest-" + time.strftime("%Y%m%d-%H%M%S"))
     benchmark_manifest: Dict[str, Any] = {
         "capturedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "hrId": stress.HR_ID,
         "mcpEndpoints": [],
     }
     try:
