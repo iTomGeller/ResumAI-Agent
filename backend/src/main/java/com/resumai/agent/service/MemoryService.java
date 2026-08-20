@@ -415,13 +415,18 @@ public class MemoryService {
                                 /** When true, include exp*_benchmark sources (lab only). */
                                 Boolean includeBenchmarkSources,
                                 /** Workflow revision consuming this memory. */
-                                String consumerVersion) {
+                                String consumerVersion,
+                                /** Exact business-memory job category filter. */
+                                String jobCategory,
+                                /** Exact JOB_PROFILE JD fingerprint filter. */
+                                String jdFingerprint) {
 
         public SearchRequest(String query, List<String> types, String userId,
                              String conversationId, String runId, Integer topK,
                              Double minConfidence, Boolean includeSensitive) {
             this(query, types, userId, conversationId, runId, topK,
-                    minConfidence, includeSensitive, null, null, null, null);
+                    minConfidence, includeSensitive, null, null, null, null,
+                    null, null);
         }
 
         public SearchRequest(String query, List<String> types, String userId,
@@ -429,7 +434,8 @@ public class MemoryService {
                              Double minConfidence, Boolean includeSensitive,
                              String channel) {
             this(query, types, userId, conversationId, runId, topK,
-                    minConfidence, includeSensitive, channel, null, null, null);
+                    minConfidence, includeSensitive, channel, null, null, null,
+                    null, null);
         }
     }
 
@@ -493,8 +499,21 @@ public class MemoryService {
         if (!storedTypes.isEmpty()) {
             query.in("type", storedTypes);
         }
+        if (StringUtils.hasText(request.jobCategory())) {
+            query.apply(
+                    "JSON_UNQUOTE(JSON_EXTRACT(structured_content, '$.jobCategory')) = {0}",
+                    request.jobCategory().trim().toUpperCase(Locale.ROOT));
+        }
+        if (StringUtils.hasText(request.jdFingerprint())) {
+            query.apply(
+                    "JSON_UNQUOTE(JSON_EXTRACT(structured_content, '$.jdFingerprint')) = {0}",
+                    request.jdFingerprint().trim());
+        }
         query.orderByDesc("update_time").last("limit 400");
         List<MemoryEntryRow> candidates = memoryMapper.selectList(query);
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
 
         double minConfidence = request.minConfidence() != null ? request.minConfidence() : 0.0;
         boolean includeSensitive = Boolean.TRUE.equals(request.includeSensitive());

@@ -10,6 +10,7 @@ import com.resumai.agent.api.dto.TaskControlResponse;
 import com.resumai.agent.dao.AgentRunMapper;
 import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.entity.ConversationSession;
+import com.resumai.agent.conversation.CopilotMetrics;
 import com.resumai.agent.service.ConversationService;
 import com.resumai.agent.service.TaskControlService;
 import com.resumai.agent.util.HrContext;
@@ -46,15 +47,18 @@ public class ConversationController {
     private final TaskControlService taskControlService;
     private final AgentRunMapper agentRunMapper;
     private final ObjectMapper objectMapper;
+    private final CopilotMetrics copilotMetrics;
 
     public ConversationController(ConversationService conversationService,
                                   TaskControlService taskControlService,
                                   AgentRunMapper agentRunMapper,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  CopilotMetrics copilotMetrics) {
         this.conversationService = conversationService;
         this.taskControlService = taskControlService;
         this.agentRunMapper = agentRunMapper;
         this.objectMapper = objectMapper;
+        this.copilotMetrics = copilotMetrics;
     }
 
     public record CreateConversationBody(String title, String resumeText, String jobDescription,
@@ -134,7 +138,10 @@ public class ConversationController {
     public ResponseEntity<StreamingResponseBody> streamMessage(
             @PathVariable String conversationId,
             @Valid @RequestBody ConversationTurnRequest request) {
+        long acceptedNanos = System.nanoTime();
         StreamingResponseBody body = output -> {
+            copilotMetrics.recordAsyncQueueLatency(
+                    Math.max(0, (System.nanoTime() - acceptedNanos) / 1_000_000));
             try {
                 ConversationTurnResponse response = conversationService.sendTurn(
                         conversationId, request,

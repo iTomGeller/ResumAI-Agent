@@ -201,7 +201,8 @@ public class AgentRunInternalController {
                                       String conversationId, String runId, Integer topK,
                                       Double minConfidence, String channel,
                                       String consumerAgent, String consumerVersion,
-                                      Boolean includeBenchmarkSources) {
+                                      Boolean includeBenchmarkSources,
+                                      String jobCategory, String jdFingerprint) {
     }
 
     @PostMapping("/memory/search")
@@ -214,7 +215,8 @@ public class AgentRunInternalController {
                 request.query(), request.types(), request.userId(), request.conversationId(),
                 request.runId(), request.topK(), request.minConfidence(), false,
                 request.channel(), request.consumerAgent(),
-                request.includeBenchmarkSources(), request.consumerVersion()));
+                request.includeBenchmarkSources(), request.consumerVersion(),
+                request.jobCategory(), request.jdFingerprint()));
         Instant searchEndedAt = Instant.now();
         long searchDurationMs = Math.max(
                 0L, (System.nanoTime() - searchStartedNanos) / 1_000_000L);

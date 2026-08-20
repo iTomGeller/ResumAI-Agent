@@ -43,7 +43,7 @@ _SECTION_READ_MAP: Dict[str, List[str]] = {
     "ProjectAgent": ["resumeFacts", "jdRequirements", "effectiveJd", "inputPresence"],
     "RiskAgent": ["resumeFacts", "timelineCheck", "inputPresence"],
     "ReportAgent": ["resumeFacts", "jdRequirements", "mcpEvidence",
-                    "technicalFindings", "projectFindings", "risks",
+                    "technicalFindings", "projectFindings", "risks", "evidence",
                     "jdCoverage", "timelineCheck", "effectiveJd",
                     "inputPresence"],
     "CoordinatorAgent": CANONICAL_ARTIFACT_KEYS,
@@ -361,13 +361,127 @@ class SharedState:
         presence = store.get("inputPresence") or {}
         if presence:
             view["inputPresence"] = presence
+        if agent_id == "ReportAgent":
+            view = self._compact_report_view(view)
         text = json.dumps(view, ensure_ascii=False, default=str)
         if len(text) > max_chars:
+            if agent_id == "ReportAgent":
+                # Keep the digest parseable even for pathological artifacts.
+                # Canonical state is untouched; only this prompt view is
+                # tightened further.
+                for list_limit, string_limit, dict_limit in (
+                        (4, 120, 12), (2, 80, 8), (1, 48, 6)):
+                    view = self._compact_nested(
+                        view, list_limit=list_limit,
+                        string_limit=string_limit, dict_limit=dict_limit)
+                    text = json.dumps(view, ensure_ascii=False, default=str)
+                    if len(text) <= max_chars:
+                        return text
+                return json.dumps({
+                    "inputPresence": view.get("inputPresence") or {},
+                    "promptViewTruncated": True,
+                }, ensure_ascii=False, default=str)
             for section in list(view.keys()):
                 if isinstance(view[section], list) and len(view[section]) > 6:
                     view[section] = view[section][-6:]
             text = json.dumps(view, ensure_ascii=False, default=str)[:max_chars]
         return text
+
+    @classmethod
+    def _compact_report_view(cls, view: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep ReportAgent's evidence-rich input bounded and valid JSON.
+
+        Report only needs the highest-signal structured facts and findings. The
+        full canonical artifacts remain in checkpoints; this affects prompt
+        assembly only.
+        """
+        compact = dict(view)
+        facts = view.get("resumeFacts")
+        if isinstance(facts, dict):
+            compact_facts: Dict[str, Any] = {}
+            limits = {
+                "skills": 16,
+                "projects": 4,
+                "experiences": 4,
+                "education": 2,
+                "timelinePeriods": 8,
+            }
+            for key in (
+                    "rawExcerpt", "skills", "projects", "experiences",
+                    "education", "timelinePeriods", "source", "completeness",
+                    "confidence"):
+                if key not in facts:
+                    continue
+                value = facts[key]
+                if key == "rawExcerpt":
+                    compact_facts[key] = str(value)[:1200]
+                elif key in limits and isinstance(value, list):
+                    compact_facts[key] = cls._compact_nested(
+                        value[:limits[key]], list_limit=limits[key],
+                        string_limit=100)
+                else:
+                    compact_facts[key] = cls._compact_nested(value)
+            compact["resumeFacts"] = compact_facts
+
+        list_limits = {
+            "technicalFindings": 6,
+            "projectFindings": 5,
+            "risks": 4,
+            "evidence": 6,
+        }
+        for section, limit in list_limits.items():
+            value = view.get(section)
+            if isinstance(value, list):
+                compact[section] = cls._compact_nested(
+                    value[:limit], list_limit=limit, string_limit=160)
+
+        for section in ("jdRequirements", "jdCoverage", "timelineCheck"):
+            if section in view:
+                compact[section] = cls._compact_nested(
+                    view[section], list_limit=6, string_limit=180)
+
+        if "effectiveJd" in view:
+            compact["effectiveJd"] = str(view["effectiveJd"])[:800]
+
+        mcp_entries = compact.get("mcpEvidence")
+        if isinstance(mcp_entries, list):
+            bounded_mcp = []
+            for entry in mcp_entries[-3:]:
+                if not isinstance(entry, dict):
+                    continue
+                item = cls._compact_nested(
+                    entry, list_limit=4, string_limit=240)
+                if isinstance(item, dict) and "contentPreview" in item:
+                    item["contentPreview"] = str(item["contentPreview"])[:300]
+                bounded_mcp.append(item)
+            compact["mcpEvidence"] = bounded_mcp
+        return compact
+
+    @classmethod
+    def _compact_nested(
+            cls, value: Any, *, list_limit: int = 8,
+            string_limit: int = 320, dict_limit: int = 16,
+            depth: int = 0) -> Any:
+        """Bound nested prompt-only values without changing canonical state."""
+        if isinstance(value, str):
+            return value[:string_limit]
+        if depth >= 5:
+            return str(value)[:string_limit]
+        if isinstance(value, list):
+            return [
+                cls._compact_nested(
+                    item, list_limit=list_limit, string_limit=string_limit,
+                    dict_limit=dict_limit, depth=depth + 1)
+                for item in value[:list_limit]
+            ]
+        if isinstance(value, dict):
+            return {
+                key: cls._compact_nested(
+                    nested, list_limit=list_limit, string_limit=string_limit,
+                    dict_limit=dict_limit, depth=depth + 1)
+                for key, nested in list(value.items())[:dict_limit]
+            }
+        return value
 
     @staticmethod
     def _compact_mcp_entries(value: Any) -> Any:

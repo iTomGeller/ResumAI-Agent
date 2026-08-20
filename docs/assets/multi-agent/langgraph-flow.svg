@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1110" viewBox="0 0 1200 1110" role="img" aria-labelledby="title desc">
+  <title id="title">LangGraph 多 Agent 编排图</title>
+  <desc id="desc">唯一 Coordinator 在 observe_plan 控制节点生成初始计划，dispatch 使用 Send 并行执行，Reducer merge 后持久化并继续 dispatch，最终 finalize。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 Z" fill="#52637a"/></marker>
+    <style>
+      .title{font:700 34px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#10233f}
+      .subtitle{font:20px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#5a6b84}
+      .label{font:700 23px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#10233f}
+      .detail{font:18px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#4d5d74}
+      .small{font:17px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#52637a}
+      .arrow{stroke:#52637a;stroke-width:3;fill:none;marker-end:url(#arrow)}
+      .loop{stroke:#8a64cf;stroke-width:3;fill:none;stroke-dasharray:9 7;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="1110" fill="#ffffff"/>
+  <text class="title" x="50" y="55">LangGraph 控制流：Send 并行、Reducer 汇聚、Command 循环</text>
+  <text class="subtitle" x="50" y="88">每个 super-step 由 PostgreSQL Checkpointer 同步持久化；thread_id = runId</text>
+
+  <rect x="380" y="120" width="440" height="86" rx="14" fill="#edf3ff" stroke="#8caceb" stroke-width="2"/>
+  <text class="label" x="600" y="155" text-anchor="middle">Coordinator 规划</text><text class="detail" x="600" y="184" text-anchor="middle">LangGraph 节点名：observe_plan</text>
+  <path class="arrow" d="M600 206 V252"/>
+
+  <rect x="380" y="254" width="440" height="86" rx="14" fill="#fff5e5" stroke="#e7b25e" stroke-width="2"/>
+  <text class="label" x="600" y="289" text-anchor="middle">dispatch</text><text class="detail" x="600" y="318" text-anchor="middle">选择下一并行组</text>
+  <path class="arrow" d="M600 340 V386"/>
+
+  <text class="small" x="600" y="376" text-anchor="middle">Send("agent") × N</text>
+  <path class="arrow" d="M600 386 H210 V420"/><path class="arrow" d="M600 386 V420"/><path class="arrow" d="M600 386 H990 V420"/>
+  <rect x="70" y="422" width="280" height="90" rx="14" fill="#eaf1ff" stroke="#6f97e8" stroke-width="2"/>
+  <text class="label" x="210" y="458" text-anchor="middle">TechAgent</text><text class="detail" x="210" y="487" text-anchor="middle">并行节点</text>
+  <rect x="460" y="422" width="280" height="90" rx="14" fill="#ecf8f0" stroke="#6fbd8b" stroke-width="2"/>
+  <text class="label" x="600" y="458" text-anchor="middle">ProjectAgent</text><text class="detail" x="600" y="487" text-anchor="middle">并行节点</text>
+  <rect x="850" y="422" width="280" height="90" rx="14" fill="#f4edff" stroke="#9c79df" stroke-width="2"/>
+  <text class="label" x="990" y="458" text-anchor="middle">RiskAgent</text><text class="detail" x="990" y="487" text-anchor="middle">并行节点</text>
+
+  <path class="arrow" d="M210 512 V552 H600 V580"/><path class="arrow" d="M600 512 V580"/><path class="arrow" d="M990 512 V552 H600 V580"/>
+  <rect x="380" y="582" width="440" height="88" rx="14" fill="#f3f6fa" stroke="#92a0b4" stroke-width="2"/>
+  <text class="label" x="600" y="617" text-anchor="middle">merge</text><text class="detail" x="600" y="646" text-anchor="middle">Reducer + SharedState schema merge</text>
+  <path class="arrow" d="M600 670 V716"/>
+
+  <rect x="380" y="718" width="440" height="96" rx="14" fill="#f5efff" stroke="#aa8be3" stroke-width="2"/>
+  <text class="label" x="600" y="754" text-anchor="middle">checkpoint</text><text class="detail" x="600" y="783" text-anchor="middle">保存快照 · 继续 dispatch</text>
+  <path class="loop" d="M380 766 H180 V297 H380"/>
+  <text class="small" x="92" y="530" transform="rotate(-90 92 530)" text-anchor="middle">Command(goto="dispatch") · 最多2次</text>
+
+  <path class="arrow" d="M600 814 V866"/>
+  <rect x="380" y="868" width="440" height="88" rx="14" fill="#eaf8f1" stroke="#6fc196" stroke-width="2"/>
+  <text class="label" x="600" y="903" text-anchor="middle">finalize</text><text class="detail" x="600" y="932" text-anchor="middle">校验目标产物并写最终结果</text>
+
+  <path class="arrow" d="M600 956 V1004"/>
+  <rect x="300" y="1006" width="600" height="76" rx="14" fill="#edf3ff" stroke="#8caceb" stroke-width="2"/>
+  <text class="label" x="600" y="1040" text-anchor="middle">AsyncPostgresSaver · durability="sync"</text>
+  <text class="small" x="600" y="1068" text-anchor="middle">故障后从最后一个成功 super-step 继续</text>
+</svg>

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
@@ -21,6 +22,21 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class MemoryWriteRunEpisodeTest {
+
+    @Test
+    void emptyScopedCandidateSetSkipsEmbeddingRecall() {
+        MemoryEntryMapper mapper = mock(MemoryEntryMapper.class);
+        MemoryVectorService vector = mock(MemoryVectorService.class);
+        MemoryService svc = new MemoryService(mapper, new ObjectMapper(), vector);
+        when(mapper.selectList(any())).thenReturn(List.of());
+
+        List<Map<String, Object>> hits = svc.search(new MemoryService.SearchRequest(
+                "Java", List.of("JOB_PROFILE"), "u1", "c1", "r1", 1,
+                0.35, false));
+
+        assertTrue(hits.isEmpty());
+        verifyNoInteractions(vector);
+    }
 
     @Test
     void identicalCurrentBuildWriteRefreshesProducerAndTtl() {

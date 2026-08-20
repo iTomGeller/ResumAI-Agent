@@ -39,19 +39,30 @@ public class CopilotLlmClient {
             4. 回答控制在 300 个中文字符左右；普通问答不得触发完整评估运行。
             5. contextSnapshot.messagesToCompact 非空时，把既有 conversationSummary 与这些旧消息合并为新的 conversationSummary，最多800个中文字符；否则输出 null。
             6. 有实时工具时由你根据工具描述自主决定是否调用，禁止预设工具名；工具失败时明确说明未查到。
+            7. “候选人固定上下文”与“当前会话与问题”共同构成本轮输入；当前问题和近期消息以后者为准。
             """;
+
+    private static final List<String> STABLE_SNAPSHOT_KEYS = List.of(
+            "jobCategory", "revision", "hasResume", "hasJobDescription",
+            "resumeText", "jobDescription", "structuredReport");
 
     private final DeepSeekProperties properties;
     private final CopilotMcpClient mcpClient;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final CopilotMetrics metrics;
+
+    private record PromptParts(String stableJson, String dynamicJson) {
+    }
 
     public CopilotLlmClient(DeepSeekProperties properties,
                             CopilotMcpClient mcpClient,
-                            ObjectMapper objectMapper) {
+                            ObjectMapper objectMapper,
+                            CopilotMetrics metrics) {
         this.properties = properties;
         this.mcpClient = mcpClient;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(
                         Math.max(1000, properties.getConnectTimeoutMs())))
@@ -66,10 +77,12 @@ public class CopilotLlmClient {
         }
         Consumer<String> sink = onDelta != null ? onDelta : ignored -> { };
         try {
+            PromptParts prompt = promptParts(input);
             List<Map<String, Object>> messages = new ArrayList<>();
             messages.add(Map.of("role", "system", "content", SYSTEM_PROMPT));
             messages.add(Map.of("role", "user", "content",
-                    objectMapper.writeValueAsString(input)));
+                    "[候选人固定上下文]\n" + prompt.stableJson()
+                            + "\n[当前会话与问题]\n" + prompt.dynamicJson()));
 
             boolean allowTools = Boolean.TRUE.equals(input.get("allowTools"))
                     || "BACKGROUND_QUERY".equalsIgnoreCase(
@@ -112,7 +125,7 @@ public class CopilotLlmClient {
                             "role", "tool",
                             "tool_call_id", String.valueOf(call.getOrDefault("id", "")),
                             "name", name,
-                            "content", clip(objectMapper.writeValueAsString(result), 8000)));
+                            "content", toolMessageContent(result)));
                 }
             }
 
@@ -120,6 +133,7 @@ public class CopilotLlmClient {
             Map<String, Object> payload = stream(finalBody, sink, evidence);
             return Optional.of(payload);
         } catch (Exception e) {
+            metrics.recordProviderFailure();
             log.info("Java Copilot model call unavailable: {}", e.getMessage());
             return Optional.empty();
         }
@@ -147,10 +161,14 @@ public class CopilotLlmClient {
 
     private Map<String, Object> complete(Map<String, Object> body)
             throws IOException, InterruptedException {
+        long providerStartedNanos = System.nanoTime();
         HttpResponse<String> response = httpClient.send(request(body),
                 HttpResponse.BodyHandlers.ofString());
+        long totalMs = elapsedMs(providerStartedNanos);
+        metrics.recordProviderCall(totalMs, totalMs, totalMs);
         ensureSuccess(response.statusCode(), response.body());
         Map<String, Object> envelope = objectMapper.readValue(response.body(), Map.class);
+        recordUsage(envelope);
         List<Map<String, Object>> choices = mapList(envelope.get("choices"));
         if (choices.isEmpty()) {
             throw new IOException("Copilot provider returned no choices");
@@ -162,8 +180,11 @@ public class CopilotLlmClient {
                                        Consumer<String> sink,
                                        List<Map<String, Object>> evidence)
             throws IOException, InterruptedException {
+        long providerStartedNanos = System.nanoTime();
         HttpResponse<InputStream> response = httpClient.send(request(body),
                 HttpResponse.BodyHandlers.ofInputStream());
+        long headerLatencyMs = elapsedMs(providerStartedNanos);
+        long firstTokenNanos = 0;
         if (response.statusCode() >= 400) {
             String error = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
             ensureSuccess(response.statusCode(), error);
@@ -186,6 +207,7 @@ public class CopilotLlmClient {
                     continue;
                 }
                 Map<String, Object> chunk = objectMapper.readValue(data, Map.class);
+                recordUsage(chunk);
                 List<Map<String, Object>> choices = mapList(chunk.get("choices"));
                 if (choices.isEmpty()) {
                     continue;
@@ -194,6 +216,9 @@ public class CopilotLlmClient {
                 Object content = delta.get("content");
                 if (content == null) {
                     continue;
+                }
+                if (firstTokenNanos == 0) {
+                    firstTokenNanos = System.nanoTime();
                 }
                 raw.append(content);
                 String partial = extractPartialAnswer(raw.toString());
@@ -204,6 +229,13 @@ public class CopilotLlmClient {
                 }
             }
         }
+        long completedNanos = System.nanoTime();
+        metrics.recordProviderCall(
+                headerLatencyMs,
+                firstTokenNanos == 0
+                        ? elapsedMs(providerStartedNanos)
+                        : elapsedMs(providerStartedNanos, firstTokenNanos),
+                elapsedMs(providerStartedNanos, completedNanos));
         Map<String, Object> payload = parsePayload(raw.toString(), evidence);
         String answer = String.valueOf(payload.getOrDefault("answer", ""));
         if (answer.length() > emitted.length()) {
@@ -353,6 +385,36 @@ public class CopilotLlmClient {
         }
     }
 
+    /**
+     * DeepSeek caches only identical prefixes. Candidate material changes only
+     * when the conversation revision changes, so serialize it before the
+     * current question and recent turns. Dynamic values must never precede it.
+     */
+    private PromptParts promptParts(Map<String, Object> input) throws IOException {
+        Map<String, Object> dynamic = new LinkedHashMap<>(input);
+        Map<String, Object> stable = new LinkedHashMap<>();
+        // Internal identifiers are unnecessary model input.
+        dynamic.remove("conversationId");
+
+        Map<String, Object> sourceSnapshot = mapValue(dynamic.remove("contextSnapshot"));
+        Map<String, Object> stableSnapshot = new LinkedHashMap<>();
+        Map<String, Object> dynamicSnapshot = new LinkedHashMap<>(sourceSnapshot);
+        for (String key : STABLE_SNAPSHOT_KEYS) {
+            if (dynamicSnapshot.containsKey(key)) {
+                stableSnapshot.put(key, dynamicSnapshot.remove(key));
+            }
+        }
+        if (!stableSnapshot.isEmpty()) {
+            stable.put("contextSnapshot", stableSnapshot);
+        }
+        if (!dynamicSnapshot.isEmpty()) {
+            dynamic.put("contextSnapshot", dynamicSnapshot);
+        }
+        return new PromptParts(
+                objectMapper.writeValueAsString(stable),
+                objectMapper.writeValueAsString(dynamic));
+    }
+
     private static void ensureSuccess(int statusCode, String body) throws IOException {
         if (statusCode >= 400) {
             throw new IOException("HTTP " + statusCode + ": " + clip(body, 500));
@@ -383,8 +445,76 @@ public class CopilotLlmClient {
         return (Map<String, Object>) raw;
     }
 
+    private void recordUsage(Map<String, Object> envelope) {
+        Map<String, Object> usage = mapValue(envelope.get("usage"));
+        if (usage.isEmpty()) {
+            return;
+        }
+        Map<String, Object> promptDetails = mapValue(
+                usage.get("prompt_tokens_details"));
+        Integer cachedTokens = integerValue(promptDetails.get("cached_tokens"));
+        if (cachedTokens == null) {
+            cachedTokens = integerValue(promptDetails.get("prompt_cache_hit_tokens"));
+        }
+        if (cachedTokens == null) {
+            cachedTokens = integerValue(usage.get("prompt_cache_hit_tokens"));
+        }
+        metrics.recordProviderUsage(
+                integerValue(usage.get("prompt_tokens")),
+                cachedTokens);
+    }
+
+    private static Integer integerValue(Object raw) {
+        if (raw instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return raw == null ? null : Integer.valueOf(String.valueOf(raw));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static long elapsedMs(long startedNanos) {
+        return Math.max(0, (System.nanoTime() - startedNanos) / 1_000_000);
+    }
+
+    private static long elapsedMs(long startedNanos, long endedNanos) {
+        return Math.max(0, (endedNanos - startedNanos) / 1_000_000);
+    }
+
     private static String clip(String value, int limit) {
         String text = value == null ? "" : value;
         return text.length() <= limit ? text : text.substring(0, limit);
+    }
+
+    private static String clipPreservingHeadTail(String value, int limit) {
+        String text = value == null ? "" : value;
+        if (text.length() <= limit) {
+            return text;
+        }
+        String marker = "\n[…中间内容已截断…]\n";
+        int available = Math.max(2, limit - marker.length());
+        int head = Math.max(1, (int) Math.ceil(available * 0.6));
+        int tail = Math.max(1, available - head);
+        return text.substring(0, head) + marker
+                + text.substring(text.length() - tail);
+    }
+
+    /** Keep the tool envelope valid; only large payload fields are clipped. */
+    private String toolMessageContent(Map<String, Object> result) throws IOException {
+        Map<String, Object> safe = new LinkedHashMap<>();
+        for (String key : List.of("success", "status", "tool", "mcpServer")) {
+            if (result.containsKey(key)) {
+                safe.put(key, result.get(key));
+            }
+        }
+        safe.put("text", clipPreservingHeadTail(
+                String.valueOf(result.getOrDefault("text", "")), 6200));
+        if (result.containsKey("structuredContent")) {
+            safe.put("structuredContent", clipPreservingHeadTail(
+                    objectMapper.writeValueAsString(result.get("structuredContent")), 1200));
+        }
+        return objectMapper.writeValueAsString(safe);
     }
 }

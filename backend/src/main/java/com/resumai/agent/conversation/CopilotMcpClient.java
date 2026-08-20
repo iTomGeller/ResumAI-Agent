@@ -127,7 +127,7 @@ public class CopilotMcpClient {
                     ? "ERROR" : "SUCCESS");
             normalized.put("tool", tool.catalogName());
             normalized.put("mcpServer", tool.server());
-            normalized.put("text", clip(String.join("\n", texts), 12000));
+            normalized.put("text", clipPreservingHeadTail(String.join("\n", texts), 12000));
             if (result.get("structuredContent") instanceof Map<?, ?> structured) {
                 normalized.put("structuredContent", structured);
             }
@@ -398,5 +398,18 @@ public class CopilotMcpClient {
     private static String clip(String value, int limit) {
         String text = value == null ? "" : value;
         return text.length() <= limit ? text : text.substring(0, limit);
+    }
+
+    private static String clipPreservingHeadTail(String value, int limit) {
+        String text = value == null ? "" : value;
+        if (text.length() <= limit) {
+            return text;
+        }
+        String marker = "\n[…中间内容已截断…]\n";
+        int available = Math.max(2, limit - marker.length());
+        int head = Math.max(1, (int) Math.ceil(available * 0.6));
+        int tail = Math.max(1, available - head);
+        return text.substring(0, head) + marker
+                + text.substring(text.length() - tail);
     }
 }

@@ -26,8 +26,6 @@ EXPECTED_SKILLS = [
     "assess-production-engineering",
     "assess-technical-evidence",
     "audit-claim-consistency",
-    "audit-evidence-provenance",
-    "calibrate-evidence-confidence",
     "ground-project-claims",
     "retrieve-public-candidate-evidence",
     "risk-pattern-detection",
@@ -44,6 +42,9 @@ RAG_SCENARIOS = {
     "jd_match_search": "jd_matching",
     "knowledge_search": "knowledge_base",
     "resume_semantic_search": "resume_evidence",
+    "retrieval.jd": "jd_matching",
+    "retrieval.knowledge": "knowledge_base",
+    "retrieval.resume": "resume_evidence",
 }
 RAG_SCENARIO_LABELS = {
     "jd_matching": "岗位匹配检索",
@@ -394,10 +395,13 @@ def parse_ecs_monitor(path: Path) -> Dict[str, Any]:
 
     for line in lines[1:]:
         columns = line.split("|")
-        if len(columns) != 11:
+        if len(columns) not in (11, 14):
             malformed += 1
             continue
         queue_index = 6
+        mysql_index = 8 if len(columns) == 11 else 9
+        redis_index = 9 if len(columns) == 11 else 10
+        disk_index = 10 if len(columns) == 11 else 13
         try:
             timestamps.append(datetime.fromisoformat(columns[0]))
         except ValueError:
@@ -431,13 +435,13 @@ def parse_ecs_monitor(path: Path) -> Dict[str, Any]:
             for key, value in json_column(column).items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     target[key].append(float(value))
-        for key, value in key_values(columns[queue_index + 2], "\t").items():
+        for key, value in key_values(columns[mysql_index], "\t").items():
             mysql[key].append(value)
-        for key, value in key_values(columns[queue_index + 3], ":").items():
+        for key, value in key_values(columns[redis_index], ":").items():
             redis[key].append(value)
         for _device, used_pct, mount in re.findall(
                 r"(/dev/[^,\s]+)\s+\d+\s+\d+\s+\d+\s+(\d+)%\s+([^,\s]+)",
-                columns[queue_index + 4]):
+                columns[disk_index]):
             disk[mount].append(float(used_pct))
 
     containers: Dict[str, Any] = {}
@@ -530,7 +534,7 @@ def coverage(runtime: Dict[str, Any],
         "memory": {
             "observed": sorted((runtime.get("memoryUsageByType") or {}).keys()),
             "missing": sorted(
-                {"WORKING", "SEMANTIC", "EPISODIC", "PROCEDURAL"}
+                {"JOB_PROFILE", "RECENT_CASE"}
                 - set((runtime.get("memoryUsageByType") or {}).keys())),
         },
     }
@@ -1255,6 +1259,34 @@ def _json_lines(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def analyze_queue_trend(directory: Path) -> Dict[str, Any]:
+    rows = _json_lines(directory / "queue_samples.jsonl")
+    samples = [
+        (float(row.get("offsetS") or 0),
+         float((row.get("runQueue") or {}).get("queued") or 0))
+        for row in rows]
+    if len(samples) < 2:
+        return {"status": "NOT_COLLECTED"}
+    peak_index = max(range(len(samples)), key=lambda index: samples[index][1])
+    start_t, start_q = samples[0]
+    peak_t, peak_q = samples[peak_index]
+    end_t, end_q = samples[-1]
+    growth_slope = ((peak_q - start_q) / (peak_t - start_t)
+                    if peak_t > start_t else None)
+    drain_slope = ((end_q - peak_q) / (end_t - peak_t)
+                   if end_t > peak_t else None)
+    return {
+        "status": "MEASURED",
+        "peakQueued": peak_q,
+        "peakAtSeconds": round(peak_t, 3),
+        "netGrowthPerSecondToPeak": round(growth_slope, 4)
+        if growth_slope is not None else None,
+        "netDrainPerSecondAfterPeak": round(drain_slope, 4)
+        if drain_slope is not None else None,
+        "definition": "net slope from first sample to peak, and from peak to final sample",
+    }
+
+
 def generate_charts(report: Dict[str, Any], directory: Path) -> Dict[str, str]:
     """Render report-native PNGs from raw benchmark evidence."""
     try:
@@ -1275,6 +1307,8 @@ def generate_charts(report: Dict[str, Any], directory: Path) -> Dict[str, str]:
     chart_dir = directory / "charts"
     chart_dir.mkdir(parents=True, exist_ok=True)
     generated: Dict[str, str] = {}
+    memory = report.get("memory") or {}
+    skills = report.get("skills") or {}
 
     def save(fig: Any, name: str, key: str) -> None:
         fig.tight_layout()
@@ -1475,7 +1509,7 @@ def generate_charts(report: Dict[str, Any], directory: Path) -> Dict[str, str]:
             name: {"cpu": [], "memory": []} for name in CONTAINERS}
         for line in monitor.read_text(encoding="utf-8").splitlines()[1:]:
             columns = line.split("|")
-            if len(columns) != 11:
+            if len(columns) not in (11, 14):
                 continue
             try:
                 times.append(datetime.fromisoformat(columns[0]))
@@ -1506,12 +1540,130 @@ def generate_charts(report: Dict[str, Any], directory: Path) -> Dict[str, str]:
             axes[1].legend(ncol=2, fontsize=8)
             save(fig, "05_ecs_resources.png", "ecsResources")
 
+    graph_metrics = report.get("langgraphMetrics") or {}
+    graph = graph_metrics.get("langgraph") or {}
+    parallel = graph.get("parallel") or {}
+    boundary = graph.get("graphBoundary") or {}
+    if parallel.get("groups"):
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+        labels = ["P50", "P95"]
+        x = np.arange(len(labels))
+        width = 0.34
+        wall = [float((parallel.get("groupWallMs") or {}).get(key) or 0) / 1000
+                for key in ("p50", "p95")]
+        summed = [float((parallel.get("summedAgentMs") or {}).get(key) or 0) / 1000
+                  for key in ("p50", "p95")]
+        axes[0].bar(x - width / 2, wall, width, label="Parallel wall time")
+        axes[0].bar(x + width / 2, summed, width, label="Serial sum")
+        axes[0].set_xticks(x, labels)
+        axes[0].set_ylabel("seconds")
+        axes[0].set_title("Specialist parallel-group gain")
+        axes[0].legend()
+        boundary_names = ["Result→Reducer", "Result→next Dispatch"]
+        boundary_values = [
+            float((boundary.get("lastResultToReducerMs") or {}).get("p95") or 0),
+            float((boundary.get("lastResultToNextDispatchMs") or {}).get("p95") or 0),
+        ]
+        bars = axes[1].bar(boundary_names, boundary_values,
+                           color=["#4c78a8", "#f58518"])
+        axes[1].set_ylabel("P95 milliseconds")
+        axes[1].set_title("LangGraph control-plane boundary")
+        for bar, value in zip(bars, boundary_values):
+            axes[1].text(bar.get_x() + bar.get_width() / 2, value,
+                         f"{value:.1f}ms", ha="center", va="bottom")
+        save(fig, "06_langgraph_parallel.png", "langgraphParallel")
+
+    if llm := (runtime.get("llm") or {}):
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+        latency_labels = ["Provider", "TTFT", "Permit reacquire", "LLM gate"]
+        latency_sources = [
+            llm.get("latencyMs") or {}, llm.get("ttftMs") or {},
+            llm.get("permitReacquireWaitMs") or {},
+            llm.get("gateQueueWaitMs") or {},
+        ]
+        x = np.arange(len(latency_labels))
+        width = 0.34
+        for index, key in enumerate(("p50", "p95")):
+            values = [float(source.get(key) or 0) / 1000
+                      for source in latency_sources]
+            axes[0].bar(x + (index - 0.5) * width, values, width,
+                        label=key.upper())
+        axes[0].set_xticks(x, latency_labels, rotation=12, ha="right")
+        axes[0].set_ylabel("seconds")
+        axes[0].set_title("LLM streaming and concurrency waits")
+        axes[0].legend()
+        model_calls = llm.get("modelCalls") or {}
+        names = list(model_calls)
+        values = [float(model_calls[name]) for name in names]
+        bars = axes[1].bar(names, values, color=["#2e86ab", "#d1495b"])
+        axes[1].set_ylabel("calls")
+        axes[1].set_title("LLM model-call distribution")
+        for bar, value in zip(bars, values):
+            axes[1].text(bar.get_x() + bar.get_width() / 2, value,
+                         f"{value:.0f}", ha="center", va="bottom")
+        save(fig, "07_llm_streaming.png", "llmStreaming")
+
+    if memory or skills:
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+        produced = (memory.get("produced") or {}).get("byType") or {}
+        consumed = (memory.get("consumed") or {}).get("byType") or {}
+        memory_types = sorted(set(produced) | set(consumed))
+        x = np.arange(len(memory_types))
+        width = 0.34
+        axes[0].bar(x - width / 2, [produced.get(name, 0) for name in memory_types],
+                    width, label="Produced")
+        axes[0].bar(x + width / 2, [consumed.get(name, 0) for name in memory_types],
+                    width, label="Consumed")
+        axes[0].set_xticks(x, memory_types)
+        axes[0].set_ylabel("records")
+        axes[0].set_title("Two-layer business memory")
+        axes[0].legend()
+        per_skill = skills.get("perSkill") or {}
+        skill_ids = [name for name in EXPECTED_SKILLS
+                     if int((per_skill.get(name) or {}).get("selected") or 0) > 0]
+        short_names = [name.replace("assess-", "").replace("audit-", "")
+                       .replace("retrieve-public-candidate-", "public-")
+                       .replace("risk-pattern-detection", "risk-pattern")
+                       .replace("ground-project-claims", "project-claims")
+                       for name in skill_ids]
+        selected = [int((per_skill.get(name) or {}).get("selected") or 0)
+                    for name in skill_ids]
+        applied = [int((per_skill.get(name) or {}).get("applied") or 0)
+                   for name in skill_ids]
+        x = np.arange(len(skill_ids))
+        axes[1].bar(x - width / 2, selected, width, label="Selected")
+        axes[1].bar(x + width / 2, applied, width, label="Applied")
+        axes[1].set_xticks(x, short_names, rotation=18, ha="right")
+        axes[1].set_ylabel("events")
+        axes[1].set_title("Skill selection and application")
+        axes[1].legend()
+        save(fig, "08_memory_skill.png", "memorySkill")
+
+    checkpoints = graph_metrics.get("checkpoints") or {}
+    if checkpoints.get("checkpoints"):
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+        names = ["Checkpoints", "Writes", "Blobs"]
+        values = [checkpoints.get("checkpoints", 0), checkpoints.get("writes", 0),
+                  checkpoints.get("blobs", 0)]
+        axes[0].bar(names, values, color=["#087e8b", "#d97706", "#6f4eaa"])
+        axes[0].set_ylabel("rows")
+        axes[0].set_title("LangGraph persistence rows")
+        state = checkpoints.get("checkpointStateBytes") or {}
+        labels = ["P50", "P95", "P99", "Max"]
+        values = [float(state.get(key) or 0) / 1024
+                  for key in ("p50", "p95", "p99", "max")]
+        axes[1].bar(labels, values, color="#4c78a8")
+        axes[1].set_ylabel("KiB")
+        axes[1].set_title("Checkpoint state size")
+        save(fig, "09_checkpoint_growth.png", "checkpointGrowth")
+
     return generated
 
 
 def markdown(report: Dict[str, Any]) -> str:
     load = report["load"]
     runtime = report["agentRuntime"]
+    queue_trend = report.get("queueTrend") or {}
     ecs = report["ecs"]
     cover = report["coverage"]
     rag = report.get("rag") or {}
@@ -1519,6 +1671,14 @@ def markdown(report: Dict[str, Any]) -> str:
     skills = report.get("skills") or {}
     quality = report.get("reportQuality") or {}
     labeled_rag = report.get("labeledRag") or {}
+    langgraph_metrics = report.get("langgraphMetrics") or {}
+    graph = langgraph_metrics.get("langgraph") or {}
+    parallel = graph.get("parallel") or {}
+    boundary = graph.get("graphBoundary") or {}
+    coordinator = graph.get("coordinator") or {}
+    checkpoints = langgraph_metrics.get("checkpoints") or {}
+    consistency = langgraph_metrics.get("consistency") or {}
+    langgraph_resources = langgraph_metrics.get("resources") or {}
     charts = report.get("charts") or {}
     llm = runtime.get("llm") or {}
     llm_failure_detail = runtime.get("llmFailureDetail") or {}
@@ -1619,15 +1779,15 @@ def markdown(report: Dict[str, Any]) -> str:
         "/data", {}).get("max") or 0)
 
     issue_rows = [
-        f"| 已闭环 | 0.08 QPS 持续容量 | 完成吞吐 "
-        f"{number(load.get('completionThroughputPerSecond'), 4)} 份/s；"
-        f"队列峰值 {number(queue_peak)}、结束为 {number(final_run_queued)}；"
-        f"排空 {drain_minutes:.1f} min | 本轮 0.08 QPS 稳态通过，0.10 QPS "
-        "只作短时突发；1 QPS 上传入口与深评完成能力分开表达 |",
-        f"| 观察项 | 单份深评长尾 | Runtime P95 {duration_ms(run_p95)}；"
+        f"| P0 | 入口与完整消费能力存在差距 | 入口稳态 "
+        f"{number((phase_metrics.get('steady') or {}).get('achievedQps'), 4)} QPS，"
+        f"完成吞吐 {number(load.get('completionThroughputPerSecond'), 4)} 份/s；"
+        f"队列峰值 {number(queue_peak)}、排空 {drain_minutes:.1f} min | "
+        "入口 QPS 与完成 QPS 分开表达；持续容量以长时间 no-backlog 到达率重新验收 |",
+        f"| P1 | 单份深评长尾 | Runtime P95 {duration_ms(run_p95)}；"
         f"ReportAgent P95 {duration_ms((runtime.get('agentLatencyMs') or {}).get('ReportAgent', {}).get('p95'))} | "
-        "长尾主要来自外部 LLM；本轮不再修改 Workflow，若继续优化必须使用同样本 A/B "
-        "同时验收时延和报告质量 |",
+        "优先分析最慢 Specialist、Provider latency、Permit reacquire 与简历 RAG fallback；"
+        "使用同样本 A/B 同时验收时延和报告质量 |",
     ]
     if partial or success != total_requests:
         issue_rows.append(
@@ -1732,6 +1892,15 @@ def markdown(report: Dict[str, Any]) -> str:
           if charts.get("trafficQueue") else []),
         *([f"![端到端及各阶段时延分位]({charts['latencyPercentiles']})", ""]
           if charts.get("latencyPercentiles") else []),
+        f"- Queue 峰值 {number(queue_trend.get('peakQueued'))}，出现在 "
+        f"{number(queue_trend.get('peakAtSeconds'))}s；首样本到峰值净增长斜率 "
+        f"{number(queue_trend.get('netGrowthPerSecondToPeak'), 4)} Run/s，"
+        f"峰值到结束净排空斜率 "
+        f"{number(queue_trend.get('netDrainPerSecondAfterPeak'), 4)} Run/s。",
+        f"- 终态：SUCCESS {success}，PARTIAL_SUCCESS {partial}，"
+        f"FAILED {int(terminal.get('FAILED') or 0)}，"
+        f"TIMED_OUT {int(terminal.get('TIMED_OUT') or 0)}。",
+        "",
         "| 指标 | P50 | P95 | P99 | Max |",
         "|---|---:|---:|---:|---:|",
         f"| 上传接口 | {duration_ms((load.get('uploadLatencyMs') or {}).get('p50'))} | "
@@ -1796,6 +1965,96 @@ def markdown(report: Dict[str, Any]) -> str:
     for route, count in sorted((runtime.get("routeSignatures") or {}).items(),
                                key=lambda item: item[1], reverse=True):
         lines.append(f"| {route.replace(' -> ', ' → ')} | {number(count)} |")
+
+    if graph:
+        lines.extend([
+            "",
+            "### 当前 Workflow 编排",
+            "",
+            *([f"![Specialist 并行收益与 Graph boundary]({charts['langgraphParallel']})", ""]
+              if charts.get("langgraphParallel") else []),
+            "#### Coordinator / Plan",
+            "",
+            "| 指标 | 结果 |",
+            "|---|---:|",
+            f"| Plan 事件 | {number(coordinator.get('planEvents'))} |",
+            f"| Plan 独立耗时 P50/P95 | "
+            f"{duration_ms((coordinator.get('planDurationMs') or {}).get('p50'))} / "
+            f"{duration_ms((coordinator.get('planDurationMs') or {}).get('p95'))} |",
+            f"| Coordinator Provider LLM 调用 | "
+            f"{number(coordinator.get('llmCalls'))} |",
+            "",
+            "Plan 节点事件覆盖完整，但当前 custom event 没有写入 Plan duration，"
+            "分析器也没有导出 Coordinator provider-call scope；因此这两项明确标为未采集，"
+            "不能用整个 Runtime 或全局 LLM calls 替代。",
+            "",
+            "#### Specialist 并行组",
+            "",
+            "| 指标 | P50 | P95 | P99 | Max |",
+            "|---|---:|---:|---:|---:|",
+            f"| 并行组墙钟 | {duration_ms((parallel.get('groupWallMs') or {}).get('p50'))} | "
+            f"{duration_ms((parallel.get('groupWallMs') or {}).get('p95'))} | "
+            f"{duration_ms((parallel.get('groupWallMs') or {}).get('p99'))} | "
+            f"{duration_ms((parallel.get('groupWallMs') or {}).get('max'))} |",
+            f"| Agent 串行求和 | {duration_ms((parallel.get('summedAgentMs') or {}).get('p50'))} | "
+            f"{duration_ms((parallel.get('summedAgentMs') or {}).get('p95'))} | "
+            f"{duration_ms((parallel.get('summedAgentMs') or {}).get('p99'))} | "
+            f"{duration_ms((parallel.get('summedAgentMs') or {}).get('max'))} |",
+            f"| Speedup | {number((parallel.get('speedup') or {}).get('p50'), 2)}x | "
+            f"{number((parallel.get('speedup') or {}).get('p95'), 2)}x | "
+            f"{number((parallel.get('speedup') or {}).get('p99'), 2)}x | "
+            f"{number((parallel.get('speedup') or {}).get('max'), 2)}x |",
+            "",
+            f"真实三 Agent 并行组 {number(parallel.get('groups'))} 个；"
+            f"每组 Agent P50 {number((parallel.get('agentsPerGroup') or {}).get('p50'))}；"
+            f"P50 节省率 {ratio((parallel.get('savingRatio') or {}).get('p50'))}。"
+            "并行组墙钟按 dispatch 到最后一个 Agent result 计算，不把 Tech/Project/Risk 时延相加。",
+            "",
+            "#### Graph boundary 与 Checkpoint",
+            "",
+            f"- Result→Reducer P50/P95："
+            f"{duration_ms((boundary.get('lastResultToReducerMs') or {}).get('p50'))} / "
+            f"{duration_ms((boundary.get('lastResultToReducerMs') or {}).get('p95'))}。",
+            f"- Result→下一组 Dispatch P50/P95："
+            f"{duration_ms((boundary.get('lastResultToNextDispatchMs') or {}).get('p50'))} / "
+            f"{duration_ms((boundary.get('lastResultToNextDispatchMs') or {}).get('p95'))}。",
+            f"- 当前图事件完整覆盖：{ratio(graph.get('customEventCoverage'))}；"
+            f"Checkpoint thread 覆盖：{ratio(checkpoints.get('threadCoverage'))}。",
+            f"- MySQL/PG 一致性错误：{number(consistency.get('mismatchCount'))}。",
+            "",
+            *([f"![Checkpoint 行数与状态体积]({charts['checkpointGrowth']})", ""]
+              if charts.get("checkpointGrowth") else []),
+            "| Checkpoint 指标 | 结果 |",
+            "|---|---:|",
+            f"| Threads expected / covered | {number(checkpoints.get('threadsExpected'))} / "
+            f"{number(checkpoints.get('threadsWithCheckpoints'))} |",
+            f"| Checkpoints / writes / blobs | {number(checkpoints.get('checkpoints'))} / "
+            f"{number(checkpoints.get('writes'))} / {number(checkpoints.get('blobs'))} |",
+            f"| Checkpoints per Run P50/P95 | "
+            f"{number((checkpoints.get('checkpointsPerRun') or {}).get('p50'))} / "
+            f"{number((checkpoints.get('checkpointsPerRun') or {}).get('p95'))} |",
+            f"| Checkpoint state P50/P95/Max | "
+            f"{number((checkpoints.get('checkpointStateBytes') or {}).get('p50'))} / "
+            f"{number((checkpoints.get('checkpointStateBytes') or {}).get('p95'))} / "
+            f"{number((checkpoints.get('checkpointStateBytes') or {}).get('max'))} bytes |",
+            f"| Orphan parent checkpoints | {number(checkpoints.get('orphanParentCheckpoints'))} |",
+            "",
+            "### 流式输出与并发等待",
+            "",
+            *([f"![LLM 流式与并发等待]({charts['llmStreaming']})", ""]
+              if charts.get("llmStreaming") else []),
+            f"- Streamed calls：{number(llm.get('streamedCalls'))}；"
+            f"TTFT P50/P95：{duration_ms((llm.get('ttftMs') or {}).get('p50'))} / "
+            f"{duration_ms((llm.get('ttftMs') or {}).get('p95'))}。",
+            f"- Provider latency P50/P95："
+            f"{duration_ms((llm.get('latencyMs') or {}).get('p50'))} / "
+            f"{duration_ms((llm.get('latencyMs') or {}).get('p95'))}。",
+            f"- Permit reacquire P50/P95："
+            f"{duration_ms((llm.get('permitReacquireWaitMs') or {}).get('p50'))} / "
+            f"{duration_ms((llm.get('permitReacquireWaitMs') or {}).get('p95'))}；"
+            f"LLM gate wait P95："
+            f"{duration_ms((llm.get('gateQueueWaitMs') or {}).get('p95'))}。",
+        ])
 
     lines.extend([
         "",
@@ -1962,6 +2221,8 @@ def markdown(report: Dict[str, Any]) -> str:
     lines.extend([
         "## 4. Memory 生产与消费",
         "",
+        *([f"![两层 Memory 与 Skill 选择/应用]({charts['memorySkill']})", ""]
+          if charts.get("memorySkill") else []),
     ])
     produced = memory.get("produced") or {}
     consumed = memory.get("consumed") or {}
@@ -1970,11 +2231,14 @@ def markdown(report: Dict[str, Any]) -> str:
     consumed_types = consumed.get("byType") or {}
     ttl_types = (memory.get("ttl") or {}).get("effectiveDaysByType") or {}
     memory_latency = memory.get("retrievalLatencyMs") or {}
+    memory_types = sorted(set(produced_types) | set(consumed_types) | set(ttl_types))
+    if not memory_types:
+        memory_types = ["JOB_PROFILE", "RECENT_CASE"]
     lines.extend([
         "| 类型 | 本次产出 | 本次消费 | TTL |",
         "|---|---:|---:|---:|",
     ])
-    for memory_type in ("WORKING", "SEMANTIC", "EPISODIC", "PROCEDURAL"):
+    for memory_type in memory_types:
         ttl = (ttl_types.get(memory_type) or {}).get("p50")
         lines.append(
             f"| {memory_type} | {number(produced_types.get(memory_type, 0))} | "
@@ -2101,6 +2365,15 @@ def markdown(report: Dict[str, Any]) -> str:
             f"| {container_name} | {number(cpu.get('avg'))}% | "
             f"{number(cpu.get('p95'))}% | {number(cpu.get('max'))}% | "
             f"{number(mem.get('p95'))} MiB | {number(mem.get('max'))} MiB |")
+    for container_name in ("resumai-langgraph-postgres", "resumai-milvus"):
+        values = (langgraph_resources.get("containers") or {}).get(container_name, {})
+        cpu = values.get("cpuPercent") or {}
+        mem = values.get("memoryMiB") or {}
+        if cpu or mem:
+            lines.append(
+                f"| {container_name} | {number(cpu.get('avg'))}% | "
+                f"{number(cpu.get('p95'))}% | {number(cpu.get('max'))}% | "
+                f"{number(mem.get('p95'))} MiB | {number(mem.get('max'))} MiB |")
     lines.extend([
         "",
         f"- MySQL：Threads_running Max "
@@ -2115,6 +2388,10 @@ def markdown(report: Dict[str, Any]) -> str:
         f"{number((ecs.get('agentRuntimeActive') or {}).get('max'))}；"
         f"Run queue P95 / Max = {number((ecs.get('runQueue') or {}).get('queued', {}).get('p95'))} / "
         f"{number((ecs.get('runQueue') or {}).get('queued', {}).get('max'))}。",
+        f"- PostgreSQL：连接数 Max "
+        f"{number((langgraph_resources.get('postgres') or {}).get('maxConnections'))}；"
+        f"deadlock 增量 {number((langgraph_resources.get('postgres') or {}).get('deadlockDelta'))}；"
+        f"数据库增长 {number((langgraph_resources.get('postgres') or {}).get('databaseGrowthBytes'))} bytes。",
         "",
         "## 8. 主要问题与修复优先级",
         "",
@@ -2137,6 +2414,7 @@ def markdown(report: Dict[str, Any]) -> str:
         "- `load_report.json`：本报告结构化数据",
         "- `raw_results.json`：100 份请求与任务结果",
         "- `runtime_metrics.json`：Agent Runtime 聚合输入",
+        "- `langgraph_metrics.json`：Coordinator/并行组、Graph boundary、Checkpoint 与一致性指标",
         "- `rag_metrics.json` / `memory_metrics.json` / `skill_metrics.json`：三条质量链路",
         "- `ecs_monitor.csv`：ECS 与容器采样",
         "- `charts/*.png`：由上述原始数据生成的报告图表",
@@ -2196,6 +2474,10 @@ def main() -> int:
     benchmark_manifest = (
         json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest_path.is_file() else {})
+    langgraph_path = directory / "langgraph_metrics.json"
+    langgraph_metrics = (
+        json.loads(langgraph_path.read_text(encoding="utf-8"))
+        if langgraph_path.is_file() else {})
     expected_mcp = benchmark_manifest.get("mcpEndpoints") \
         if isinstance(benchmark_manifest.get("mcpEndpoints"), list) else None
     report = {
@@ -2204,9 +2486,11 @@ def main() -> int:
         "load": {key: value for key, value in summary.items()
                  if key != "agentRuntime"},
         "agentRuntime": runtime,
+        "queueTrend": analyze_queue_trend(directory),
         "ecs": parse_ecs_monitor(directory / "ecs_monitor.csv"),
         "coverage": coverage(runtime, skills, expected_mcp),
         "benchmarkManifest": benchmark_manifest,
+        "langgraphMetrics": langgraph_metrics,
         "rag": rag,
         "memory": memory,
         "skills": skills,

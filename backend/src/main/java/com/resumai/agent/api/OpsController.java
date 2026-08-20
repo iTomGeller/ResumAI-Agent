@@ -6,6 +6,7 @@ import com.resumai.agent.api.dto.ops.OpsDebugDtos.RagOpsResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.RunDebugDetailResponse;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.RunDebugSummary;
 import com.resumai.agent.api.dto.ops.OpsDebugDtos.SkillOpsResponse;
+import com.resumai.agent.conversation.CopilotMetrics;
 import com.resumai.agent.service.ops.OpsDebugService;
 import com.resumai.agent.service.run.AgentRuntimeClient;
 import java.util.LinkedHashMap;
@@ -28,23 +29,31 @@ public class OpsController {
 
     private final OpsDebugService opsDebugService;
     private final AgentRuntimeClient runtimeClient;
+    private final CopilotMetrics copilotMetrics;
 
     public OpsController(OpsDebugService opsDebugService,
-                         AgentRuntimeClient runtimeClient) {
+                         AgentRuntimeClient runtimeClient,
+                         CopilotMetrics copilotMetrics) {
         this.opsDebugService = opsDebugService;
         this.runtimeClient = runtimeClient;
+        this.copilotMetrics = copilotMetrics;
     }
 
     /** Lightweight shell — tab panels load their own paginated endpoints. */
     @GetMapping
     public Map<String, Object> overview() {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("panels", List.of("runs", "memory", "mcp", "skills", "rag"));
+        body.put("panels", List.of("runs", "memory", "mcp", "skills", "rag", "copilot"));
         body.put("role", "developer_console");
         body.put("description", "Run-centric Debug Console：按 run 下钻 MCP/Skills/Memory/RAG");
         body.put("runtimeReady", runtimeClient.isReady());
         body.put("recentRuns", runs(null, null, null, null, 20).get("items"));
         return body;
+    }
+
+    @GetMapping("/copilot")
+    public Map<String, Object> copilot() {
+        return copilotMetrics.snapshot();
     }
 
     @GetMapping("/runs")

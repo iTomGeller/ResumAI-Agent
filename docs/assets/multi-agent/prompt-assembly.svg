@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1050" viewBox="0 0 1200 1050" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Prompt 拼接与注入顺序</title>
+  <desc id="desc">system message 固定前缀、user message 候选人上下文、tools schema 和 tool choice 一起构成模型请求。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 Z" fill="#52637a"/></marker>
+    <style>
+      .title{font:700 34px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#10233f}
+      .subtitle{font:20px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#5a6b84}
+      .head{font:700 25px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#10233f}
+      .label{font:21px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#1b304e}
+      .small{font:18px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#52637a}
+      .arrow{stroke:#52637a;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="1050" fill="#ffffff"/>
+  <text class="title" x="50" y="55">真正发给模型的内容：messages + tools + tool_choice</text>
+  <text class="subtitle" x="50" y="88">固定内容前置以复用 DeepSeek 精确前缀 Cache；候选人数据放在后半段</text>
+
+  <rect x="45" y="120" width="520" height="640" rx="18" fill="#f3f7ff" stroke="#8caceb" stroke-width="2"/>
+  <text class="head" x="75" y="163">system message｜稳定前缀</text>
+  <rect x="78" y="195" width="454" height="92" rx="12" fill="#ffffff" stroke="#bfd0f2"/>
+  <text class="label" x="105" y="231">1　Agent system prompt</text><text class="small" x="105" y="264">角色、边界、证据纪律</text>
+  <path class="arrow" d="M305 287 V320"/>
+  <rect x="78" y="322" width="454" height="92" rx="12" fill="#ffffff" stroke="#bfd0f2"/>
+  <text class="label" x="105" y="358">2　策略要求</text><text class="small" x="105" y="391">policy · evidence · LLM/tool budget</text>
+  <path class="arrow" d="M305 414 V447"/>
+  <rect x="78" y="449" width="454" height="112" rx="12" fill="#ffffff" stroke="#bfd0f2"/>
+  <text class="label" x="105" y="485">3　Skill 指令</text><text class="small" x="105" y="518">本轮 eager：完整 SKILL.md 正文</text><text class="small" x="105" y="544">只注入当前 Agent 选中的 1–2 个</text>
+  <path class="arrow" d="M305 561 V594"/>
+  <rect x="78" y="596" width="454" height="112" rx="12" fill="#ffffff" stroke="#bfd0f2"/>
+  <text class="label" x="105" y="632">4　输出契约</text><text class="small" x="105" y="665">AgentOutput / StructuredReport schema</text><text class="small" x="105" y="691">候选人无关，仍属于稳定前缀</text>
+
+  <rect x="635" y="120" width="520" height="640" rx="18" fill="#f4fbf8" stroke="#7fc8b6" stroke-width="2"/>
+  <text class="head" x="665" y="163">user message｜动态上下文</text>
+  <g fill="#ffffff" stroke="#abd8cc">
+    <rect x="668" y="195" width="454" height="62" rx="10"/><rect x="668" y="271" width="454" height="62" rx="10"/>
+    <rect x="668" y="347" width="454" height="62" rx="10"/><rect x="668" y="423" width="454" height="62" rx="10"/>
+    <rect x="668" y="499" width="454" height="62" rx="10"/><rect x="668" y="575" width="454" height="62" rx="10"/>
+    <rect x="668" y="651" width="454" height="62" rx="10"/>
+  </g>
+  <text class="label" x="695" y="235">1　当前请求</text><text class="label" x="695" y="311">2　当前目标</text>
+  <text class="label" x="695" y="387">3　会话摘要</text><text class="label" x="695" y="463">4　最近消息</text>
+  <text class="label" x="695" y="539">5　Memory</text><text class="label" x="695" y="615">6　SharedState 视图</text>
+  <text class="label" x="695" y="691">7　确定性工具观察</text>
+
+  <rect x="45" y="805" width="520" height="105" rx="16" fill="#f7f1ff" stroke="#aa8be3" stroke-width="2"/>
+  <text class="head" x="75" y="846">provider tools</text>
+  <text class="small" x="75" y="881">name + description + JSON parameters｜不粘进正文</text>
+  <rect x="635" y="805" width="520" height="105" rx="16" fill="#fff7e7" stroke="#e8bd65" stroke-width="2"/>
+  <text class="head" x="665" y="846">tool_choice</text>
+  <text class="small" x="665" y="881">auto｜强制 emit_decision｜强制 emit_report_section</text>
+
+  <path class="arrow" d="M305 760 V805"/><path class="arrow" d="M895 760 V805"/>
+  <path class="arrow" d="M305 910 V958 H515"/><path class="arrow" d="M895 910 V958 H685"/>
+  <rect x="440" y="940" width="320" height="76" rx="16" fill="#eaf1ff" stroke="#5f88dd" stroke-width="2"/>
+  <text class="head" x="600" y="987" text-anchor="middle">DeepSeek request</text>
+</svg>

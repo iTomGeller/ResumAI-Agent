@@ -1240,7 +1240,7 @@ def test_report_agent_hides_evaluation_retrieval_and_forces_final_output():
     assert llm.tool_choices == [
         {"type": "function", "function": {"name": "emit_decision"}},
     ]
-    assert llm.max_tokens == [8192]
+    assert llm.max_tokens == [4096]
 
 
 class _ReportRepairLlm:

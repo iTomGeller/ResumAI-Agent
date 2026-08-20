@@ -211,6 +211,7 @@ class LangGraphRunExecutor(RunExecutor):
             })
 
         memory_query, memory_query_basis = self._memory_retrieval_query(request)
+        job_category, jd_fingerprint = self._business_memory_scope(request)
         recall_limit = self.policy.memoryRetrieval.topK
         recent_case_hits, job_profile_hits = (
             await asyncio.gather(
@@ -218,11 +219,14 @@ class LangGraphRunExecutor(RunExecutor):
                     memory_query, types=["RECENT_CASE"],
                     top_k=min(2, recall_limit),
                     min_confidence=self.policy.memoryRetrieval.minConfidence,
-                    consumer_agent="SpecialistAgent"),
+                    consumer_agent="SpecialistAgent",
+                    job_category=job_category),
                 self.memory.search(
                     memory_query, types=["JOB_PROFILE"], top_k=1,
                     min_confidence=self.policy.memoryRetrieval.minConfidence,
-                    consumer_agent="SpecialistAgent"),
+                    consumer_agent="SpecialistAgent",
+                    job_category=job_category,
+                    jd_fingerprint=jd_fingerprint),
             ))
         recent_case_hits = [
             hit for hit in recent_case_hits

@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1080" viewBox="0 0 1200 1080" role="img" aria-labelledby="title desc">
+  <title id="title">ResumAI 多 Agent 主流程</title>
+  <desc id="desc">输入经过观察和协调后，并行派发 Tech、Project、Risk，合并后由 Evidence 审计，再由 Report 汇总并持久化。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#52637a"/>
+    </marker>
+    <style>
+      .title{font:700 34px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#10233f}
+      .subtitle{font:20px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#5a6b84}
+      .label{font:700 23px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#10233f}
+      .detail{font:18px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#43536b}
+      .small{font:17px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#43536b}
+      .arrow{stroke:#52637a;stroke-width:3;fill:none;marker-end:url(#arrow)}
+      .dash{stroke:#7c8ca3;stroke-width:2.5;fill:none;stroke-dasharray:8 7;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="1080" fill="#ffffff"/>
+  <text class="title" x="50" y="55">当前多 Agent 架构：并行专家 + 证据门 + 单一报告出口</text>
+  <text class="subtitle" x="50" y="88">箭头表示控制流；Agent 之间不群聊，只通过结构化 SharedState 交换产物</text>
+
+  <rect x="350" y="120" width="500" height="78" rx="14" fill="#edf3ff" stroke="#8caceb" stroke-width="2"/>
+  <text class="label" x="600" y="151" text-anchor="middle">输入</text>
+  <text class="detail" x="600" y="180" text-anchor="middle">简历 · JD · 用户要求</text>
+
+  <path class="arrow" d="M600 198 V236"/>
+  <rect x="350" y="238" width="500" height="88" rx="14" fill="#eef8f6" stroke="#7fc8b6" stroke-width="2"/>
+  <text class="label" x="600" y="270" text-anchor="middle">Observe</text>
+  <text class="detail" x="600" y="301" text-anchor="middle">确定性解析 · RAG · Memory 检索</text>
+
+  <path class="arrow" d="M600 326 V364"/>
+  <rect x="350" y="366" width="500" height="92" rx="14" fill="#fff5df" stroke="#e8bd65" stroke-width="2"/>
+  <text class="label" x="600" y="399" text-anchor="middle">Coordinator</text>
+  <text class="detail" x="600" y="431" text-anchor="middle">按目标 artifact 与输入信号生成执行计划</text>
+
+  <text class="small" x="600" y="497" text-anchor="middle">LangGraph Send：同一 super-step 并行派发</text>
+  <path class="arrow" d="M600 458 V515 H200 V542"/>
+  <path class="arrow" d="M600 458 V542"/>
+  <path class="arrow" d="M600 458 V515 H1000 V542"/>
+
+  <rect x="60" y="544" width="280" height="104" rx="14" fill="#eaf1ff" stroke="#6f97e8" stroke-width="2"/>
+  <text class="label" x="200" y="582" text-anchor="middle">TechAgent</text>
+  <text class="detail" x="200" y="616" text-anchor="middle">技术栈 / JD 证据</text>
+  <rect x="460" y="544" width="280" height="104" rx="14" fill="#ecf8f0" stroke="#6fbd8b" stroke-width="2"/>
+  <text class="label" x="600" y="582" text-anchor="middle">ProjectAgent</text>
+  <text class="detail" x="600" y="616" text-anchor="middle">项目深度 / 外链核验</text>
+  <rect x="860" y="544" width="280" height="104" rx="14" fill="#f4edff" stroke="#9c79df" stroke-width="2"/>
+  <text class="label" x="1000" y="582" text-anchor="middle">RiskAgent</text>
+  <text class="detail" x="1000" y="616" text-anchor="middle">时间线 / 履历风险</text>
+
+  <path class="arrow" d="M200 648 V686 H600 V712"/>
+  <path class="arrow" d="M600 648 V712"/>
+  <path class="arrow" d="M1000 648 V686 H600 V712"/>
+  <rect x="350" y="714" width="500" height="88" rx="14" fill="#f3f6fa" stroke="#92a0b4" stroke-width="2"/>
+  <text class="label" x="600" y="747" text-anchor="middle">Reducer merge</text>
+  <text class="detail" x="600" y="778" text-anchor="middle">按 schema 写入 canonical SharedState</text>
+
+  <path class="arrow" d="M600 802 V838"/>
+  <rect x="350" y="840" width="500" height="88" rx="14" fill="#e8f8fb" stroke="#59b3c4" stroke-width="2"/>
+  <text class="label" x="600" y="873" text-anchor="middle">EvidenceAgent</text>
+  <text class="detail" x="600" y="904" text-anchor="middle">逐主张审计 · 冲突与置信度校准</text>
+
+  <path class="arrow" d="M600 928 V960"/>
+  <rect x="300" y="962" width="600" height="90" rx="14" fill="#fff0e7" stroke="#e49a67" stroke-width="2"/>
+  <text class="label" x="600" y="995" text-anchor="middle">ReportAgent</text>
+  <text class="detail" x="600" y="1026" text-anchor="middle">score · risk · question 三个 section 并行生成并校验</text>
+
+  <path class="dash" d="M300 1007 H128"/>
+  <rect x="22" y="946" width="170" height="106" rx="12" fill="#eef5ff" stroke="#8caceb"/>
+  <text class="small" x="107" y="981" text-anchor="middle">PostgreSQL</text>
+  <text class="small" x="107" y="1008" text-anchor="middle">LangGraph</text>
+  <text class="small" x="107" y="1035" text-anchor="middle">checkpoints</text>
+  <path class="dash" d="M900 1007 H1072"/>
+  <rect x="1008" y="946" width="170" height="106" rx="12" fill="#eef8f6" stroke="#7fc8b6"/>
+  <text class="small" x="1093" y="981" text-anchor="middle">MySQL</text>
+  <text class="small" x="1093" y="1008" text-anchor="middle">业务结果</text>
+  <text class="small" x="1093" y="1035" text-anchor="middle">审计副本</text>
+</svg>

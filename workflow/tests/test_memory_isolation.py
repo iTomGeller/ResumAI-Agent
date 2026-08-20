@@ -133,6 +133,31 @@ def test_null_client_search_excludes_failure_for_specialists():
     asyncio.run(_run())
 
 
+def test_null_client_business_memory_filters_by_job_and_jd():
+    client = NullMemoryClient(canned=[
+        {"memoryId": "same-job", "type": "JOB_PROFILE",
+         "structuredContent": {"jobCategory": "JAVA_BACKEND",
+                                "jdFingerprint": "jd-1"},
+         "content": "same"},
+        {"memoryId": "other-job", "type": "JOB_PROFILE",
+         "structuredContent": {"jobCategory": "DATA",
+                                "jdFingerprint": "jd-1"},
+         "content": "other"},
+        {"memoryId": "other-jd", "type": "JOB_PROFILE",
+         "structuredContent": {"jobCategory": "JAVA_BACKEND",
+                                "jdFingerprint": "jd-2"},
+         "content": "other jd"},
+    ])
+
+    async def _run():
+        hits = await client.search(
+            "Java", types=["JOB_PROFILE"],
+            job_category="java_backend", jd_fingerprint="jd-1")
+        assert [h["memoryId"] for h in hits] == ["same-job"]
+
+    asyncio.run(_run())
+
+
 def test_canonical_taxonomy_and_agent_routes_are_diverse():
     assert canonical_taxonomy("PREFERENCE") == "SEMANTIC"
     assert canonical_taxonomy("CONVERSATION") == "WORKING"

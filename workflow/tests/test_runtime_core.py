@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 WORKFLOW_ROOT = Path(__file__).resolve().parents[1]
 if str(WORKFLOW_ROOT) not in sys.path:
@@ -10,6 +12,14 @@ if str(WORKFLOW_ROOT) not in sys.path:
 
 from app.runtime.context import ContextManager, estimate_tokens
 from app.runtime.events import NullEmitter
+from app.runtime.executor import (
+    EMIT_REPORT_TOOL,
+    REPORT_MAX_TOKENS,
+    REPORT_OUTPUT_SCHEMA,
+    REPORT_RAG_MAX_CHARS,
+    REPORT_STATE_MAX_CHARS,
+    RunExecutor,
+)
 from app.runtime.loop_guard import LoopGuard
 from app.runtime.models import AgentOutput, ContextBudget, PolicyBundle
 from app.runtime.state import SharedState
@@ -248,6 +258,81 @@ def test_shared_state_scoped_views():
     assert "risks" not in tech_view, "TechAgent 不应读取风险区"
     report_view = state.view_for("ReportAgent")
     assert "technicalFindings" in report_view and "risks" in report_view
+
+
+def test_report_view_compacts_large_artifacts_without_mutating_state():
+    state = SharedState()
+    raw_excerpt = "简历原文" * 1200
+    state.apply_artifacts({
+        "resumeFacts": {
+            "rawExcerpt": raw_excerpt,
+            "skills": [f"skill-{i}" for i in range(50)],
+            "projects": [{"name": f"项目-{i}", "detail": "证据" * 300}
+                         for i in range(20)],
+            "experiences": [{"raw": "经历" * 300} for _ in range(20)],
+            "education": [{"raw": "教育" * 300} for _ in range(10)],
+        },
+        "effectiveJd": "岗位要求" * 1200,
+        "technicalFindings": [
+            {"text": f"技术发现-{i}", "quote": "原文证据" * 200}
+            for i in range(20)],
+        "projectFindings": [{"text": f"项目发现-{i}"} for i in range(20)],
+        "risks": [{"text": f"风险-{i}"} for i in range(20)],
+    })
+
+    serialized_view = state.view_for("ReportAgent", max_chars=6000)
+    view = json.loads(serialized_view)
+
+    assert len(serialized_view) <= 6000
+    assert len(view["resumeFacts"]["rawExcerpt"]) == 1200
+    assert len(view["resumeFacts"]["skills"]) == 16
+    assert len(view["technicalFindings"]) == 6
+    assert len(view["projectFindings"]) == 5
+    assert len(view["risks"]) == 4
+    assert "quote" in view["technicalFindings"][0]
+    assert state.artifact("resumeFacts")["rawExcerpt"] == raw_excerpt
+
+
+def test_report_generation_contract_is_bounded_and_not_duplicated_in_prompt():
+    report = EMIT_REPORT_TOOL["function"]["parameters"]["properties"][
+        "output"]["properties"]["report"]["properties"]
+
+    assert REPORT_MAX_TOKENS == 3072
+    assert REPORT_STATE_MAX_CHARS == 6000
+    assert REPORT_RAG_MAX_CHARS == 2800
+    assert report["dimensions"]["maxItems"] == 4
+    assert report["risks"]["maxItems"] == 4
+    assert report["interviewProbes"]["maxItems"] == 6
+    probe_fields = report["interviewProbes"]["items"]["properties"]
+    assert "followUps" not in probe_fields
+    assert "scoreRubric" not in probe_fields
+    assert "function schema" in REPORT_OUTPUT_SCHEMA
+    assert '"dimensions"' not in REPORT_OUTPUT_SCHEMA
+
+
+def test_report_uses_fast_model_for_healthy_artifacts_and_escalates_conflicts():
+    executor = object.__new__(RunExecutor)
+    executor.state = SharedState()
+    executor.state.apply_artifacts({
+        "inputPresence": {"resumePresent": True, "jdPresent": True},
+        "technicalFindings": [{"text": "技术结论"}],
+        "projectFindings": [{"text": "项目结论"}],
+        "risks": [],
+    })
+    executor.failure_notes = []
+    executor.executed = ["TechAgent", "ProjectAgent", "RiskAgent"]
+    executor.request = SimpleNamespace(runType="full_evaluation")
+
+    use_quality, reasons = executor._report_quality_route()
+    assert use_quality is False
+    assert reasons == []
+
+    executor.state.apply_artifacts({
+        "conflicts": [{"key": "project", "reason": "上游结论冲突"}],
+    })
+    use_quality, reasons = executor._report_quality_route()
+    assert use_quality is True
+    assert "artifact_conflict" in reasons
 
 
 def test_external_mcp_evidence_is_compact_and_visible_to_auditors():

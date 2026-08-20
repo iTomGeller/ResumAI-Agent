@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1030" viewBox="0 0 1200 1030" role="img" aria-labelledby="title desc">
+  <title id="title">MCP 工具从配置到模型调用的注入链</title>
+  <desc id="desc">MCP 先发现和健康过滤，再按 Agent 和候选人上下文过滤，作为原生 tools schema 交给模型，模型调用后结果回填下一轮。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 Z" fill="#52637a"/></marker>
+    <style>
+      .title{font:700 34px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#10233f}
+      .subtitle{font:20px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#5a6b84}
+      .num{font:700 25px 'Segoe UI',sans-serif;fill:#ffffff}
+      .label{font:700 23px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#10233f}
+      .detail{font:18px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#4d5d74}
+      .arrow{stroke:#52637a;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="1030" fill="#ffffff"/>
+  <text class="title" x="50" y="55">MCP 不是把服务器说明塞进 Prompt，而是动态生成原生工具目录</text>
+  <text class="subtitle" x="50" y="88">只有“配置允许 + 实时健康 + 当前 Agent 路由 + 候选人上下文匹配”的工具会进入请求</text>
+
+  <g>
+    <circle cx="170" cy="157" r="29" fill="#2f67e8"/><text class="num" x="170" y="166" text-anchor="middle">1</text>
+    <rect x="225" y="112" width="850" height="90" rx="14" fill="#edf3ff" stroke="#8caceb" stroke-width="2"/>
+    <text class="label" x="255" y="148">读取 mcp-servers.json</text><text class="detail" x="255" y="179">server、transport、allowedTools、agentToolRouting、超时和限流策略</text>
+    <path class="arrow" d="M650 202 V238"/>
+
+    <circle cx="170" cy="283" r="29" fill="#2f67e8"/><text class="num" x="170" y="292" text-anchor="middle">2</text>
+    <rect x="225" y="238" width="850" height="90" rx="14" fill="#edf3ff" stroke="#8caceb" stroke-width="2"/>
+    <text class="label" x="255" y="274">initialize + tools/list</text><text class="detail" x="255" y="305">取得服务器真实 name、description、inputSchema；非 AVAILABLE 或熔断工具直接删除</text>
+    <path class="arrow" d="M650 328 V364"/>
+
+    <circle cx="170" cy="409" r="29" fill="#7a45d8"/><text class="num" x="170" y="418" text-anchor="middle">3</text>
+    <rect x="225" y="364" width="850" height="90" rx="14" fill="#f5efff" stroke="#aa8be3" stroke-width="2"/>
+    <text class="label" x="255" y="400">按 Agent 和上下文二次过滤</text><text class="detail" x="255" y="431">Project / Evidence 可路由；没有简历 URL 时隐藏 fetch/Exa；Report 永远无公网 MCP</text>
+    <path class="arrow" d="M650 454 V490"/>
+
+    <circle cx="170" cy="535" r="29" fill="#7a45d8"/><text class="num" x="170" y="544" text-anchor="middle">4</text>
+    <rect x="225" y="490" width="850" height="90" rx="14" fill="#f5efff" stroke="#aa8be3" stroke-width="2"/>
+    <text class="label" x="255" y="526">转换为 provider-native tools</text><text class="detail" x="255" y="557">tools=[function{name, description, parameters}]；schema 单独发送，不占 system/user 正文</text>
+    <path class="arrow" d="M650 580 V616"/>
+
+    <circle cx="170" cy="661" r="29" fill="#df8c24"/><text class="num" x="170" y="670" text-anchor="middle">5</text>
+    <rect x="225" y="616" width="850" height="90" rx="14" fill="#fff5e5" stroke="#e7b25e" stroke-width="2"/>
+    <text class="label" x="255" y="652">模型决定是否调用</text><text class="detail" x="255" y="683">原生 function call(name, arguments)；目录出现不代表必须调用</text>
+    <path class="arrow" d="M650 706 V742"/>
+
+    <circle cx="170" cy="787" r="29" fill="#179d62"/><text class="num" x="170" y="796" text-anchor="middle">6</text>
+    <rect x="225" y="742" width="850" height="90" rx="14" fill="#eaf8f1" stroke="#6fc196" stroke-width="2"/>
+    <text class="label" x="255" y="778">Runtime 执行 tools/call</text><text class="detail" x="255" y="809">校验 subject binding、预算、限流、timeout，并保存来源 URL 与真实回执</text>
+    <path class="arrow" d="M650 832 V868"/>
+
+    <circle cx="170" cy="913" r="29" fill="#179d62"/><text class="num" x="170" y="922" text-anchor="middle">7</text>
+    <rect x="225" y="868" width="850" height="90" rx="14" fill="#eaf8f1" stroke="#6fc196" stroke-width="2"/>
+    <text class="label" x="255" y="904">结果回填模型与 SharedState</text><text class="detail" x="255" y="935">tool result 进入下一轮；mcpEvidence 供 Evidence 校准、Report 只读消费</text>
+  </g>
+  <text class="detail" x="600" y="1000" text-anchor="middle">实际路由：ProjectAgent / EvidenceAgent → fetch / Exa　｜　ReportAgent → 无公网 MCP</text>
+</svg>

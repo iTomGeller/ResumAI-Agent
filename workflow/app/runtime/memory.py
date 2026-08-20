@@ -359,7 +359,9 @@ class MemoryClient:
     async def search(self, query: str, *, types: Optional[List[str]] = None,
                      top_k: int = 5, min_confidence: float = 0.35,
                      consumer_agent: Optional[str] = None,
-                     include_benchmark_sources: bool = False) -> List[Dict[str, Any]]:
+                     include_benchmark_sources: bool = False,
+                     job_category: Optional[str] = None,
+                     jd_fingerprint: Optional[str] = None) -> List[Dict[str, Any]]:
         # Default specialist-safe types when caller omits them.
         effective_types = types
         if effective_types is None and not allows_failure(consumer_agent):
@@ -375,6 +377,8 @@ class MemoryClient:
             "consumerAgent": consumer_agent,
             "consumerVersion": settings.workflow_build_version,
             "includeBenchmarkSources": include_benchmark_sources,
+            "jobCategory": job_category,
+            "jdFingerprint": jd_fingerprint,
         }
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -496,7 +500,9 @@ class NullMemoryClient(MemoryClient):
     async def search(self, query: str, *, types: Optional[List[str]] = None,
                      top_k: int = 5, min_confidence: float = 0.35,
                      consumer_agent: Optional[str] = None,
-                     include_benchmark_sources: bool = False) -> List[Dict[str, Any]]:
+                     include_benchmark_sources: bool = False,
+                     job_category: Optional[str] = None,
+                     jd_fingerprint: Optional[str] = None) -> List[Dict[str, Any]]:
         hits = self.canned
         if types:
             failure_only = any(str(t).upper() == "FAILURE" for t in types)
@@ -518,6 +524,20 @@ class NullMemoryClient(MemoryClient):
                 h for h in hits
                 if (include_benchmark_sources or not is_benchmark_source(h.get("source")))
                 and not is_failure_episode(h)
+            ]
+        if job_category:
+            normalized_category = job_category.strip().upper()
+            hits = [
+                h for h in hits
+                if str((h.get("structuredContent") or {}).get(
+                    "jobCategory") or "").strip().upper()
+                == normalized_category
+            ]
+        if jd_fingerprint:
+            hits = [
+                h for h in hits
+                if str((h.get("structuredContent") or {}).get(
+                    "jdFingerprint") or "") == jd_fingerprint
             ]
         return hits[:top_k]
 

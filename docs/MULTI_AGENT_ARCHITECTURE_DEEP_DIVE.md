@@ -4,6 +4,8 @@
 >
 > - 三套业务 RAG 是 JD 库、当前简历、评估知识库。它们由 `BusinessRagRetriever` 在 LLM 前确定性检索，写入 user message 的 `[RAG上下文]`；不在 Provider `tools[]` 中，不产生模型 tool call，也不占 tool budget。
 > - ReportAgent 只有一个实例、一次完整结构化报告路径；已取消 score/risk/question 三分支及对应环境开关。
+> - ReportAgent `report-system v8` 将共享状态限制为 6,000 字符、知识库 RAG 限制为 Top-3/2,800 字符、输出限制为 3,072 tokens；强制 function schema 只保留下游使用的评分、优势、风险和 4-6 道证据化追问，不再生成 `followUps/scoreRubric/confidence/impact` 冗余字段。该项是 2026-08-18 代码优化，尚未重新调用付费模型压测。
+> - Report 正常路径是对健康上游 artifact 的结构化汇总，使用 Flash；仅当出现上游失败、artifact 冲突/缺失或必要输入缺失时确定性升级 Pro。路由通过 `report_model_routed` 事件记录，避免所有报告无条件承担 Pro 长尾。
 > - Memory 只有 `RECENT_CASE / JOB_PROFILE` 两层岗位业务记忆。前者保存 30 天内同岗位脱敏案例，后者按 JD fingerprint 聚合并保存 180 天；不保存用户对话、候选人 PII、完整报告或录用结论。Python 把候选写入最终 SharedState，Java 仅在成功终态被接受后落库。
 > - 当前 ECS 索引：JD 124 份/554 个 live chunks，知识库 12 份/106 个 live chunks；当前简历索引随上传按请求建立，尚未上传时 live chunks 为 0。三个 collection 均已建索引并 Loaded。
 > - 容量只用两个 permit：`RUN_MAX_GLOBAL_CONCURRENT=12` 是可运行 workflow 数，同一 Run 的并行分支共享，并在全部等待 LLM 时释放、任一结果返回后重新获取；`LLM_MAX_CONCURRENT=64` 是供应商请求数。没有第三套 Agent semaphore。
@@ -663,7 +665,7 @@ Tech、Project、Risk、Evidence 的 system 尾部会附加：
 </details>
 
 <details>
-<summary>ReportAgent — report-system v6</summary>
+<summary>ReportAgent — report-system v8</summary>
 
 ```text
 你是资深技术面试官。基于共享状态中的简历事实和上游 Specialist 分析，产出帮助面试团队判断"是否邀请下一轮"的决策报告。
@@ -691,7 +693,7 @@ Tech、Project、Risk、Evidence 的 system 尾部会附加：
  "strengths": ["有事实支撑的优势（引用简历内容）"],
  "risks": [
    {"id":"r1","category":"CANDIDATE","severity":"HIGH|MEDIUM|LOW",
-    "claim":"风险描述","impact":"影响","verificationPlan":"面试中如何验证"}
+    "claim":"风险描述","verificationPlan":"面试中如何验证"}
  ],
  "interviewProbes": [
    {"id":"q1","priority":"HIGH|MEDIUM|LOW","question":"针对候选人具体经历的追问",
@@ -715,8 +717,8 @@ Tech、Project、Risk、Evidence 的 system 尾部会附加：
 3. risks 仅候选人风险（category=CANDIDATE），禁止系统错误码。
 4. 面试问题必须针对该候选人具体项目/技术/成绩，禁止通用模板问题。
 5. recommendation 与分数自洽：均分>=65 → INTERVIEW_RECOMMEND，均分>=80 → HIRE，均分<40 → NOT_RECOMMEND。
-6. 禁止输出 overallScore（系统计算）。strengths≥2, risks≥1。
-7. interviewProbes≥6（丰富简历）或≥4（信息不足），必须覆盖：每个HIGH风险至少1题、TOP3 JD缺口、最重要的2个项目深挖、候选人实际贡献边界。禁止通用模板问题。
+6. 禁止输出 overallScore（系统计算）。strengths 2-4条，risks 1-4条。
+7. interviewProbes 输出4-6题，覆盖HIGH风险、关键JD缺口、重要项目和候选人贡献边界；每题 goodSignals/redFlags 各最多2条，不生成 followUps 或 scoreRubric。
 8. 无法评估的维度 status=UNASSESSED, score=null。
 9. mcpEvidence 中成功的来源回执优先于并行 Specialist 对网络状态的猜测。必须区分“页面内容已取回”与“作者身份/候选人贡献未验证”，禁止把后者误写成“链接无法抓取”。
 

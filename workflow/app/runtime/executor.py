@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.config import settings
 from app.runtime.agents import AgentDefinition, AgentRegistry, default_agent_registry
 from app.runtime.context import ContextManager
 from app.runtime.coordinator import Coordinator, FULL_EVAL_TYPES, TERMINAL_AGENTS
@@ -54,6 +55,9 @@ from app.runtime.tools import ToolExecutor
 logger = logging.getLogger(__name__)
 
 _SOURCE_URL = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+REPORT_MAX_TOKENS = 3072
+REPORT_STATE_MAX_CHARS = 6000
+REPORT_RAG_MAX_CHARS = 2800
 
 
 def _utc_now() -> str:
@@ -128,27 +132,9 @@ AGENT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容）：
 }
 工具调用必须使用模型原生 function/tool calls；禁止在 JSON 中嵌套 toolCalls。"""
 
-REPORT_OUTPUT_SCHEMA = """输出 JSON（不要输出其它内容；精简表达）：
-{
-  "thought": "简要计划",
-  "output": {
-    "summary": "面试官视角的一句话结论",
-    "report": {
-      "recommendation": "HIRE|INTERVIEW_RECOMMEND|NEED_MANUAL_REVIEW|NOT_RECOMMEND",
-      "dimensions": [{"name":"技术能力|项目深度|JD匹配|履历可信度","score":"0-100整数（依据证据合理评分）","status":"ASSESSED|PARTIAL|UNASSESSED","rationale":"判断理由","evidenceRefs":[{"sourceType":"RESUME","sourceId":"resume","quote":"原文≤30字"}]}],
-      "strengths": ["有事实支撑的优势"],
-      "risks": [{"id":"r1","category":"CANDIDATE","severity":"HIGH|MEDIUM|LOW","claim":"具体风险","verificationPlan":"面试核实方式"}],
-      "interviewProbes": [{"id":"q1","priority":"HIGH|MEDIUM","question":"针对性问题","objective":"目的","triggeredBy":"由哪个项目/风险/JD缺口触发","goodSignals":["好信号"],"redFlags":["警示信号"]}],
-      "dataQuality": "SUFFICIENT|PARTIAL|INSUFFICIENT",
-      "missingEvidence": ["无法从简历判断的信息"]
-    }
-  },
-  "done": true
-}
-禁止输出 overallScore（系统加权计算）。无证据维度 status=UNASSESSED score=null。
-评分标准：60=基本合格，70=良好匹配，80+=优秀匹配。有证据支撑合理给分，不要全部压低。
-risks 仅写候选人侧(category=CANDIDATE)；系统/数据问题放 systemWarnings。
-interviewProbes 按去重后的待核验主题动态生成，必须覆盖每个HIGH风险、关键JD缺口和最重要项目；最多8题，超过预算按风险优先级截断，禁止为凑数量重复问题。"""
+REPORT_OUTPUT_SCHEMA = """仅调用强制提供的 emit_decision 提交结果；字段和枚举以该 function schema 为唯一准则。
+输出必须精简：4个评分维度、2-4条优势、1-4条候选人风险、4-6道针对性问题；每项最多2个最强证据引用。
+禁止 overallScore；系统负责加权。无证据维度使用 status=UNASSESSED、score=null；系统/数据问题只放 systemWarnings。"""
 
 # Provider-side schema enforcement (JSON guarantee layer 1): the decision loop
 # forces this function; DeepSeek then guarantees arguments match the schema.
@@ -190,27 +176,27 @@ _SOURCE_REF_SCHEMA = {
             "type": "string",
             "enum": ["RESUME", "JD", "KNOWLEDGE", "EXTERNAL"],
         },
-        "sourceId": {"type": "string"},
+        "sourceId": {"type": "string", "maxLength": 80},
         "lineStart": {"type": "integer"},
         "lineEnd": {"type": "integer"},
-        "quote": {"type": "string"},
-        "uri": {"type": "string"},
+        "quote": {"type": "string", "maxLength": 120},
+        "uri": {"type": "string", "maxLength": 500},
     },
     "required": ["sourceType", "sourceId", "quote"],
 }
 _REPORT_DIM = {
     "type": "object",
     "properties": {
-        "name": {"type": "string"},
+        "name": {"type": "string", "maxLength": 32},
         "score": {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
         "status": {
             "type": "string",
             "enum": ["ASSESSED", "UNASSESSED", "PARTIAL"],
         },
         "evidenceCoverage": {"type": "number", "minimum": 0, "maximum": 1},
-        "rationale": {"type": "string"},
+        "rationale": {"type": "string", "maxLength": 220},
         "evidenceRefs": {
-            "type": "array", "minItems": 1,
+            "type": "array", "minItems": 1, "maxItems": 2,
             "items": _SOURCE_REF_SCHEMA},
     },
     "required": ["name", "status", "rationale", "evidenceRefs"],
@@ -218,16 +204,14 @@ _REPORT_DIM = {
 _CANDIDATE_RISK_SCHEMA = {
     "type": "object",
     "properties": {
-        "id": {"type": "string"},
-        "category": {"type": "string"},
+        "id": {"type": "string", "maxLength": 20},
+        "category": {"type": "string", "enum": ["CANDIDATE"]},
         "severity": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
-        "confidence": {"type": "number"},
-        "claim": {"type": "string"},
-        "impact": {"type": "string"},
+        "claim": {"type": "string", "maxLength": 180},
         "evidenceRefs": {
-            "type": "array", "minItems": 1,
+            "type": "array", "minItems": 1, "maxItems": 2,
             "items": _SOURCE_REF_SCHEMA},
-        "verificationPlan": {"type": "string"},
+        "verificationPlan": {"type": "string", "maxLength": 160},
     },
     "required": [
         "id", "severity", "claim", "evidenceRefs", "verificationPlan"],
@@ -235,18 +219,20 @@ _CANDIDATE_RISK_SCHEMA = {
 _INTERVIEW_PROBE_SCHEMA = {
     "type": "object",
     "properties": {
-        "id": {"type": "string"},
-        "priority": {"type": "string"},
-        "question": {"type": "string"},
-        "objective": {"type": "string"},
-        "triggeredBy": {"type": "string"},
+        "id": {"type": "string", "maxLength": 20},
+        "priority": {"type": "string", "enum": ["HIGH", "MEDIUM"]},
+        "question": {"type": "string", "maxLength": 200},
+        "objective": {"type": "string", "maxLength": 120},
+        "triggeredBy": {"type": "string", "maxLength": 120},
         "evidenceRefs": {
-            "type": "array", "minItems": 1,
+            "type": "array", "minItems": 1, "maxItems": 2,
             "items": _SOURCE_REF_SCHEMA},
-        "goodSignals": {"type": "array", "items": {"type": "string"}},
-        "redFlags": {"type": "array", "items": {"type": "string"}},
-        "followUps": {"type": "array", "items": {"type": "string"}},
-        "scoreRubric": {"type": "string"},
+        "goodSignals": {
+            "type": "array", "maxItems": 2,
+            "items": {"type": "string", "maxLength": 100}},
+        "redFlags": {
+            "type": "array", "maxItems": 2,
+            "items": {"type": "string", "maxLength": 100}},
     },
     "required": [
         "id", "priority", "question", "objective", "triggeredBy",
@@ -270,11 +256,11 @@ EMIT_REPORT_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "thought": {"type": "string"},
+                "thought": {"type": "string", "maxLength": 120},
                 "output": {
                     "type": "object",
                     "properties": {
-                        "summary": {"type": "string"},
+                        "summary": {"type": "string", "maxLength": 240},
                         "report": {
                             "type": "object",
                             "properties": {
@@ -283,20 +269,31 @@ EMIT_REPORT_TOOL = {
                                     "enum": ["HIRE", "INTERVIEW_RECOMMEND",
                                              "NEED_MANUAL_REVIEW", "NOT_RECOMMEND"],
                                 },
-                                "dimensions": {"type": "array", "items": _REPORT_DIM},
-                                "strengths": {"type": "array", "items": {"type": "string"}},
+                                "dimensions": {
+                                    "type": "array", "minItems": 4,
+                                    "maxItems": 4, "items": _REPORT_DIM},
+                                "strengths": {
+                                    "type": "array", "minItems": 2,
+                                    "maxItems": 4,
+                                    "items": {"type": "string", "maxLength": 160}},
                                 "risks": {
-                                    "type": "array", "items": _CANDIDATE_RISK_SCHEMA},
+                                    "type": "array", "minItems": 1,
+                                    "maxItems": 4,
+                                    "items": _CANDIDATE_RISK_SCHEMA},
                                 "interviewProbes": {
-                                    "type": "array", "items": _INTERVIEW_PROBE_SCHEMA},
+                                    "type": "array", "minItems": 4,
+                                    "maxItems": 6,
+                                    "items": _INTERVIEW_PROBE_SCHEMA},
                                 "systemWarnings": {
-                                    "type": "array", "items": _SYSTEM_WARNING_SCHEMA},
+                                    "type": "array", "maxItems": 4,
+                                    "items": _SYSTEM_WARNING_SCHEMA},
                                 "dataQuality": {
                                     "type": "string",
                                     "enum": ["SUFFICIENT", "PARTIAL", "INSUFFICIENT"],
                                 },
                                 "missingEvidence": {
-                                    "type": "array", "items": {"type": "string"}},
+                                    "type": "array", "maxItems": 6,
+                                    "items": {"type": "string", "maxLength": 160}},
                             },
                             "required": ["recommendation", "dimensions", "strengths",
                                          "risks", "interviewProbes", "dataQuality"],
@@ -656,6 +653,7 @@ class RunExecutor:
                 f"{resume_cues} | 技术词={','.join(technical_tokens)}"
                 if resume_cues else f"技术词={','.join(technical_tokens)}")
         parts = [
+            ("memory_intent", "岗位画像 稳定要求 近期案例 JD缺口 风险 证据缺口"),
             ("run_type", request.runType or ""),
             ("job_category", (request.jobCategory or "")[:100]),
             ("job_description", (request.jobDescription or "")[:220]),
@@ -686,6 +684,18 @@ class RunExecutor:
             if str(structured.get("jdFingerprint") or "") != fingerprint:
                 return False
         return bool(current_category or normalized_jd)
+
+    @staticmethod
+    def _business_memory_scope(
+            request: AgentRunRequest) -> Tuple[Optional[str], Optional[str]]:
+        """Return exact DB-side filters for the two business-memory layers."""
+        job_category = (request.jobCategory or "").strip().upper() or None
+        normalized_jd = re.sub(
+            r"\s+", " ", (request.jobDescription or "").strip()).lower()
+        jd_fingerprint = (
+            hashlib.sha256(normalized_jd.encode("utf-8")).hexdigest()[:20]
+            if normalized_jd else None)
+        return job_category, jd_fingerprint
 
     @staticmethod
 
@@ -796,6 +806,7 @@ class RunExecutor:
             # small recent-case layer plus one stable job profile.
             memory_query, memory_query_basis = self._memory_retrieval_query(
                 request)
+            job_category, jd_fingerprint = self._business_memory_scope(request)
             recall_limit = self.policy.memoryRetrieval.topK
             recent_case_hits, job_profile_hits = (
                 await asyncio.gather(
@@ -803,11 +814,14 @@ class RunExecutor:
                         memory_query, types=["RECENT_CASE"],
                         top_k=min(2, recall_limit),
                         min_confidence=self.policy.memoryRetrieval.minConfidence,
-                        consumer_agent="SpecialistAgent"),
+                        consumer_agent="SpecialistAgent",
+                        job_category=job_category),
                     self.memory.search(
                         memory_query, types=["JOB_PROFILE"], top_k=1,
                         min_confidence=self.policy.memoryRetrieval.minConfidence,
-                        consumer_agent="SpecialistAgent"),
+                        consumer_agent="SpecialistAgent",
+                        job_category=job_category,
+                        jd_fingerprint=jd_fingerprint),
                 ))
             recent_case_hits = [
                 hit for hit in recent_case_hits
@@ -1361,6 +1375,40 @@ class RunExecutor:
         value = quota.get(key)
         return int(value) if isinstance(value, (int, float)) and value >= 0 else fallback
 
+    def _report_quality_route(self) -> Tuple[bool, List[str]]:
+        """Use Pro only when the terminal stage must repair degraded inputs.
+
+        Specialists already perform the expensive domain reasoning. A healthy
+        ReportAgent turn is bounded synthesis and should use the fast model;
+        conflicts, failed/missing upstream artifacts, or missing required
+        inputs are explicit escalation signals for the quality model.
+        """
+        artifacts = self.state.artifacts()
+        reasons: List[str] = []
+        if self.failure_notes:
+            reasons.append("upstream_failure")
+        if artifacts.get("conflicts"):
+            reasons.append("artifact_conflict")
+
+        presence = artifacts.get("inputPresence") or {}
+        if not presence.get("resumePresent"):
+            reasons.append("resume_missing")
+        if (self.request.runType in {
+                "full_evaluation", "jd_evaluation", "backend_eval",
+                "agent_eval"} and not presence.get("jdPresent")):
+            reasons.append("jd_missing")
+
+        expected = {
+            "TechAgent": "technicalFindings",
+            "ProjectAgent": "projectFindings",
+            "RiskAgent": "risks",
+        }
+        for upstream_agent, artifact_key in expected.items():
+            if (upstream_agent in self.executed
+                    and artifact_key not in artifacts):
+                reasons.append(f"{artifact_key}_missing")
+        return bool(reasons), list(dict.fromkeys(reasons))
+
     async def _run_agent(self, definition: AgentDefinition) -> AgentOutput:
         # Parallel Agent branches share one workflow permit. It is detached
         # only while every live branch is suspended in provider I/O.
@@ -1642,14 +1690,24 @@ class RunExecutor:
                 if native_history else tool_results_block)
             skill_text = default_skill_manager.render_progressive(
                 skills, list(loaded_skills.values()))
+            report_user_request = request.userMessage or "（对当前简历执行你的职责）"
+            if agent_id == "ReportAgent" and single_pass_evaluation:
+                # Full-evaluation requests already carry resume/JD evidence in
+                # the bounded shared view. Re-attaching a potentially large
+                # user message duplicates candidate tokens and slows the only
+                # serial terminal call.
+                report_user_request = "生成当前 Run 的最终候选人评估报告。"
             messages = self.context.assemble(
                 system_prompt=prompt.content,
                 policy_instructions=self._policy_instructions(),
                 skill_instructions=skill_text,
-                user_request=request.userMessage or "（对当前简历执行你的职责）",
+                user_request=report_user_request,
                 agent_task=definition.task_prompt or definition.description,
                 current_goal=request.currentGoal or "",
-                shared_state_digest=self.state.view_for(agent_id),
+                shared_state_digest=self.state.view_for(
+                    agent_id,
+                    max_chars=(REPORT_STATE_MAX_CHARS
+                               if agent_id == "ReportAgent" else 9000)),
                 recent_messages=request.recentMessages,
                 conversation_summary=request.conversationSummary or "",
                 memory_block=memory_block,
@@ -1666,7 +1724,7 @@ class RunExecutor:
                                        "[当前目标]", "[输出要求]"],
                     recent_messages=request.recentMessages)
                 violations = self.context.consistency_check(
-                    messages, user_request=(request.userMessage or "")[:80],
+                    messages, user_request=report_user_request[:80],
                     current_goal=(request.currentGoal or "")[:60],
                     agent_task=(definition.task_prompt
                                 or definition.description)[:80])
@@ -1674,6 +1732,18 @@ class RunExecutor:
                     logger.warning("compaction consistency violations: %s", violations)
 
             is_report = definition.agent_id == "ReportAgent"
+            report_use_quality = False
+            if is_report:
+                report_use_quality, report_route_reasons = (
+                    self._report_quality_route())
+                await self.emitter.emit(
+                    "run.progress", agent_id=agent_id, payload={
+                        "stage": "report_model_routed",
+                        "modelTier": (
+                            "quality" if report_use_quality else "fast"),
+                        "reasons": report_route_reasons,
+                        "occurredAt": _utc_now(),
+                    })
             # A loaded skill is "applied" only when its instructions actually
             # enter a subsequent model turn.
             for skill_id, loaded in loaded_skills.items():
@@ -1820,7 +1890,7 @@ class RunExecutor:
                     "occurredAt": _utc_now(),
                 })
             turn_max_tokens = (
-                8192 if is_report
+                REPORT_MAX_TOKENS if is_report
                 else 3600 if definition.agent_id in TERMINAL_AGENTS
                 else 4096)
             was_json_repair_turn = json_repair_pending
@@ -1833,7 +1903,7 @@ class RunExecutor:
                         turn_messages, agent_id=agent_id,
                         purpose=definition.output_type,
                         max_tokens=repair_max_tokens,
-                        use_quality=is_report,
+                        use_quality=report_use_quality,
                         fallback_tool=final_tool,
                         trace_context=trace_context)
                     json_repair_pending = False
@@ -1841,12 +1911,12 @@ class RunExecutor:
                     turn = await self._chat_native_turn(
                         turn_messages, agent_id=agent_id,
                         purpose=definition.output_type,
-                        # Full reports routinely exceed 4k tokens because every
-                        # score, risk and interview probe is evidence-bound.
+                        # The bounded report contract fits in 3k output tokens;
+                        # every retained score/risk/probe remains evidence-bound.
                         max_tokens=turn_max_tokens,
                         tools=turn_tools,
                         tool_choice=tool_choice,
-                        use_quality=is_report,
+                        use_quality=report_use_quality,
                         trace_context=trace_context)
             except LlmError as exc:
                 if (was_json_repair_turn
@@ -2319,7 +2389,7 @@ class RunExecutor:
             if "trace_context" in inspect.signature(
                     self.llm.chat).parameters:
                 kwargs["trace_context"] = trace_context
-            if (agent_id == "RiskAgent"
+            if (agent_id in {"RiskAgent", "ReportAgent"}
                     and "max_output_tokens_hard" in inspect.signature(
                         self.llm.chat).parameters):
                 kwargs["max_output_tokens_hard"] = max_tokens
@@ -4279,7 +4349,7 @@ class RunExecutor:
                     definition.agent_id, resume, artifacts, request)
             if query:
                 steps.append({
-                    "source": "knowledge", "query": query, "top_k": 5})
+                    "source": "knowledge", "query": query, "top_k": 3})
             if resume and request.runType in ("followup", "quick_answer"):
                 steps.append({
                     "source": "resume", "query": query, "top_k": 5,
@@ -4307,9 +4377,13 @@ class RunExecutor:
             if retrieval.succeeded:
                 payload = json.dumps(
                     retrieval.result, ensure_ascii=False, separators=(",", ":"))
+                payload_limit = (
+                    REPORT_RAG_MAX_CHARS
+                    if definition.agent_id == "ReportAgent" else 6000)
                 blocks.append(
                     f"[来源={retrieval.source} "
-                    f"retrievalId={retrieval.retrieval_id}]\n{payload[:6000]}")
+                    f"retrievalId={retrieval.retrieval_id}]\n"
+                    f"{payload[:payload_limit]}")
         return "\n\n".join(blocks), refs
 
     async def _record_retrieval(
@@ -4779,12 +4853,15 @@ class RunExecutor:
         if taxonomy not in {"RECENT_CASE", "JOB_PROFILE"}:
             return None
         candidate_id = f"pending-{uuid.uuid4().hex[:16]}"
+        structured_payload = dict(structured or {})
+        structured_payload.setdefault(
+            "_producerVersion", settings.workflow_build_version)
         self.pending_memory_writes.append({
             "candidateId": candidate_id,
             "type": taxonomy,
             "ownerScope": owner_scope,
             "content": content,
-            "structuredContent": dict(structured or {}),
+            "structuredContent": structured_payload,
             "source": source,
             "sourceId": source_id,
             "confidence": confidence,
