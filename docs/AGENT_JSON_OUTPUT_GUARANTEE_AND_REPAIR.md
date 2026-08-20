@@ -187,7 +187,9 @@ Runtime 明确追加：
 
 同时把上一轮的具体 schema error 一并放入上下文。这样修复轮只有一个任务：重新提交完整结构化结果，不允许模型借机继续搜索或加载 Skill。
 
-切换到 JSON mode 前，Runtime 会移除历史中的 Tool 协议 frame，但保留普通 system/user/assistant 内容和已经汇总的 Tool Observation，避免部分兼容网关因“历史有 tool_calls、当前却没有 tools”而返回 400。
+切换到 JSON mode 前，Runtime 会保留普通 system/user/assistant 内容，并移除历史中的 Tool 协议 frame，避免部分兼容网关因“历史有 tool_calls、当前却没有 tools”而返回 400。
+
+当前实现需要特别注意：确定性 pre-step 的结果已经写进基础 user message 的 `[工具观察]`，因此仍会保留；但 ReAct 过程中只存在于原生 `role=tool` 消息里的 Skill/MCP/业务 Tool Result 会随协议 frame 一起被删除。已加载 Skill 的正文会重新进入 system context，部分 MCP 证据也可能已落入 SharedState，但不能据此宣称所有 Tool Observation 都保留。这是当前修复链路的真实缺口：正确做法应在删除协议 frame 前，将需要的成功 Tool Result 有界地扁平化为普通 `[此前工具观察]` 文本，同时排除终态 `emit_decision` 的错误回执。
 
 ### 7.4 修复轮重新走完整校验
 

@@ -137,3 +137,22 @@ v1、v2 保留在数据库中是为了审计，不应覆盖或伪装成有效结
 - Copilot 与 Workflow 隔离：通过，回归请求未创建 Run。
 - 压缩指标：修复完成，最终实测 `2459 → 1600`（34.93%）。
 - 高低水位策略：通过，避免单次只释放约 10% 上下文。
+
+## DeepSeek Prompt Cache 优化回归
+
+Copilot 不再把近期对话整体序列化进一个动态 JSON，而是按原生多轮消息发送：稳定候选人上下文进入 system 前缀，历史按 `USER/ASSISTANT` 顺序追加，当前问题始终位于最后。历史 assistant 使用与当前 JSON mode 一致的结构重放，避免模型受纯文本历史影响而返回空 `answer`。
+
+同一 conversation 连续 10 个极短 turn 的最终线上结果：
+
+| 指标 | 结果 |
+|---|---:|
+| 10 轮累计 Prompt tokens | 7761 |
+| 10 轮累计 cached tokens | 7040 |
+| 10 轮累计 cache token rate | 90.71% |
+| 第 3～10 轮 warm cache rate | 90.98% |
+| Provider 成功 | 10/10 |
+| Provider failures | 0 |
+| 意外 Workflow Run | 0 |
+| Provider 完整耗时 P50/P95 | 1150 / 1488 ms |
+
+本轮验收同时要求缓存命中和 Provider 零 fallback，未把本地降级回答计入模型成功率。

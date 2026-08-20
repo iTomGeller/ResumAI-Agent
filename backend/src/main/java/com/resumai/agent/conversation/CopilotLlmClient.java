@@ -37,7 +37,7 @@ public class CopilotLlmClient {
             2. 不要编造候选人事实、分数或风险；证据不足时明确说明缺什么。
             3. citations 仅在有真实依据时填写；公网技术文档不是候选人履历证据。
             4. 回答控制在 300 个中文字符左右；普通问答不得触发完整评估运行。
-            5. contextSnapshot.messagesToCompact 非空时，把既有 conversationSummary 与这些旧消息合并为新的 conversationSummary，最多800个中文字符；否则输出 null。
+            5. conversationCompressionContext.messagesToCompact 非空时，把既有 conversationSummary 与这些旧消息合并为新的 conversationSummary，最多800个中文字符；否则输出 null。
             6. 有实时工具时由你根据工具描述自主决定是否调用，禁止预设工具名；工具失败时明确说明未查到。
             7. “候选人固定上下文”与“当前会话与问题”共同构成本轮输入；当前问题和近期消息以后者为准。
             """;
@@ -52,7 +52,11 @@ public class CopilotLlmClient {
     private final HttpClient httpClient;
     private final CopilotMetrics metrics;
 
-    private record PromptParts(String stableJson, String dynamicJson) {
+    private record PromptParts(
+            String systemContextJson,
+            List<Map<String, Object>> historyMessages,
+            String currentUserContent
+    ) {
     }
 
     public CopilotLlmClient(DeepSeekProperties properties,
@@ -79,10 +83,11 @@ public class CopilotLlmClient {
         try {
             PromptParts prompt = promptParts(input);
             List<Map<String, Object>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "system", "content", SYSTEM_PROMPT));
-            messages.add(Map.of("role", "user", "content",
-                    "[候选人固定上下文]\n" + prompt.stableJson()
-                            + "\n[当前会话与问题]\n" + prompt.dynamicJson()));
+            messages.add(Map.of("role", "system", "content",
+                    SYSTEM_PROMPT + "\n[候选人与会话稳定上下文]\n"
+                            + prompt.systemContextJson()));
+            messages.addAll(prompt.historyMessages());
+            messages.add(Map.of("role", "user", "content", prompt.currentUserContent()));
 
             boolean allowTools = Boolean.TRUE.equals(input.get("allowTools"))
                     || "BACKGROUND_QUERY".equalsIgnoreCase(
@@ -391,28 +396,65 @@ public class CopilotLlmClient {
      * current question and recent turns. Dynamic values must never precede it.
      */
     private PromptParts promptParts(Map<String, Object> input) throws IOException {
-        Map<String, Object> dynamic = new LinkedHashMap<>(input);
-        Map<String, Object> stable = new LinkedHashMap<>();
-        // Internal identifiers are unnecessary model input.
-        dynamic.remove("conversationId");
-
-        Map<String, Object> sourceSnapshot = mapValue(dynamic.remove("contextSnapshot"));
+        Map<String, Object> systemContext = new LinkedHashMap<>();
+        Map<String, Object> sourceSnapshot = mapValue(input.get("contextSnapshot"));
         Map<String, Object> stableSnapshot = new LinkedHashMap<>();
-        Map<String, Object> dynamicSnapshot = new LinkedHashMap<>(sourceSnapshot);
         for (String key : STABLE_SNAPSHOT_KEYS) {
-            if (dynamicSnapshot.containsKey(key)) {
-                stableSnapshot.put(key, dynamicSnapshot.remove(key));
+            if (sourceSnapshot.containsKey(key)) {
+                stableSnapshot.put(key, sourceSnapshot.get(key));
             }
         }
         if (!stableSnapshot.isEmpty()) {
-            stable.put("contextSnapshot", stableSnapshot);
+            systemContext.put("candidateContext", stableSnapshot);
         }
-        if (!dynamicSnapshot.isEmpty()) {
-            dynamic.put("contextSnapshot", dynamicSnapshot);
+
+        Map<String, Object> compactContext = new LinkedHashMap<>();
+        for (String key : List.of("activeGoal", "summary", "conversationSummary",
+                "messagesToCompact")) {
+            Object value = sourceSnapshot.get(key);
+            if (value != null && (!(value instanceof List<?> list) || !list.isEmpty())) {
+                compactContext.put(key, value);
+            }
+        }
+        if (!compactContext.isEmpty()) {
+            systemContext.put("conversationCompressionContext", compactContext);
+        }
+
+        List<Map<String, Object>> history = new ArrayList<>();
+        for (Map<String, Object> item : mapList(sourceSnapshot.get("recentMessages"))) {
+            String role = String.valueOf(item.getOrDefault("role", "")).toLowerCase();
+            String content = String.valueOf(item.getOrDefault("content", ""));
+            if (("user".equals(role) || "assistant".equals(role))
+                    && StringUtils.hasText(content)) {
+                history.add(Map.of(
+                        "role", role,
+                        "content", "assistant".equals(role)
+                                ? historicalAssistantJson(content) : content));
+            }
+        }
+
+        String currentContent = String.valueOf(input.getOrDefault("content", ""));
+        List<Map<String, Object>> contextRefs = mapList(input.get("contextRefs"));
+        if (!contextRefs.isEmpty()) {
+            currentContent = "[引用上下文]\n"
+                    + objectMapper.writeValueAsString(contextRefs)
+                    + "\n[当前问题]\n" + currentContent;
         }
         return new PromptParts(
-                objectMapper.writeValueAsString(stable),
-                objectMapper.writeValueAsString(dynamic));
+                objectMapper.writeValueAsString(systemContext),
+                history,
+                currentContent);
+    }
+
+    /** Keep historical assistant turns consistent with the active JSON mode. */
+    private String historicalAssistantJson(String answer) throws IOException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("answer", answer);
+        payload.put("citations", List.of());
+        payload.put("actions", List.of());
+        payload.put("suggestions", List.of());
+        payload.put("conversationSummary", null);
+        return objectMapper.writeValueAsString(payload);
     }
 
     private static void ensureSuccess(int statusCode, String body) throws IOException {
