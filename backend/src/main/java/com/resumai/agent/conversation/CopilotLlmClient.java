@@ -440,6 +440,14 @@ public class CopilotLlmClient {
                     + objectMapper.writeValueAsString(contextRefs)
                     + "\n[当前问题]\n" + currentContent;
         }
+        Object compactRows = sourceSnapshot.get("messagesToCompact");
+        if (compactRows instanceof List<?> rows && !rows.isEmpty()) {
+            currentContent = "[运行时上下文压缩要求]\n"
+                    + "本轮必须在最终JSON的conversationSummary中返回非空增量摘要，"
+                    + "合并既有conversationSummary与messagesToCompact，保留目标、约束、"
+                    + "已确认事实、未解决问题和关键结论；最多800个中文字符，不得返回null。\n"
+                    + "[当前问题]\n" + currentContent;
+        }
         return new PromptParts(
                 objectMapper.writeValueAsString(systemContext),
                 history,

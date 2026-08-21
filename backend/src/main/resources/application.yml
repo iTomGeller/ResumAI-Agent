@@ -83,6 +83,12 @@ resumai:
   intent:
     # EXP-6: below this LLM confidence the turn degrades to a clarify question
     confidence-floor: ${INTENT_CONFIDENCE_FLOOR:0.7}
+  copilot:
+    # Application budget, not the provider's maximum context window. Keeping
+    # recent history below 12K controls latency/noise while preserving a long
+    # stable prefix; compression returns to 6K to avoid frequent re-summarize.
+    history-high-watermark-tokens: ${COPILOT_HISTORY_HIGH_WATERMARK_TOKENS:12000}
+    history-target-tokens: ${COPILOT_HISTORY_TARGET_TOKENS:6000}
   task-queue:
     enabled: ${TASK_QUEUE_ENABLED:true}
     stream-key: resumai:task_queue

@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import org.redisson.api.RMapCache;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -44,9 +45,14 @@ public class ConversationReplyService {
             Pattern.compile("^\\s*(\\d+)\\s*([+\\-*/x×])\\s*(\\d+)\\s*$");
 
     private static final Duration HISTORY_CACHE_TTL = Duration.ofHours(2);
-    private static final int HISTORY_CONTEXT_HIGH_WATERMARK = 2400;
-    private static final int HISTORY_CONTEXT_TARGET_TOKEN_LIMIT = 1600;
-    private static final int MAX_RECENT_MESSAGE_COUNT = 64;
+    /** Emergency guard only; normal compaction is driven by the token budget. */
+    private static final int MAX_RECENT_MESSAGE_COUNT = 512;
+
+    @Value("${resumai.copilot.history-high-watermark-tokens:12000}")
+    private int historyContextHighWatermark = 12000;
+
+    @Value("${resumai.copilot.history-target-tokens:6000}")
+    private int historyContextTargetTokenLimit = 6000;
 
     private final CopilotLlmClient llmClient;
     private final AgentRunMapper agentRunMapper;
@@ -312,7 +318,8 @@ public class ConversationReplyService {
                                     "copilot_incremental_window_8",
                                     "copilot_incremental_window_token_cap",
                                     "copilot_token_budget_2400",
-                                    "copilot_token_budget_2400_target_1600"))
+                                    "copilot_token_budget_2400_target_1600",
+                                    snapshotReason()))
                             .orderByDesc(ContextSnapshotRow::getId)
                             .last("limit 1"));
             Long compactedThrough = latest != null
@@ -386,7 +393,7 @@ public class ConversationReplyService {
                 .map(row -> historyMessage(row, 600)).toList();
         int allTokens = estimateTokens(previousSummary, List.of(), allMessages);
         if (rows.size() <= MAX_RECENT_MESSAGE_COUNT
-                && allTokens <= HISTORY_CONTEXT_HIGH_WATERMARK) {
+                && allTokens <= historyContextHighWatermark) {
             return new HistoryWindow(List.of(), rows);
         }
 
@@ -407,7 +414,7 @@ public class ConversationReplyService {
                     .map(row -> historyMessage(row, 600)).toList();
             int candidateTokens = estimateTokens(previousSummary, List.of(), candidateRecent);
             if (!recentRows.isEmpty()
-                    && candidateTokens > HISTORY_CONTEXT_TARGET_TOKEN_LIMIT) {
+                    && candidateTokens > historyContextTargetTokenLimit) {
                 break;
             }
             recentRows = candidateRows;
@@ -460,7 +467,7 @@ public class ConversationReplyService {
                             .mapToInt(item -> String.valueOf(
                                     item.getOrDefault("content", "")).length())
                             .sum()) / 2));
-            row.setReason("copilot_token_budget_2400_target_1600");
+            row.setReason(snapshotReason());
             row.setSummary(clipPreservingHeadTail(updatedSummary, 1600));
             row.setCreateTime(LocalDateTime.now());
             contextSnapshotMapper.insert(row);
@@ -480,6 +487,11 @@ public class ConversationReplyService {
             chars += String.valueOf(item.getOrDefault("content", "")).length();
         }
         return Math.max(1, chars / 2);
+    }
+
+    private String snapshotReason() {
+        return "copilot_token_budget_" + historyContextHighWatermark
+                + "_target_" + historyContextTargetTokenLimit;
     }
 
     private List<String> defaultSuggestions() {
