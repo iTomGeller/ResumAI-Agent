@@ -9,6 +9,7 @@ import com.resumai.agent.domain.entity.AgentRun;
 import com.resumai.agent.domain.enums.RunStatus;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +46,14 @@ public class RunQueueService {
     }
 
     public record SubmitResult(AgentRun run, boolean mergedIntoExisting, AgentRun interruptedRun) {
+    }
+
+    /** One indexed round-trip for the Copilot router's active/paused/pending view. */
+    public record ConversationRunState(
+            AgentRun active,
+            AgentRun paused,
+            AgentRun pending
+    ) {
     }
 
     /**
@@ -203,6 +212,46 @@ public class RunQueueService {
                 .eq("status", RunStatus.PAUSED.name())
                 .orderByDesc("created_at")
                 .last("limit 1"));
+    }
+
+    public ConversationRunState findConversationRunState(String conversationId) {
+        if (!StringUtils.hasText(conversationId)) {
+            return new ConversationRunState(null, null, null);
+        }
+        HashSet<String> relevantStatuses = new HashSet<>(RunStatus.ACTIVE);
+        relevantStatuses.add(RunStatus.PAUSED.name());
+        relevantStatuses.add(RunStatus.QUEUED.name());
+        List<AgentRun> rows = runMapper.selectList(new QueryWrapper<AgentRun>()
+                .eq("conversation_id", conversationId)
+                .in("status", relevantStatuses));
+        AgentRun active = null;
+        AgentRun paused = null;
+        AgentRun pending = null;
+        for (AgentRun row : rows) {
+            String status = row.getStatus();
+            if (RunStatus.isActive(status)
+                    && newerThan(row, active)) {
+                active = row;
+            } else if (RunStatus.PAUSED.name().equals(status)
+                    && newerThan(row, paused)) {
+                paused = row;
+            } else if (RunStatus.QUEUED.name().equals(status)
+                    && newerThan(row, pending)) {
+                pending = row;
+            }
+        }
+        return new ConversationRunState(active, paused, pending);
+    }
+
+    private static boolean newerThan(AgentRun candidate, AgentRun current) {
+        if (current == null) {
+            return true;
+        }
+        if (candidate.getCreatedAt() == null) {
+            return false;
+        }
+        return current.getCreatedAt() == null
+                || candidate.getCreatedAt().isAfter(current.getCreatedAt());
     }
 
     public List<AgentRun> listQueued(String conversationId) {

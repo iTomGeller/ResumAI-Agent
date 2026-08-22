@@ -11,6 +11,7 @@ import com.resumai.agent.api.ApiConflictException;
 import com.resumai.agent.api.ApiNotFoundException;
 import com.resumai.agent.api.dto.TaskResponse;
 import com.resumai.agent.conversation.ConversationReplyService;
+import com.resumai.agent.conversation.CopilotMetrics;
 import com.resumai.agent.conversation.TurnDecision;
 import com.resumai.agent.conversation.TurnDisposition;
 import com.resumai.agent.conversation.TurnPolicyService;
@@ -43,6 +44,7 @@ import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -70,6 +72,9 @@ public class ConversationService {
     private final ConversationReplyService conversationReplyService;
     private final ConversationTurnService conversationTurnService;
     private final RedissonClient redisson;
+
+    @Autowired(required = false)
+    private CopilotMetrics copilotMetrics;
 
     public ConversationService(ConversationSessionMapper sessionMapper,
                                ConversationMessageMapper messageMapper,
@@ -271,24 +276,42 @@ public class ConversationService {
 
     @Transactional
     public ConversationTurnResponse sendTurn(String idOrTraceId, ConversationTurnRequest request) {
-        return sendTurnInternal(idOrTraceId, request, null);
+        return sendTurnInternal(idOrTraceId, request, null, System.nanoTime());
     }
 
     @Transactional
     public ConversationTurnResponse sendTurn(String idOrTraceId,
                                              ConversationTurnRequest request,
                                              Consumer<String> onDelta) {
-        return sendTurnInternal(idOrTraceId, request, onDelta);
+        return sendTurnInternal(idOrTraceId, request, onDelta, System.nanoTime());
+    }
+
+    @Transactional
+    public ConversationTurnResponse sendTurn(String idOrTraceId,
+                                             ConversationTurnRequest request,
+                                             Consumer<String> onDelta,
+                                             long requestAcceptedNanos) {
+        return sendTurnInternal(
+                idOrTraceId, request, onDelta, requestAcceptedNanos);
     }
 
     private ConversationTurnResponse sendTurnInternal(
             String idOrTraceId, ConversationTurnRequest request,
-            Consumer<String> onDelta) {
-        ConversationSession session = lockSession(ensureSession(idOrTraceId).getId());
+            Consumer<String> onDelta, long requestAcceptedNanos) {
+        recordPipelineStage("requestToTransactionalEntry", requestAcceptedNanos);
+        long stageStarted = System.nanoTime();
+        ConversationSession ensured = ensureSession(idOrTraceId);
+        recordPipelineStage("sessionResolve", stageStarted);
+        stageStarted = System.nanoTime();
+        ConversationSession session = lockSession(ensured.getId());
+        recordPipelineStage("sessionRowLock", stageStarted);
         // Re-check idempotency while holding the conversation row lock. Two
         // retries with the same clientMessageId can arrive before either one
         // commits; serializing first prevents a duplicate-message exception.
-        ConversationTurnResponse replay = replayIfPresent(session.getId(), request.clientMessageId());
+        stageStarted = System.nanoTime();
+        ConversationTurnResponse replay = replayIfPresent(
+                session.getId(), request.clientMessageId());
+        recordPipelineStage("idempotencyLookup", stageStarted);
         if (replay != null) {
             return replay;
         }
@@ -297,10 +320,14 @@ public class ConversationService {
             throw new ApiConflictException(
                     "会话 revision 已从 v" + request.expectedRevision() + " 更新为 v" + activeRevision + "，请刷新后重试。");
         }
+        stageStarted = System.nanoTime();
         ConversationIntentClassifier.Decision decision = classifier.classify(request.content());
+        recordPipelineStage("ruleClassification", stageStarted);
         boolean agentRuntimeConversation = StringUtils.hasText(session.getResumeText());
         if (agentRuntimeConversation) {
-            return handleRuntimeTurn(session, request, activeRevision, onDelta);
+            return handleRuntimeTurn(
+                    session, request, activeRevision, onDelta,
+                    requestAcceptedNanos);
         }
         return handleLegacyTurn(session, request, decision, activeRevision);
     }
@@ -312,23 +339,32 @@ public class ConversationService {
     private ConversationTurnResponse handleRuntimeTurn(ConversationSession session,
                                                        ConversationTurnRequest request,
                                                        int activeRevision,
-                                                       Consumer<String> onDelta) {
-        AgentRun active = runQueueService.findActiveRun(session.getId());
+                                                       Consumer<String> onDelta,
+                                                       long requestAcceptedNanos) {
+        long stageStarted = System.nanoTime();
+        RunQueueService.ConversationRunState runState =
+                runQueueService.findConversationRunState(session.getId());
+        AgentRun active = runState.active();
         if (active == null) {
             // A paused run is still the active immutable revision. Evaluation-
             // changing input must supersede it instead of leaving a stale
             // checkpoint that can later overwrite the new intent.
-            active = runQueueService.findPausedRun(session.getId());
+            active = runState.paused();
         }
-        AgentRun pending = runQueueService.findPendingRun(session.getId());
+        AgentRun pending = runState.pending();
+        recordPipelineStage("runStateLookup", stageStarted);
+        stageStarted = System.nanoTime();
         TurnDecision decision = turnPolicyService.decide(session, active, pending, request.content());
+        recordPipelineStage("turnPolicy", stageStarted);
 
         return switch (decision.disposition()) {
             case CONTROL -> handleControlDisposition(session, request, decision, activeRevision);
             case DIRECT_REPLY -> handleDirectReply(
-                    session, request, decision, activeRevision, false, onDelta);
+                    session, request, decision, activeRevision, false, onDelta,
+                    requestAcceptedNanos);
             case BACKGROUND_QUERY -> handleDirectReply(
-                    session, request, decision, activeRevision, true, onDelta);
+                    session, request, decision, activeRevision, true, onDelta,
+                    requestAcceptedNanos);
             case MERGE_CONTEXT -> handleMergeContext(session, request, decision, activeRevision, pending);
             case CREATE_REVISION -> handleEvaluationRevision(session, request, decision,
                     activeRevision, false);
@@ -406,15 +442,18 @@ public class ConversationService {
                                                        TurnDecision decision,
                                                        int activeRevision,
                                                        boolean allowTools,
-                                                       Consumer<String> onDelta) {
+                                                       Consumer<String> onDelta,
+                                                       long requestAcceptedNanos) {
         // DIRECT_REPLY / BACKGROUND_QUERY always persist conversation_turn and
         // never create agent_run (runId stays null).
+        long stageStarted = System.nanoTime();
         var persistedTurn = conversationTurnService.start(
                 session.getId(),
                 request.clientMessageId(),
                 decision.disposition().name(),
                 decision.intent(),
                 request.content());
+        recordPipelineStage("conversationTurnStart", stageStarted);
 
         if (decision.needsConfirmation()) {
             saveMessage(session.getId(), request.clientMessageId(), "USER", decision.intent(),
@@ -434,10 +473,18 @@ public class ConversationService {
             return response;
         }
 
+        stageStarted = System.nanoTime();
         saveMessage(session.getId(), request.clientMessageId(), "USER", decision.intent(),
                 request.content(), activeRevision, null, null,
                 Map.of("disposition", decision.disposition().name(),
                         "affectsEvaluation", false));
+        recordPipelineStage("userMessageInsert", stageStarted);
+        if (copilotMetrics != null) {
+            copilotMetrics.recordPipelineStage(
+                    "requestToReplyService",
+                    Math.max(0, TimeUnit.NANOSECONDS.toMillis(
+                            System.nanoTime() - requestAcceptedNanos)));
+        }
 
         ConversationReplyService.CopilotReply reply;
         try {
@@ -462,6 +509,16 @@ public class ConversationService {
         saveMessage(session.getId(), request.clientMessageId() + ":assistant", "ASSISTANT",
                 decision.intent(), reply.answer(), activeRevision, null, null, response);
         return response;
+    }
+
+    private void recordPipelineStage(String stage, long startedNanos) {
+        if (copilotMetrics == null) {
+            return;
+        }
+        copilotMetrics.recordPipelineStage(
+                stage,
+                Math.max(0, TimeUnit.NANOSECONDS.toMillis(
+                        System.nanoTime() - startedNanos)));
     }
 
     private ConversationTurnResponse handleMergeContext(ConversationSession session,

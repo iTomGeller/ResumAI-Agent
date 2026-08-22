@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -142,16 +143,22 @@ public class ConversationController {
         StreamingResponseBody body = output -> {
             copilotMetrics.recordAsyncQueueLatency(
                     Math.max(0, (System.nanoTime() - acceptedNanos) / 1_000_000));
+            AtomicBoolean firstDelta = new AtomicBoolean();
             try {
                 ConversationTurnResponse response = conversationService.sendTurn(
                         conversationId, request,
                         text -> {
+                            if (firstDelta.compareAndSet(false, true)) {
+                                copilotMetrics.recordServerFirstDeltaLatency(
+                                        Math.max(0, (System.nanoTime() - acceptedNanos)
+                                                / 1_000_000));
+                            }
                             try {
                                 writeSse(output, "delta", Map.of("text", text));
                             } catch (IOException e) {
                                 throw new UncheckedIOException(e);
                             }
-                        });
+                        }, acceptedNanos);
                 writeSse(output, "done", response);
             } catch (Exception e) {
                 Throwable cause = e instanceof UncheckedIOException && e.getCause() != null

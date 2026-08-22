@@ -75,8 +75,8 @@ class ConversationDirectReplySideEffectTest {
         lenient().when(redisson.<String, String>getMapCache(anyString())).thenReturn(sessionCache);
         lenient().when(sessionCache.get(anyString())).thenReturn(null);
         lenient().when(runtimeClient.replyConversation(any())).thenReturn(Optional.empty());
-        lenient().when(runQueueService.findActiveRun(anyString())).thenReturn(null);
-        lenient().when(runQueueService.findPendingRun(anyString())).thenReturn(null);
+        lenient().when(runQueueService.findConversationRunState(anyString()))
+                .thenReturn(new RunQueueService.ConversationRunState(null, null, null));
         lenient().when(messageMapper.insert(any(com.resumai.agent.domain.entity.ConversationMessage.class))).thenReturn(1);
         lenient().when(agentRunMapper.selectCount(any())).thenAnswer(inv -> (long) agentRunCount.get());
 

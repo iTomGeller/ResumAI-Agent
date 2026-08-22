@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.LongAdder;
 import org.springframework.stereotype.Component;
@@ -32,9 +33,12 @@ public class CopilotMetrics {
 
     private final ConcurrentLinkedDeque<Long> replyLatencyMs = new ConcurrentLinkedDeque<>();
     private final ConcurrentLinkedDeque<Long> asyncQueueLatencyMs = new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<Long> serverFirstDeltaLatencyMs = new ConcurrentLinkedDeque<>();
     private final ConcurrentLinkedDeque<Long> providerHeaderLatencyMs = new ConcurrentLinkedDeque<>();
     private final ConcurrentLinkedDeque<Long> providerFirstTokenLatencyMs = new ConcurrentLinkedDeque<>();
     private final ConcurrentLinkedDeque<Long> providerTotalLatencyMs = new ConcurrentLinkedDeque<>();
+    private final Map<String, ConcurrentLinkedDeque<Long>> pipelineStagesMs =
+            new ConcurrentHashMap<>();
 
     public void recordContextCacheHit() {
         contextCacheHits.increment();
@@ -58,6 +62,18 @@ public class CopilotMetrics {
 
     public void recordAsyncQueueLatency(long elapsedMs) {
         addSample(asyncQueueLatencyMs, elapsedMs);
+    }
+
+    public void recordServerFirstDeltaLatency(long elapsedMs) {
+        addSample(serverFirstDeltaLatencyMs, elapsedMs);
+    }
+
+    public void recordPipelineStage(String stage, long elapsedMs) {
+        if (stage == null || stage.isBlank()) {
+            return;
+        }
+        addSample(pipelineStagesMs.computeIfAbsent(
+                stage, ignored -> new ConcurrentLinkedDeque<>()), elapsedMs);
     }
 
     public void recordProviderFailure() {
@@ -116,6 +132,11 @@ public class CopilotMetrics {
         body.put("provider", provider);
         body.put("replyLatencyMs", percentiles(replyLatencyMs));
         body.put("asyncQueueLatencyMs", percentiles(asyncQueueLatencyMs));
+        body.put("serverFirstDeltaLatencyMs", percentiles(serverFirstDeltaLatencyMs));
+        Map<String, Object> stages = new LinkedHashMap<>();
+        pipelineStagesMs.keySet().stream().sorted().forEach(
+                stage -> stages.put(stage, percentiles(pipelineStagesMs.get(stage))));
+        body.put("pipelineStagesMs", stages);
         return body;
     }
 

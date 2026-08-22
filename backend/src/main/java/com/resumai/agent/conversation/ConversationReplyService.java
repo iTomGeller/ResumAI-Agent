@@ -158,8 +158,11 @@ public class ConversationReplyService {
         snapshot.put("revision", session.getActiveRevision());
         snapshot.put("hasResume", StringUtils.hasText(session.getResumeText()));
         snapshot.put("hasJobDescription", StringUtils.hasText(session.getJobDescription()));
+        long stageStartedNanos = System.nanoTime();
         HistoryContext history = loadHistoryContext(
                 session.getId(), request.clientMessageId());
+        metrics.recordPipelineStage(
+                "historyContextLoad", elapsedMs(stageStartedNanos));
         if (StringUtils.hasText(history.summary())) {
             snapshot.put("conversationSummary", history.summary());
         }
@@ -176,12 +179,17 @@ public class ConversationReplyService {
             snapshot.put("jobDescription", clipPreservingHeadTail(session.getJobDescription(), 1600));
         }
         // Include structuredReport from the latest completed run for rich Copilot answers
+        stageStartedNanos = System.nanoTime();
         Map<String, Object> report = getLatestStructuredReport(session.getId());
+        metrics.recordPipelineStage(
+                "latestReportLookup", elapsedMs(stageStartedNanos));
         if (report != null && !report.isEmpty()) {
             snapshot.put("structuredReport", report);
         }
         body.put("contextSnapshot", snapshot);
 
+        metrics.recordPipelineStage(
+                "replyPromptAssemblyTotal", elapsedMs(startedNanos));
         Optional<Map<String, Object>> remote = llmClient.reply(body, onDelta);
         if (remote.isPresent()) {
             CopilotReply reply = fromPayload(turnId, remote.get());

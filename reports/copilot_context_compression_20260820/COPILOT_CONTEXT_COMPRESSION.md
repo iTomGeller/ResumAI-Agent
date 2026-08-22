@@ -126,9 +126,42 @@ conversation：每个请求使用新会话
 
 ## 时延解释
 
-公网 TTFT 约 5.5 秒，但 Provider 原始首 token 在长上下文 smoke 中为 335ms。两者不是同一口径：公网 TTFT 还包含会话读取、幂等校验、数据库写入和事务等 Provider 调用前的 Java 链路。
+外部 Windows 测试端观测到 TTFT 约 5.5～6.2 秒，但服务端从接收请求到首个 SSE delta 实测约 1.1～1.5 秒，Provider 原始首 token 约 0.3～0.6 秒。外部 TTFT 包含测试端到 ECS 的网络、连接与代理路径，不能全部归因于 Backend 或模型。
 
-因此，本报告证明 12K 压缩和 Provider Prefix Cache 工作正常，但不能把公网约 5.5 秒全部归因于模型。
+服务端数据库前置链路的 3 次分段 smoke 结果：
+
+| 阶段 | P50 | 最大值 |
+|---|---:|---:|
+| 进入事务 | 1ms | 7ms |
+| 会话解析 | 3ms | 10ms |
+| 会话行锁 | 1ms | 1ms |
+| 幂等查询 | 1ms | 4ms |
+| Run 状态查询 | 0ms | 1ms |
+| conversation_turn 写入 | 1ms | 2ms |
+| USER 消息写入 | 0ms | 2ms |
+| 请求进入 ReplyService 前总计 | 10ms | 31ms |
+
+因此数据库不是当前 5 秒级 TTFT 的瓶颈。
+
+## 数据库热路径优化
+
+虽然当前数据量下 SQL 仅为毫秒级，Copilot 每轮原先仍需分别查询 active、paused、pending Run，最多产生 3 次 MySQL round-trip。当前版本改为一次状态快照查询：
+
+```sql
+SELECT *
+FROM agent_run
+WHERE conversation_id = ?
+  AND status IN (...active statuses..., 'PAUSED', 'QUEUED');
+```
+
+Java 在结果中选择各类别 `created_at` 最新记录，并通过 V24 增加联合索引：
+
+```sql
+CREATE INDEX idx_agent_run_conv_status_created
+ON agent_run(conversation_id, status, created_at);
+```
+
+该优化的准确收益是将 Run 状态读取从最多 3 次 SQL 往返缩减为 1 次，并为会话 Run 历史增长提供组合过滤路径；不能宣称它把当前外部 TTFT 降低了数秒。线上 V24 已应用，最终 Copilot smoke HTTP 200、SSE 正常、Provider failure 为 0、未创建 Workflow Run。
 
 ## 验收结果
 
