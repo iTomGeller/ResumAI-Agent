@@ -988,7 +988,8 @@ public class ConversationService {
     }
 
     private void refreshCopilotCacheAfterCommit(String conversationId) {
-        Runnable refresh = () -> conversationReplyService.refreshHistoryCache(conversationId);
+        Runnable refresh = () -> conversationReplyService.refreshHistoryCache(
+                cachedSession(conversationId));
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(
                     new TransactionSynchronization() {

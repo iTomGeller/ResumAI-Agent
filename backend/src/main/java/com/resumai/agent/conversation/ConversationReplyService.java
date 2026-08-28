@@ -61,6 +61,7 @@ public class ConversationReplyService {
     private final ObjectMapper objectMapper;
     private final RedissonClient redisson;
     private final CopilotMetrics metrics;
+    private final CopilotMemoryCodec memoryCodec;
 
     @Autowired
     public ConversationReplyService(CopilotLlmClient llmClient,
@@ -69,7 +70,8 @@ public class ConversationReplyService {
                                     ContextSnapshotMapper contextSnapshotMapper,
                                     ObjectMapper objectMapper,
                                     RedissonClient redisson,
-                                    CopilotMetrics metrics) {
+                                    CopilotMetrics metrics,
+                                    CopilotMemoryCodec memoryCodec) {
         this.llmClient = llmClient;
         this.agentRunMapper = agentRunMapper;
         this.conversationMessageMapper = conversationMessageMapper;
@@ -77,6 +79,7 @@ public class ConversationReplyService {
         this.objectMapper = objectMapper;
         this.redisson = redisson;
         this.metrics = metrics;
+        this.memoryCodec = memoryCodec;
     }
 
     /** Compatibility constructor for lightweight unit tests. */
@@ -87,7 +90,8 @@ public class ConversationReplyService {
                                     ObjectMapper objectMapper,
                                     RedissonClient redisson) {
         this(llmClient, agentRunMapper, conversationMessageMapper,
-                contextSnapshotMapper, objectMapper, redisson, new CopilotMetrics());
+                contextSnapshotMapper, objectMapper, redisson,
+                new CopilotMetrics(), new CopilotMemoryCodec(objectMapper));
     }
 
     public record CopilotReply(
@@ -96,12 +100,13 @@ public class ConversationReplyService {
             List<Map<String, Object>> citations,
             List<Map<String, Object>> actions,
             List<String> suggestions,
-            String conversationSummary
+            Map<String, Object> conversationMemory
     ) {
     }
 
     private record HistoryContext(
-            String summary,
+            String scopeHash,
+            Map<String, Object> longTermMemory,
             int summaryVersion,
             List<Map<String, Object>> messagesToCompact,
             List<Map<String, Object>> recentMessages,
@@ -160,11 +165,11 @@ public class ConversationReplyService {
         snapshot.put("hasJobDescription", StringUtils.hasText(session.getJobDescription()));
         long stageStartedNanos = System.nanoTime();
         HistoryContext history = loadHistoryContext(
-                session.getId(), request.clientMessageId());
+                session, request.clientMessageId());
         metrics.recordPipelineStage(
                 "historyContextLoad", elapsedMs(stageStartedNanos));
-        if (StringUtils.hasText(history.summary())) {
-            snapshot.put("conversationSummary", history.summary());
+        if (history.longTermMemory() != null && !history.longTermMemory().isEmpty()) {
+            snapshot.put("conversationMemory", history.longTermMemory());
         }
         if (!history.messagesToCompact().isEmpty()) {
             snapshot.put("messagesToCompact", history.messagesToCompact());
@@ -193,7 +198,7 @@ public class ConversationReplyService {
         Optional<Map<String, Object>> remote = llmClient.reply(body, onDelta);
         if (remote.isPresent()) {
             CopilotReply reply = fromPayload(turnId, remote.get());
-            persistHistorySnapshot(session.getId(), history, reply.conversationSummary());
+            persistHistorySnapshot(session, history, reply.conversationMemory());
             metrics.recordCopilotReply(true, elapsedMs(startedNanos));
             return reply;
         }
@@ -218,10 +223,18 @@ public class ConversationReplyService {
         List<String> suggestions = stringList(payload.get("suggestions"));
         String remoteTurn = payload.get("turnId") != null
                 ? String.valueOf(payload.get("turnId")) : turnId;
-        String conversationSummary = payload.get("conversationSummary") != null
-                ? clip(String.valueOf(payload.get("conversationSummary")), 1600) : null;
+        Map<String, Object> conversationMemory = mapValue(payload.get("conversationMemory"));
+        if (conversationMemory.isEmpty() && payload.get("conversationSummary") != null) {
+            String legacy = clip(String.valueOf(payload.get("conversationSummary")), 1600);
+            if (StringUtils.hasText(legacy) && !"null".equals(legacy)) {
+                conversationMemory = Map.of(
+                        "decisions", List.of(Map.of(
+                                "text", legacy,
+                                "status", "LEGACY_MODEL_SUMMARY")));
+            }
+        }
         return new CopilotReply(remoteTurn, answer, citations, actions, suggestions,
-                conversationSummary);
+                conversationMemory);
     }
 
     private CopilotReply localFallback(String turnId, String content, TurnDecision decision,
@@ -291,22 +304,28 @@ public class ConversationReplyService {
         return new CopilotReply(turnId, answer, List.of(), List.of(), suggestions, null);
     }
 
-    private HistoryContext loadHistoryContext(String conversationId,
-                                              String currentClientMessageId) {
-        return loadHistoryContext(conversationId, currentClientMessageId, true);
+    private HistoryContext loadHistoryContext(
+            ConversationSession session,
+            String currentClientMessageId) {
+        return loadHistoryContext(session, currentClientMessageId, true);
     }
 
-    private HistoryContext loadHistoryContext(String conversationId,
-                                              String currentClientMessageId,
-                                              boolean observeRequestLookup) {
+    private HistoryContext loadHistoryContext(
+            ConversationSession session,
+            String currentClientMessageId,
+            boolean observeRequestLookup) {
+        String conversationId = session.getId();
+        CopilotMemoryCodec.Scope scope = memoryCodec.scopeFor(session);
         try {
             String cached = historyCache().get(conversationId);
             if (StringUtils.hasText(cached)) {
                 HistoryContext context = objectMapper.readValue(cached, HistoryContext.class);
-                if (observeRequestLookup) {
-                    metrics.recordContextCacheHit();
+                if (scope.scopeHash().equals(context.scopeHash())) {
+                    if (observeRequestLookup) {
+                        metrics.recordContextCacheHit();
+                    }
+                    return context;
                 }
-                return context;
             }
             if (observeRequestLookup) {
                 metrics.recordContextCacheMiss();
@@ -319,17 +338,23 @@ public class ConversationReplyService {
                     conversationId, e.getMessage());
         }
         try {
-            ContextSnapshotRow latest = contextSnapshotMapper.selectOne(
+            List<ContextSnapshotRow> snapshots = contextSnapshotMapper.selectList(
                     new LambdaQueryWrapper<ContextSnapshotRow>()
-                    .eq(ContextSnapshotRow::getConversationId, conversationId)
-                            .in(ContextSnapshotRow::getReason, List.of(
-                                    "copilot_incremental_window_8",
-                                    "copilot_incremental_window_token_cap",
-                                    "copilot_token_budget_2400",
-                                    "copilot_token_budget_2400_target_1600",
-                                    snapshotReason()))
+                            .eq(ContextSnapshotRow::getConversationId, conversationId)
+                            .eq(ContextSnapshotRow::getReason, memorySnapshotReason())
                             .orderByDesc(ContextSnapshotRow::getId)
-                            .last("limit 1"));
+                            .last("limit 20"));
+            ContextSnapshotRow latest = null;
+            Map<String, Object> longTermMemory = Map.of();
+            for (ContextSnapshotRow candidate : snapshots) {
+                Map<String, Object> decoded = memoryCodec.decodeMatching(
+                        candidate.getSummary(), scope);
+                if (!decoded.isEmpty()) {
+                    latest = candidate;
+                    longTermMemory = decoded;
+                    break;
+                }
+            }
             Long compactedThrough = latest != null
                     ? latest.getSourceMessageEndId() : null;
             LambdaQueryWrapper<ConversationMessage> query =
@@ -348,18 +373,17 @@ public class ConversationReplyService {
                     .filter(row -> "USER".equalsIgnoreCase(row.getRole())
                             || "ASSISTANT".equalsIgnoreCase(row.getRole()))
                     .toList();
-            HistoryWindow selected = selectHistoryWindow(rows,
-                    latest != null ? latest.getSummary() : null);
+            HistoryWindow selected = selectHistoryWindow(rows, longTermMemory);
             List<ConversationMessage> compactRows = selected.compactRows();
             List<ConversationMessage> recentRows = selected.recentRows();
             List<Map<String, Object>> toCompact = compactRows.stream()
                     .map(row -> historyMessage(row, 400)).toList();
             List<Map<String, Object>> recent = recentRows.stream()
                     .map(row -> historyMessage(row, 600)).toList();
-            String previousSummary = latest != null ? latest.getSummary() : null;
-            int beforeTokens = estimateTokens(previousSummary, toCompact, recent);
+            int beforeTokens = estimateTokens(longTermMemory, toCompact, recent);
             HistoryContext context = new HistoryContext(
-                    previousSummary,
+                    scope.scopeHash(),
+                    longTermMemory,
                     latest != null && latest.getSummaryVersion() != null
                             ? latest.getSummaryVersion() : 0,
                     toCompact,
@@ -381,7 +405,8 @@ public class ConversationReplyService {
             return context;
         } catch (Exception e) {
             log.info("Copilot history context degraded to current turn: {}", e.getMessage());
-            return new HistoryContext(null, 0, List.of(), List.of(),
+            return new HistoryContext(scope.scopeHash(), Map.of(),
+                    0, List.of(), List.of(),
                     null, null, null, 0);
         }
     }
@@ -395,11 +420,12 @@ public class ConversationReplyService {
      * compact enough old turns to return near the lower target. The gap prevents
      * paying for another summary after only one or two new turns.
      */
-    private HistoryWindow selectHistoryWindow(List<ConversationMessage> rows,
-                                              String previousSummary) {
+    private HistoryWindow selectHistoryWindow(
+            List<ConversationMessage> rows,
+            Map<String, Object> longTermMemory) {
         List<Map<String, Object>> allMessages = rows.stream()
                 .map(row -> historyMessage(row, 600)).toList();
-        int allTokens = estimateTokens(previousSummary, List.of(), allMessages);
+        int allTokens = estimateTokens(longTermMemory, List.of(), allMessages);
         if (rows.size() <= MAX_RECENT_MESSAGE_COUNT
                 && allTokens <= historyContextHighWatermark) {
             return new HistoryWindow(List.of(), rows);
@@ -420,7 +446,8 @@ public class ConversationReplyService {
             candidateRows.addAll(recentRows);
             List<Map<String, Object>> candidateRecent = candidateRows.stream()
                     .map(row -> historyMessage(row, 600)).toList();
-            int candidateTokens = estimateTokens(previousSummary, List.of(), candidateRecent);
+            int candidateTokens = estimateTokens(
+                    longTermMemory, List.of(), candidateRecent);
             if (!recentRows.isEmpty()
                     && candidateTokens > historyContextTargetTokenLimit) {
                 break;
@@ -434,13 +461,16 @@ public class ConversationReplyService {
     }
 
     /** Rebuild the prompt-ready short memory after a completed turn commits. */
-    public void refreshHistoryCache(String conversationId) {
+    public void refreshHistoryCache(ConversationSession session) {
+        if (session == null || !StringUtils.hasText(session.getId())) {
+            return;
+        }
         try {
-            historyCache().fastRemove(conversationId);
-            loadHistoryContext(conversationId, null, false);
+            historyCache().fastRemove(session.getId());
+            loadHistoryContext(session, null, false);
         } catch (Exception e) {
             log.debug("Copilot history cache refresh skipped {}: {}",
-                    conversationId, e.getMessage());
+                    session.getId(), e.getMessage());
         }
     }
 
@@ -453,30 +483,35 @@ public class ConversationReplyService {
         return view;
     }
 
-    private void persistHistorySnapshot(String conversationId,
+    private void persistHistorySnapshot(
+                                        ConversationSession session,
                                         HistoryContext history,
-                                        String updatedSummary) {
-        if (!StringUtils.hasText(updatedSummary)
+                                        Map<String, Object> providerMemory) {
+        if ((providerMemory == null || providerMemory.isEmpty())
                 || history.messagesToCompact().isEmpty()
                 || history.sourceMessageEndId() == null) {
             return;
         }
         try {
+            Map<String, Object> durableMemory = memoryCodec.mergeForStorage(
+                    history.longTermMemory(), providerMemory,
+                    memoryCodec.scopeFor(session), history.sourceMessageEndId());
+            String encodedMemory = memoryCodec.encode(durableMemory);
             ContextSnapshotRow row = new ContextSnapshotRow();
-            row.setRunId(clip("copilot:" + conversationId, 64));
-            row.setConversationId(conversationId);
+            row.setRunId(clip("copilot:" + session.getId(), 64));
+            row.setConversationId(session.getId());
             row.setSummaryVersion(history.summaryVersion() + 1);
             row.setSourceMessageStartId(history.sourceMessageStartId());
             row.setSourceMessageEndId(history.sourceMessageEndId());
             row.setFirstKeptMessageId(history.firstKeptMessageId());
             row.setBeforeTokenEstimate(history.beforeTokenEstimate());
             row.setAfterTokenEstimate(Math.max(1,
-                    (updatedSummary.length() + history.recentMessages().stream()
+                    (encodedMemory.length() + history.recentMessages().stream()
                             .mapToInt(item -> String.valueOf(
                                     item.getOrDefault("content", "")).length())
                             .sum()) / 2));
-            row.setReason(snapshotReason());
-            row.setSummary(clipPreservingHeadTail(updatedSummary, 1600));
+            row.setReason(memorySnapshotReason());
+            row.setSummary(encodedMemory);
             row.setCreateTime(LocalDateTime.now());
             contextSnapshotMapper.insert(row);
         } catch (Exception e) {
@@ -484,10 +519,11 @@ public class ConversationReplyService {
         }
     }
 
-    private int estimateTokens(String summary,
+    private int estimateTokens(Map<String, Object> longTermMemory,
                                List<Map<String, Object>> compact,
                                List<Map<String, Object>> recent) {
-        int chars = summary == null ? 0 : summary.length();
+        int chars = longTermMemory == null || longTermMemory.isEmpty()
+                ? 0 : memoryCodec.encode(longTermMemory).length();
         for (Map<String, Object> item : compact) {
             chars += String.valueOf(item.getOrDefault("content", "")).length();
         }
@@ -497,9 +533,8 @@ public class ConversationReplyService {
         return Math.max(1, chars / 2);
     }
 
-    private String snapshotReason() {
-        return "copilot_token_budget_" + historyContextHighWatermark
-                + "_target_" + historyContextTargetTokenLimit;
+    private String memorySnapshotReason() {
+        return CopilotMemoryCodec.SCHEMA_VERSION;
     }
 
     private List<String> defaultSuggestions() {
@@ -674,6 +709,23 @@ public class ConversationReplyService {
             out.add(map);
         }
         return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> mapValue(Object value) {
+        if (value instanceof String text && text.stripLeading().startsWith("{")) {
+            try {
+                return objectMapper.readValue(text, new TypeReference<>() { });
+            } catch (Exception ignored) {
+                return Map.of();
+            }
+        }
+        if (!(value instanceof Map<?, ?> map)) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        map.forEach((key, nested) -> result.put(String.valueOf(key), nested));
+        return result;
     }
 
     @SuppressWarnings("unchecked")

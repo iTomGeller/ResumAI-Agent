@@ -31,13 +31,13 @@ public class CopilotLlmClient {
 
     private static final String SYSTEM_PROMPT = """
             你是 ResumAI 招聘决策 Copilot。只输出 JSON（不要 markdown）：
-            {"answer":"针对当前问题的短答","citations":[],"actions":[],"suggestions":["可选下一步"],"conversationSummary":null}
+            {"answer":"针对当前问题的短答","citations":[],"actions":[],"suggestions":["可选下一步"],"conversationMemory":null}
             规则：
             1. 不要复述完整评估报告；完整报告只在决策报告页。
             2. 不要编造候选人事实、分数或风险；证据不足时明确说明缺什么。
             3. citations 仅在有真实依据时填写；公网技术文档不是候选人履历证据。
             4. 回答控制在 300 个中文字符左右；普通问答不得触发完整评估运行。
-            5. conversationCompressionContext.messagesToCompact 非空时，把既有 conversationSummary 与这些旧消息合并为新的 conversationSummary，最多800个中文字符；否则输出 null。
+            5. conversationCompressionContext.messagesToCompact 非空时，返回conversationMemory对象；否则返回null。对象只包含goals、confirmedCorrections、decisions、openQuestions、evidenceRefs五个数组。前四个数组项格式为{"text":"简短内容","sourceMessageId":消息ID或null,"status":"可选状态"}。必须合并已有conversationMemory，保留目标、用户明确更正、既有决策、未解决问题和证据指针；不得把无来源摘要冒充候选人证据。
             6. 有实时工具时由你根据工具描述自主决定是否调用，禁止预设工具名；工具失败时明确说明未查到。
             7. “候选人固定上下文”与“当前会话与问题”共同构成本轮输入；当前问题和近期消息以后者为准。
             """;
@@ -409,7 +409,7 @@ public class CopilotLlmClient {
         }
 
         Map<String, Object> compactContext = new LinkedHashMap<>();
-        for (String key : List.of("activeGoal", "summary", "conversationSummary",
+        for (String key : List.of("activeGoal", "summary", "conversationMemory",
                 "messagesToCompact")) {
             Object value = sourceSnapshot.get(key);
             if (value != null && (!(value instanceof List<?> list) || !list.isEmpty())) {
@@ -443,9 +443,9 @@ public class CopilotLlmClient {
         Object compactRows = sourceSnapshot.get("messagesToCompact");
         if (compactRows instanceof List<?> rows && !rows.isEmpty()) {
             currentContent = "[运行时上下文压缩要求]\n"
-                    + "本轮必须在最终JSON的conversationSummary中返回非空增量摘要，"
-                    + "合并既有conversationSummary与messagesToCompact，保留目标、约束、"
-                    + "已确认事实、未解决问题和关键结论；最多800个中文字符，不得返回null。\n"
+                    + "本轮必须在最终JSON的conversationMemory中返回非空结构化长期记忆，"
+                    + "合并既有conversationMemory与messagesToCompact；只保留目标、用户明确更正、"
+                    + "既有决策、未解决问题和证据指针，并为条目保留sourceMessageId。不得返回null。\n"
                     + "[当前问题]\n" + currentContent;
         }
         return new PromptParts(
@@ -461,7 +461,7 @@ public class CopilotLlmClient {
         payload.put("citations", List.of());
         payload.put("actions", List.of());
         payload.put("suggestions", List.of());
-        payload.put("conversationSummary", null);
+        payload.put("conversationMemory", null);
         return objectMapper.writeValueAsString(payload);
     }
 
